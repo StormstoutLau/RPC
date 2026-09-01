@@ -78,7 +78,7 @@
 - 依据: 调研 §4.2, >100GiB 模型 llama-server RPC 加载 hang, 三重独立确认; 本集群 121.10 GiB 在临界区之上 (当前能加载疑似因 -c 缓存改变了路径, 不赌)
 - 改动: `ExecStart` 追加 `-dio`; 顺带评估 `-ctk q8_0 -ctv q8_0` (KV 8.4→4.2 GiB, 为 ctx 扩展留余量)
 - 代价: 一次服务重启 (~4-5 min, 缓存热加载)
-- 文件: B 站 `/etc/systemd/system/llama-server.service` (主控源 [scripts/llama-server.service](../../scripts/llama-server.service) 同步改)
+- 文件: B 站 `/etc/systemd/system/llama-server.service` (主控源 [scripts/llama-server.service](../../ops/llama-server.service) 同步改)
 
 ### A2. 单机速度档基线 (C3 cell, 调研 §4.5D 配置)
 - 前提: 检查 `MiniMax-M2.7-UD-Q3_K_XL` (101.8G) 可用性 (llmfan46 repo / Unsloth dynamic); 缺失则退 IQ3_XS/M 变体并在日志标注
@@ -203,4 +203,4 @@ A1 (服务参数) → A4 (停服) → C1 → C2 → C5 → A2/C3 (单机基线, 
 
 ---
 
-**关联文档**: [算子层调研](../../AMD平台算子层优化与USB4分布式调研.md) · [RPC 协议调研](../../RPC协议瓶颈调研.md) · [40G 链路评估](../rpc-optimization/USB4-40G链路能力评估.md) · [metrics-log (RPC)](../rpc-optimization/metrics-log.md) · [DEV-LOG-010](../../DEV-LOG-010-rpc-optimization.md)
+**关联文档**: [算子层调研](../../docs/AMD平台算子层优化与USB4分布式调研.md) · [RPC 协议调研](../../docs/RPC协议瓶颈调研.md) · [40G 链路评估](../rpc-optimization/USB4-40G链路能力评估.md) · [metrics-log (RPC)](../rpc-optimization/metrics-log.md) · [DEV-LOG-010](../../docs/DEV-LOG-010-rpc-optimization.md)
