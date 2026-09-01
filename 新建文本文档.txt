@@ -1,3 +1,0 @@
-LiteLLM：http://scott-lau-GTR-Pro.local:4000 （带 Bearer key）
-Beszel：http://scott-lau-GTR-Pro.local:8090
-Cockpit：https://scott-lau-GTR-Pro.local:9095 / https://scott-lau-NEX.local:9095
