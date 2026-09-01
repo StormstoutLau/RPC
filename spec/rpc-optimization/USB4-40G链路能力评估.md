@@ -86,6 +86,6 @@ bash ~/llama-distributed/bench_phase1.sh
 
 ## 9. 与既有文档关系
 
-- 补充 [DEV-LOG-010](../DEV-LOG-010-rpc-optimization.md) §4 遗留项"链路 20G→40G 换线"的判定依据
+- 补充 [DEV-LOG-010](../../docs/DEV-LOG-010-rpc-optimization.md) §4 遗留项"链路 20G→40G 换线"的判定依据
 - 呼应 [RPC协议瓶颈调研.md] §6.1 链路层措施及 [AMD平台算子层优化与USB4分布式调研.md] 传输层天花板章节
 - Phase 3 自愈链（DEV-LOG-010 §3）是 idle 振荡风险的兜底，已验证有效

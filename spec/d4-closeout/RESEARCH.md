@@ -111,7 +111,7 @@ B 站 `crontab -l` 实测有两条（E1）：
 * * * * * (curl -s --max-time 5 http://127.0.0.1:1234/v1/models | grep -q gpt-oss-120b && pgrep -f 'llama-[s]erver.*gpt-oss-120b' >/dev/null) || bash /tmp/bjork_deepfix/recover_lmstudio_v1.sh 118272 ...
 ```
 
-- [A站挂死根因分析](../../A站挂死根因分析_20260901.md) F4 断言"B 站无 bjork cron"**被实测推翻**。A 站挂死当时 B 站 cron 是否存在无法回溯（现存的 `launch_fixer_v2.sh B` 带 B 参数，设计上即面向 B 站）。
+- [A站挂死根因分析](../../docs/A站挂死根因分析_20260901.md) F4 断言"B 站无 bjork cron"**被实测推翻**。A 站挂死当时 B 站 cron 是否存在无法回溯（现存的 `launch_fixer_v2.sh B` 带 B 参数，设计上即面向 B 站）。
 
 - **现况无害但脏**：`/tmp/bjork_deepfix/` 目录已不存在（E1 `ls` 空），cron 每分钟执行 `cd` 失败短路、recover 脚本路径不存在 bash 报错——僵尸条目空跑，不构成 GPU 扰动（与 A 站挂死时的活体执行不同：当时脚本存在于 /tmp）。LM Studio :1234 实测 `000`（无服务），第二条 cron 走失败分支。
 

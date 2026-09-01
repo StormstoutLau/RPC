@@ -3,7 +3,7 @@
 > 日期: 2026-09-01 · 作者: Scott (鹏) + Trae
 > 状态: **调研完成, 待用户裁决执行范围** · 附录 A/B/C 归档三份 subagent 检索原始输出 (依据可追溯), 附录 D 为正文↔附录索引表
 > 前置: [ClaudeCode本地集群与子代理框架分析.md](ClaudeCode本地集群与子代理框架分析.md) (阶段2 GO)、[双端点部署与opencode混合框架调研.md](双端点部署与opencode混合框架调研.md) (双端点已落地)
-> 配套: [spec/vulkan-version-control/](spec/vulkan-version-control/) 五阶段 spec 模板链
+> 配套: [spec/vulkan-version-control/](../spec/vulkan-version-control/) 五阶段 spec 模板链
 
 ***
 
@@ -37,7 +37,7 @@
 
 ### 1.3 主控站既有方法论资产
 
-- spec 五阶段模板链: RESEARCH → DESIGN → IMPLEMENTATION → CHECKLIST → ADR ([模板](spec/vulkan-version-control/DESIGN_TEMPLATE.md))
+- spec 五阶段模板链: RESEARCH → DESIGN → IMPLEMENTATION → CHECKLIST → ADR ([模板](../spec/vulkan-version-control/DESIGN_TEMPLATE.md))
 
 - CHECKLIST.md 本质就是文档间对齐审计 (§1.1-1.4 RESEARCH↔DESIGN↔IMPL 交叉验收) — ADD 审计的雏形
 
