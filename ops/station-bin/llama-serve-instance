@@ -1,0 +1,34 @@
+#!/bin/bash
+# llama-serve-instance <alias> — 读 /etc/llama-instances/<alias>.env 启动 llama-server
+# systemd EnvironmentFile 无法表达条件参数 (RPC 有无), 故用 wrapper
+# B5q-1: RPC_TARGET 哨兵语义 — auto=运行时调 rpc-nodes 展开; 空=单机(现行语义不变); 显式值原样
+# 测试缝隙: CONF_DIR / LLAMA_SERVER_BIN (tests/b5q/test_rpc_target.sh)
+set -u
+ALIAS="$1"
+CONF="${CONF_DIR:-/etc/llama-instances}/${ALIAS}.env"
+[ -f "$CONF" ] || { echo "FATAL: conf missing: $CONF"; exit 1; }
+source "$CONF"
+[ -f "$MODEL_PATH" ] || { echo "FATAL: model missing: $MODEL_PATH"; exit 1; }
+
+# B5q-1 哨兵: auto → rpc-nodes 存活列表 (无存活节点回退单机并告警)
+if [ "${RPC_TARGET:-}" = "auto" ]; then
+  RPC_TARGET="$(rpc-nodes 2>/dev/null || true)"
+  [ -z "$RPC_TARGET" ] && echo "[warn] rpc-nodes 无存活节点, 回退单机" >&2
+fi
+
+RPC_ARGS=""
+if [ -n "${RPC_TARGET:-}" ]; then
+  # 等 RPC server 就绪 (A 站 rpc-server@<alias> 可能仍在启动)
+  HOST_P="${RPC_TARGET%%:*}"; PORT_P="${RPC_TARGET##*:}"
+  for i in $(seq 1 90); do
+    (exec 3<>"/dev/tcp/${HOST_P}/${PORT_P}") 2>/dev/null && { exec 3>&- 3<&-; break; }
+    echo "[wait-rpc] ${RPC_TARGET} not ready (${i})..."
+    sleep 2
+  done
+  RPC_ARGS="--rpc ${RPC_TARGET}"
+fi
+# EXTRA_FLAGS 有意不加引号 (word-split 展开)
+exec "${LLAMA_SERVER_BIN:-/opt/llama.cpp/llama-server}" -m "$MODEL_PATH" $RPC_ARGS \
+  -ngl 999 -c "${CTX:-32768}" -t "${THREADS:-16}" \
+  --n-cpu-moe "${N_CPU_MOE:-0}" ${EXTRA_FLAGS:-} \
+  --host 0.0.0.0 --port "${PORT:-8080}"

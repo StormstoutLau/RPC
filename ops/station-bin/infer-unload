@@ -1,0 +1,33 @@
+#!/bin/bash
+# infer-unload — 停两站全部推理实例, 等 GTT 释放
+set -uo pipefail
+AWORK="scott-lau@scott-lau-NEX.local"
+log() { echo "[infer-unload] $(date '+%H:%M:%S') $*"; }
+log "停 B 站 llama-server@*..."
+sudo systemctl stop 'llama-server@*' 2>/dev/null || true
+if pgrep -f 'vllm.entrypoint[s]' >/dev/null 2>&1; then
+  log "停 vLLM..."
+  pkill -f 'vllm.entrypoint[s]' 2>/dev/null || true
+  pkill -f '^ray::' 2>/dev/null || true
+  /home/scott-lau/vllm-rocm/bin/ray stop -f 2>/dev/null || true
+fi
+log "停 A 站 rpc-server@*..."
+A_RPC_WAS=$(ssh -o BatchMode=yes "$AWORK" "systemctl list-units 'rpc-server@*' --state=active --no-legend 2>/dev/null | grep -q . && echo active || echo inactive; sudo systemctl stop 'rpc-server@*' 2>/dev/null; pkill -f '^ray::' 2>/dev/null; /home/scott-lau/vllm-rocm/bin/ray stop -f 2>/dev/null" 2>/dev/null | head -1)
+[ -z "$A_RPC_WAS" ] && A_RPC_WAS=inactive
+wait_gtt() {  # $1=tag, $2=ssh
+  for i in $(seq 1 90); do
+    if [ -n "$2" ]; then used=$(ssh -o BatchMode=yes "$2" "cat /sys/class/drm/card*/device/mem_info_gtt_used 2>/dev/null | head -1")
+    else used=$(cat /sys/class/drm/card*/device/mem_info_gtt_used 2>/dev/null | head -1); fi
+    [ -z "$used" ] && used=0
+    [ "$used" -lt 2000000000 ] && { log "$1 GTT released (${used}B)"; return 0; }
+    sleep 2
+  done
+  log "WARN: $1 GTT 未完全释放"
+}
+wait_gtt "B" ""
+if [ "$A_RPC_WAS" = "active" ]; then
+  wait_gtt "A" "$AWORK"
+else
+  log "A GTT 跳过 (A 站 rpc-server 未运行)"
+fi
+log "UNLOADED ✓ (两站内存回收)"

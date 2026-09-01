@@ -1,0 +1,13 @@
+#!/bin/bash
+# wait-gtt-release — kill llama-server 后轮询等 GTT 回收 (替代 sleep 定值)
+# 机理: GTT 释放是异步的, 实测 30-90s; sleep 8 曾致双模型叠加 OOM (2026-09-01)
+for i in $(seq 1 36); do
+  AVAIL=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
+  if [ "$AVAIL" -ge 102400 ]; then
+    echo "[gtt-wait] OK: MemAvailable $((AVAIL/1024))G (${i}x5s) — GTT 已回收"
+    exit 0
+  fi
+  sleep 5
+done
+echo "[gtt-wait] TIMEOUT 180s: MemAvailable $((AVAIL/1024))G — 有进程残留, pgrep llama-server 检查" >&2
+exit 1

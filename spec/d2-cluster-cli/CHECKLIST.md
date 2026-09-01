@@ -113,7 +113,7 @@ upstream: null
 | # | 发现 | 性质 | 处置 |
 |---|------|------|------|
 | F1 | A 站 infer-load 日志措辞"B 站起 llama-server@"具误导性（实际是 A 站本地 systemctl start——脚本是 B 站版完整副本，日志 tag 未改） | 站侧日志瑕疵 | 记档；修 A 站脚本 tag 属站侧变更，超出 D2 纯客户端边界，留待下次站侧维护窗口 |
-| F2 | B 站 infer-load 的 `wait_gtt A`（SSH 到 A 站查 GTT<2G）在双端点模式下恒走满 90 次×~12s≈18min 才 WARN 放行——A 站常驻 gpt-oss (GTT 135G)，且 B→A 单次 SSH 达 10.2s（mDNS 解析慢） | 站侧设计缺陷（D4 复刻引入） | 手册 §2.4 已注"无害延迟"；根治需改 B 站 infer-load（RPC_TARGET 为空时跳过 wait_gtt A），留待站侧维护窗口与 F1 同批 |
+| F2 | B 站 infer-load 的 `wait_gtt A`（SSH 到 A 站查 GTT<2G）在双端点模式下恒走满 90 次×~12s≈18min 才 WARN 放行——A 站常驻 gpt-oss (GTT 135G)，且 B→A 单次 SSH 达 10.2s（mDNS 解析慢） | 站侧设计缺陷（D4 复刻引入） | **✅ 已修复 2026-09-02**：infer-load（RPC_TARGET 空跳过）+ infer-unload（rpc-server 未运行跳过）双补丁两站同步；实测 nemotron 换载 20min→2.7min、双站 unload 32s；修复版快照入 [ops/station-bin/](../../ops/station-bin/README.md)；站侧备份 `.bak-f2fix`×2/站 |
 | F3 | 主控站 paramiko 在 Python 3.12（`AppData\...\Python312`），RESEARCH §3.1 写的 hermes venv 3.11 无该模块——文档笔误 | 本 spec 文档勘误 | 手册 §2.4 命令示例用 3.12 路径（正确）；RESEARCH 不回改（保留原样+此处勘误记录） |
 | F4 | `qwen3-coder-next` 无 conf（infer-list CONF 列 `-`）、`glm-5.3-flash` 有 conf 无模型（不在 infer-list）——站侧资产与 conf 脱节 | 站侧卫生债 | 记档；属 D3/站侧维护范畴，不阻塞 D2 |
 
