@@ -86,6 +86,7 @@ def cmd_status(html: bool) -> None:
 - 两站查询并行（threading.Thread × 2，超时 8s；单站不可达标 `UNREACHABLE` 不阻塞另一站）
 - HTML 为快照页（生成时刻数据 + 各面板链接：Beszel/Cockpit A/B + 手册路径），**不自动刷新**——重新运行即刷新，避免常驻进程
 - key 读取路径 `d:\RPC\secrets\litellm_master.key`（不硬编码，RESEARCH §3.1 契约）
+- infer-list 输出**原样透传**展示（审查 P2：实测"位置"列 AB/B 宽度不一，固定列宽解析会错位；且路由决策不依赖该表格——RESEARCH §4.3 已定死硬编码路由表）
 
 ### 3.3 子命令 load
 
@@ -106,7 +107,8 @@ def cmd_load(alias: str) -> int:
 #### 实施要点
 
 - 输出实时流式（paramiko channel recv，非结束后一次性——加载需 40s~3min，用户需看进度）
-- exit code：0=READY / 1=加载失败 / 2=RPC 类需手动
+- exit code：0=READY / 1=加载失败 / 2=RPC 类需手动 / 3=e2e 前置未加载
+- **换模型串行化（审查 P1）**：load 前先查该站 `:8080/health`——READY 则先 `infer-unload`（站内已含 wait-gtt-release 的 GTT 等待）并确认返回后再加载新模型；未 READY 直接加载。**禁止**在 unload 完成前发出第二个 infer-load（防 GTT 叠加期并发加载）
 - **不做**内存预检：站内 load-mem-gate 已有 12G 垫（委托，不复制）
 
 ### 3.4 子命令 unload
@@ -115,7 +117,7 @@ def cmd_load(alias: str) -> int:
 
 ### 3.5 子命令 e2e
 
-经 LiteLLM 双路由（nemotron + gpt-oss）各发 `max_tokens=64` 请求，打印两路由的 t/s 与 content 摘要（复用手册 §2.1 语义）。任一路由失败→exit 1 并给出排查指引（先 status 看哪站没起）。
+经 LiteLLM 双路由（nemotron + gpt-oss）各发 `max_tokens=64` 请求，打印两路由的 t/s 与 content 摘要（复用手册 §2.1 语义）。任一路由失败→exit 1 并给出排查指引（先 status 看哪站没起）。**前置检查（审查 P3）**：先探测双路由后端 `:8080/health`，任一未 READY → 打印 `cluster.py load <对应模型>` 提示并 exit 3（区别于路由故障的 exit 1）。
 
 ### 3.6 低效操作排除
 
@@ -146,6 +148,7 @@ def cmd_load(alias: str) -> int:
 | 6 | e2e | `cluster.py e2e` | 双路由响应，exit 0 |
 | 7 | HTML 快照 | `cluster.py status --html` | 生成文件含数据+4 链接，浏览器可开 |
 | 8 | 手册更新 | docs/手册 §2.4 | cluster.py 用法 3 行以上 |
+| 9 | 连续 load 幂等（审查 P1 回归） | 已加载模型后再 load 另一模型 | 先 unload→GTT 释放→新 load 成功，无并发 |
 
 ## 6. 风险与回滚
 
