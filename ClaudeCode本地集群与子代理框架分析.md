@@ -3,7 +3,7 @@
 > 日期: 2026-09-01 19:35 · 作者: Scott (鹏)
 > 数据基础: 本轮 B 站 claudecode 安装 + 全链路实验实锤 (非纸面推演)
 > 关联: [双端点部署与opencode混合框架调研.md](双端点部署与opencode混合框架调研.md) · [SSH_OPENCODE_SETUP.md](SSH_OPENCODE_SETUP.md)
-> 状态: **可行性已实验确认**; 部署形态待用户裁决
+> 状态: **阶段 2 已验证 GO** (2026-09-01 20:18): claudecode+nemotron 真实编码任务 PASS (stats.cpp 写码→编译→测试闭环, 输出精确匹配, exit=0) — tool-use 经 litellm 转换层兼容性实锤; 阶段 3 的 A 站 gpt-oss 端点与 opencode 双 provider 亦已部署验证
 
 ---
 
