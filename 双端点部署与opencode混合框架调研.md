@@ -3,7 +3,7 @@
 > 日期: 2026-09-01 19:15 · 作者: Scott (鹏)
 > 数据基础: 当日全库存 B6 评测 + nemotron 专项实测 + 本轮 opencode 活体验证
 > 关联: [双机推理集群使用手册.md](双机推理集群使用手册.md) · [SSH_OPENCODE_SETUP.md](SSH_OPENCODE_SETUP.md) · [spec/model-eval/results-ledger.md](spec/model-eval/results-ledger.md)
-> 状态: 可行性已实锤; 部署待用户裁决
+> 状态: **阶段 1+2 已执行完毕** (2026-09-01 20:30): gpt-oss 63G 已 rsync 至 A 站 (sha256 双端一致), A 站 llama-server@gpt-oss-120b 单机端点 READY, LiteLLM gpt-oss 路由改指 10.10.10.1:8080, 双路由 E2E 全通 (nemotron 单机 20.9 t/s / gpt-oss 58 t/s); A 站 opencode 双 provider (本机 + 跨站网关) PONG 验证通过
 
 ---
 
