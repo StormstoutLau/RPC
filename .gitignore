@@ -20,3 +20,6 @@ downloads/
 # ── 系统垃圾 ──
 Thumbs.db
 Desktop.ini
+
+# D2 运行时生成物
+ops/cluster_status.html
