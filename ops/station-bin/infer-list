@@ -1,0 +1,52 @@
+#!/bin/bash
+# infer-list — 两站模型清单: alias/位置/大小/建议后端/conf 状态
+AWORK="scott-lau@scott-lau-NEX.local"
+scan() {  # $1=tag(本站路径前缀)
+  find -L /data/models/gguf -mindepth 2 -maxdepth 2 -type d 2>/dev/null | while read -r d; do
+    repo=$(echo "$d" | sed 's|/data/models/gguf/||')
+    # 主 gguf 优先级: 合并单文件 (B5j 产物, 排除分片/mmproj) > 分片首片 (未合并)
+    F=$(find -L "$d" -name '*.gguf' ! -name '*-of-0000*.gguf' ! -name 'mmproj*' -size +1G -printf '%s %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+    [ -z "$F" ] && F=$(find -L "$d" -name '*-00001-of-*.gguf' 2>/dev/null | head -1)
+    [ -z "$F" ] && F=$(find -L "$d" -name '*.gguf' 2>/dev/null | head -1)  # embedding 等小模型
+    [ -z "$F" ] && continue
+    # 大小用 repo 总量, -L 跟随软链 (repo 是 B5m2 收编软链; 分片首片可能 header-only)
+    SZ=$(du -smL "$d" 2>/dev/null | cut -f1)
+    alias=$(basename "$d" | sed 's/-GGUF$//' | tr 'A-Z' 'a-z')
+    case "$alias" in minimax-m2.7*) alias="m27-q4ks";; esac
+    echo "${alias}|${repo}|${SZ}|${F}"
+  done
+}
+# AWQ
+for d in /data/models/*/; do
+  case "$d" in */gguf/) ;; *)
+    ST=$(find -L "$d" -name '*.safetensors' 2>/dev/null | wc -l)
+    [ "$ST" -gt 0 ] && { SZ=$(du -m "$d" | cut -f1); echo "m27-awq|$(basename $d)|${SZ}|$d"; }
+  ;; esac
+done
+B_LIST=$(scan)
+A_LIST=$(ssh -o BatchMode=yes "$AWORK" "find -L /data/models/gguf -mindepth 2 -maxdepth 2 -type d 2>/dev/null | while read -r d; do
+  F=\$(find -L \"\$d\" -name '*-00001-of-*.gguf' 2>/dev/null | head -1)
+  [ -z \"\$F\" ] && F=\$(find -L \"\$d\" -name '*.gguf' -size +1G -printf '%s %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+  [ -z \"\$F\" ] && continue
+  echo \"\$(basename \"\$d\" | sed 's/-GGUF\$//' | tr 'A-Z' 'a-z')\"
+done")
+printf "%-38s %-6s %-7s %-12s %s\n" "ALIAS" "位置" "大小" "建议后端" "CONF"
+printf "%-38s %-6s %-7s %-12s %s\n" "-----" "----" "----" "--------" "----"
+echo "$B_LIST" | while IFS='|' read -r a repo sz f; do
+  [ -z "$a" ] && continue
+  LOC="B"; inA=$(echo "$A_LIST" | grep -cx "$a" || true); [ "$inA" -ge 1 ] && LOC="AB"
+  G=$(( sz / 1024 ))
+  if [ -f "/etc/llama-instances/${a}.env" ]; then CF="✓"; else CF="-"; fi
+  case "$a" in
+    m27-awq) BE="vllm" ;;
+    all-minilm*) BE="llama-emb" ;;
+    *) if [ "$sz" -gt 66560 ]; then BE="llama-rpc"; else BE="llama-single"; fi ;;
+  esac
+  printf "%-38s %-6s %-7s %-12s %s\n" "$a" "$LOC" "${G}G" "$BE" "$CF"
+done
+# A 独有
+echo "$A_LIST" | while read -r a; do
+  [ -z "$a" ] && continue
+  inB=$(echo "$B_LIST" | grep -c "^${a}|" || true)
+  [ "$inB" -eq 0 ] && printf "%-38s %-6s %-7s %-12s %s\n" "$a" "A-only" "-" "(需同步B)" "-"
+done
