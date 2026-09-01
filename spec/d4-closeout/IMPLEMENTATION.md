@@ -131,7 +131,7 @@ ssh scott-lau@scott-lau-GTR-Pro.local "cd /tmp && timeout 120 ~/.opencode/bin/op
 - 升级前记录当前二进制 md5（回滚锚点）：`md5sum ~/.opencode/bin/opencode > /tmp/oc_bin.md5.bak`
 - **回滚路径**：`opencode upgrade 1.18.9`（官方支持指定版本降级）
 - 冒烟失败（provider 不识别等）：先 `opencode doctor` 自检，再查 `~/.config/opencode/` 是否被迁移工具改动；配置备份见 T5 保留策略
-- 网络不通（HTTPS 出网）：B 站历史上经 A 站 mihomo 代理出网，备选 `https_proxy=http://192.168.1.33:7890 opencode upgrade`（IP 以当日 A 站实际为准）
+- 网络备选（**审查修正**：A 站 mihomo 仅监听 127.0.0.1，B 站不能直接引用）：B 站直连失败时，在 A 站本机经 mihomo 代理下载新版本二进制 → `scp` 传 B 站 → 覆盖 `~/.opencode/bin/opencode`（保留旧二进制为 `.old` 先备份）
 
 #### 低效操作排除
 
@@ -153,18 +153,42 @@ ssh scott-lau@scott-lau-GTR-Pro.local "rm -v ~/.config/opencode/opencode.jsonc.b
 
 #### 实施要点
 
-- 删除前 `diff bak3 bak2` 确认 bak3 ⊇ bak2 信息（若 bak3 更旧则保留实际最新者）
+- 删除前 `diff bak3 bak2` 确认 bak3 ⊇ bak2 信息（若 bak3 更旧则保留实际最新者）。**审查补核**：时间戳实测 bak(15:55) < bak2(17:00) < bak3(17:39)，bak3 最新 ✓；且三个 bak 均 50 字节（近乎空配置），删除 bak/bak2 零风险
 - 生产配置 `opencode.jsonc` 本身在 git 外（两站本地文件），T4 升级失败时的恢复依赖保留下来的这份 bak
+
+### 3.6 操作 T6：B 站僵尸 cron 清理（审查新增）
+
+#### 职责
+
+移除 B 站 crontab 中两条引用已不存在目录 `/tmp/bjork_deepfix/` 的僵尸条目，消除"未来目录重建后被意外激活"的隐患（条目内容与 A 站挂死根因同构，见 RESEARCH §3.6 发现 1）。
+
+#### 接口签名（命令）
+
+```bash
+# 1. 备份现 crontab (空 crontab 也能恢复)
+ssh scott-lau@scott-lau-GTR-Pro.local "crontab -l > ~/crontab.bak-20260901"
+# 2. 清空 (B 站仅这两条, 全清 = 精准清理)
+ssh scott-lau@scott-lau-GTR-Pro.local "crontab -r"
+# 3. 验证
+ssh scott-lau@scott-lau-GTR-Pro.local "crontab -l"   # 预期: no crontab for ...
+```
+
+#### 实施要点
+
+- **前置断言**：执行前 `crontab -l` 确认仍只有那两条 bjork_deepfix 条目（若有新增条目，改为逐条移除而非全清）
+- 与根因报告 L0（A 站侧已清）形成双站闭环
+- 回滚：`crontab ~/crontab.bak-20260901`
 
 ## 4. 实施顺序与检查点
 
 ```
-T1 (git 提交, 含人工核对门)
+T1 (git 提交; 核对门已关闭—纯 CRLF)
   └─> T2 (/tmp key 清理 ×4+2)  ── 验证: grep 无命中
         └─> T3 (txt 删除)      ── 验证: 手册含端点信息
               └─> T5 (bak 收敛) ── 验证: 每站 ≤1 个 bak
-                    └─> T4 (opencode 升级+冒烟) ── 验证: 1.18.25 + PONG
-                          └─> 最终: git status 干净 + commit + push
+                    └─> T6 (B 站僵尸 cron) ── 验证: crontab -l 空
+                          └─> T4 (opencode 升级+冒烟) ── 验证: 1.18.25 + PONG
+                                └─> 最终: git status 干净 + commit + push
 ```
 
 T4 放最后：升级是唯一有失败风险的操作，放收尾处不阻塞前序清理。
@@ -180,15 +204,18 @@ T4 放最后：升级是唯一有失败风险的操作，放收尾处不阻塞�
 | 5 | 升级后可用 | `opencode run -m cluster-litellm/nemotron 'reply PONG'` | PONG |
 | 6 | bak 收敛 | `ls ~/.config/opencode/*.bak*` (两站) | 每站 ≤1 |
 | 7 | 远端同步 | `git log origin/main -1` | 含 D4 commit |
+| 8 | B 站 crontab 清空 | `ssh B站 "crontab -l"` | no crontab（且 ~/crontab.bak-20260901 存在） |
+| 9 | T6 前置断言通过 | 清理前 `crontab -l` | 仅两条 bjork_deepfix 条目（若非，改逐条移除） |
 
 ## 6. 风险与回滚汇总
 
 | 风险 | 概率 | 影响 | 回滚 |
 |------|------|------|------|
-| gptoss_spec_test2.sh 含敏感内容被误提交 | 低 | 中 | git 历史重写（未 push 前 `git reset`） |
+| ~~gptoss_spec_test2.sh 含敏感内容被误提交~~ | ~~低~~ | — | **审查后消除**：实测纯 CRLF 差异无内容变更 |
 | opencode 升级后 provider 配置不识别 | 低 | 低（冒烟即暴露） | `opencode upgrade 1.18.9` 降级 + bak 恢复 |
-| 删除的 /tmp 文件实际仍被引用 | 极低 | 低 | 全部为已完成任务的临时副本，无 cron/服务引用（E1 crontab 已核） |
-| 升级出网失败 | 中 | 低 | 经 A 站代理或手动下载替换二进制 |
+| 删除的 /tmp 文件实际仍被引用 | 极低 | 低 | 待删清单（cca.sh/e2e.sh/litellm yaml/aoc.jsonc/fixa.sh/d4probe.sh）经 `grep -rl /tmp/ /etc/systemd/system/` 与 crontab 双向核（B 站 systemd 无引用 E1；A 站 crontab 空 E1） |
+| 升级出网失败 | 中 | 低 | A 站本机下载 → scp → 覆盖（审查修正后的正确路径） |
+| crontab -r 误删未来新增条目 | 极低 | 中 | 前置断言（验收 #9）+ `~/crontab.bak-20260901` 恢复 |
 
 ## 7. 交付物
 
