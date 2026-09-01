@@ -1,0 +1,75 @@
+#!/bin/bash
+# cluster-watchdog — 双机集群 health 看门狗 (D1.1)
+# 部署: 两站 /usr/local/bin + cluster-watchdog.{service,timer} (60s oneshot)
+# 模态覆盖: M2 服务冻结(本机处置) / M3+M4 主机失联(对端探测,只通知) / M5 GTT 残留(告警)
+# 边界: 不自动拉起模型(零自加载); 对端故障不远程处置(M3/M4 冻结域外无处置能力)
+# 维护: 先改仓库 ops/station-bin/ 再同步上站 (station-bin 约定)
+# 差异: 两站仅下行 PEER 不同 — A 站=scott-lau-GTR-Pro.local, B 站=scott-lau-NEX.local
+
+PEER="scott-lau-NEX.local"              # ← B 站版本; A 站部署时改为 scott-lau-GTR-Pro.local
+PEER_USER="scott-lau"
+STATE_DIR="/var/lib/cluster-watchdog"
+LOG="/var/log/cluster-watchdog.log"
+GTT_WARN_BYTES=$((20*1024*1024*1024))    # 无 active 实例时 GTT 残留告警线 20G
+WARN_AFTER=3                             # 连续失败 N 次 → WARN
+ACT_AFTER=5                              # 连续失败 N 次 → 处置 (仅本机 M2)
+
+if [ ! -d "$STATE_DIR" ]; then
+  sudo mkdir -p "$STATE_DIR" && sudo chown scott-lau:scott-lau "$STATE_DIR"
+fi
+if [ ! -w "$LOG" ]; then
+  sudo touch "$LOG" && sudo chown scott-lau:scott-lau "$LOG"
+fi
+ts() { date '+%F %T'; }
+log() { echo "[watchdog] $(ts) $*" | tee -a "$LOG" >&2; }
+load_ctr() { cat "$STATE_DIR/$1" 2>/dev/null || echo 0; }
+save_ctr() { echo "$2" > "$STATE_DIR/$1" 2>/dev/null; }
+
+ACTIVE=$(systemctl list-units 'llama-server@*' --state=active --no-legend 2>/dev/null | awk '{print $1}' | head -1)
+LOADING=$(pgrep -f 'infer-load|infer-unload|load-mem-gate' >/dev/null 2>&1 && echo yes || echo no)
+
+# ── 探测 1: 本机服务冻结 (M2, 处置) ────────────────────
+if [ -z "$ACTIVE" ]; then
+  save_ctr fail.local 0                  # 未加载是正常态 (零自加载原则)
+elif [ "$LOADING" = "yes" ]; then
+  :                                      # 加载/卸载窗口跳过 (防 Loading 期 503 误报), 计数不动
+else
+  if curl -sf -m 8 http://127.0.0.1:8080/health >/dev/null 2>&1; then
+    save_ctr fail.local 0
+  else
+    n=$(($(load_ctr fail.local)+1)); save_ctr fail.local "$n"
+    [ "$n" -ge "$WARN_AFTER" ] && log "WARN: 本机服务无响应 x${n} ($ACTIVE) [M2]"
+    if [ "$n" -ge "$ACT_AFTER" ]; then
+      if systemctl is-active --quiet "$ACTIVE" 2>/dev/null; then
+        log "ACT: restart $ACTIVE [M2 处置]"
+        sudo systemctl restart "$ACTIVE" 2>/dev/null || log "ERR: restart $ACTIVE 失败"
+      fi
+      save_ctr fail.local 0              # 处置后清零; 若再挂重新计数
+    fi
+  fi
+fi
+
+# ── 探测 2: 本机 GTT 残留 (M5, 只告警) ────────────────
+if [ -z "$ACTIVE" ]; then
+  used=$(cat /sys/class/drm/card*/device/mem_info_gtt_used 2>/dev/null | head -1)
+  if [ -n "$used" ] && [ "$used" -gt "$GTT_WARN_BYTES" ]; then
+    log "WARN: GTT 残留 $((used/1024/1024/1024))G (无 active 实例) [M5: LM Studio GUI 或孤儿进程?]"
+  fi
+fi
+
+# ── 探测 3: 对端三态 (M3/M4 通知, 不处置) ──────────────
+PEER_STATE=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$PEER_USER@$PEER" '
+  A=$(systemctl list-units "llama-server@*" --state=active --no-legend 2>/dev/null | head -1)
+  if [ -z "$A" ]; then echo IDLE
+  elif curl -sf -m 8 http://127.0.0.1:8080/health >/dev/null 2>&1; then echo OK
+  else echo FROZEN; fi' 2>/dev/null)
+
+case "$PEER_STATE" in
+  OK|IDLE)
+    save_ctr fail.peer 0 ;;
+  FROZEN)
+    log "WARN: 对端 $PEER 服务冻结 (SSH OK + health 挂) — 对端本机看门狗自治 [对端 M2]" ;;
+  *)
+    n=$(($(load_ctr fail.peer)+1)); save_ctr fail.peer "$n"
+    [ "$n" -ge "$WARN_AFTER" ] && log "WARN: 对端 $PEER 主机失联 x${n} [M3/M4] — 若 A 站: 遗言见 B:/var/log/netconsole-a.log" ;;
+esac
