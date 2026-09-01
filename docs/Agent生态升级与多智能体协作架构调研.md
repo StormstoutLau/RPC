@@ -13,7 +13,7 @@
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 插件生态是否需要更新?            | **是, 且空间巨大**: 两站 4 个 agent 全部裸装 (无 MCP/skills/subagents/自定义 agents)。关键事实: **Skills/MCP/subagents 全是 CLI 客户端机制, 与后端无关** — 经 ANTHROPIC\_BASE\_URL 指向本地 nemotron/gpt-oss 后整套生态完全可用 (tool-use 已 PASS 实锤)。opencode 1.18+ 更是**直接读** **`.claude/skills/`**, 一份 skills 两 CLI 零成本共用 |
 | 4 agent × trae 如何高效协作? | **五层循环**: trae 规划(生成 spec) → 派发(SSH headless 任务卡) → 本地执行(检索/编码/编译/测试) → 执行锚定验证(编译器+测试+数值输出, 零 LLM 成本拦幻觉) → trae ADD 审计回环。成本分配: 本地 80% 流量(无限 token), trae 20% 高价值轮次(规划+审计)                                                                                                  |
-| 上下文管理装什么? (§6)         | **零安装先行**: claude code 内置 CLAUDE.md/Auto Memory//compact + opencode `limit.context` 配置即覆盖 80% 需求; 插件层 **claude-mem** (双 CLI 通吃) 与 **opencode-codex-memory** (纯本地) 起步; ⚠ claude code **窗口假设风险** (推断待实测) → 长会话默认走 opencode                                                    |
+| 上下文管理装什么? (§6)         | **零安装先行**: claude code 内置 CLAUDE.md/Auto Memory//compact + opencode `limit.context` 配置即覆盖 80% 需求; 插件层 **claude-mem** (双 CLI 通吃) 与 **opencode-codex-memory** (纯本地) 起步; ⚠ claude code **窗口假设风险** (推断待实测) → 长会话默认走 opencode                                                   |
 | Trae 已装生态可迁移吗? (§7)    | **三层策略 (§7.5 终裁)**: **原生优先** — obra/superpowers v6.3.0 (Trae 工程链 6 件本就是它的旧快照) + anthropics document-skills 直接装原生不迁; **定制迁移** — math-finance-reasoning / research-\* 学术编排链 / paper-lookup / what-if-oracle (原生无等价); **Trae 兜底** — C 类检索留主控站, 插件层 8 个宿主绑定弃                   |
 
 ***
@@ -303,24 +303,24 @@ allowed-tools: Read, Grep, Glob
 
 **claude code**:
 
-| 机制                     | 说明                                                                                      |
-| ---------------------- | --------------------------------------------------------------------------------------- |
-| CLAUDE.md 层级注入         | 规则类上下文进 system prompt 稳定区 (利缓存); 手册铁律/spec 引用放这里                                        |
+| 机制                     | 说明                                                                                                         |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------- |
+| CLAUDE.md 层级注入         | 规则类上下文进 system prompt 稳定区 (利缓存); 手册铁律/spec 引用放这里                                                           |
 | Auto Memory (v2.1.59+) | `~/.claude/projects/<proj>/memory/MEMORY.md` 前 200 行 (或 25KB) 每会话自动注入, 免装插件的半持久记忆 ⚠ 单一博客来源 (CSDN), 细节数字待实测 |
-| `/context`             | 占用可视化 — 大任务前先看余量, <30% 先压缩                                                              |
-| `/compact <保留指令>`      | **60-70% 时手动压, 远优于 \~92% 触发的被动 auto** (被挤压时总结质量差、丢文件路径/行号); 带"保留已改文件路径+当前失败+架构决策"指令质量翻倍 |
-| `/rewind` (Esc+Esc)    | 检查点回溯, 上下文走错路时回滚                                                                        |
-| subagents (§3.4)       | 上下文隔离 — 大输出子任务下放 subagent, 主会话只收结论                                                      |
+| `/context`             | 占用可视化 — 大任务前先看余量, <30% 先压缩                                                                                 |
+| `/compact <保留指令>`      | **60-70% 时手动压, 远优于 \~92% 触发的被动 auto** (被挤压时总结质量差、丢文件路径/行号); 带"保留已改文件路径+当前失败+架构决策"指令质量翻倍                    |
+| `/rewind` (Esc+Esc)    | 检查点回溯, 上下文走错路时回滚                                                                                           |
+| subagents (§3.4)       | 上下文隔离 — 大输出子任务下放 subagent, 主会话只收结论                                                                         |
 
 ### 6.3 插件选型表 (跨会话记忆层)
 
-| 插件                              | 装                                                                                                                                                  | 机制                                                                                                                                                                                   | 本集群适配判断                                                                                                                                                              |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **claude-mem** (首选)             | claude code: `/plugin marketplace add thedotmack/claude-mem` 或 `npx claude-mem install`; **opencode:** **`npx claude-mem install --ide opencode`** | 5 生命周期 hooks (SessionStart/PostToolUse/Stop...) + Bun worker (端口 `37700 + (uid % 100)` 官方式, 每用户不同 — 第三方文章的 37777 只是单用户实例) + SQLite/FTS5 (+可选 Chroma 向量), 会话结束自动压缩观察→摘要, 新会话注入近 10 次 session 上下文; Web UI 同 worker 端口; stars 数两来源矛盾 (72.4K@2026-05 vs 89K+@2026-03, 取保守口径"70k+ 级") | 双 CLI 一套记忆 — 与"`.claude/` 单一事实源"战略同构。⚠ worker 的摘要调用走 Claude Agent SDK → 需实测经 ANTHROPIC\_BASE\_URL (LiteLLM) 指向本地模型时压缩质量 (120B 压缩够用, 但未验证); 记忆注入量对 32k 的 gpt-oss 路由偏重 |
-| **opencode-codex-memory** (纯本地) | opencode.json 一行 `"plugin": ["opencode-codex-memory@0.6.5"]` (版本必须钉死, opencode 不自动重解析)                                                             | OpenAI Codex 记忆系统移植: 会话闲置 6h 后**用 opencode 已配置的模型**后台提取→合并, markdown+SQLite 全本地, 无外部服务无 worker                                                                                       | 全链路走本地端点 — 适配性最稳; 需 opencode ≥1.18 (B 站 1.18.9 满足但建议先升 1.18.25); 后台提取调用计入网关 rpm=30 (D1), 低频不冲突                                                                       |
-| four-opencode-memory (备选)       | `"plugin": ["@four-bytes/four-opencode-memory"]`                                                                                                   | 零依赖纯 Markdown (MEMORY.md + 每日 diary), session idle 自动捕获                                                                                                                              | 最保守 (无 LLM 调用, grep 检索); 记忆质量靠模板不靠模型 — 适合先验证工作流                                                                                                                      |
-| opencode-dcp (进阶)               | `opencode plugin @tarquinen/opencode-dcp@latest --global`                                                                                          | 动态修剪: compress 作为工具交给模型自选时机 (比满窗 compact 聪明), 重复工具调用去重 + 错误调用输入清理                                                                                                                    | "小 ctx 模型需调低 min/maxContextLimit" 官方注记正对本集群; 与 codex-memory 功能重叠, 二选一                                                                                                |
-| claude-max-context (模式参考)       | 不整装                                                                                                                                                | hooks 组合: session-start 注入 HANDOFF/MEMORY/PROJECT\_MAP + pre-compact 强制 7 点保留清单 (任务态/决策/已试失败法/文件/阻塞)                                                                                 | 借鉴其 **PreCompact hook 保留清单** 模式, 手写轻量版 (\~20 行) 挂 claude code — 与 spec 工作流语义天然对齐                                                                                     |
+| 插件                              | 装                                                                                                                                                  | 机制                                                                                                                                                                                                                                                                                 | 本集群适配判断                                                                                                                                                              |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **claude-mem** (首选)             | claude code: `/plugin marketplace add thedotmack/claude-mem` 或 `npx claude-mem install`; **opencode:** **`npx claude-mem install --ide opencode`** | 5 生命周期 hooks (SessionStart/PostToolUse/Stop...) + Bun worker (端口 `37700 + (uid % 100)` 官方式, 每用户不同 — 第三方文章的 37777 只是单用户实例) + SQLite/FTS5 (+可选 Chroma 向量), 会话结束自动压缩观察→摘要, 新会话注入近 10 次 session 上下文; Web UI 同 worker 端口; stars 数两来源矛盾 (72.4K\@2026-05 vs 89K+\@2026-03, 取保守口径"70k+ 级") | 双 CLI 一套记忆 — 与"`.claude/` 单一事实源"战略同构。⚠ worker 的摘要调用走 Claude Agent SDK → 需实测经 ANTHROPIC\_BASE\_URL (LiteLLM) 指向本地模型时压缩质量 (120B 压缩够用, 但未验证); 记忆注入量对 32k 的 gpt-oss 路由偏重 |
+| **opencode-codex-memory** (纯本地) | opencode.json 一行 `"plugin": ["opencode-codex-memory@0.6.5"]` (版本必须钉死, opencode 不自动重解析)                                                             | OpenAI Codex 记忆系统移植: 会话闲置 6h 后**用 opencode 已配置的模型**后台提取→合并, markdown+SQLite 全本地, 无外部服务无 worker                                                                                                                                                                                     | 全链路走本地端点 — 适配性最稳; 需 opencode ≥1.18 (B 站 1.18.9 满足但建议先升 1.18.25); 后台提取调用计入网关 rpm=30 (D1), 低频不冲突                                                                       |
+| four-opencode-memory (备选)       | `"plugin": ["@four-bytes/four-opencode-memory"]`                                                                                                   | 零依赖纯 Markdown (MEMORY.md + 每日 diary), session idle 自动捕获                                                                                                                                                                                                                            | 最保守 (无 LLM 调用, grep 检索); 记忆质量靠模板不靠模型 — 适合先验证工作流                                                                                                                      |
+| opencode-dcp (进阶)               | `opencode plugin @tarquinen/opencode-dcp@latest --global`                                                                                          | 动态修剪: compress 作为工具交给模型自选时机 (比满窗 compact 聪明), 重复工具调用去重 + 错误调用输入清理                                                                                                                                                                                                                  | "小 ctx 模型需调低 min/maxContextLimit" 官方注记正对本集群; 与 codex-memory 功能重叠, 二选一                                                                                                |
+| claude-max-context (模式参考)       | 不整装                                                                                                                                                | hooks 组合: session-start 注入 HANDOFF/MEMORY/PROJECT\_MAP + pre-compact 强制 7 点保留清单 (任务态/决策/已试失败法/文件/阻塞)                                                                                                                                                                               | 借鉴其 **PreCompact hook 保留清单** 模式, 手写轻量版 (\~20 行) 挂 claude code — 与 spec 工作流语义天然对齐                                                                                     |
 
 **选型裁定**: B 站先装 **opencode-codex-memory** (纯本地零风险跑通跨会话记忆) → 验证后 A/B 两站 claude-mem 双 CLI 试点 (worker→LiteLLM 路径实测是门); dcp/four 视前者不足再上。
 
@@ -354,11 +354,11 @@ allowed-tools: Read, Grep, Glob
 
 ### 7.1 盘点事实 (主控站磁盘实测)
 
-| 层       | 位置                                                                  | 规模          | 形态                                                                                                                                                  | 可迁移性                                                                                     |
-| ------- | ------------------------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| 层       | 位置                                                                  | 规模                 | 形态                                                                                                                                                  | 可迁移性                                                                                     |
+| ------- | ------------------------------------------------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | **技能层** | `c:\Users\Peng\.trae-cn\skills\<name>\SKILL.md`                     | **213 个** (目录计数实测) | 标准 SKILL.md (name/description frontmatter + 正文; 部分带 references/scripts/ 子目录 = 渐进披露)                                                                 | **与 claude code 技能格式同源** — scp 到 `~/.claude/skills/` 即被 claude code + opencode 双读 (§2.2) |
-| 插件层     | `~\.trae-cn\plugins\trae-remote-official\` (installed-plugins.json) | 8 个         | browser/chrome/computer-use/lark 1.0.4 (OAuth connector + lark-cli 二进制)/product-lifecycle-workbench/seedance/seedream/teaching-management-assistant | **不可迁** — Trae 宿主绑定 (OAuth 连接器、Trae 内建工具、视频/图像生成后端)                                      |
-| 内建层     | `~\.trae-cn\builtin\work\*/skills\`                                 | \~15 个      | docx/pdf/pptx/xlsx/feedback/TRAE-product-knowledge 等                                                                                                | 不迁本体; 同名开源版可从 anthropics/skills 取                                                        |
+| 插件层     | `~\.trae-cn\plugins\trae-remote-official\` (installed-plugins.json) | 8 个                | browser/chrome/computer-use/lark 1.0.4 (OAuth connector + lark-cli 二进制)/product-lifecycle-workbench/seedance/seedream/teaching-management-assistant | **不可迁** — Trae 宿主绑定 (OAuth 连接器、Trae 内建工具、视频/图像生成后端)                                      |
+| 内建层     | `~\.trae-cn\builtin\work\*/skills\`                                 | \~15 个             | docx/pdf/pptx/xlsx/feedback/TRAE-product-knowledge 等                                                                                                | 不迁本体; 同名开源版可从 anthropics/skills 取                                                        |
 
 frontmatter 抽查 (5 个代表): `paper-lookup` (name+description+metadata, REST 无 MCP 绑定) · `research-lookup` (`allowed-tools: Read Write Edit Bash` + license/compatibility/required\_environment\_variables — claude code 忽略陌生字段, **推断待站上实测**) · `test-driven-development` / `math-finance-reasoning` / `brainstorming` (纯 name+description)。
 
@@ -466,15 +466,15 @@ frontmatter 抽查 (5 个代表): `paper-lookup` (name+description+metadata, RES
 
 **opencode 原生生态头部** (npm 1000+ 包; awesome-opencode 9.5k stars):
 
-| 件                        | 功能                                             | 对本集群价值                                                                       |
-| ------------------------ | ---------------------------------------------- | ---------------------------------------------------------------------------- |
-| opencode-scheduler       | cron 语法调度周期任务 (systemd/Linux)                  | P2 — 与集群 D1 看门狗 timer 同范式, 可做站侧例检                                            |
-| opencode-worktree        | git worktree 隔离会话                              | P2 — 多任务并行实验时                                                                |
-| opencode-supermemory     | 跨会话持久记忆                                        | 与 §6.3 选型重叠, 备选                                                              |
-| opencode-skillful        | 技能懒加载注入                                        | P2 — 技能多了之后的瘦身手段                                                             |
-| opencode-websearch-cited | 受支持 provider 的原生网页搜索 (Google grounded 风格) | **P1 试** — 补 opencode 侧的网页搜索空缺 (claude code 内置 WebSearch 是 Anthropic 服务端工具本地后端不可用 §2.1; 此插件是否兼容本地后端未知, "受支持的提供商"限定语存疑, 试点裁决) |
-| oh-my-opencode (slim)    | 编排 + LSP/AST 工具 + 后台 agent 套件                  | P2 — 与自定义 agent 路线重叠, 观察                                                     |
-| subtask2 / micode        | /commands 编排扩展 / brainstorm→plan→implement 工作流 | P2                                                                           |
+| 件                        | 功能                                             | 对本集群价值                                                                                                                       |
+| ------------------------ | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| opencode-scheduler       | cron 语法调度周期任务 (systemd/Linux)                  | P2 — 与集群 D1 看门狗 timer 同范式, 可做站侧例检                                                                                            |
+| opencode-worktree        | git worktree 隔离会话                              | P2 — 多任务并行实验时                                                                                                                |
+| opencode-supermemory     | 跨会话持久记忆                                        | 与 §6.3 选型重叠, 备选                                                                                                              |
+| opencode-skillful        | 技能懒加载注入                                        | P2 — 技能多了之后的瘦身手段                                                                                                             |
+| opencode-websearch-cited | 受支持 provider 的原生网页搜索 (Google grounded 风格)      | **P1 试** — 补 opencode 侧的网页搜索空缺 (claude code 内置 WebSearch 是 Anthropic 服务端工具本地后端不可用 §2.1; 此插件是否兼容本地后端未知, "受支持的提供商"限定语存疑, 试点裁决) |
+| oh-my-opencode (slim)    | 编排 + LSP/AST 工具 + 后台 agent 套件                  | P2 — 与自定义 agent 路线重叠, 观察                                                                                                     |
+| subtask2 / micode        | /commands 编排扩展 / brainstorm→plan→implement 工作流 | P2                                                                                                                           |
 
 **逐类终裁 (迁 vs 原生)**:
 
@@ -498,31 +498,31 @@ frontmatter 抽查 (5 个代表): `paper-lookup` (name+description+metadata, RES
 
 **修正清单**:
 
-| # | 原断言 | 问题 | 处置 |
-| - | ----- | ---- | ---- |
-| F1 | "Trae 技能层 \~190 个" (§7.1) | 低估 — 目录计数实测 **213** | 已改正文 |
-| F2 | claude-mem worker 端口 :37777 (§6.3) | 第三方文章 (termdock) 与官方 docs 冲突; 官方为 `37700 + (uid % 100)` 每用户不同 | 取官方, 已改正文 |
-| F3 | "claude-mem 72K+ stars 生态最大" (§6.3) | 两来源数字矛盾 (72.4K@2026-05 augmentcode vs 89K+@2026-03 termdock, stars 不可能倒退 — 至少一方失真) | 改为"70k+ 级"保守口径并标注矛盾 |
-| F4 | "claude code 按 \~200k 假设...永远晚于真实上限" (§6.4, 原表述为事实) | **推断被当实证** — 92% 阈值与窗口映射机制有 E4 来源, 但"自定义后端下仍按 200k 计"无任何来源 | 降级为"推断非实证", 补 5min 验证法 (上站跑 `/context` 看窗口基数) |
-| F5 | opencode `limit.context` 嵌套式配置示例 (§6.2) | 两来源格式冲突: 嵌套式 (yahtoo 第三方整理) vs GLM5 案例平铺式 (bswen); `prune` 默认值亦冲突 (官方片段 false vs 第三方 true) | 保留嵌套式但加"格式待站上验证"标注; prune 显式写 true 消歧 |
-| F6 | Auto Memory "v2.1.59+ / 前 200 行或 25KB" (§6.2) | 单一 CSDN 博客来源 (E4) | 加"单一博客来源, 细节待实测"标注 |
-| F7 | "GLM5 同款教训**实证**" (§6.2 注释) | 案例本身真实但属博客级证据 (E4) | 措辞降为"社区案例" |
-| F8 | "opencode-websearch-cited...补 claude code 内置 WebSearch 之洞" (§7.5) | 措辞失准 — 该件是 **opencode** 插件, 补的是 opencode 侧; 且"受支持的提供商"是否含本地后端未知 | 已改精确表述 + 标注存疑待试点 |
+| #  | 原断言                                                               | 问题                                                                                         | 处置                                            |
+| -- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------- |
+| F1 | "Trae 技能层 \~190 个" (§7.1)                                         | 低估 — 目录计数实测 **213**                                                                        | 已改正文                                          |
+| F2 | claude-mem worker 端口 :37777 (§6.3)                                | 第三方文章 (termdock) 与官方 docs 冲突; 官方为 `37700 + (uid % 100)` 每用户不同                              | 取官方, 已改正文                                     |
+| F3 | "claude-mem 72K+ stars 生态最大" (§6.3)                               | 两来源数字矛盾 (72.4K\@2026-05 augmentcode vs 89K+\@2026-03 termdock, stars 不可能倒退 — 至少一方失真)       | 改为"70k+ 级"保守口径并标注矛盾                           |
+| F4 | "claude code 按 \~200k 假设...永远晚于真实上限" (§6.4, 原表述为事实)               | **推断被当实证** — 92% 阈值与窗口映射机制有 E4 来源, 但"自定义后端下仍按 200k 计"无任何来源                                 | 降级为"推断非实证", 补 5min 验证法 (上站跑 `/context` 看窗口基数) |
+| F5 | opencode `limit.context` 嵌套式配置示例 (§6.2)                           | 两来源格式冲突: 嵌套式 (yahtoo 第三方整理) vs GLM5 案例平铺式 (bswen); `prune` 默认值亦冲突 (官方片段 false vs 第三方 true) | 保留嵌套式但加"格式待站上验证"标注; prune 显式写 true 消歧         |
+| F6 | Auto Memory "v2.1.59+ / 前 200 行或 25KB" (§6.2)                     | 单一 CSDN 博客来源 (E4)                                                                          | 加"单一博客来源, 细节待实测"标注                            |
+| F7 | "GLM5 同款教训**实证**" (§6.2 注释)                                       | 案例本身真实但属博客级证据 (E4)                                                                         | 措辞降为"社区案例"                                    |
+| F8 | "opencode-websearch-cited...补 claude code 内置 WebSearch 之洞" (§7.5) | 措辞失准 — 该件是 **opencode** 插件, 补的是 opencode 侧; 且"受支持的提供商"是否含本地后端未知                            | 已改精确表述 + 标注存疑待试点                              |
 
 **抽验通过的关键断言 (无需改)**:
 
-| 断言 | 来源等级 | 核验方式 |
-| ---- | ------ | ------ |
-| Trae superpowers 血统 6 件 = obra/superpowers 快照 | **E1 级实证** | mdskills.ai 收录的 obra/brainstorming description 与 Trae 本地 SKILL.md **逐字一致**; skill 名单/正文结构 (docs/superpowers/specs 路径引用) 吻合 |
-| superpowers v6.3.0 (2026-08-12) / 820k+ installs / 20+ skills | E1+E3 | marketplace commit 记录 + clauder-navi + marketplace README |
-| nemotron RULER @256k 96.30 / @1M 91.75; gpt-oss @256k 52.30 / @1M 22.30; temp=1.0+top_p=0.95; SWE-Bench 数字 | E1 | build.nvidia.com model card 直读 |
-| claude-mem 支持 opencode (`--ide opencode`) / 注入近 10 session | E1 | GitHub README + docs.claude-mem.ai |
-| opencode-codex-memory: 6h 闲置提取 / 版本须钉死 / 需 ≥1.18 / 全本地 | E1 | npm README 直读 |
-| Trae 插件层 8 个宿主绑定 (browser/chrome/computer-use/lark/...) | E1 | installed-plugins.json 直读 |
-| anthropics document-skills = Claude.ai 文档功能同源, 含生成-验证-修复循环 | E2 | 官方 README ("power Claude's document capabilities") + 实现.review |
-| 多 agent token \~15x | E3 | NVIDIA 官方 blog 引 Anthropic 工程博客 |
-| gpt-oss CoT passback (5+ 轮) / effort low 几乎无推理 | E3 | ivanopcode 实测指南 |
-| ctx 16k→32k 同级 MoE 吞吐 -30% | E3 | corti DGX Spark 实测 (原文"comparable small-active MoE", 非gpt-oss本体 — 归因已按原文限定) |
+| 断言                                                                                                          | 来源等级       | 核验方式                                                                                                                       |
+| ----------------------------------------------------------------------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Trae superpowers 血统 6 件 = obra/superpowers 快照                                                               | **E1 级实证** | mdskills.ai 收录的 obra/brainstorming description 与 Trae 本地 SKILL.md **逐字一致**; skill 名单/正文结构 (docs/superpowers/specs 路径引用) 吻合 |
+| superpowers v6.3.0 (2026-08-12) / 820k+ installs / 20+ skills                                               | E1+E3      | marketplace commit 记录 + clauder-navi + marketplace README                                                                  |
+| nemotron RULER @256k 96.30 / @1M 91.75; gpt-oss @256k 52.30 / @1M 22.30; temp=1.0+top\_p=0.95; SWE-Bench 数字 | E1         | build.nvidia.com model card 直读                                                                                             |
+| claude-mem 支持 opencode (`--ide opencode`) / 注入近 10 session                                                  | E1         | GitHub README + docs.claude-mem.ai                                                                                         |
+| opencode-codex-memory: 6h 闲置提取 / 版本须钉死 / 需 ≥1.18 / 全本地                                                      | E1         | npm README 直读                                                                                                              |
+| Trae 插件层 8 个宿主绑定 (browser/chrome/computer-use/lark/...)                                                     | E1         | installed-plugins.json 直读                                                                                                  |
+| anthropics document-skills = Claude.ai 文档功能同源, 含生成-验证-修复循环                                                  | E2         | 官方 README ("power Claude's document capabilities") + 实现.review                                                             |
+| 多 agent token \~15x                                                                                         | E3         | NVIDIA 官方 blog 引 Anthropic 工程博客                                                                                            |
+| gpt-oss CoT passback (5+ 轮) / effort low 几乎无推理                                                              | E3         | ivanopcode 实测指南                                                                                                            |
+| ctx 16k→32k 同级 MoE 吞吐 -30%                                                                                  | E3         | corti DGX Spark 实测 (原文"comparable small-active MoE", 非gpt-oss本体 — 归因已按原文限定)                                                |
 
 **残余风险声明**: ① E4 级 claude code 机制细节 (/compact 92% 阈值, /context 用法) 未在本地后端实测 — 均为操作建议非关键路径, 实操时以实际行为为准; ② opencode 官方 config schema 未直接拉取 (open-code.ai 文档页未全文读), §6.2 配置以第三方整理为据 — 上站首装时须过一遍 schema 校验; ③ 本审计覆盖 §6/§7 (本轮新增), §1-§5 为首轮调研 + 附录 subagent 原文, D4 时已过一轮排幻觉 (表格重排提交 1ef4179)。
 
