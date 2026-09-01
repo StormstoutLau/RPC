@@ -7,7 +7,7 @@ type: design
 version: 1.1
 status: draft
 date: 2026-09-02
-depends: \[Agent生态升级与多智能体协作架构调研 (docs/, 2026-09-02 含 §7.6 排幻觉审计版 + §8 审计任务补充调研含 §8.5 opencode 原生审计件二轮)]
+depends: \[Agent生态升级与多智能体协作架构调研 (docs/, 2026-09-02 含 §7.6 排幻觉审计版 + §8 审计任务补充调研含 §8.5 opencode 原生审计件二轮 + §8.6 插件层稳定性三轮)]
 upstream: [ADR-0001 集群运维框架审计与四项改进决策]
 ---
 
@@ -281,6 +281,9 @@ V0 验证门 (V1→V2→V3→V5, 任一失败只影响对应模块不改全局)
 | 技能过多稀释 120B 指令遵循（自动触发误判率升）                             | 全部关键技能手动 `/` 触发纪律（调研 §2.1 限制②）；P2 视需要上 opencode-skillful 懒加载 |
 | claude-mem worker→LiteLLM 路径未验证                        | 已隔离在 P2（本设计范围外），V4 验证门独立裁决                                   |
 | 审计 F4 陷阱若成立，claude code 长会话踩 400                       | V2 验证 + 无害缓解三件套已内建（§10 T2 无关，claude code 侧纪律入手册）             |
+| opencode plugin API patch 版内静默破坏（`api.command.*` 移除、V2 hook 静默失效致父会话挂死，调研 §8.6.1） | 技能全走 A 类纯 prompt（零 plugin API 依赖）；opencode 锁版本禁自动升级，升级后跑 hook 冒烟；自制 skill Phase 2 hook 化降级为失效后备且禁用 TUI `api.*` 面 |
+| 首跑 ripgrep 从 GitHub Releases 下载停滞 → grep/skill 工具无限挂死零报错（调研 §8.6.1 #23891，中国网络高危） | 两站环境准备步骤强制 `apt install ripgrep`                                             |
+| claude code marketplace 自动更新静默清空插件目录（调研 §8.6.2）                      | claude code 插件面维持最小、不依赖 marketplace 分发；未来需要时本地路径安装             |
 
 ***
 
