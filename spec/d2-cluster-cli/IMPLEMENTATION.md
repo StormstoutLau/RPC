@@ -12,7 +12,7 @@ upstream: null
 
 > **Feature**: D2 集群聚合操作
 > **创建日期**: 2026-09-01
-> **状态**: draft
+> **状态**: verified（2026-09-01 23:45 验收 9 项全过，CHECKLIST v1.1）
 > **Spec 步骤**: Step 5-6
 > **基于调研**: [RESEARCH.md](./RESEARCH.md)
 > **决策来源**: [ADR-0001](../../adr/ADR-0001-集群运维框架审计与四项改进决策.md) §决策 3（D2）
