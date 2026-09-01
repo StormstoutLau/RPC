@@ -1,0 +1,124 @@
+#!/bin/bash
+# infer-load <alias前缀> [--backend llama-rpc|llama-single|vllm] [--port N] [--ctx N] [--threads N]
+# 首次加载自动生成默认 conf (打印路径, 可编辑后 systemctl restart llama-server@<alias>)
+set -uo pipefail
+AWORK="scott-lau@scott-lau-NEX.local"
+AWORK_IP=192.168.1.11
+
+PREFIX=""; BACKEND=""; PORT=""; CTX=""; THREADS=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --backend) BACKEND="$2"; shift 2 ;;
+    --port) PORT="$2"; shift 2 ;;
+    --ctx) CTX="$2"; shift 2 ;;
+    --threads) THREADS="$2"; shift 2 ;;
+    *) PREFIX="$1"; shift ;;
+  esac
+done
+[ -n "$PREFIX" ] || { echo "用法: infer-load <alias前缀> [--backend ...] [--port N]"; exit 1; }
+
+log() { echo "[infer-load] $(date '+%H:%M:%S') $*"; }
+
+# ---- [1] 解析 alias (唯一前缀匹配) ----
+MATCHES=$(find -L /data/models/gguf -mindepth 2 -maxdepth 2 -type d 2>/dev/null | \
+  sed 's|/data/models/gguf/[^/]*/||; s|-GGUF$||' | tr 'A-Z' 'a-z' | sed 's/^minimax-m2.7.*/m27-q4ks/' | grep "^${PREFIX}" | sort -u)
+N=$(echo "$MATCHES" | grep -c .)
+if [ "$N" -eq 0 ]; then echo "ERROR: 无匹配 '$PREFIX' (infer-list 查看)"; exit 1; fi
+if [ "$N" -gt 1 ]; then echo "ERROR: 前缀歧义 ($N 匹配):"; echo "$MATCHES"; exit 1; fi
+ALIAS="$MATCHES"
+
+# ---- [2] 定位模型文件 + 生成 conf (若缺) ----
+CONF="/etc/llama-instances/${ALIAS}.env"
+if [ ! -f "$CONF" ]; then
+  # 找 repo 目录
+  REPO=$(find -L /data/models/gguf -mindepth 2 -maxdepth 2 -type d 2>/dev/null | \
+    while read -r d; do a=$(basename "$d" | sed 's/-GGUF$//' | tr 'A-Z' 'a-z'); \
+    case "$a" in minimax-m2.7*) a="m27-q4ks";; esac; [ "$a" = "$ALIAS" ] && echo "$d"; done | head -1)
+  [ -z "$REPO" ] && { echo "ERROR: repo not found"; exit 1; }
+  # 主权重优先级: 合并单文件 (B5j 产物, 排除分片/mmproj) > 分片首片 (未合并)
+  F=$(find -L "$REPO" -name '*.gguf' ! -name '*-of-0000*.gguf' ! -name 'mmproj*' -size +1G -printf '%s %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+  [ -z "$F" ] && F=$(find -L "$REPO" -name '*-00001-of-*.gguf' | head -1)
+  [ -z "$F" ] && F=$(find -L "$REPO" -name '*.gguf' | head -1)
+  # 大小判定: F 为分片首片(未合并)→repo 总量 (防首片 header-only); F 为合并单文件→文件本身
+  if echo "$F" | grep -q -- '-of-0000'; then SZ=$(du -smL "$REPO" | cut -f1); else SZ=$(( $(stat -c%s "$F") / 1048576 )); fi
+  # 后端默认判定
+  if [ -z "$BACKEND" ]; then
+    case "$ALIAS" in all-minilm*) BACKEND="llama-single";; *) \
+      if [ "$SZ" -gt 66560 ]; then BACKEND="llama-rpc"; else BACKEND="llama-single"; fi ;;
+    esac
+  fi
+  RPCV=""; [ "$BACKEND" = "llama-rpc" ] && RPCV="auto"
+  NCM=0; [ "$BACKEND" = "llama-rpc" ] && NCM=8
+  EMB=""; case "$ALIAS" in all-minilm*) EMB="--embedding";; esac
+  sudo tee "$CONF" >/dev/null <<CEOF
+# B5i 自动生成 ($(date '+%F %T')) — 可编辑后 systemctl restart llama-server@${ALIAS}
+MODEL_PATH=${F}
+PORT=${PORT:-8080}
+CTX=${CTX:-32768}
+THREADS=${THREADS:-16}
+N_CPU_MOE=${NCM}
+RPC_TARGET=${RPCV}
+EXTRA_FLAGS="-fa on ${EMB}"
+CEOF
+  log "conf 生成: $CONF (backend=$BACKEND)"
+fi
+source "$CONF"
+[ -n "$PORT" ] && PORT_NUM="$PORT" || PORT_NUM="${PORT:-8080}"
+
+# ---- [3] 互斥: 停另一后端 ----
+log "停旧实例 (llama/vllm)..."
+sudo systemctl stop 'llama-server@*' 2>/dev/null || true
+if pgrep -f 'vllm.entrypoint[s]' >/dev/null 2>&1; then
+  log "停 vLLM (Ray 双机)..."
+  pkill -f 'vllm.entrypoint[s]' 2>/dev/null || true
+  pkill -f '^ray::' 2>/dev/null || true
+  /home/scott-lau/vllm-rocm/bin/ray stop -f 2>/dev/null || true
+  ssh -o BatchMode=yes "$AWORK" "pkill -f '^ray::' 2>/dev/null; /home/scott-lau/vllm-rocm/bin/ray stop -f 2>/dev/null" 2>/dev/null || true
+fi
+
+wait_gtt() {  # $1=tag, $2=ssh target (空=本地)
+  for i in $(seq 1 90); do
+    if [ -n "$2" ]; then
+      used=$(ssh -o BatchMode=yes "$2" "cat /sys/class/drm/card*/device/mem_info_gtt_used 2>/dev/null | head -1")
+    else
+      used=$(cat /sys/class/drm/card*/device/mem_info_gtt_used 2>/dev/null | head -1)
+    fi
+    [ -z "$used" ] && used=0
+    [ "$used" -lt 2000000000 ] && { log "$1 GTT released"; return 0; }
+    sleep 2
+  done
+  log "WARN: $1 GTT 180s 未释放"
+}
+wait_gtt "B" ""
+if [ -n "${RPC_TARGET:-}" ]; then
+  wait_gtt "A" "$AWORK"
+else
+  log "A GTT 跳过 (单机模式: RPC_TARGET 空, A 站资源与本加载无关)"
+fi
+
+# ---- [4] vLLM 路径 ----
+if [ "$BACKEND" = "vllm" ]; then
+  log "vLLM 路径: 调 a4_vllm_launch.sh (仅 m27-awq 验证)..."
+  exec bash /home/scott-lau/scripts/a4_vllm_launch.sh
+fi
+
+# ---- [5] A 站 rpc-server (分布式) ----
+if [ -n "${RPC_TARGET:-}" ]; then
+  log "A 站起 rpc-server@${ALIAS} (cache /data/rpccache/${ALIAS})..."
+  ssh -o BatchMode=yes "$AWORK" "sudo systemctl start rpc-server@${ALIAS}"
+fi
+
+# ---- [6] B 站 llama-server ----
+log "B 站起 llama-server@${ALIAS} (port ${PORT_NUM})..."
+sudo systemctl start "llama-server@${ALIAS}"
+
+# ---- [7] 健康检查 (-f: 503 Loading model 不算就绪) ----
+for i in $(seq 1 120); do
+  if curl -sf --max-time 2 "http://127.0.0.1:${PORT_NUM}/health" >/dev/null 2>&1; then
+    log "READY ✓ :${PORT_NUM} (llama-server@${ALIAS})"
+    exit 0
+  fi
+  sleep 3
+done
+log "ERROR: 健康检查 6min 超时 — journalctl -u llama-server@${ALIAS} 排查"
+exit 1
