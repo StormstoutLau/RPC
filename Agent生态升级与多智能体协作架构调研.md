@@ -1,7 +1,7 @@
 # Agent 生态升级与多智能体协作架构调研
 
 > 日期: 2026-09-01 · 作者: Scott (鹏) + Trae
-> 状态: **调研完成, 待用户裁决执行范围**
+> 状态: **调研完成, 待用户裁决执行范围** · 附录 A/B/C 归档三份 subagent 检索原始输出 (依据可追溯), 附录 D 为正文↔附录索引表
 > 前置: [ClaudeCode本地集群与子代理框架分析.md](ClaudeCode本地集群与子代理框架分析.md) (阶段2 GO)、[双端点部署与opencode混合框架调研.md](双端点部署与opencode混合框架调研.md) (双端点已落地)
 > 配套: [spec/vulkan-version-control/](spec/vulkan-version-control/) 五阶段 spec 模板链
 
@@ -9,10 +9,10 @@
 
 ## 0. 两个问题的答案速览
 
-| 问题 | 答案 |
-|---|---|
-| 插件生态是否需要更新? | **是, 且空间巨大**: 两站 4 个 agent 全部裸装 (无 MCP/skills/subagents/自定义 agents)。关键事实: **Skills/MCP/subagents 全是 CLI 客户端机制, 与后端无关** — 经 ANTHROPIC_BASE_URL 指向本地 nemotron/gpt-oss 后整套生态完全可用 (tool-use 已 PASS 实锤)。opencode 1.18+ 更是**直接读 `.claude/skills/`**, 一份 skills 两 CLI 零成本共用 |
-| 4 agent × trae 如何高效协作? | **五层循环**: trae 规划(生成 spec) → 派发(SSH headless 任务卡) → 本地执行(检索/编码/编译/测试) → 执行锚定验证(编译器+测试+数值输出, 零 LLM 成本拦幻觉) → trae ADD 审计回环。成本分配: 本地 80% 流量(无限 token), trae 20% 高价值轮次(规划+审计) |
+| 问题                     | 答案                                                                                                                                                                                                                                                                         |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 插件生态是否需要更新?            | **是, 且空间巨大**: 两站 4 个 agent 全部裸装 (无 MCP/skills/subagents/自定义 agents)。关键事实: **Skills/MCP/subagents 全是 CLI 客户端机制, 与后端无关** — 经 ANTHROPIC\_BASE\_URL 指向本地 nemotron/gpt-oss 后整套生态完全可用 (tool-use 已 PASS 实锤)。opencode 1.18+ 更是**直接读** **`.claude/skills/`**, 一份 skills 两 CLI 零成本共用 |
+| 4 agent × trae 如何高效协作? | **五层循环**: trae 规划(生成 spec) → 派发(SSH headless 任务卡) → 本地执行(检索/编码/编译/测试) → 执行锚定验证(编译器+测试+数值输出, 零 LLM 成本拦幻觉) → trae ADD 审计回环。成本分配: 本地 80% 流量(无限 token), trae 20% 高价值轮次(规划+审计)                                                                                                  |
 
 ***
 
@@ -20,23 +20,27 @@
 
 ### 1.1 两站 4 agent 版本与生态
 
-| 站 | Agent | 版本 | MCP | Skills | 自定义 Agents | 诊断 |
-|---|---|---|---|---|---|---|
-| A (NEX) | opencode | **1.18.25** (最新) | ❌ | ❌ | ❌ | 裸装 |
-| A (NEX) | claude code | 2.1.220 | ❌ | ❌ | ❌ | 裸装, 有 plugins 目录(marketplaces)未启用 |
-| B (GTR-Pro) | opencode | **1.18.9** (落后 16 版) | ❌ | ❌ | ❌ | 裸装, plugin SDK 1.17.11 |
-| B (GTR-Pro) | claude code | 2.1.252 | ❌ | ❌ | ❌ | 裸装, ~/.claude 只有 theme 配置 |
+| 站           | Agent       | 版本                   | MCP | Skills | 自定义 Agents | 诊断                                |
+| ----------- | ----------- | -------------------- | --- | ------ | ---------- | --------------------------------- |
+| A (NEX)     | opencode    | **1.18.25** (最新)     | ❌   | ❌      | ❌          | 裸装                                |
+| A (NEX)     | claude code | 2.1.220              | ❌   | ❌      | ❌          | 裸装, 有 plugins 目录(marketplaces)未启用 |
+| B (GTR-Pro) | opencode    | **1.18.9** (落后 16 版) | ❌   | ❌      | ❌          | 裸装, plugin SDK 1.17.11            |
+| B (GTR-Pro) | claude code | 2.1.252              | ❌   | ❌      | ❌          | 裸装, \~/.claude 只有 theme 配置        |
 
 ### 1.2 后端能力 (已验证)
 
 - nemotron (B 站单机 20.9 t/s) / gpt-oss (A 站 58-64 t/s) 双端点 E2E 全通
+
 - claudecode 经 LiteLLM anthropic 转换层 tool-use **PASS** (stats.cpp 写码→编译→测试闭环) — 这是 skills 可用的充分条件
+
 - opencode 双 provider (cluster-local + cluster-litellm) PONG 验证通过
 
 ### 1.3 主控站既有方法论资产
 
 - spec 五阶段模板链: RESEARCH → DESIGN → IMPLEMENTATION → CHECKLIST → ADR ([模板](spec/vulkan-version-control/DESIGN_TEMPLATE.md))
+
 - CHECKLIST.md 本质就是文档间对齐审计 (§1.1-1.4 RESEARCH↔DESIGN↔IMPL 交叉验收) — ADD 审计的雏形
+
 - trae 侧大量专业 skill 可作为蓝本 (statistical-analysis / peer-review / deep-research 等)
 
 ***
@@ -50,39 +54,40 @@
 已验证的社区后端: Ollama / LM Studio / llama.cpp / DeepSeek / GLM / Kimi / OpenRouter — **llama.cpp 原生支持已在被广泛复制的方案列表里**。
 
 **已知限制 (120B 本地模型适配)**:
+
 1. 模型名映射: 需 `ANTHROPIC_DEFAULT_SONNET_MODEL` 等环境变量指向本地模型名
-2. skill 自动触发依赖指令遵循 — 小模型对 description 语义匹配弱 → **关键 skill 用 `/` 手动触发或 `disable-model-invocation`**
+2. skill 自动触发依赖指令遵循 — 小模型对 description 语义匹配弱 → **关键 skill 用** **`/`** **手动触发或** **`disable-model-invocation`**
 3. 内置 WebSearch 是 Anthropic 服务端工具, 本地后端不可用 → **用 web-search 类 MCP 替代** (MCP 工具本地执行, 不受后端影响)
 4. 无 prompt caching → 长会话每轮重编码 (本地免费, 可接受)
 
 ### 2.2 opencode 对 Claude Code 生态的兼容性 (第一梯队)
 
-| 资产 | 复用成本 | 说明 |
-|---|---|---|
+| 资产                | 复用成本    | 说明                                                              |
+| ----------------- | ------- | --------------------------------------------------------------- |
 | `.claude/skills/` | **零成本** | opencode 原生扫描 `.claude/skills/*/SKILL.md` 与 `~/.claude/skills/` |
-| CLAUDE.md | 零成本 | 无 AGENTS.md 时自动 fallback 读 CLAUDE.md |
-| MCP server 本体 | 一次性转换 | server 复用, 但 `.mcp.json` → `opencode.json` 的 `mcp` 字段需手改 |
-| `.claude/agents/` | 轻量搬移 | frontmatter 字段调整 (tools CSV → 权限对象, model 名格式) |
-| Hooks | 需重写 | settings.json 范式 → JS/TS 插件范式 |
+| CLAUDE.md         | 零成本     | 无 AGENTS.md 时自动 fallback 读 CLAUDE.md                            |
+| MCP server 本体     | 一次性转换   | server 复用, 但 `.mcp.json` → `opencode.json` 的 `mcp` 字段需手改        |
+| `.claude/agents/` | 轻量搬移    | frontmatter 字段调整 (tools CSV → 权限对象, model 名格式)                  |
+| Hooks             | 需重写     | settings.json 范式 → JS/TS 插件范式                                   |
 
 **战略含义**: 以 `.claude/` 目录为**单一事实源**, claudecode 直接用, opencode 兼容读取 — 两 CLI 一套资产。
 
 ### 2.3 社区多 agent 降幻觉十大模式 (精选与本集群相关的)
 
-| # | 模式 | 核心机制 | 本集群映射 |
-|---|---|---|---|
-| 1 | **Orchestrator-Worker** | 强模型规划 + 隔离上下文弱模型并行 + 结构化 artifact 回传 | trae=orchestrator, 本地=worker |
-| 2 | **Planner-Generator-Evaluator** | 生成者不验证自己 | trae 审计本地产出 |
-| 3 | **Draft-Verify 级联** | 便宜模型起草 → 验证门 → 贵模型接受/增强 | PayPal 生产: 88.8% 请求停在草稿层, 省 45.8% 成本且质量 100% vs 原生 95% |
-| 4 | **Spec 门控流水线** | Constitution→Specify→Plan→Tasks→Implement | spec_workflow 已有, 补 Constitution 层 |
-| 5 | **Rigor 拦截器** (Curie) | 动作级拦截→验证→转发 | 3.4x 超最强基线 |
-| 6 | **证据外部锚定** (Co-Scientist) | 数值声明 vs 执行日志比对 | 幻觉率 4% (Nature 2026); **回测场景是社区空白 → 本集群的机会** |
-| 7 | **对抗辩论 + Elo 排名** | 多空辩论消除确认偏误 | nemotron vs gpt-oss 交叉审 |
-| 8 | **否决权风控层** (TradingAgents) | 风控 agent 一等公民可否决 | 量化场景治理 |
-| 9 | **验证门 fallback 链** | 超时/schema 失败/低置信 → 升级 | 本地失败 → trae 接管 |
-| 10 | **记忆增强迭代** | 历史决策向量化检索 | topics.md/project_memory 人工版已有 |
+| #  | 模式                              | 核心机制                                      | 本集群映射                                                  |
+| -- | ------------------------------- | ----------------------------------------- | ------------------------------------------------------ |
+| 1  | **Orchestrator-Worker**         | 强模型规划 + 隔离上下文弱模型并行 + 结构化 artifact 回传      | trae=orchestrator, 本地=worker                           |
+| 2  | **Planner-Generator-Evaluator** | 生成者不验证自己                                  | trae 审计本地产出                                            |
+| 3  | **Draft-Verify 级联**             | 便宜模型起草 → 验证门 → 贵模型接受/增强                   | PayPal 生产: 88.8% 请求停在草稿层, 省 45.8% 成本且质量 100% vs 原生 95% |
+| 4  | **Spec 门控流水线**                  | Constitution→Specify→Plan→Tasks→Implement | spec\_workflow 已有, 补 Constitution 层                    |
+| 5  | **Rigor 拦截器** (Curie)           | 动作级拦截→验证→转发                               | 3.4x 超最强基线                                             |
+| 6  | **证据外部锚定** (Co-Scientist)       | 数值声明 vs 执行日志比对                            | 幻觉率 4% (Nature 2026); **回测场景是社区空白 → 本集群的机会**           |
+| 7  | **对抗辩论 + Elo 排名**               | 多空辩论消除确认偏误                                | nemotron vs gpt-oss 交叉审                                |
+| 8  | **否决权风控层** (TradingAgents)      | 风控 agent 一等公民可否决                          | 量化场景治理                                                 |
+| 9  | **验证门 fallback 链**              | 超时/schema 失败/低置信 → 升级                     | 本地失败 → trae 接管                                         |
+| 10 | **记忆增强迭代**                      | 历史决策向量化检索                                 | topics.md/project\_memory 人工版已有                        |
 
-**社区共识三支柱**: ① 幻觉根源是"未锁定的决策" (Qodo: 给足上下文幻觉 54%→16%); ② 读密集任务 fan-out 并行, 写密集任务单线程; ③ ~80% 真实请求简单到本地模型即可处理。
+**社区共识三支柱**: ① 幻觉根源是"未锁定的决策" (Qodo: 给足上下文幻觉 54%→16%); ② 读密集任务 fan-out 并行, 写密集任务单线程; ③ \~80% 真实请求简单到本地模型即可处理。
 
 **ADD 审计印证**: 社区 "AI Decision Audit" (unhallucinate 项目) 与 Scott 的 ADD 审计方法论**独立收敛** — 枚举 AI 需要做的每个决策, 验证答案是否存在于 spec 中, 不存在则必然被幻觉。
 
@@ -92,23 +97,23 @@
 
 ### 3.1 版本更新
 
-| 项 | 动作 | 优先级 |
-|---|---|---|
+| 项                             | 动作                 | 优先级                                        |
+| ----------------------------- | ------------------ | ------------------------------------------ |
 | B 站 opencode 1.18.9 → 1.18.25 | `opencode upgrade` | P0 (子代理失败可恢复/v1.18.20、深度限制/v1.18.2 都是协作刚需) |
-| A 站 claude code 2.1.220 → 最新 | npm 全局更新 | P1 |
-| B 站 claude code 2.1.252 | 已近最新 | — |
+| A 站 claude code 2.1.220 → 最新  | npm 全局更新           | P1                                         |
+| B 站 claude code 2.1.252       | 已近最新               | —                                          |
 
 ### 3.2 Skills 部署 (单一事实源 `~/.claude/skills/`, 两站 git 同步)
 
 按 Scott 场景筛选 (宁缺毋滥, 本地 120B 的 skill 自动触发弱 → 手动 `/` 调用为主):
 
-| Skill | 来源 | 场景 | 理由 |
-|---|---|---|---|
-| `code-review` | claude code 内置 | 编程 | 已有, 零成本 |
-| `superpowers` 子集 | obra/superpowers | 编程 | 挑 TDD + systematic-debugging 两个, 给本地 agent 注入工程纪律; 全套 14 个对 120B 过重 |
-| `quant-analysis` | 定制 (参考 quant-mcp) | 金融计量 | Sharpe/VaR/回测/Greeks 的操作规范 |
-| `paper-search` | 定制 (MCP 配套 skill) | 学术推理 | 教 agent "该怎么用检索工具" (Anthropic 官方建议 MCP 配 skill) |
-| `spec-compliance` | 定制 | 全场景 | ADD 审计的客户端形态: 枚举决策→比对 spec |
+| Skill             | 来源                | 场景   | 理由                                                                  |
+| ----------------- | ----------------- | ---- | ------------------------------------------------------------------- |
+| `code-review`     | claude code 内置    | 编程   | 已有, 零成本                                                             |
+| `superpowers` 子集  | obra/superpowers  | 编程   | 挑 TDD + systematic-debugging 两个, 给本地 agent 注入工程纪律; 全套 14 个对 120B 过重 |
+| `quant-analysis`  | 定制 (参考 quant-mcp) | 金融计量 | Sharpe/VaR/回测/Greeks 的操作规范                                          |
+| `paper-search`    | 定制 (MCP 配套 skill) | 学术推理 | 教 agent "该怎么用检索工具" (Anthropic 官方建议 MCP 配 skill)                     |
+| `spec-compliance` | 定制                | 全场景  | ADD 审计的客户端形态: 枚举决策→比对 spec                                          |
 
 **定制 skill 示例** (`~/.claude/skills/spec-compliance/SKILL.md`):
 
@@ -129,13 +134,13 @@ allowed-tools: Read, Grep, Glob
 
 ### 3.3 MCP servers (本地 stdio, 不依赖外网 API key 的优先)
 
-| MCP | 安装 | 场景 | 落点 |
-|---|---|---|---|
-| **duckdb** | `uvx mcp-server-duckdb` | 金融计量 | 直连 factor_db.duckdb — **最高对口度** |
-| **quant-mcp** | `uvx quant-mcp` | 金融数学 | 20 工具: Sharpe/VaR/CVaR/回测/HMM/Greeks/Fama-French/组合优化 |
-| **paper-search** | `uvx paper-search-mcp` | 学术推理 | arXiv/PubMed/Semantic Scholar/CrossRef |
-| **context7** | `npx -y @upstash/context7-mcp` | 编程+计量 | statsmodels/PyTorch 等库文档实时拉取 |
-| filesystem | 不装 | — | CLI 已有文件工具, 冗余 |
+| MCP              | 安装                             | 场景    | 落点                                                    |
+| ---------------- | ------------------------------ | ----- | ----------------------------------------------------- |
+| **duckdb**       | `uvx mcp-server-duckdb`        | 金融计量  | 直连 factor\_db.duckdb — **最高对口度**                      |
+| **quant-mcp**    | `uvx quant-mcp`                | 金融数学  | 20 工具: Sharpe/VaR/CVaR/回测/HMM/Greeks/Fama-French/组合优化 |
+| **paper-search** | `uvx paper-search-mcp`         | 学术推理  | arXiv/PubMed/Semantic Scholar/CrossRef                |
+| **context7**     | `npx -y @upstash/context7-mcp` | 编程+计量 | statsmodels/PyTorch 等库文档实时拉取                          |
+| filesystem       | 不装                             | —     | CLI 已有文件工具, 冗余                                        |
 
 **opencode 配置** (`opencode.jsonc` 增加):
 
@@ -162,17 +167,19 @@ allowed-tools: Read, Grep, Glob
 
 ### 3.4 自定义 Agents (`.claude/agents/`, 定向用途)
 
-| Agent | 模型 | 工具白名单 | 职责 |
-|---|---|---|---|
-| `research-worker` | 本地 | Read/Grep/Glob + paper-search MCP | 文献检索/代码考古, 只读 |
-| `code-executor` | 本地 | 全工具 | 编码/编译/测试闭环 (stats.cpp 模式复制) |
-| `quant-analyst` | 本地 | duckdb + quant MCP | 数据查询/指标计算 |
-| `auditor` | 本地 | 只读 | 初审: 结构化验收 (终审留 trae) |
+| Agent             | 模型 | 工具白名单                             | 职责                          |
+| ----------------- | -- | --------------------------------- | --------------------------- |
+| `research-worker` | 本地 | Read/Grep/Glob + paper-search MCP | 文献检索/代码考古, 只读               |
+| `code-executor`   | 本地 | 全工具                               | 编码/编译/测试闭环 (stats.cpp 模式复制) |
+| `quant-analyst`   | 本地 | duckdb + quant MCP                | 数据查询/指标计算                   |
+| `auditor`         | 本地 | 只读                                | 初审: 结构化验收 (终审留 trae)        |
 
 ### 3.5 不建议的项
 
 - ~~Agent Teams / tmux 多会话~~ — 主控站单人操作, 收益低于复杂度
+
 - ~~ARIS 全套学术流水线~~ — 重, 且与 trae 侧 deep-research 重复
+
 - ~~Hooks 体系~~ — opencode 侧需 JS 插件重写, 维护税 > 收益, 等 V2 稳定再说
 
 ***
@@ -220,25 +227,25 @@ allowed-tools: Read, Grep, Glob
 
 ### 4.3 降幻觉五机制 (逐条落地)
 
-| 机制 | 社区证据 | 本集群落地 |
-|---|---|---|
-| ① spec 锁定决策 | Qodo: 54%→16% | L1 的 Constitution + 任务卡 acceptance 字段 |
-| ② 生成者不验证自己 | RLM-Cascade 质量 100%>95% | 本地只执行, trae 只审计, 角色永不分饰 |
-| ③ 结构化交接 | 消灭传话效应 | 任务卡 JSON + artifact 落盘 (非 stdout 口信) |
-| ④ 执行锚定 | Co-Scientist 幻觉 4% | L4 硬门: 编译/测试/数值, 零 LLM 成本 |
-| ⑤ 上下文隔离 | Anthropic: 子agent=智能过滤器 | 本地 agent 只拿任务卡, 不拿全局上下文 |
+| 机制          | 社区证据                    | 本集群落地                                 |
+| ----------- | ----------------------- | ------------------------------------- |
+| ① spec 锁定决策 | Qodo: 54%→16%           | L1 的 Constitution + 任务卡 acceptance 字段 |
+| ② 生成者不验证自己  | RLM-Cascade 质量 100%>95% | 本地只执行, trae 只审计, 角色永不分饰               |
+| ③ 结构化交接     | 消灭传话效应                  | 任务卡 JSON + artifact 落盘 (非 stdout 口信)  |
+| ④ 执行锚定      | Co-Scientist 幻觉 4%      | L4 硬门: 编译/测试/数值, 零 LLM 成本             |
+| ⑤ 上下文隔离     | Anthropic: 子agent=智能过滤器 | 本地 agent 只拿任务卡, 不拿全局上下文               |
 
 ### 4.4 成本与能力分工
 
-| 资源 | 角色 | 占比 |
-|---|---|---|
-| trae 付费模型 | 规划 / ADD 审计 / 最终合成 / 失败兜底 (fallback 链终点) | ~20% 轮次, 100% 高价值轮次 |
-| 本地 4 agent | 信息检索 / 多轮试错 / 编码执行 / 数据处理 / 初审 | ~80% 轮次, 无限 token |
-| 编译器+测试+DuckDB | 锚定验证 | 0 LLM 成本 |
+| 资源            | 角色                                       | 占比                   |
+| ------------- | ---------------------------------------- | -------------------- |
+| trae 付费模型     | 规划 / ADD 审计 / 最终合成 / 失败兜底 (fallback 链终点) | \~20% 轮次, 100% 高价值轮次 |
+| 本地 4 agent    | 信息检索 / 多轮试错 / 编码执行 / 数据处理 / 初审           | \~80% 轮次, 无限 token   |
+| 编译器+测试+DuckDB | 锚定验证                                     | 0 LLM 成本             |
 
 ### 4.5 实施路线
 
-**P0 (立即, ~1h)**: B 站 opencode 升级 + `.claude/skills/` 共享骨架 + duckdb MCP (最高对口) + `research-worker`/`code-executor` 两个 agent 定义
+**P0 (立即, \~1h)**: B 站 opencode 升级 + `.claude/skills/` 共享骨架 + duckdb MCP (最高对口) + `research-worker`/`code-executor` 两个 agent 定义
 **P1 (半天)**: 任务卡 JSON 协议 + 派发脚本 (PowerShell/bash) + `spec-compliance` skill + 端到端走一个真实任务
 **P2 (可选)**: quant-mcp / paper-search MCP / 对抗辩论双模型交叉审 / 回测数值锚定工具 (社区空白 = 论文素材)
 
@@ -250,3 +257,472 @@ allowed-tools: Read, Grep, Glob
 2. **MCP 进程开销**: 每个 opencode/claudecode 会话拉起 MCP 子进程 — duckdb 文件锁与 LM Studio 无关, 但并发查询注意 duckdb 单写者限制
 3. **免费模型配额波动**: opencode 免费模型是外部服务, 任务路由脚本需有 fallback 到本地端点的分支
 4. **spec 维护税**: 按海拔采纳 — 跨会话/跨 agent 的工作必须 spec 化, 一行修改跳过全部仪式 (社区批评 SDD "Waterfall in a Hoodie" 的解药)
+
+***
+
+# 附录 A: OpenCode CLI 生态调研全文 (subagent 检索原始输出)
+
+> 检索时间: 2026-09-01 · 检索工具: Trae general_purpose_task subagent (web 调研)
+> 归档目的: 正文 §2.2/§3 的依据溯源
+
+**背景说明**：OpenCode 于 2025-06-19 由 SST（Serverless Stack）团队发布，2026 年该团队更名为 **Anomaly**，仓库已从 `sst/opencode` 迁移至 **`anomalyco/opencode`**（旧链接自动重定向）。MIT 协议，GitHub Star 超 18 万，支持 75+ LLM 供应商（通过 models.dev），提供 TUI / Desktop（beta）/ Web / SDK 多形态。
+
+## A.1 最新版本号及 Changelog 要点
+
+**最新稳定版：v1.18.25（2026-08-28 发布，GitHub Releases API 确认）**；npm 包名 `opencode-ai`，可通过 `opencode upgrade` 升级、`opencode doctor` 体检。
+
+v1.18 系列（2026 年 7-8 月）要点：
+- **Desktop v2 默认启用**（桌面端 beta 转正推进中）；同时存在 **V2 引擎（`opencode2`，beta）** 双轨并行，支持 standalone 模式，V1 已能读取 V2 配置字段保持兼容。
+- **v1.18.2**：Agent 深度限制（防止子代理无限嵌套）。
+- **v1.18.19**：Cloudflare AI Gateway 原生 OpenAI/Anthropic passthrough；Codex 速率限制对齐 ChatGPT 订阅额度。
+- **v1.18.20**：子代理失败可恢复（surface resumable `task_id`）、大量网络错误重试强化、`opencode run` 下子代理权限请求应答。
+- **v1.18.23**：Cloudflare AI Gateway 第三方 provider 路由修复；Azure 支持 Entra ID CLI 登录。
+- **v1.18.17**：会话压缩（compaction）保留完整近期轮次、Vertex AI 多区域 Gemini 路由。
+- 历史里程碑：v1.0.190 起 **Skills 原生化**；v1.1.48（2026-01）Skills 可作为斜杠命令调用。
+
+## A.2 MCP 支持方式与配置语法
+
+配置入口：项目根 `opencode.json` / `opencode.jsonc`，全局 `~/.config/opencode/opencode.json`，`$schema: "https://opencode.ai/config.json"`。支持 **本地（stdio）** 与 **远程（Streamable HTTP）** 两类，工具自动注入 LLM 上下文（按名称引用，如 `use the xxx tool`）。
+
+**V1 语法（当前稳定版，顶层 `mcp` 字段）：**
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    // 本地 stdio 服务器
+    "filesystem": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+      "environment": { "MY_VAR": "{env:MY_VAR}" },  // {env:NAME} 占位符替换
+      "enabled": true,
+      "timeout": 30000
+    },
+    // 远程 Streamable HTTP 服务器
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp",
+      "headers": { "CONTEXT7_API_KEY": "{env:CONTEXT7_API_KEY}" },
+      "oauth": false   // 纯 API Key 认证时必须显式关闭，否则 401 会被误判为 OAuth 挑战
+    },
+    // 远程 + 预注册 OAuth 客户端
+    "sentry": {
+      "type": "remote",
+      "url": "https://mcp.sentry.dev/mcp",
+      "oauth": { "clientId": "{env:CLIENT_ID}", "clientSecret": "{env:CLIENT_SECRET}", "scope": "tools:read tools:execute" }
+    }
+  }
+}
+```
+
+- OAuth 默认自动发现（PKCE + 动态客户端注册 + token 刷新），凭据存于项目配置之外；组织可通过 `.well-known/opencode` 下发默认服务器。
+- 支持**按 agent 覆盖 MCP**（agent frontmatter / `agent` 配置内的 `mcp` 字段）。
+- CLI 管理命令：`opencode mcp auth <name>`、`opencode mcp auth list`、`opencode mcp logout <name>`、`opencode mcp debug <name>`（诊断 OAuth/连接）。**没有** `claude mcp add` 式的 `opencode mcp add`，添加服务器主要靠编辑配置文件。
+
+**V2 语法（beta，结构改为嵌套 + snake_case）：** 服务器放入 `mcp.servers.<name>`，`enabled` 改为语义相反的 `disabled`，OAuth 字段为 `client_id/client_secret`，新增 `codemode`（默认 true，工具经 Code Mode 暴露）与 `cwd` 选项。
+
+## A.3 Agent / 子代理自定义（Custom Agents）
+
+两类代理：**primary**（Tab 键循环切换，内置 Build 全工具 / Plan 受限只读）与 **subagent**（内置 General、Explore、Scout；通过 **@mention** 或主代理自动派发调用）。v1.18.20 后子代理失败可恢复。
+
+**方式一：Markdown + YAML frontmatter（推荐）**，放 `.opencode/agents/<name>.md`（项目）或 `~/.config/opencode/agents/<name>.md`（全局）：
+
+```markdown
+---
+description: Reviews code for quality and best practices
+mode: subagent              # primary | subagent | all
+model: anthropic/claude-sonnet-4-5
+temperature: 0.1
+steps: 20                   # 最大迭代步数（旧 maxSteps 已弃用）
+color: "#4CAF50"
+permission:                 # 新权限系统（旧 tools 布尔写法已弃用，会自动迁移）
+  edit: deny
+  bash:
+    "*": ask
+    "git diff": allow
+  skill:
+    "internal-*": deny
+---
+You are in code review mode. Focus on code quality, bugs and security.
+```
+
+**方式二：JSON 配置**（`opencode.json` 的 `agent` 字段，可覆盖内置代理如 `plan`）。未知 frontmatter 键会自动收集进 `options` 并透传给 provider（如 `thinking`、`budget_tokens`）。
+
+调用方式：`opencode --agent <name>`、TUI 内 @mention、Tab 切换。社区有大量现成 agent 集合（如 Shakudo-io/opencode-agents）。
+
+## A.4 Skills 与插件机制
+
+**Skills（v1.0.190 起原生）**：原生 `skill` 工具 + **懒加载**（仅 name/description 预载入工具 schema，正文按需读取），遵循 Agent Skills 开放标准（agentskills.io）。发现路径（项目级向上遍历至 git 根）：
+- `.opencode/skills/<name>/SKILL.md`（原生）、`~/.config/opencode/skills/`（全局）
+- **兼容路径：`.claude/skills/`、`.agents/skills/`（项目与全局均可）**
+
+```markdown
+---
+name: git-release                      # 1-64 字符，小写+单连字符，须与目录名一致
+description: Create consistent releases and changelogs   # 1-1024 字符
+license: MIT
+compatibility: opencode
+metadata: { audience: maintainers }
+---
+## What I do
+- Draft release notes from merged PRs ...
+```
+
+权限控制：`permission.skill` 支持 glob 模式（`"internal-*": "deny"`、`"experimental-*": "ask"`），可按 agent 覆盖或整体禁用 `skill` 工具；另可在配置中用 `skills.paths` 添加自定义目录。2026 年初起 skills 可直接作为 `/skill-name` 斜杠命令调用。原社区插件 `opencode-skills` 已归档（功能被官方 PR #5930 / #6000 吸收）。
+
+**插件（`@opencode-ai/plugin` SDK）**：JS/TS 模块（Bun 运行时，直接写 TS），两种加载方式——本地 `.opencode/plugins/*.ts` 与 `~/.config/opencode/plugins/`（自动加载）；npm 包写入配置（启动时 bun 自动安装缓存到 `~/.cache/opencode/node_modules/`）：
+
+```jsonc
+{ "plugin": ["opencode-helicone-session", "opencode-wakatime", "@my-org/custom-plugin"] }
+```
+
+```typescript
+// .opencode/plugins/custom-tools.ts
+import { type Plugin, tool } from "@opencode-ai/plugin"
+export const CustomToolsPlugin: Plugin = async (ctx) => {
+  return {
+    "tool.execute.before": async (input, output) => { /* 拦截/改写工具执行 */ },
+    tool: {
+      mytool: tool({
+        description: "This is a custom tool",
+        args: { foo: tool.schema.string() },
+        async execute(args) { return `done: ${args.foo}` }
+      })
+    }
+  }
+}
+```
+
+可用 hook：`event`（session.idle 等全事件）、`tool.execute.before/after`、`shell.env`、`experimental.session.compacting` 等；外部依赖放 `.opencode/package.json`（启动时自动 `bun install`）。另有自定义命令 `.opencode/command/*.md`（支持 `$ARGUMENTS`、`$SHELL{}` 模板变量）。V2 有 `@opencode-ai/plugin/v2` API。
+
+## A.5 与 Claude Code 生态的兼容性
+
+| 资产 | 能否复用 | 说明 |
+|---|---|---|
+| **CLAUDE.md** | ✅ 直接 | 官方 fallback：无 `AGENTS.md` 时自动读取项目/全局 `CLAUDE.md` |
+| **Skills（.claude/skills/）** | ✅ 直接 | 原生扫描 `.claude/skills/*/SKILL.md` 与 `~/.claude/skills/`，同一份文件双工具共用；未知 frontmatter 字段（`allowed-tools`、`user-invocable` 等）被忽略 |
+| **MCP server 本体** | ✅（协议标准） | server 进程/URL 完全复用；**但不读取 `.mcp.json` / `~/.claude.json`**，需转换写入 `opencode.json` |
+| **Agents（.claude/agents/）** | ⚠️ 需转换 | 同为 Markdown+frontmatter，搬到 `.opencode/agents/` 并调整字段（`tools: Read, Edit` CSV → 权限对象；`model: sonnet` → `anthropic/claude-sonnet-4-5`）；有 claude-to-opencode 等 porter 工具 |
+| **Commands（.claude/commands/）** | ⚠️ 需搬迁 | 复制到 `.opencode/command/`，内容基本通用 |
+| **Hooks** | ❌ 需重写 | Claude 的 settings.json+脚本范式 ≠ opencode 的 JS/TS 插件范式 |
+| **互操作** | ✅ | 支持 ACP（Agent Client Protocol），Claude Code 可经 skill 委派任务给 opencode；Multi-CLI 类 MCP server 可让多 CLI 互调 |
+
+**MCP 配置转换示例**（Claude Code `.mcp.json` → `opencode.json`）：
+
+```json
+// Claude Code: .mcp.json                    // OpenCode: opencode.json
+{ "mcpServers": {                            {
+  "github": {                                  "$schema": "https://opencode.ai/config.json",
+    "command": "npx",                          "mcp": {
+    "args": ["-y", "@modelcontextprotocol/server-github"],    "github": {
+    "env": { "GITHUB_TOKEN": "ghp_xxx" }                        "type": "local",
+  },                                                             "command": ["npx", "-y", "@modelcontextprotocol/server-github"],
+  "deepwiki": {                                                  "environment": { "GITHUB_TOKEN": "{env:GITHUB_TOKEN}" }
+    "type": "http",                                             },
+    "url": "https://mcp.deepwiki.com/mcp"                       "deepwiki": {
+  }                                                               "type": "remote",
+}                                                                 "url": "https://mcp.deepwiki.com/mcp"
+                                                                }
+                                                              }
+                                                            }
+```
+
+**结论**：opencode 对 Claude Code 生态兼容性在同类工具中属于第一梯队——规则文件与 Skills **零成本复用**，MCP server **低成本转换**（一次性配置改写），agents/commands 需轻量搬移，hooks 需重写为插件；配合 ACP 还能与 Claude Code 双向协作。
+
+**A 附录来源**:
+- [OpenCode 官方 Changelog（dev.opencode.ai）](https://dev.opencode.ai/changelog)
+- [GitHub Releases – anomalyco/opencode](https://github.com/anomalyco/opencode/releases)
+- [官方文档：MCP Servers](https://opencode.ai/docs/mcp-servers) / [V2 MCP 文档](https://opencode.ai/v2/docs/mcp-servers)
+- [官方文档：Agents（中文）](https://opencode.ai/docs/zh-cn/agents/)
+- [官方文档：Skills](https://opencode.ai/docs/skills/) / [Plugins](https://open-code.ai/ko/docs/plugins)
+- [opencode-skills 插件归档说明（原生 Skills 迁移指南）](https://github.com/malhashemi/opencode-skills)
+- [OpenCode/ClaudeCode/Codex 目录兼容性对比](https://kimigao.com/blog/opencode-claudecode-codex-skills-folder-compatibility/)
+- [官方文档：Rules（Claude Code 兼容）](https://opencode.ai/docs/fr/rules/)
+- [OpenCode-Book：自定义 Agent 配置](https://github.com/0xtresser/OpenCode-Book/blob/main/ZH/%E7%AC%AC06%E7%AB%A0_Agent%E7%B3%BB%E7%BB%9F/6.5_%E8%87%AA%E5%AE%9A%E4%B9%89Agent%E9%85%8D%E7%BD%AE.md)
+- [opencode.school MCP 认证排障 PR #151](https://github.com/opencodeschool/opencode.school/pull/151/files)
+- [OpenCode 介绍与安装指南（CSDN）](https://blog.csdn.net/xilinxiayue/article/details/163199629)
+
+***
+
+# 附录 B: Claude Code CLI 扩展生态调研全文 (subagent 检索原始输出)
+
+> 检索时间: 2026-09-01 · 检索工具: Trae general_purpose_task subagent (web 调研)
+> 归档目的: 正文 §2.1/§3.2/§3.3 的依据溯源
+
+## B.1 Agent Skills 机制（.claude/skills 与 SKILL.md）
+
+**核心机制**：Skill = 一个文件夹 + 一个 `SKILL.md`（大小写敏感）。遵循渐进式披露（progressive disclosure）三级加载：① YAML frontmatter（name/description）常驻系统提示词用于路由判断；② SKILL.md 正文仅在相关时加载；③ `scripts/`、`references/`、`assets/` 按需加载。因此长参考材料平时几乎零 token 成本。
+
+**存放位置与优先级**（同名冲突时 enterprise > personal > project；plugin 用 `plugin-name:skill-name` 命名空间隔离）：
+
+| 级别 | 路径 | 生效范围 |
+|---|---|---|
+| 企业 | managed settings 下发 | 全组织 |
+| 个人 | `~/.claude/skills/<name>/SKILL.md` | 本人所有项目 |
+| 项目 | `.claude/skills/<name>/SKILL.md` | 仅本项目（可入 git 共享） |
+| 插件 | `<plugin>/skills/<name>/SKILL.md` | 启用插件处 |
+
+**SKILL.md frontmatter 主要字段**：`name`（必填，kebab-case ≤64 字符）、`description`（必填，**自动触发的主信号**，建议写清 "Use when..."）、`allowed-tools`（预授权工具，支持 `Bash(git:*)` 作用域语法）、`argument-hint`、`model`、`disable-model-invocation`（仅允许用户 `/` 手动触发）、`user-invocable`、`mode`、`context: fork` + `agent:`（在 subagent 中运行）、`hooks`、`version/license`。正文支持动态上下文注入（行首 `` !`git diff HEAD` `` 会在加载前执行并内联输出）和 `$ARGUMENTS`/`$1` 位置参数。**自定义 slash commands 已合并进 skills**（`.claude/commands/` 旧格式仍兼容，同名时 skill 优先）。另有 monorepo 嵌套目录发现、live change detection（免重启）等特性。
+
+**开放标准**：Claude Code skills 遵循 **agentskills.io 开放标准**，同一 SKILL.md 可跨 Claude Code、Codex CLI（`.codex/skills/`）、GitHub Copilot（`.github/skills/`，兼容 `.claude/skills/`）、OpenCode、Gemini CLI、Cursor 使用；Claude Code 在标准之上扩展了 invocation control、subagent 执行、动态注入。
+
+**官方与社区集合**：
+- **anthropics/skills**（官方，~21.8k+ stars）：`document-skills`（docx/pdf/pptx/xlsx，source-available）、`mcp-builder`、`webapp-testing`、`algorithmic-art`、`brand-guidelines`、`skill-creator`（元技能，用来造 skill）、`template-skill` + Agent Skills 规范与模板。安装：`/plugin marketplace add anthropics/skills` → `/plugin install document-skills@anthropic-agent-skills`。
+- **obra/superpowers**（社区最流行，MIT，2026 年官方 marketplace 收录，安装量 68–82 万级）：14 个方法论 skills——brainstorming → writing-plans → subagent-driven-development → test-driven-development（强制红绿重构）→ systematic-debugging → requesting/receiving-code-review → verification-before-completion 等，本质是给模型注入工程纪律。
+- 其他：claude-code-plugins-plus（240+ 插件/185 skills）、VoltAgent/awesome-agent-skills、awesome-claude-skills 系列、BbgnsurfTech/claude-skills-collection（汇总索引）、claude-academic-toolkit（38+ 学术 skills）、ARIS（自主科研流水线）。
+
+## B.2 Subagents 多代理机制（.claude/agents）
+
+**机制**：每个 subagent 是一个 Markdown 文件（项目级 `.claude/agents/` 可入 git；用户级 `~/.claude/agents/`），拥有**独立上下文窗口**、独立系统提示、独立工具白名单与权限，干完活只把摘要返回主对话——核心价值是保护主上下文 + 并行 + 约束。
+
+**frontmatter 字段**：`name`、`description`（Claude 靠它决定何时自动委派）、`model`（sonnet/opus/haiku/inherit，搜索类任务用 haiku 省钱）、`tools`（白名单，如 `Read, Grep, Glob`；可用 `Task(agent-type)` 语法限制可派生的下级）、`memory: project|user`（2026 新增的跨会话持久记忆）、`maxTurns`、`permissionMode`。
+
+**内置 subagents**：`Explore`（Haiku、只读、代码检索）、`Plan`（plan mode 下做调研）、`general-purpose`（全工具）。**注意 subagent 不自动继承 CLAUDE.md 和会话历史，需在 prompt 中显式传递上下文**；subagent 原则上不能再派生 subagent。
+
+**2026 年生态**：新增 **Agent Teams**（跨多个 Claude Code 会话的 peer-to-peer 协作，配 tmux 分屏，区别于单会话内的 subagent）、会话 fork、`SubagentStart/SubagentStop` hooks、向 subagent 预载 skills、前台/后台运行、`/agents` 交互式向导。Skill 与 subagent 的分工：**Skill 管规则（做什么怎么做），subagent 管干活（独立执行单元）**。
+
+## B.3 Hooks 与 MCP 集成
+
+**Hooks**：在 `settings.json` / `.claude/settings.json` / `.claude/settings.local.json` 的 `hooks` 键配置，三层结构：事件 → matcher（工具名正则，可匹配 MCP 工具 `mcp__server__tool`）→ handler。2026 年事件已扩展到 ~26 个：`SessionStart/End`、`UserPromptSubmit`、`PreToolUse`（exit code 2 可阻断工具调用）、`PostToolUse`、`Stop`、`SubagentStop`、`PreCompact/PostCompact`、`Notification`、`PermissionRequest`、`TaskCreated/Completed`、`CwdChanged`、`FileChanged` 等。handler 四种类型：**command**（stdin 收 JSON）、**http**（POST 到远端）、**prompt**（让 LLM 判断）、**agent**（可实际动手验证的子代理）；可用 `$CLAUDE_PROJECT_DIR` 引用项目内脚本。hooks 也可写进 skills 和 agents 的 frontmatter。典型用法：PreToolUse 拦截 `rm -rf`、PostToolUse 自动 prettier 格式化、Stop 时跑测试。
+
+**MCP**：四种传输（`claude mcp add --transport http|sse|stdio|ws`），stdio 用 `--` 分隔服务端命令；三种 scope（local 默认 / project 写入 `.mcp.json` 可入 git / user）。支持 `claude mcp add-json`、从 Claude Desktop 导入、claude.ai connectors 复用、OAuth 认证、MCP tool search（大量工具时按需加载）、elicitation 交互。官方定位的类比：**MCP 提供厨房（连接与工具），Skills 提供食谱（工作流知识）**，两者是互补关系；Anthropic 官方甚至建议 MCP 集成方配一个 skill 来教用户"该怎么用这套工具"。
+
+## B.4 编程 + 学术推理 + 金融数学/计量场景的实用组件
+
+| 场景 | 推荐 Skills | 推荐 MCP servers |
+|---|---|---|
+| **代码审查/TDD** | 内置 bundled `/code-review`、`/debug`、`/verify`；superpowers（test-driven-development、systematic-debugging、requesting-code-review） | GitHub/GitLab MCP（读 PR/issue） |
+| **学术文献** | ARIS（idea→review→paper 自主流水线）、claude-academic-toolkit（文献综述/答辩/发表写作） | **Ariadne**（系统性综述 83 工具：Semantic Scholar/OpenAlex/arXiv 多源检索、PRISMA 筛选、引文网络、BibTeX/LaTeX 导出）、**zotero-mcp / zotero-library-mcp**（本地 Zotero 库检索、PDF 标注、任意 CSL 引用格式、DOI/arXiv/ISBN 入库）、paper-search 类 MCP（arXiv/PubMed/Semantic Scholar/CrossRef） |
+| **LaTeX/写作** | 各学术工具包自带 latex skill；skill-creator 自建论文模板 skill | latex 编译类 MCP（如 research-tools 的 latex_compile）、Ariadne 的 IEEE/ACM 模板导出 + Overleaf 上传 |
+| **数据/计量分析** | 官方 `xlsx` skill、data-analysis-assistant（含多个统计子代理）、CSV summarizer | DuckDB/PostgreSQL MCP（本地数据查询）、**FRED**（宏观指标：利率、CPI、VIX、收益率曲线）、Context7（实时拉取 statsmodels/PyTorch 等库文档） |
+| **金融/量化** | Claude Equity Research、Anthropic 2026-05 发布的 10 个金融 agent 模板（Model Builder:DCF/LBO/可比公司；Earnings Reviewer；Valuation Reviewer 等，技能+连接器+子代理三合一） | **quant-mcp**（20 工具：风险指标 Sharpe/VaR/CVaR、回测、HMM 市场状态识别、regime-aware 蒙特卡洛、期权 Greeks、DCF/Piotroski/Altman、Fama-French 因子归因、组合优化，数据源全免费）、Financial Modeling Prep、Moody's（6 亿公司数据） |
+| **Web 搜索** | 内置 WebSearch/WebFetch | Tavily、Brave Search、Exa（结构化检索） |
+
+## B.5 Skills 能否在非 Anthropic 后端（本地模型经 ANTHROPIC_BASE_URL）下工作？
+
+**结论：可以正常工作，且已有大量实证。** 原理：skills/subagents/hooks/MCP 全部是 **Claude Code CLI 客户端侧机制**——skill 正文与 subagent 定义由 CLI 在本地拼装进请求，hooks 由 CLI 在本地执行，MCP 由 CLI 在本地拉起进程，与后端是谁无关。只要后端说 **Anthropic Messages API** 协议，整套扩展生态即可用。
+
+**已验证的后端**：① **Ollama**（v0.14.0+，2026 年 1 月起原生支持 Anthropic Messages API，`ANTHROPIC_BASE_URL=http://localhost:11434`）；② **LM Studio**（0.4.1+ 原生 `/v1/messages`）；③ **llama.cpp**（llama-server 原生支持，Mac 上跑 Qwen3.5-35B 等已是被广泛复制的方案）；④ **DeepSeek**（`https://api.deepseek.com/anthropic`）；⑤ **智谱 GLM**（Z.ai 官方推出 ¥20/月起的 GLM Coding Plan 专供 Claude Code 等十余款编码工具）；⑥ **Kimi、MiniMax、OpenRouter**（"Anthropic Skin" 端点，需将 `ANTHROPIC_API_KEY` 置为空串并 `/logout` 清缓存）、NVIDIA NIM（经 free-claude-code 等代理）。实证项目 ARIS 明确声明其 skills 工作流 "GLM、MiniMax、Kimi、LongCat、DeepSeek 均已测试，零 Claude/OpenAI API 依赖"。
+
+**已知限制与注意事项**：
+1. **模型名映射**：Claude Code 内部按 haiku/sonnet/opus 三档请求，需设 `ANTHROPIC_DEFAULT_SONNET_MODEL/HAIKU_MODEL/OPUS_MODEL` 指向本地模型名，或在 Ollama 里 `ollama cp qwen3-coder:30b claude-sonnet-4-6` 做别名，否则报 model-not-found。
+2. **工具调用质量是真正瓶颈**：Claude Code 每一轮都是 function call，弱模型会 malform `tool_calls` 导致循环（有文档记录 480B 级开源模型在 30K token 后出现工具调用幻觉回退）。选型看 BFCL/τ-bench/SWE-bench，而非文风。
+3. **skill 自动触发依赖指令遵循能力**：小模型对 description 语义匹配和"何时该用 skill"的判断明显弱于 Claude，建议对关键 skill 用 `/` 手动触发或设 `disable-model-invocation`。
+4. **服务端工具不可用**：内置 WebSearch 属 Anthropic 服务端工具，第三方后端一般不支持（claude-code-router 生态里靠转换器打补丁，如某 fork 专门修 Gemini 的 finish_reason 才让 subagent 跑通）；**替代方案是接 web-search 类 MCP server**——MCP 工具是本地执行的，不受后端影响。同理 `prompt`/`agent` 类型 hooks 内部要调 LLM，需后端可用。
+5. **无 prompt caching**：本地后端每轮重编码全部历史，长会话延迟和成本上升；30 秒/轮的体验底线要求约 15 tok/s 以上生成速度。
+6. 多后端混合可用 **claude-code-router**（按任务路由到不同厂商，subagent 用 `<CCR-SUBAGENT-MODEL>` 标记路由）或 claude-code-delegate-local（主会话留在 Anthropic、子代理外派本地模型）。
+
+## B.6 安装配置示例
+
+**① 最小 Skill**（`~/.claude/skills/summarize-changes/SKILL.md`）:
+```markdown
+---
+description: Summarizes uncommitted changes and flags risks. Use when the user
+  asks what changed, wants a commit message, or asks to review their diff.
+allowed-tools: Bash(git diff:*), Bash(git log:*), Read
+---
+## Current changes
+!`git diff HEAD`
+## Instructions
+Summarize the changes above in 2-3 bullets, then list risks (missing error
+handling, hardcoded values, tests needing updates).
+```
+
+**② Subagent**（`.claude/agents/code-reviewer.md`）:
+```markdown
+---
+name: code-reviewer
+description: Expert code review specialist. Use proactively after writing or modifying code.
+tools: Read, Grep, Glob, Bash
+model: inherit
+---
+You are a senior code reviewer. Run `git diff` first; organize findings as
+Critical / Warning / Suggestion, each with file:line and a concrete fix.
+```
+
+**③ Hooks**（`.claude/settings.json`）:
+```json
+{ "hooks": { "PreToolUse": [ { "matcher": "Bash",
+      "hooks": [ { "type": "command", "if": "Bash(rm *)",
+        "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/block-rm.sh" } ] } ],
+  "PostToolUse": [ { "matcher": "Write|Edit",
+      "hooks": [ { "type": "command",
+        "command": "prettier --write \"$CLAUDE_TOOL_INPUT_FILE_PATH\" 2>/dev/null || true" } ] } ] } }
+```
+
+**④ MCP**:
+```bash
+claude mcp add --transport http notion https://mcp.notion.com/mcp
+claude mcp add --scope project --transport stdio quant -- uvx quant-mcp
+claude mcp add zotero -- uvx zotero-library-mcp   # 学术文献
+/plugin marketplace add anthropics/skills          # 官方 skills 市场
+/plugin install document-skills@anthropic-agent-skills
+/plugin marketplace add obra/superpowers-marketplace && /plugin install superpowers@superpowers-marketplace
+```
+
+**⑤ 本地/第三方后端**（PowerShell 示例）：
+```powershell
+# Ollama(需 v0.14+)
+$env:ANTHROPIC_BASE_URL="http://127.0.0.1:11434"
+$env:ANTHROPIC_API_KEY="ollama"; $env:ANTHROPIC_AUTH_TOKEN="ollama"
+$env:ANTHROPIC_MODEL="qwen3-coder:30b"
+$env:ANTHROPIC_DEFAULT_SONNET_MODEL="qwen3-coder:30b"
+$env:ANTHROPIC_DEFAULT_HAIKU_MODEL="qwen3-coder:30b"
+$env:ANTHROPIC_DEFAULT_OPUS_MODEL="qwen3-coder:30b"
+claude
+# 或 DeepSeek: BASE_URL=https://api.deepseek.com/anthropic
+# 或 GLM(Z.ai Coding Plan)/OpenRouter(https://openrouter.ai/api,API_KEY 需显式置空)
+```
+
+## B.7 总结论
+
+1. Claude Code 已形成 **Skills（知识层）+ Subagents/Agent Teams（执行层）+ Hooks（确定性控制层）+ MCP（连接层）+ Plugins（分发层）** 五位一体的扩展体系，且 Skills 通过 agentskills.io 成为跨工具开放标准，复用性极强。
+2. 编程场景首选 superpowers + 内置 `/code-review`；学术场景用 ARIS/Ariadne/zotero-mcp + paper-search MCP；金融计量场景用 quant-mcp + FRED + 官方金融 agent 模板；web 检索建议用 MCP 而非依赖服务端 WebSearch。
+3. **Skills 在非 Anthropic 后端完全可用**——它们是纯客户端机制；前提是后端实现 Anthropic Messages API（Ollama/LM Studio/llama.cpp/DeepSeek/GLM/Kimi/OpenRouter 均已支持），并做好模型名映射；体验上限取决于后端模型的工具调用与指令遵循能力，而非机制本身。
+
+**B 附录来源**:
+- [Extend Claude with skills — Claude Code 官方文档](https://code.claude.com/docs/en/skills)
+- [Create custom subagents — Claude Code 官方文档](https://docs.anthropic.com/en/docs/claude-code/sub-agents)
+- [Hooks reference — Claude Code 官方文档](https://code.claude.com/docs/en/hooks)
+- [Connect Claude Code to tools via MCP — 官方文档](https://code.claude.com/docs/en/mcp)
+- [anthropics/skills — GitHub](https://github.com/anthropics/skills)
+- [obra/superpowers — GitHub](https://github.com/obra/superpowers)
+- [Claude Academic Toolkit — GitHub](https://github.com/rafeeqinea/claude-academic-toolkit)
+- [ARIS: Auto-claude-code-research-in-sleep — GitHub](https://github.com/AuroraSxh/Auto-claude-code-research-in-sleep)
+- [Ariadne 学术研究 MCP — LobeHub](https://lobehub.com/mcp/cgarryza-ariadne)
+- [zotero-mcp — GitHub](https://github.com/richardjlyon/zotero-mcp)
+- [zotero-library-mcp — PyPI](https://pypi.org/project/zotero-library-mcp/)
+- [quant-mcp — GitHub](https://github.com/irohan0/quant-mcp)
+- [Top 8 Claude Skills for Finance and Quantitative Developers — Snyk](https://snyk.io/jp/articles/top-claude-skills-finance-quantitative-developers/)
+- [Pairing Claude Code with Local Models — KDnuggets](https://www.kdnuggets.com/pairing-claude-code-with-local-models)
+- [OpenRouter × Claude Code 集成指南](https://openrouter.ai/docs/guides/coding-agents/claude-code-integration)
+- [claude-code-router — GitHub](https://github.com/musistudio/claude-code-router)
+- [claude-code-delegate-local — GitHub](https://github.com/fegone/claude-code-delegate-local)
+- [SKILL.md Format Reference(skillshelf)](https://github.com/timctfl/skillshelf/blob/main/skillmd-specs.md)
+- [Claude Code 多 Agent 协作：Subagents 与 Agent Teams(腾讯云开发者社区)](https://cloud.tencent.com/developer/article/2652960)
+- [2026 Claude Code 配置指南(CSDN)](https://blog.csdn.net/qq_73472828/article/details/160851280)
+- [华尔街金融 agent 模板发布报道(掘金)](https://juejin.cn/post/7640524650062446644)
+
+***
+
+# 附录 C: 多 Agent 协作降幻觉社区最佳实践调研全文 (subagent 检索原始输出)
+
+> 检索时间: 2026-09-01 · 检索工具: Trae general_purpose_task subagent (web 调研)
+> 归档目的: 正文 §2.3/§4.2/§4.3 的依据溯源
+
+## C.1 精炼结论（6条）
+
+**1. 幻觉的根源是"未锁定的决策"，不是模型能力。** 社区已收敛到一个共识：AI 在 spec 缺失时会替你做决定，而这些决定就是幻觉。Qodo 数据显示给足上下文后幻觉率从 54% 降至 16%；"unhallucinate" 项目明确使用 **AI Decision Audit**（即 ADD 审计的社区对应物）：枚举代码生成中 AI 需要做的每一个决策，验证答案是否存在于 spec 中——不存在则必然被幻觉。这与你"设计方案→实施方案→质量审计→ADD审计"多轮迭代的路线完全一致，且社区正在独立收敛到同一方法论。
+
+**2. Anthropic vs Cognition 之争已被调和：可分解性是唯一决策变量。** Anthropic 多agent研究系统（Opus 规划 + Sonnet 子agent执行）在广度优先研究任务上超单 agent 90.2%，但代价是 ~15x token；Cognition《Don't Build Multi-Agents》指出编码任务因隐式决策冲突不适合并行。2026 年社区结论：**读密集、可并行分解的任务 → fan-out 多agent；写密集、共享状态的任务 → 单线程连续上下文**。中间态用 pipeline（顺序传递）而非 orchestrator-worker。
+
+**3. 强弱模型分工的经济学已成熟：draft-verify 模式质量不降反升。** RLM-Cascade（PayPal 生产环境）用 DeepSeek 起草、Opus 验证/增强，88.8% 请求停在草稿层，省 45.8% 成本，且质量基准 100% vs 原生 Opus 的 95%——验证者同时充当质量过滤器。FrugalGPT 级联（59–98% 节省）、RouteLLM（85% 节省保 95% 质量）构成完整谱系。**关键洞察：~80% 的真实请求简单到小模型即可处理。**
+
+**4. 多agent降低幻觉的机制不是"多个脑子"，而是三件事：上下文隔离（子agent是"智能过滤器"，只返回压缩后的结构化 artifact）、结构化交接（JSON schema 而非自由文本，消灭"传话效应"）、验证闭环（生成者不验证自己）。**
+
+**5. SDD 的社区实践已分层：Spec-First（文档引导）→ Spec-Anchored（spec 与代码同步演化）→ Spec-as-Source（代码是一次性产物）。** 但批评同样成立：有损压缩（5万 token 需求 elicitation 压成 1.5万 token markdown）、维护税（spec 与代码同步是持续成本）、小任务仪式开销。成熟做法是**按海拔采纳**：跨会话/跨agent存活的工作必须 spec 化，一行修改跳过全部仪式。
+
+**6. 学术场景的黄金模式是"rigor 拦截 + 证据外部锚定"：** Curie 的 Inter-ARM 拦截每个 agent 动作（拦截→验证→转发），较最强基线提升 3.4x；Google Co-Scientist（Nature 2026）用 Elo 辩论锦标赛排名假设 + 对 ChEMBL/UniProt 交叉验证 + 验证模块将论文数值声明与代码执行日志比对，幻觉率压到 4%。
+
+## C.2 分领域核心数据
+
+### C.2.1 Orchestrator-Worker 成熟案例
+
+| 案例 | 架构 | 数据 |
+|---|---|---|
+| Anthropic Research | Opus lead + 3–5 并行 Sonnet subagent + 独立引用核查 pass | +90.2%（广度优先研究eval）；token 解释 BrowseComp 80% 方差 |
+| Claude Code | 三层：主会话 / subagents（`.claude/agents/` 自定义，YAML+MD）/ Agent Teams | 成本：单会话 1x → subagent 2–4x → 3-agent team ~15x → 5+ team ~25x+ |
+| 内置 subagent 分工 | Explore（Haiku，只读）、Plan、General-purpose、Bash | 只读探索用最便宜模型，写操作才升级 |
+| 生产案例 | cqwerty.com 25 agent 纯 Hook 编排（Git 作为agent间通信总线）；BuzzSuite 12-agent 5波执行，52 文件零 TS 错误 | — |
+
+社区最佳实践：lead 只持有高层计划+子agent摘要（不持有细节）；子agent返回 JSON schema artifact（含 key_finding / sources / confidence）；限制嵌套深度（subagent 生成 sub-subagent 是反模式）；git worktree 隔离并行写操作。
+
+### C.2.2 Plan Mode / SDD 实践
+
+- **GitHub Spec Kit**（~69k stars，MIT，agent 无关，30+ 工具可用）：`Constitution → Specify → Clarify → Plan → Tasks → Analyze → Implement` 七阶段，每阶段人工审查。Constitution 阶段锁定不可协商原则（架构约束/编码规范/安全规则），是降低幻觉的核心杠杆——所有后续决策对齐它。
+- **Kiro**（AWS，GA 2025.11）：`requirements.md（EARS 语法：WHEN [条件] THE SYSTEM SHALL [行为]）→ design.md → tasks.md` 三阶段门控 + 任务依赖分析并行执行（大 spec 实施时间降至 1/4）。批评集中在定价（vibe/spec 请求分离导致重度用户 $550+/月）与厂商锁定。
+- **BMAD Method**（~35k stars）：虚拟敏捷团队（Analyst→PM→UX→Architect→PO 验证），planning 阶段用 web UI、execution 阶段切 IDE。
+- **Plan mode（Claude Code/Cursor）**：本质是"短暂的 spec"——只读探索+人批准后才执行，但不版本化。定位：短生命周期任务的轻量替代。
+
+### C.2.3 模型分工与幻觉抑制
+
+- **级联触发器（2026 共识）**：超时 / 重试耗尽 / **JSON schema 验证失败** / 置信度阈值未过 → 升级到贵模型。其中 validation gate 是最常被忽略却最有效的——它拦截"看起来合法的错误答案"。
+- **RAG 接地**：幻觉 8% → 0.3%（生产数据）。检索先行 + 引用强制。
+- **交叉验证三形态**：(a) 对外部数据库锚定（Co-Scientist 对 ChEMBL/UniProt）；(b) 对执行日志锚定（数值声明 vs 代码实际输出）；(c) 多源一致性（多agent独立检索后比对）。
+- **多模型投票/辩论**：Co-Scientist 的 Elo 锦标赛（两两辩论动态排名）优于一次性打分；TradingAgents 的多空辩论消除确认偏误。
+- **对本架构直接可抄的**：RLM-Cascade 的规则路由——简单 agentic 轮次直接走本地模型（~2% Opus 成本），schema 关键的工具调用轮次直通强模型，复杂轮次走 draft→verify。
+
+### C.2.4 学术/量化研究 Agent 案例
+
+| 系统 | 核心机制 | 量化结果 |
+|---|---|---|
+| **Curie**（UMich，开源） | Intra-agent rigor（策略校验：计划对齐目标、setup 可复现）+ Inter-ARM 拦截转发 + 实验知识模块 | 3.4x 超最强基线 |
+| **Co-Scientist**（DeepMind+100 机构，Nature 2026） | 7-agent：Supervisor + 生成/评审/排名(Elo)/进化/Meta-review/Proximity；三阶段 Generation→Reflection→Evolution | 幻觉率 4%；两天解决十年超级细菌问题（AMR 假设） |
+| **TradingAgents**（UCLA/Tauric，AAAI 2025） | 4分析师→多空辩论→Trader→风控团队（否决权）→PM；LangGraph 状态机；ChromaDB 记忆学习历史决策 | 累计收益/Sharpe/最大回撤全面超单 agent 基线 |
+| **AI Scientist v2** | 端到端：文献→想法→实验→写作 | 已产出 workshop 级论文 |
+
+TradingAgents 的两个可复用细节：(1) 结构化 `AgentState`（各报告+辩论状态+决策结果统一对象）消灭自然语言传话的信息损耗；(2) 风控 agent 是一等公民带**否决权**，不是顾问——这是量化场景治理的关键设计。
+
+## C.3 可复用架构模式清单（10 模式完整版）
+
+| # | 模式 | 结构 | 幻觉抑制机制 | 适用 |
+|---|---|---|---|---|
+| 1 | **Orchestrator-Worker** | 强模型规划 + N 个隔离上下文弱模型并行 + 结构化 artifact 回传 | 上下文隔离=智能过滤；压缩交接 | 读密集、可分解（文献扫描/多源数据采集） |
+| 2 | **Planner-Generator-Evaluator** | 规划、生成、批评三角色分离 | 生成者不验证自己 | 任何高风险产出 |
+| 3 | **Draft-Verify 级联** | 便宜模型起草 → 验证门（schema/置信度/超时）→ 贵模型接受/增强/重写 | 验证者=质量过滤器；80% 请求停在草稿层 | 高吞吐流水线（三机集群+云端强模型的天然形态） |
+| 4 | **Spec 门控流水线** | Constitution → Specify → Clarify → Plan → Tasks → Implement，阶段间人工/审计门 | 决策前置锁定；spec 提供可 QA 的基准 | 跨会话存活的工作（工具链/论文项目） |
+| 5 | **Rigor 拦截器**（Curie 式） | 每个 agent 动作：拦截 → 策略验证 → 转发 | 动作级而非输出级验证 | 实验执行、数据管道 |
+| 6 | **证据外部锚定**（Co-Scientist 式） | 数值声明 vs 执行日志比对；关键证据 vs 外部数据库 | 幻觉无处藏身 | 计量结果、论文数值 |
+| 7 | **对抗辩论 + Elo 排名** | 多空/正反 agent 结构化辩论，两两对决动态排名 | 消除确认偏误；多轮竞争淘汰弱假设 | 假设筛选、策略评估 |
+| 8 | **否决权风控层**（TradingAgents 式） | 风控 agent 一等公民，可否决执行 | 单点过度自信被制度性拦截 | 交易/生产系统治理 |
+| 9 | **验证门 fallback 链** | 超时/重试/schema 失败/低置信 → 逐级升级 | 拦截"看起来合法的错答案" | 本地↔云端混合 |
+| 10 | **记忆增强迭代** | 历史决策+结果向量化存储，检索注入 | 同类错误不重犯 | 长期研究项目 |
+
+## C.4 对 Research OS 的直接映射（3点）
+
+1. **三机集群的天然形态 = Pattern 3 + 9**：A/B 工作站跑本地模型做检索/草稿/数据清洗（80% 流量），云端强模型只做规划、审计、最终合成；validation gate 用 schema 校验（便宜且确定）而非 LLM 判断。
+2. **ADD 审计与社区收敛点重合**："AI Decision Audit" 的表述说明该模式已有独立命名和开源实现，可在论文/工具文档中直接引用对齐（unhallucinate, Qodo 2025）。
+3. **量化研究 agent 的缺失环节 = Pattern 6**：社区有 Co-Scientist 的日志比对，但**没有**针对回测的场景——"论文声明数值 vs 回测引擎实际输出"的强制比对是空白，与形式化验证层（Lean4）可形成互补：Lean4 验证理论，日志锚定验证数值。
+
+**C 附录来源**:
+- [Anthropic: How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system)
+- [Multi-agent is not an architecture decision. It is a workload decision.](https://agenticlab.sunilprakash.com/signal/003-multi-agent-decision-variable/)
+- [Orchestrator-Worker vs Pipeline vs Swarm: How to Choose a Multi-Agent Topology](https://dreaming.press/posts/orchestrator-worker-vs-pipeline-multi-agent.html)
+- [Research Report: Claude Code Multi-Agent Coordination for Software Development](https://github.com/pjloury/multi-agent-research)
+- [How to Use a Smart Orchestrator Model to Direct Cheaper Sub-Agent Models in Claude Code](https://www.mindstudio.ai/blog/smart-orchestrator-cheaper-sub-agent-models-claude-code)
+- [unhallucinate (AI Decision Audit / spec-driven-dev)](https://github.com/stineluca-ctrl/unhallucinate)
+- [Spec-Driven Development: Spec Kit vs Kiro vs Tessl](https://dreaming.press/posts/spec-driven-development-spec-kit-vs-kiro-vs-tessl.html)
+- [Spec-Driven Development: Four Approaches in Detailed Comparison](https://github.com/LLM-Coding/Spec-Driven)
+- [Spec-Driven Development Is Waterfall in a Hoodie](https://airisingtrends.com/spec-driven-development-ai-coding-agents/)
+- [RLM-Cascade: Response-Level Speculative Decoding for Cost-Efficient LLM API Serving](https://arxiv.org/html/2606.22840v1)
+- [Cascade and Self-Verification: Try the Cheap Model First, Upgrade If Needed](https://jonathanding.github.io/llm-learning/en/articles/cascade-self-verification/)
+- [How to Build a Fallback Model Chain](https://dreaming.press/posts/how-to-build-a-fallback-model-chain-cheap-model-frontier-backstop.html)
+- [Curie: Toward Rigorous and Automated Scientific Experimentation with AI Agents](https://arxiv.org/pdf/2502.16069v2)
+- [Google DeepMind's AI Co-Scientist now plans experiments, runs lab equipment, and writes scientific papers](https://the-decoder.com/google-deepminds-ai-co-scientist-now-plans-experiments-runs-lab-equipment-and-writes-scientific-papers/)
+- [Nature｜Google 7智能体科研团队 Co-Scientist](https://sts.hunnu.edu.cn/info/1132/1247.htm)
+- [TradingAgents: Multi-Agents LLM Financial Trading Framework (arXiv)](https://arxiv.org/pdf/2412.20138v3.pdf)
+- [The TradingAgents Playbook: Multi-Agent AI in Financial Services](https://www.ruh.ai/blogs/tradingagents-playbook-multi-agent-ai-financial-services)
+- [A Survey of AI Scientists](https://arxiv.org/pdf/2510.23045)
+
+***
+
+# 附录 D: 正文结论 ↔ 附录依据 索引表
+
+| 正文结论 | 依据出处 | 关键数据 |
+|---|---|---|
+| §2.1 Skills 本地后端可用 | 附录 B §B.5 | llama.cpp 在已验证后端列表; ARIS 零 Claude API 依赖实证 |
+| §2.1 四条已知限制 | 附录 B §B.5 注意事项 1-5 | 模型名映射/工具调用瓶颈/自动触发弱/WebSearch 不可用/无 caching |
+| §2.2 opencode 兼容性第一梯队 | 附录 A §A.5 | skills 零成本/MCP 一次性转换/agents 轻搬移/hooks 重写 |
+| §2.2 单一事实源策略 | 附录 A §A.4 + §A.5 | opencode 原生扫 `.claude/skills/` 与 `~/.claude/skills/` |
+| §2.3 模式3 draft-verify | 附录 C §C.1 结论3 + §C.2.3 | RLM-Cascade: 88.8% 停草稿层, 省45.8%, 质量 100% vs 95% |
+| §2.3 模式6 执行锚定 | 附录 C §C.1 结论6 + §C.2.4 | Co-Scientist 幻觉 4% (Nature 2026) |
+| §2.3 ADD 审计独立收敛 | 附录 C §C.1 结论1 | Qodo 54%→16%; unhallucinate 项目 |
+| §2.3 回测锚定是社区空白 | 附录 C §C.4 映射3 | "论文数值 vs 回测输出"强制比对无现成实现 |
+| §3.2 superpowers 只取子集 | 附录 B §B.1 | 14 个方法论 skills, 安装量 68-82 万级 |
+| §3.3 quant-mcp 工具清单 | 附录 B §B.4 金融/量化行 | 20 工具: Sharpe/VaR/CVaR/回测/HMM/Greeks/FF/组合优化 |
+| §3.3 MCP 配置语法 | 附录 A §A.2 | opencode V1 mcp 字段 + claude mcp add 对应命令 |
+| §4.2 读密集fan-out/写密集单线程 | 附录 C §C.1 结论2 | Anthropic +90.2% vs Cognition 批评的调和 |
+| §4.3 五机制数据 | 附录 C §C.1 结论1/3/4 + §C.2.3 | 见索引各行 |
+| §5.1 手动触发建议 | 附录 B §B.5 注意事项3 | 小模型 description 语义匹配弱 |
+| §5.4 按海拔采纳 | 附录 C §C.1 结论5 | SDD 三分层 + 批评 (有损压缩/维护税/仪式开销) |
+
