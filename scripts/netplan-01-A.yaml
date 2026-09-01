@@ -1,0 +1,9 @@
+network:
+  version: 2
+  renderer: NetworkManager
+  ethernets:
+    thunderbolt0:
+      addresses:
+      - "10.10.10.1/24"
+      dhcp4: false
+      mtu: 9000

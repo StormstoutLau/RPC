@@ -1,0 +1,19 @@
+[Unit]
+Description=llama.cpp llama-server (MiniMax-M2.7 Q4_K_S, 双机 RPC Master, B 站)
+# Phase 3: systemd 化 + 崩溃兜底 — A 站 rpc-server 挂掉时本进程 GGML_ABORT,
+# Restart=on-failure 使其在 10s 后自动重启; ExecStartPre 等 A 站 rpc-server 自愈(最长 5 分钟)
+# 参数与 run_server.sh / inference.conf 完全同源(行为等价迁移, 不引入性能变量)
+
+[Service]
+Type=simple
+User=scott-lau
+Group=scott-lau
+SupplementaryGroups=render video
+ExecStartPre=/llama-distributed/wait_rpc.sh
+ExecStart=/opt/llama.cpp/llama-server -m /home/scott-lau/.lmstudio/models/llmfan46/MiniMax-M2.7-ultra-uncensored-heretic-GGUF/MiniMax-M2.7-BF16-ultra-uncensored-heretic-Q4_K_S.gguf --rpc 10.10.10.1:50052 -ngl 999 -c 32768 -t 16 -b 512 --n-cpu-moe 8 -fa on --host 0.0.0.0 --port 8080
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target

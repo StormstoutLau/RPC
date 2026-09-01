@@ -1,0 +1,13 @@
+[Unit]
+Description=USB4/Thunderbolt power control on (prevent runtime suspend / retimer oscillation)
+After=multi-user.target
+ConditionPathExistsGlob=/sys/bus/thunderbolt/devices/*/power/control
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c 'for f in /sys/bus/thunderbolt/devices/*/power/control; do [ -e "$f" ] && echo on > "$f"; done'
+ExecStop=/bin/bash -c 'for f in /sys/bus/thunderbolt/devices/*/power/control; do [ -e "$f" ] && echo auto > "$f"; done'
+
+[Install]
+WantedBy=multi-user.target

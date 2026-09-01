@@ -1,0 +1,13 @@
+[Unit]
+Description=Cap CPU resume latency for USB4 RPC latency (Strix Halo RPC tuning)
+# 依据: strix-halo-guide #13 — USB4 ping RTT 600-700µs -> ~134µs, 功耗代价实测 +1.5W/机
+# ExecStart 用 tee+glob 避免 systemd 对 $ 变量的展开
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c 'echo 100 | tee /sys/devices/system/cpu/cpu*/power/pm_qos_resume_latency_us > /dev/null'
+ExecStop=/bin/bash -c 'echo 0 | tee /sys/devices/system/cpu/cpu*/power/pm_qos_resume_latency_us > /dev/null'
+
+[Install]
+WantedBy=multi-user.target

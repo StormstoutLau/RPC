@@ -1,0 +1,18 @@
+[Unit]
+Description=llama.cpp RPC server (ggml-rpc-server on USB4 thunderbolt0, A 站 Worker)
+# Phase 2: -H 10.10.10.1 收敛暴露面(协议无认证, 弃 0.0.0.0) + -c 本地缓存(二次加载 A 侧网络流量归零)
+# Phase 3: Restart=always 兜底崩溃传导(PR #26724 未合并前, B 站整进程 abort 后可自动恢复)
+
+[Service]
+Type=simple
+User=scott-lau
+Group=scott-lau
+SupplementaryGroups=render video
+Environment=LLAMA_CACHE=/data/rpccache/MiniMax-M2.7-Q4KS
+ExecStart=/opt/llama.cpp/ggml-rpc-server -H 10.10.10.1 -p 50052 -c
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target
