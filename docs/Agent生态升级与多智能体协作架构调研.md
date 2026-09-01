@@ -1,6 +1,6 @@
 # Agent 生态升级与多智能体协作架构调研
 
-> 日期: 2026-09-01 · 作者: Scott (鹏) + Trae
+> 日期: 2026-09-01 · 2026-09-02 补充上下文管理选型 (§6) · 作者: Scott (鹏) + Trae
 > 状态: **调研完成, 待用户裁决执行范围** · 附录 A/B/C 归档三份 subagent 检索原始输出 (依据可追溯), 附录 D 为正文↔附录索引表
 > 前置: [ClaudeCode本地集群与子代理框架分析.md](ClaudeCode本地集群与子代理框架分析.md) (阶段2 GO)、[双端点部署与opencode混合框架调研.md](双端点部署与opencode混合框架调研.md) (双端点已落地)
 > 配套: [spec/vulkan-version-control/](../spec/vulkan-version-control/) 五阶段 spec 模板链
@@ -13,6 +13,7 @@
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 插件生态是否需要更新?            | **是, 且空间巨大**: 两站 4 个 agent 全部裸装 (无 MCP/skills/subagents/自定义 agents)。关键事实: **Skills/MCP/subagents 全是 CLI 客户端机制, 与后端无关** — 经 ANTHROPIC\_BASE\_URL 指向本地 nemotron/gpt-oss 后整套生态完全可用 (tool-use 已 PASS 实锤)。opencode 1.18+ 更是**直接读** **`.claude/skills/`**, 一份 skills 两 CLI 零成本共用 |
 | 4 agent × trae 如何高效协作? | **五层循环**: trae 规划(生成 spec) → 派发(SSH headless 任务卡) → 本地执行(检索/编码/编译/测试) → 执行锚定验证(编译器+测试+数值输出, 零 LLM 成本拦幻觉) → trae ADD 审计回环。成本分配: 本地 80% 流量(无限 token), trae 20% 高价值轮次(规划+审计)                                                                                                  |
+| 上下文管理装什么? (§6)         | **零安装先行**: claude code 内置 CLAUDE.md/Auto Memory//compact + opencode `limit.context` 配置即覆盖 80% 需求; 插件层 **claude-mem** (双 CLI 通吃) 与 **opencode-codex-memory** (纯本地) 起步; ⚠ claude code 有 **200k 窗口假设陷阱** → 长会话默认走 opencode                                                    |
 
 ***
 
@@ -257,6 +258,90 @@ allowed-tools: Read, Grep, Glob
 2. **MCP 进程开销**: 每个 opencode/claudecode 会话拉起 MCP 子进程 — duckdb 文件锁与 LM Studio 无关, 但并发查询注意 duckdb 单写者限制
 3. **免费模型配额波动**: opencode 免费模型是外部服务, 任务路由脚本需有 fallback 到本地端点的分支
 4. **spec 维护税**: 按海拔采纳 — 跨会话/跨 agent 的工作必须 spec 化, 一行修改跳过全部仪式 (社区批评 SDD "Waterfall in a Hoodie" 的解药)
+
+***
+
+## 6. 补充调研: 上下文管理选型 (2026-09-02)
+
+> 背景: §3/§4 覆盖了 Skills/MCP/subagents, 但**上下文管理** (窗口预算/压缩时机/跨会话记忆) 是遗漏项 — 恰是 nemotron (conf 128k) / gpt-oss (conf 32k) 这类**非 200k 级本地模型**跑长 agent 任务的核心瓶颈。多 agent 工作流 token 量是普通对话的 \~15x (NVIDIA 引 Anthropic 工程博客), 不管理上下文 = 会话中期质量崩塌 + 网关 400。
+
+### 6.1 结论速览
+
+1. **先配置后插件**: 两个 CLI 的内置机制 (opencode `limit.context` + auto-compact; claude code CLAUDE.md + /compact 纪律) 零安装即可解决"窗口不知何时满"的问题 — 这是 P0
+2. **插件二选一起步**: claude-mem (双 CLI 通吃, 生态最大) 或 opencode-codex-memory (纯本地无 worker) — 解决"跨会话记忆"
+3. **claude code 有 200k 假设陷阱**: 后端是 128k/32k 时 auto-compact 永不触发 → 长会话默认 opencode, claude code 做短任务
+
+### 6.2 内置机制盘点 (零安装, P0)
+
+**opencode** (`~/.config/opencode/opencode.jsonc`):
+
+```jsonc
+{
+  // ① provider 声明真实窗口 — opencode 对自定义端点不知 ctx 上限,
+  //    不声明则对话无界增长直到后端 400 (GLM5 同款教训实证)
+  "provider": {
+    "cluster-litellm": {
+      "models": {
+        "nemotron": { "limit": { "context": 120000, "output": 8192 } },
+        "gpt-oss":   { "limit": { "context": 30000,  "output": 8192 } }
+      }
+    }
+  },
+  // ② 压缩策略: 满窗自动 compact (默认开) + 修剪旧工具输出 + 预留余量
+  "compaction": { "auto": true, "prune": true, "reserved": 20000 }
+}
+```
+
+- context 值故意设在 conf CTX 之下 (120000 < 131072 / 30000 < 32768), 给输出留余量 — auto-compact 会在触线前正确触发
+
+- `prune: true` 修剪旧工具输出 (agent 会话大头是 Read/Bash 输出), 对 32k 的 gpt-oss 路由尤其关键
+
+- 环境变量后备: `OPENCODE_DISABLE_AUTOCOMPACT` / `OPENCODE_DISABLE_PRUNE` 可临时关
+
+**claude code**:
+
+| 机制                     | 说明                                                                                      |
+| ---------------------- | --------------------------------------------------------------------------------------- |
+| CLAUDE.md 层级注入         | 规则类上下文进 system prompt 稳定区 (利缓存); 手册铁律/spec 引用放这里                                        |
+| Auto Memory (v2.1.59+) | `~/.claude/projects/<proj>/memory/MEMORY.md` 前 200 行 (或 25KB) 每会话自动注入, 免装插件的半持久记忆       |
+| `/context`             | 占用可视化 — 大任务前先看余量, <30% 先压缩                                                              |
+| `/compact <保留指令>`      | **60-70% 时手动压, 远优于 \~92% 触发的被动 auto** (被挤压时总结质量差、丢文件路径/行号); 带"保留已改文件路径+当前失败+架构决策"指令质量翻倍 |
+| `/rewind` (Esc+Esc)    | 检查点回溯, 上下文走错路时回滚                                                                        |
+| subagents (§3.4)       | 上下文隔离 — 大输出子任务下放 subagent, 主会话只收结论                                                      |
+
+### 6.3 插件选型表 (跨会话记忆层)
+
+| 插件                              | 装                                                                                                                                                  | 机制                                                                                                                                                                                   | 本集群适配判断                                                                                                                                                              |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **claude-mem** (首选)             | claude code: `/plugin marketplace add thedotmack/claude-mem` 或 `npx claude-mem install`; **opencode:** **`npx claude-mem install --ide opencode`** | 5 生命周期 hooks (SessionStart/PostToolUse/Stop...) + Bun worker (:37777) + SQLite/FTS5 (+可选 Chroma 向量), 会话结束自动压缩观察→摘要, 新会话注入近 10 次 session 上下文; Web UI localhost:37777; 72K+ stars 生态最大 | 双 CLI 一套记忆 — 与"`.claude/` 单一事实源"战略同构。⚠ worker 的摘要调用走 Claude Agent SDK → 需实测经 ANTHROPIC\_BASE\_URL (LiteLLM) 指向本地模型时压缩质量 (120B 压缩够用, 但未验证); 记忆注入量对 32k 的 gpt-oss 路由偏重 |
+| **opencode-codex-memory** (纯本地) | opencode.json 一行 `"plugin": ["opencode-codex-memory@0.6.5"]` (版本必须钉死, opencode 不自动重解析)                                                             | OpenAI Codex 记忆系统移植: 会话闲置 6h 后**用 opencode 已配置的模型**后台提取→合并, markdown+SQLite 全本地, 无外部服务无 worker                                                                                       | 全链路走本地端点 — 适配性最稳; 需 opencode ≥1.18 (B 站 1.18.9 满足但建议先升 1.18.25); 后台提取调用计入网关 rpm=30 (D1), 低频不冲突                                                                       |
+| four-opencode-memory (备选)       | `"plugin": ["@four-bytes/four-opencode-memory"]`                                                                                                   | 零依赖纯 Markdown (MEMORY.md + 每日 diary), session idle 自动捕获                                                                                                                              | 最保守 (无 LLM 调用, grep 检索); 记忆质量靠模板不靠模型 — 适合先验证工作流                                                                                                                      |
+| opencode-dcp (进阶)               | `opencode plugin @tarquinen/opencode-dcp@latest --global`                                                                                          | 动态修剪: compress 作为工具交给模型自选时机 (比满窗 compact 聪明), 重复工具调用去重 + 错误调用输入清理                                                                                                                    | "小 ctx 模型需调低 min/maxContextLimit" 官方注记正对本集群; 与 codex-memory 功能重叠, 二选一                                                                                                |
+| claude-max-context (模式参考)       | 不整装                                                                                                                                                | hooks 组合: session-start 注入 HANDOFF/MEMORY/PROJECT\_MAP + pre-compact 强制 7 点保留清单 (任务态/决策/已试失败法/文件/阻塞)                                                                                 | 借鉴其 **PreCompact hook 保留清单** 模式, 手写轻量版 (\~20 行) 挂 claude code — 与 spec 工作流语义天然对齐                                                                                     |
+
+**选型裁定**: B 站先装 **opencode-codex-memory** (纯本地零风险跑通跨会话记忆) → 验证后 A/B 两站 claude-mem 双 CLI 试点 (worker→LiteLLM 路径实测是门); dcp/four 视前者不足再上。
+
+### 6.4 模型侧适配: nemotron vs gpt-oss 分工
+
+| 维度                    | nemotron (B 站主力)                                                                    | gpt-oss (A 站速度档)                                                               |
+| --------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| 长上下文能力 (官方 RULER-100) | **@256k 96.3 / @1M 91.75** — 长文专精                                                   | @256k 52.3 / @1M 22.3 — 长文弱                                                    |
+| agentic 定位            | 官方 "Best For: Agentic workflows, tool use, RAG"; SWE-Bench (OpenCode harness) 59.20 | harmony 原生工具链; SWE-Bench (OpenHands) 41.9                                      |
+| conf CTX              | 131072 保持 (KV 仅 1G, results-ledger 实证)                                              | 32768 保持 — **不建议为长会话扩 ctx**: 能力不支持 + 长链降速 (\~16k→32k 同级 MoE 实测 -30%)           |
+| 采样                    | **官方: temperature=1.0 + top\_p=0.95 全任务通用 (含 tool call)** — agent 配置勿用 0.x 编码默认值    | 同左; reasoning effort **medium+** (low 几乎无推理)                                   |
+| 长工具链注意                | thinking 可开关 (chat template)                                                        | **CoT passback**: 5+ 轮工具链必须回传 reasoning 内容, 否则质量显著退化 — LiteLLM 转换层已透传, 但换链路时复查 |
+
+**claude code 200k 假设陷阱 (本集群特有)**: claude code 按 Anthropic 官方模型假设 \~200k 窗口计算占用百分比 → auto-compact 的 \~92% 阈值对应 184k, **永远晚于** nemotron 131k / gpt-oss 32k 的真实上限, 结果不是及时压缩而是直接后端 400/截断。缓解三件套: ① 长会话/大 codebase 任务**默认 opencode** (limit.context 声明后 auto-compact 正确); ② claude code 用于短平快 + 每 30min `/context` + 60-70% 手动 `/compact`; ③ 任务切换 `/clear`, 靠 memory 层 (6.3) 而非会话内历史续命。
+
+### 6.5 落地批次 (并入 §4.5 路线)
+
+- **P0 (纯配置, \~30min)**: 两站 opencode provider 加 `limit.context` (nemotron 120000 / gpt-oss 30000) + `compaction.prune: true`; claude code 侧写 CLAUDE.md 骨架 (铁律+手册引用)
+
+- **P1**: B 站 opencode-codex-memory (纯本地试点); claude code 手写 PreCompact 保留清单 hook (\~20 行)
+
+- **P2**: claude-mem 双 CLI (worker→LiteLLM 实测); 不足再评估 dcp/four-opencode-memory
+
+**本节参考**: [Nemotron-3-Super model card (build.nvidia.com)](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard) · [NVIDIA blog: Nemotron 3 Super for Agentic AI](https://blogs.nvidia.com/blog/nemotron-3-super-agentic-ai/) · [claude-mem (GitHub)](https://github.com/thedotmack/claude-mem) / [docs.claude-mem.ai](https://docs.claude-mem.ai/introduction) · [opencode-codex-memory (npm)](https://www.npmjs.com/package/opencode-codex-memory) · [four-opencode-memory (GitHub)](https://github.com/four-bytes/four-opencode-memory) · [opencode-dcp (GitHub)](https://github.com/Opencode-DCP/opencode-dynamic-context-pruning) · [claude-max-context (GitHub)](https://github.com/pkmdev-sec/claude-max-context) · [gpt-oss 本地 Codex CLI 指南](https://github.com/ivanopcode/gpt-oss-local-codex-guide) · [opencode auto-compact 实测 (bswen)](https://docs.bswen.com/blog/2026-03-21-opencode-auto-compact-config/) · [OpenAI gpt-oss model card](https://cdn.openai.com/pdf/419b6906-9da6-406c-a19d-1bb078ac7637/oai_gpt-oss_model_card.pdf)
 
 ***
 
