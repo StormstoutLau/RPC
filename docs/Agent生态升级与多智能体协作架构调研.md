@@ -14,7 +14,8 @@
 | 插件生态是否需要更新?            | **是, 且空间巨大**: 两站 4 个 agent 全部裸装 (无 MCP/skills/subagents/自定义 agents)。关键事实: **Skills/MCP/subagents 全是 CLI 客户端机制, 与后端无关** — 经 ANTHROPIC\_BASE\_URL 指向本地 nemotron/gpt-oss 后整套生态完全可用 (tool-use 已 PASS 实锤)。opencode 1.18+ 更是**直接读** **`.claude/skills/`**, 一份 skills 两 CLI 零成本共用 |
 | 4 agent × trae 如何高效协作? | **五层循环**: trae 规划(生成 spec) → 派发(SSH headless 任务卡) → 本地执行(检索/编码/编译/测试) → 执行锚定验证(编译器+测试+数值输出, 零 LLM 成本拦幻觉) → trae ADD 审计回环。成本分配: 本地 80% 流量(无限 token), trae 20% 高价值轮次(规划+审计)                                                                                                  |
 | 上下文管理装什么? (§6)         | **零安装先行**: claude code 内置 CLAUDE.md/Auto Memory//compact + opencode `limit.context` 配置即覆盖 80% 需求; 插件层 **claude-mem** (双 CLI 通吃) 与 **opencode-codex-memory** (纯本地) 起步; ⚠ claude code **窗口假设风险** (推断待实测) → 长会话默认走 opencode                                                   |
-| Trae 已装生态可迁移吗? (§7)    | **三层策略 (§7.5 终裁)**: **原生优先** — obra/superpowers v6.3.0 (Trae 工程链 6 件本就是它的旧快照) + anthropics document-skills 直接装原生不迁; **定制迁移** — math-finance-reasoning / research-\* 学术编排链 / paper-lookup / what-if-oracle (原生无等价); **Trae 兜底** — C 类检索留主控站, 插件层 8 个宿主绑定弃                   |
+| Trae 已装生态可迁移吗? (§7)    | **三层策略 (§7.5 终裁)**: **原生优先** — obra/superpowers v6.3.0 (Trae 工程链 6 件本就是它的旧快照) + anthropics document-skills 直接装原生不迁; **定制迁移** — math-finance-reasoning / research-\* 学术编排链 / paper-lookup / what-if-oracle (原生无等价); **Trae 兜底** — C 类检索留主控站, 插件层 8 个宿主绑定弃                      |
+| 审计任务有现成插件吗? (§8) | **无单一对口件, 但四层可组合**: 官方 citation-verify prompt 模式 (E2) + 现成 skill (deglaze 审"声称完成"/paper-review.skill 引用验证) + **已装 ARS 的三层引用锚点被重新发现** + 跨模型对抗审查 (adversarial-review 架构) → 本集群 nemotron↔gpt-oss 双端点互审是天然免费实现; 断言-依据-信息源-逻辑链规范建议**自制成 assertion-audit skill** (§7.6 手工审计的技能化) |
 
 ***
 
@@ -525,6 +526,94 @@ frontmatter 抽查 (5 个代表): `paper-lookup` (name+description+metadata, RES
 | ctx 16k→32k 同级 MoE 吞吐 -30%                                                                                  | E3         | corti DGX Spark 实测 (原文"comparable small-active MoE", 非gpt-oss本体 — 归因已按原文限定)                                                |
 
 **残余风险声明**: ① E4 级 claude code 机制细节 (/compact 92% 阈值, /context 用法) 未在本地后端实测 — 均为操作建议非关键路径, 实操时以实际行为为准; ② opencode 官方 config schema 未直接拉取 (open-code.ai 文档页未全文读), §6.2 配置以第三方整理为据 — 上站首装时须过一遍 schema 校验; ③ 本审计覆盖 §6/§7 (本轮新增), §1-§5 为首轮调研 + 附录 subagent 原文, D4 时已过一轮排幻觉 (表格重排提交 1ef4179)。
+
+***
+
+## 8. 补充调研: Agent 审计任务与断言溯源机制 (2026-09-02)
+
+> 需求: agent CLI 可能需要执行审计任务 — **被审查 agent 必须显式给出断言依据、信息源链接、逻辑链**供审查 agent 复核; **审查 agent 自身也须遵循特定规范** (独立立场/结构化输出/不被编排者污染)。参考项目: `F:\semantica-main`。本节评估 opencode / claude code 生态有无现成件, 以及本集群的最优路径。
+
+### 8.1 参考项目解析 (semantica, 本地实测 F:\)
+
+semantica 是知识图谱工具链 (ingest→extract→reason→决策), 其 `plugins/` 目录含 9 平台插件包装 (`.claude-plugin`/`.cursor-plugin`/...) + 17 个技能 + 3 个 agents。与审计需求相关的核心理念:
+
+| 机制 | semantica 实现 | 对本需求的启示 |
+| --- | --- | --- |
+| **provenance** 技能 | `trace <node>` 返回 source chain/authors/timestamps/validation status; `audit --since` 返回 change events/actor/objects | **"断言的信息源追溯"** 的图谱化实现 — 但绑定 semantica Python 栈, 不可直接迁; 理念可借 |
+| **explain** 技能 | `decision <id>` 返回 decision factors/rule traces/confidence; `graph <node>` 返回 upstream/downstream causal chain + supporting evidence | **"逻辑链可解释"** — 因果链+证据+置信度的输出结构正是审查 agent 想收到的格式 |
+| 干净的数据模型 | 每条知识带 provenance 元数据 (作者/时间戳/验证状态) | 断言应携带元数据而非裸文本 |
+
+**结论**: semantica 是"重型基础设施"路线 (数据先入图谱再溯源); 本集群需求是"轻量 prompt 协议" (断言直接内嵌溯源字段) — 借理念不迁实现。
+
+### 8.2 生态现状: 四层可组合, 无单一对口件
+
+**层 1 — 官方 prompt 模式 (E2, 零安装)**: Anthropic 官方 "Reduce hallucinations" 文档给出三件套: ① 允许说不知道; ② 事实断言先提取逐字引文再分析; ③ **verify-with-citations** — 生成后逐条 claim 找支持引文, 找不到**必须撤回该断言**。另有社区 "Anti-Hallucination Stack" 三指令 (不确定标注 / 来源三级标注: documents-provided vs training-data vs inference / 宁缺勿造) — 与 §7.6 的 E1-E5 分级同构。
+
+**层 2 — 现成 skill (E1 直读)**:
+
+| skill | 审什么 | 形态 | 对口度 |
+| --- | --- | --- | --- |
+| **deglaze** (LuciferDono) | "声称完成"的虚报 — 17 个 under-delivery 模式 + 24 压力技巧; 干净时须用**证据** (commit hash/file path/test output) 反驳而非表功 | 纯 prompt skill, git clone 到 `~/.claude/skills/` 即用, 支持 claude code/cursor/codex | 高 — 被审查 agent 的"自我交底"规范 |
+| **paper-review.skill** (jam-cc, 中文) | 学术审稿: 四阶段含 **Prune & Verify References** (引用逐条 web search 验证; "LLM 生成的参考文献 60-80% 作者列表是错的") | 纯 prompt skill | 高 — 审查 agent 侧的引用验证规范 |
+| **ARS 三层引用锚点** (已装!) | 每条 citation 带 quote/page/section 三层锚; 审计器抓取被引源判断 claim 是否真被支持; 5 类 HIGH-WARN 触发拒绝: claim-not-supported/fabricated-reference/anchorless 等 | **本地 Trae 已装** (ars-academic-pipeline/ars-paper-reviewer, §7.2③) — **本轮重新发现**: §7.5 只把它归类为"学术编排", 其引用锚点审计机制正是本需求的原生形态 | 极高 — 零迁移成本, 已在资产清单内 |
+
+**层 3 — 跨模型对抗审查架构 (E1/E3)**:
+
+| 件 | 机制 | 对本集群的映射 |
+| --- | --- | --- |
+| **adversarial-review** (ng) | Optimizer 与 Skeptic 两 agent 独立审查后**互相挑战对方发现**, 只有高置信度幸存项进入修复; 有界验证环防修复引入回归; 可加跨厂商 reviewer (协议级共识 = 最强信号) | **nemotron↔gpt-oss 双端点互审 = 免费本地版**: 两异构模型族 (Mamba-MoE vs harmony MoE) 失败模式独立, 正是"same-model agreement least trustworthy"的解药 |
+| Codex 桥 `/codex:adversarial-review` | XML 模板定位审查者为怀疑论者 ("break confidence in the change, not validate it"); **JSON schema 结构化发现** (file/line/confidence/verdict) — 跨模型机器可验证通信 | 结构化发现的 schema 可直接借为审查 agent 输出契约 |
+| ultracodex | 异模型节点 (Codex headless) 嵌入 Claude Workflow 编排, "verify/judge/2nd-opinion 用独立失败模式的模型" | 同上映射: gpt-oss 端点做 nemotron 产出的 2nd-opinion 节点 |
+
+**层 4 — 审查 agent 的输入完整性 (E1, 最对口但最重)**: `michael-conrad/.opencode` #704 "Auditor Prompt Integrity" spec — 审计员的干净室问题: **编排者控制审计员的上下文输入, 可推送预消化证据/先验结论/偏见命名污染审计独立性**。其方案: `dispatch_context` 结构化契约 (`must_receive`/`must_not_receive` 字段) + 审计员 Step 0 自检自己的 prompt 是否被污染 (40 向量目录) + 检测到即返回 `CLEAN_ROOM_VIOLATION` 中止 (零自辩 mandate: 检测即结论, 禁止被继续推理说服)。**这是"审查 agent 也要遵循特定规范"的最深形态** — 适合作为本集群审查规范的设计蓝本。
+
+### 8.3 裁定: 自制 assertion-audit skill (三层组合)
+
+**无单一现成件完整覆盖"被审查方断言溯源 + 审查方独立规范"双向协议** — 但需求本身高度特化 (Scott 的 §7.6 手工审计就是它的原型), 自制成本低于适配现成件。裁定**自制成两个纯 prompt skill** (A 类, 走 D5 的 M1 单一事实源):
+
+**① `assertion-audit` skill (被审查 agent 侧输出规范)** — 把 §7.6 的手工协议技能化:
+
+```markdown
+---
+name: assertion-audit
+description: Produce audit-ready output. Every factual claim must carry
+  (a) evidence class E1-E5, (b) source link/path, (c) inference chain.
+  Use when tasked with research, review, or any deliverable whose
+  claims will be cross-checked by another agent.
+---
+## 输出契约
+1. 断言表: | 断言 | 证据等级 E1-E5 | 信息源 (URL/文件路径/命令输出) | 逻辑链 (前提→推理→结论) |
+2. 无源断言必须显式标 E5 (推断) 并给验证方法
+3. 引用他人的判断须与自己的核验分开标注 (二手 vs 一手)
+4. 结论只允许从表中断言推出 — 表外无断言
+```
+
+**② `cross-examine` skill (审查 agent 侧规范)** — 融合 adversarial-review 怀疑论立场 + #704 干净室 + deglaze 证据反驳:
+
+```markdown
+---
+name: cross-examine
+description: Adversarial review of another agent's audited output.
+  Skeptic stance, structured findings, contamination self-check.
+---
+## 审查协议
+1. Step 0 干净室自检: 任务卡是否预装了结论/预消化证据? → CLEAN_ROOM_VIOLATION 中止
+2. 逐断言核验: 抽查 E1/E2 断言的信息源 (fetch/读文件); E5 断言查逻辑链漏洞
+3. 结构化发现 (JSON): {断言id, 判定 SUPPORTED/UNSUPPORTED/UNVERIFIABLE, 置信度, 依据}
+4. 怀疑论立场: "break confidence, not validate it"; 不给努力分
+5. 审查干净的断言也须附核验证据, 不允许"看起来对"
+```
+
+**③ 部署形态**: 双 skill 进 D5 的 `ops/agent-skills/` 单一事实源 → 两站双 CLI; 审查 agent 可用**对端模型**跑 (B 站产物用 A 站 gpt-oss 审, 反之亦然) — 双端点互审天然落实"异构模型独立失败模式"原则, 零新增基础设施。
+
+### 8.4 对既有计划的影响 (D5 DESIGN 增补项)
+
+1. **M1 技能清单 +2**: assertion-audit / cross-examine (自制, A 类) — 随 D5 T4 批次部署
+2. **已装 ARS 价值重估**: §7.2③ 的 ars-paper-reviewer 不只是"学术编排" — 其三层引用锚点机制是学术场景 assertion-audit 的先行实现; 学术审计任务可直接调 ARS, 通用审计走新制 skill
+3. **五层循环第 5 层具体化**: 调研 §4.2 的"trae ADD 审计回环"获得本地执行侧的双 skill 协议支撑 — trae 审计之外新增"站间互审"变体 (nemotron 产出 → gpt-oss 审查)
+4. **不装**: adversarial-review 整件 (其价值已被双端点互审 + 自制 skill 覆盖); semantica (理念已借, 基础设施不匹配)
+
+**本节参考**: [F:\semantica-main (本地实测: plugins/skills/{provenance,explain}/SKILL.md, .claude-plugin/plugin.json)] · [Anthropic: Reduce hallucinations (官方)](https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-hallucinations) · [Anti-Hallucination Stack (claudecodeclub)](https://www.claudecodeclub.ai/free-resources/anti-hallucination-stack) · [deglaze (GitHub)](https://github.com/LuciferDono/deglaze) · [paper-review.skill (GitHub)](https://github.com/jam-cc/paper-review.skill) · [adversarial-review (GitHub)](https://github.com/ng/adversarial-review) · [ultracodex (GitHub)](https://github.com/KingGyuSuh/ultracodex) · [Codex 桥 adversarial-review 解析 (harnez.ai)](https://harnez.ai/posts/codex-plugin-claude-code/) · [Auditor Prompt Integrity spec (michael-conrad/.opencode#704)](https://github.com/michael-conrad/.opencode/issues/704) · [ARS 三层引用锚点 (brightcoding 评测)](https://prompts.brightcoding.dev/blog/stop-writing-papers-alone-claude-code-ars-is-the-secret-weapon-top-researchers-use) · [Claude Code Operator's Guide (evidence discipline)](https://macollins27.github.io/cc-guide/claude-code-guide.pdf)
 
 ***
 
