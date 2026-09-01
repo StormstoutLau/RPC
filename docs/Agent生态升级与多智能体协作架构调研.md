@@ -13,8 +13,8 @@
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 插件生态是否需要更新?            | **是, 且空间巨大**: 两站 4 个 agent 全部裸装 (无 MCP/skills/subagents/自定义 agents)。关键事实: **Skills/MCP/subagents 全是 CLI 客户端机制, 与后端无关** — 经 ANTHROPIC\_BASE\_URL 指向本地 nemotron/gpt-oss 后整套生态完全可用 (tool-use 已 PASS 实锤)。opencode 1.18+ 更是**直接读** **`.claude/skills/`**, 一份 skills 两 CLI 零成本共用 |
 | 4 agent × trae 如何高效协作? | **五层循环**: trae 规划(生成 spec) → 派发(SSH headless 任务卡) → 本地执行(检索/编码/编译/测试) → 执行锚定验证(编译器+测试+数值输出, 零 LLM 成本拦幻觉) → trae ADD 审计回环。成本分配: 本地 80% 流量(无限 token), trae 20% 高价值轮次(规划+审计)                                                                                                  |
-| 上下文管理装什么? (§6)         | **零安装先行**: claude code 内置 CLAUDE.md/Auto Memory//compact + opencode `limit.context` 配置即覆盖 80% 需求; 插件层 **claude-mem** (双 CLI 通吃) 与 **opencode-codex-memory** (纯本地) 起步; ⚠ claude code 有 **200k 窗口假设陷阱** → 长会话默认走 opencode                                                    |
-| Trae 已装生态可迁移吗? (§7)    | **三层策略 (§7.5 终裁)**: **原生优先** — obra/superpowers v6.3.0 (Trae 工程链 6 件本就是它的旧快照) + anthropics document-skills 直接装原生不迁; **定制迁移** — math-finance-reasoning / research-* 学术编排链 / paper-lookup / what-if-oracle (原生无等价); **Trae 兜底** — C 类检索留主控站, 插件层 8 个宿主绑定弃                      |
+| 上下文管理装什么? (§6)         | **零安装先行**: claude code 内置 CLAUDE.md/Auto Memory//compact + opencode `limit.context` 配置即覆盖 80% 需求; 插件层 **claude-mem** (双 CLI 通吃) 与 **opencode-codex-memory** (纯本地) 起步; ⚠ claude code **窗口假设风险** (推断待实测) → 长会话默认走 opencode                                                    |
+| Trae 已装生态可迁移吗? (§7)    | **三层策略 (§7.5 终裁)**: **原生优先** — obra/superpowers v6.3.0 (Trae 工程链 6 件本就是它的旧快照) + anthropics document-skills 直接装原生不迁; **定制迁移** — math-finance-reasoning / research-\* 学术编排链 / paper-lookup / what-if-oracle (原生无等价); **Trae 兜底** — C 类检索留主控站, 插件层 8 个宿主绑定弃                   |
 
 ***
 
@@ -270,7 +270,7 @@ allowed-tools: Read, Grep, Glob
 
 1. **先配置后插件**: 两个 CLI 的内置机制 (opencode `limit.context` + auto-compact; claude code CLAUDE.md + /compact 纪律) 零安装即可解决"窗口不知何时满"的问题 — 这是 P0
 2. **插件二选一起步**: claude-mem (双 CLI 通吃, 生态最大) 或 opencode-codex-memory (纯本地无 worker) — 解决"跨会话记忆"
-3. **claude code 有 200k 假设陷阱**: 后端是 128k/32k 时 auto-compact 永不触发 → 长会话默认 opencode, claude code 做短任务
+3. **claude code 窗口假设风险** (推断待实测): 若其按官方 \~200k 计占用, auto-compact 晚于本地 131k/32k 上限 → 长会话默认 opencode, claude code 做短任务 (验证法见 §6.4)
 
 ### 6.2 内置机制盘点 (零安装, P0)
 
@@ -279,7 +279,7 @@ allowed-tools: Read, Grep, Glob
 ```jsonc
 {
   // ① provider 声明真实窗口 — opencode 对自定义端点不知 ctx 上限,
-  //    不声明则对话无界增长直到后端 400 (GLM5 同款教训实证)
+  //    不声明则对话无界增长直到后端 400 (GLM5 社区案例, bswen 博客)
   "provider": {
     "cluster-litellm": {
       "models": {
@@ -293,18 +293,20 @@ allowed-tools: Read, Grep, Glob
 }
 ```
 
+> ⚠ **格式待站上验证 (审计发现)**: 嵌套 `limit.context` 写法取自 opencode 官方 config schema 方向的第三方整理 (yahtoo 附录 B.1), 而 GLM5 案例 (bswen) 用的是 `"models": {"glm-5": {"context": 95000}}` 平铺式 — 两来源**冲突**, 上站时以 `opencode.ai/config.json` schema 或实际生效为准。`prune` 默认值两来源也不一致 (官方文档片段说 false, 第三方整理说 true) — 反正显式写 true 即无歧义。
+
 - context 值故意设在 conf CTX 之下 (120000 < 131072 / 30000 < 32768), 给输出留余量 — auto-compact 会在触线前正确触发
 
 - `prune: true` 修剪旧工具输出 (agent 会话大头是 Read/Bash 输出), 对 32k 的 gpt-oss 路由尤其关键
 
-- 环境变量后备: `OPENCODE_DISABLE_AUTOCOMPACT` / `OPENCODE_DISABLE_PRUNE` 可临时关
+- 环境变量后备: `OPENCODE_DISABLE_AUTOCOMPACT` / `OPENCODE_DISABLE_PRUNE` 可临时关 (第三方文档来源, 同待验证)
 
 **claude code**:
 
 | 机制                     | 说明                                                                                      |
 | ---------------------- | --------------------------------------------------------------------------------------- |
 | CLAUDE.md 层级注入         | 规则类上下文进 system prompt 稳定区 (利缓存); 手册铁律/spec 引用放这里                                        |
-| Auto Memory (v2.1.59+) | `~/.claude/projects/<proj>/memory/MEMORY.md` 前 200 行 (或 25KB) 每会话自动注入, 免装插件的半持久记忆       |
+| Auto Memory (v2.1.59+) | `~/.claude/projects/<proj>/memory/MEMORY.md` 前 200 行 (或 25KB) 每会话自动注入, 免装插件的半持久记忆 ⚠ 单一博客来源 (CSDN), 细节数字待实测 |
 | `/context`             | 占用可视化 — 大任务前先看余量, <30% 先压缩                                                              |
 | `/compact <保留指令>`      | **60-70% 时手动压, 远优于 \~92% 触发的被动 auto** (被挤压时总结质量差、丢文件路径/行号); 带"保留已改文件路径+当前失败+架构决策"指令质量翻倍 |
 | `/rewind` (Esc+Esc)    | 检查点回溯, 上下文走错路时回滚                                                                        |
@@ -314,7 +316,7 @@ allowed-tools: Read, Grep, Glob
 
 | 插件                              | 装                                                                                                                                                  | 机制                                                                                                                                                                                   | 本集群适配判断                                                                                                                                                              |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **claude-mem** (首选)             | claude code: `/plugin marketplace add thedotmack/claude-mem` 或 `npx claude-mem install`; **opencode:** **`npx claude-mem install --ide opencode`** | 5 生命周期 hooks (SessionStart/PostToolUse/Stop...) + Bun worker (:37777) + SQLite/FTS5 (+可选 Chroma 向量), 会话结束自动压缩观察→摘要, 新会话注入近 10 次 session 上下文; Web UI localhost:37777; 72K+ stars 生态最大 | 双 CLI 一套记忆 — 与"`.claude/` 单一事实源"战略同构。⚠ worker 的摘要调用走 Claude Agent SDK → 需实测经 ANTHROPIC\_BASE\_URL (LiteLLM) 指向本地模型时压缩质量 (120B 压缩够用, 但未验证); 记忆注入量对 32k 的 gpt-oss 路由偏重 |
+| **claude-mem** (首选)             | claude code: `/plugin marketplace add thedotmack/claude-mem` 或 `npx claude-mem install`; **opencode:** **`npx claude-mem install --ide opencode`** | 5 生命周期 hooks (SessionStart/PostToolUse/Stop...) + Bun worker (端口 `37700 + (uid % 100)` 官方式, 每用户不同 — 第三方文章的 37777 只是单用户实例) + SQLite/FTS5 (+可选 Chroma 向量), 会话结束自动压缩观察→摘要, 新会话注入近 10 次 session 上下文; Web UI 同 worker 端口; stars 数两来源矛盾 (72.4K@2026-05 vs 89K+@2026-03, 取保守口径"70k+ 级") | 双 CLI 一套记忆 — 与"`.claude/` 单一事实源"战略同构。⚠ worker 的摘要调用走 Claude Agent SDK → 需实测经 ANTHROPIC\_BASE\_URL (LiteLLM) 指向本地模型时压缩质量 (120B 压缩够用, 但未验证); 记忆注入量对 32k 的 gpt-oss 路由偏重 |
 | **opencode-codex-memory** (纯本地) | opencode.json 一行 `"plugin": ["opencode-codex-memory@0.6.5"]` (版本必须钉死, opencode 不自动重解析)                                                             | OpenAI Codex 记忆系统移植: 会话闲置 6h 后**用 opencode 已配置的模型**后台提取→合并, markdown+SQLite 全本地, 无外部服务无 worker                                                                                       | 全链路走本地端点 — 适配性最稳; 需 opencode ≥1.18 (B 站 1.18.9 满足但建议先升 1.18.25); 后台提取调用计入网关 rpm=30 (D1), 低频不冲突                                                                       |
 | four-opencode-memory (备选)       | `"plugin": ["@four-bytes/four-opencode-memory"]`                                                                                                   | 零依赖纯 Markdown (MEMORY.md + 每日 diary), session idle 自动捕获                                                                                                                              | 最保守 (无 LLM 调用, grep 检索); 记忆质量靠模板不靠模型 — 适合先验证工作流                                                                                                                      |
 | opencode-dcp (进阶)               | `opencode plugin @tarquinen/opencode-dcp@latest --global`                                                                                          | 动态修剪: compress 作为工具交给模型自选时机 (比满窗 compact 聪明), 重复工具调用去重 + 错误调用输入清理                                                                                                                    | "小 ctx 模型需调低 min/maxContextLimit" 官方注记正对本集群; 与 codex-memory 功能重叠, 二选一                                                                                                |
@@ -332,7 +334,7 @@ allowed-tools: Read, Grep, Glob
 | 采样                    | **官方: temperature=1.0 + top\_p=0.95 全任务通用 (含 tool call)** — agent 配置勿用 0.x 编码默认值    | 同左; reasoning effort **medium+** (low 几乎无推理)                                   |
 | 长工具链注意                | thinking 可开关 (chat template)                                                        | **CoT passback**: 5+ 轮工具链必须回传 reasoning 内容, 否则质量显著退化 — LiteLLM 转换层已透传, 但换链路时复查 |
 
-**claude code 200k 假设陷阱 (本集群特有)**: claude code 按 Anthropic 官方模型假设 \~200k 窗口计算占用百分比 → auto-compact 的 \~92% 阈值对应 184k, **永远晚于** nemotron 131k / gpt-oss 32k 的真实上限, 结果不是及时压缩而是直接后端 400/截断。缓解三件套: ① 长会话/大 codebase 任务**默认 opencode** (limit.context 声明后 auto-compact 正确); ② claude code 用于短平快 + 每 30min `/context` + 60-70% 手动 `/compact`; ③ 任务切换 `/clear`, 靠 memory 层 (6.3) 而非会话内历史续命。
+**claude code 窗口假设风险 (本集群特有, ⚠ 推断非实证)**: 机制已知部分 — claude code 的 auto-compact 按其认知的模型窗口百分比触发 (社区博客称 \~92%), 且其窗口认知来自 Anthropic 官方模型名映射。**推断链** (未实测): 后端经 ANTHROPIC\_BASE\_URL 换成 nemotron/gpt-oss 后, 若 claude code 仍按官方模型默认 \~200k 计算占用, 则 auto-compact 阈值 (92% × 200k ≈ 184k) 晚于真实上限 131k/32k → 不压缩直接后端 400/截断。**验证法 (上站 5min)**: 加载 gpt-oss 后在 claude code 里跑 `/context` 看它显示的窗口基数是 200k 还是读到了 conf 值 — 若显示 200k 则陷阱成立。**缓解三件套 (无论陷阱成立与否均无害)**: ① 长会话/大 codebase 任务默认 opencode (limit.context 声明后 auto-compact 语义明确); ② claude code 用于短平快 + 定期 `/context` + 60-70% 手动 `/compact`; ③ 任务切换 `/clear`, 靠 memory 层 (6.3) 而非会话内历史续命。
 
 ### 6.5 落地批次 (并入 §4.5 路线)
 
@@ -348,17 +350,17 @@ allowed-tools: Read, Grep, Glob
 
 ## 7. 补充盘点: Trae 已装生态迁移评估 (2026-09-02)
 
-> 背景: §3.2 的技能清单是"从社区挑 5 个"的增量视角; 本节改为**全量盘点主控站 Trae 已装生态**, 评估哪些可直接搬上集群两站 claude code / opencode。盘点方法: 磁盘 LS/Glob 实测 + 抽读 5 个代表技能 frontmatter 定依赖形态 (非逐个通读 ~190 个正文, 分类以描述+抽查为据)。
+> 背景: §3.2 的技能清单是"从社区挑 5 个"的增量视角; 本节改为**全量盘点主控站 Trae 已装生态**, 评估哪些可直接搬上集群两站 claude code / opencode。盘点方法: 磁盘 LS/Glob 实测 + 抽读 5 个代表技能 frontmatter 定依赖形态 (非逐个通读全部正文, 分类以描述+抽查为据)。
 
 ### 7.1 盘点事实 (主控站磁盘实测)
 
-| 层 | 位置 | 规模 | 形态 | 可迁移性 |
-| -- | --- | -- | --- | ------ |
-| **技能层** | `c:\Users\Peng\.trae-cn\skills\<name>\SKILL.md` | **~190 个** | 标准 SKILL.md (name/description frontmatter + 正文; 部分带 references/scripts/ 子目录 = 渐进披露) | **与 claude code 技能格式同源** — scp 到 `~/.claude/skills/` 即被 claude code + opencode 双读 (§2.2) |
-| 插件层 | `~\.trae-cn\plugins\trae-remote-official\` (installed-plugins.json) | 8 个 | browser/chrome/computer-use/lark 1.0.4 (OAuth connector + lark-cli 二进制)/product-lifecycle-workbench/seedance/seedream/teaching-management-assistant | **不可迁** — Trae 宿主绑定 (OAuth 连接器、Trae 内建工具、视频/图像生成后端) |
-| 内建层 | `~\.trae-cn\builtin\work\*/skills\` | ~15 个 | docx/pdf/pptx/xlsx/feedback/TRAE-product-knowledge 等 | 不迁本体; 同名开源版可从 anthropics/skills 取 |
+| 层       | 位置                                                                  | 规模          | 形态                                                                                                                                                  | 可迁移性                                                                                     |
+| ------- | ------------------------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| **技能层** | `c:\Users\Peng\.trae-cn\skills\<name>\SKILL.md`                     | **213 个** (目录计数实测) | 标准 SKILL.md (name/description frontmatter + 正文; 部分带 references/scripts/ 子目录 = 渐进披露)                                                                 | **与 claude code 技能格式同源** — scp 到 `~/.claude/skills/` 即被 claude code + opencode 双读 (§2.2) |
+| 插件层     | `~\.trae-cn\plugins\trae-remote-official\` (installed-plugins.json) | 8 个         | browser/chrome/computer-use/lark 1.0.4 (OAuth connector + lark-cli 二进制)/product-lifecycle-workbench/seedance/seedream/teaching-management-assistant | **不可迁** — Trae 宿主绑定 (OAuth 连接器、Trae 内建工具、视频/图像生成后端)                                      |
+| 内建层     | `~\.trae-cn\builtin\work\*/skills\`                                 | \~15 个      | docx/pdf/pptx/xlsx/feedback/TRAE-product-knowledge 等                                                                                                | 不迁本体; 同名开源版可从 anthropics/skills 取                                                        |
 
-frontmatter 抽查 (5 个代表): `paper-lookup` (name+description+metadata, REST 无 MCP 绑定) · `research-lookup` (`allowed-tools: Read Write Edit Bash` + license/compatibility/required_environment_variables — claude code 忽略陌生字段, **推断待站上实测**) · `test-driven-development` / `math-finance-reasoning` / `brainstorming` (纯 name+description)。
+frontmatter 抽查 (5 个代表): `paper-lookup` (name+description+metadata, REST 无 MCP 绑定) · `research-lookup` (`allowed-tools: Read Write Edit Bash` + license/compatibility/required\_environment\_variables — claude code 忽略陌生字段, **推断待站上实测**) · `test-driven-development` / `math-finance-reasoning` / `brainstorming` (纯 name+description)。
 
 **迁移分级**: **A** 纯 prompt 直拷 (scp 即用) / **B** +本地工具链 (pip/npm/lake) / **C** +外部 API key 与外网可达 / **D** Trae 托管 MCP 绑定 (换开源等价物) / **E** 宿主绑定 (不迁)。
 
@@ -366,64 +368,64 @@ frontmatter 抽查 (5 个代表): `paper-lookup` (name+description+metadata, RES
 
 **① 高质量信息源检索**
 
-| 技能 | 级 | 说明 |
-| --- | -- | --- |
-| research-lookup | C | parallel-cli 二进制 + PARALLEL_API_KEY/OPENROUTER_API_KEY; 三后端路由 (快搜/深研/学术) — 主控站已能用 |
-| exa-search | C | Exa API key; 语义检索 + research-paper 过滤 |
-| parallel-web | C | parallel-cli 搜索/抓取/富化/深研 |
-| defuddle | B | npm CLI 本地跑, URL 正文净化 |
-| database-lookup | D | 依赖 Trae 托管 MCP — 换 REST 脚本或开源 MCP |
+| 技能              | 级 | 说明                                                                                    |
+| --------------- | - | ------------------------------------------------------------------------------------- |
+| research-lookup | C | parallel-cli 二进制 + PARALLEL\_API\_KEY/OPENROUTER\_API\_KEY; 三后端路由 (快搜/深研/学术) — 主控站已能用 |
+| exa-search      | C | Exa API key; 语义检索 + research-paper 过滤                                                 |
+| parallel-web    | C | parallel-cli 搜索/抓取/富化/深研                                                              |
+| defuddle        | B | npm CLI 本地跑, URL 正文净化                                                                 |
+| database-lookup | D | 依赖 Trae 托管 MCP — 换 REST 脚本或开源 MCP                                                     |
 
 **② 学术论文搜索**
 
-| 技能 | 级 | 说明 |
-| --- | -- | --- |
-| **paper-lookup** | **B** | 10 学术库 REST (PubMed/arXiv/OpenAlex/Crossref/Semantic Scholar...) **多数免 key** — 集群最可行的学术检索; references/ 子目录带端点速查 |
-| literature-review | B | 多库系统综述, 同 REST 路数 |
-| citation-management | B | Python (Google Scholar/PubMed → BibTeX) |
-| pyzotero | B | Zotero Web API (本地库主控站有) |
-| bgpt-paper-search / paperzilla | D | Trae 托管 MCP/应用绑定 — 换 §3.3 的 paper-search-mcp |
+| 技能                             | 级     | 说明                                                                                                              |
+| ------------------------------ | ----- | --------------------------------------------------------------------------------------------------------------- |
+| **paper-lookup**               | **B** | 10 学术库 REST (PubMed/arXiv/OpenAlex/Crossref/Semantic Scholar...) **多数免 key** — 集群最可行的学术检索; references/ 子目录带端点速查 |
+| literature-review              | B     | 多库系统综述, 同 REST 路数                                                                                               |
+| citation-management            | B     | Python (Google Scholar/PubMed → BibTeX)                                                                         |
+| pyzotero                       | B     | Zotero Web API (本地库主控站有)                                                                                        |
+| bgpt-paper-search / paperzilla | D     | Trae 托管 MCP/应用绑定 — 换 §3.3 的 paper-search-mcp                                                                    |
 
 **③ 工作流编排**
 
-| 技能 | 级 | 说明 |
-| --- | -- | --- |
-| **ars-academic-pipeline** | **A** | 10 阶段研究→写作→评审→修订全链编排 (五层循环 §4.2 的现成实现) |
-| ars-deep-research / ars-academic-paper / ars-paper-reviewer | A | 13-agent 深研 / 论文写作 / 5-评审员模拟 |
-| research-* 链 ×7 (scout/idea/baseline/experiment/decision/write/finalize) | A | Research OS 中文流水线 — 与集群 spec 链 (RESEARCH→DESIGN→IMPL→CHECKLIST→ADR) 语义同构 |
-| handoff / doc-coauthoring | A | 会话交接压缩 / 文档共创流程 |
+| 技能                                                                        | 级     | 说明                                                                       |
+| ------------------------------------------------------------------------- | ----- | ------------------------------------------------------------------------ |
+| **ars-academic-pipeline**                                                 | **A** | 10 阶段研究→写作→评审→修订全链编排 (五层循环 §4.2 的现成实现)                                   |
+| ars-deep-research / ars-academic-paper / ars-paper-reviewer               | A     | 13-agent 深研 / 论文写作 / 5-评审员模拟                                             |
+| research-\* 链 ×7 (scout/idea/baseline/experiment/decision/write/finalize) | A     | Research OS 中文流水线 — 与集群 spec 链 (RESEARCH→DESIGN→IMPL→CHECKLIST→ADR) 语义同构 |
+| handoff / doc-coauthoring                                                 | A     | 会话交接压缩 / 文档共创流程                                                          |
 
 **④ 软件工程规范 (superpowers 血统 — 实际已在装)**
 
-| 技能 | 级 | 说明 |
-| --- | -- | --- |
-| **test-driven-development** | **A** | 纯 prompt 纪律技能 ("看测试先失败"), frontmatter 极简 |
-| brainstorming | A | 创造性工作前置门 (HARD-GATE 设计先行); 正文引用 `docs/superpowers/specs/` 路径 — superpowers 血统实证 |
-| writing-plans / executing-plans | A | 计划编写 / 计划执行 (spec 驱动的两端) |
-| grill-me | A | 计划拷问式评审 |
-| security-best-practices | A | 语言安全审查 (py/js/ts/go) |
-| cm-learn-codebase / cm-smart-explore | A/B | 全量通读 / tree-sitter AST 结构搜索 (后者需装依赖) |
-| git-commit | A | 约定式提交 |
+| 技能                                   | 级     | 说明                                                                              |
+| ------------------------------------ | ----- | ------------------------------------------------------------------------------- |
+| **test-driven-development**          | **A** | 纯 prompt 纪律技能 ("看测试先失败"), frontmatter 极简                                        |
+| brainstorming                        | A     | 创造性工作前置门 (HARD-GATE 设计先行); 正文引用 `docs/superpowers/specs/` 路径 — superpowers 血统实证 |
+| writing-plans / executing-plans      | A     | 计划编写 / 计划执行 (spec 驱动的两端)                                                        |
+| grill-me                             | A     | 计划拷问式评审                                                                         |
+| security-best-practices              | A     | 语言安全审查 (py/js/ts/go)                                                            |
+| cm-learn-codebase / cm-smart-explore | A/B   | 全量通读 / tree-sitter AST 结构搜索 (后者需装依赖)                                            |
+| git-commit                           | A     | 约定式提交                                                                           |
 
 > **§3.2 修正**: 原计划"从 obra/superpowers 挑 TDD + systematic-debugging 两个" — 盘点发现 superpowers 血统链 (brainstorming→writing-plans→executing-plans + TDD + grill-me + handoff) **已整体在装**, 无需从社区另取, 直接整链迁移 (全 A 类)。
 
 **⑤ 数学推理**
 
-| 技能 | 级 | 说明 |
-| --- | -- | --- |
-| **math-finance-reasoning** | **A** | 六层推理架构 (定理证明+数值算法+学术品味+跨域联想); "engine vs fuel" 设计 — 纯 prompt 零依赖 |
-| lean4-theorem-proving | B | 需 lake/lean4 工具链 (A/B 站可装, D:\Textbook 项目有既存动力) |
-| sympy / matlab | B | pip / Octave |
-| statistical-analysis / statistical-power / experimental-design | A/B | 测试选择/功效/DOE 纪律层为 prompt, 计算层可选装 |
+| 技能                                                             | 级     | 说明                                                               |
+| -------------------------------------------------------------- | ----- | ---------------------------------------------------------------- |
+| **math-finance-reasoning**                                     | **A** | 六层推理架构 (定理证明+数值算法+学术品味+跨域联想); "engine vs fuel" 设计 — 纯 prompt 零依赖 |
+| lean4-theorem-proving                                          | B     | 需 lake/lean4 工具链 (A/B 站可装, D:\Textbook 项目有既存动力)                  |
+| sympy / matlab                                                 | B     | pip / Octave                                                     |
+| statistical-analysis / statistical-power / experimental-design | A/B   | 测试选择/功效/DOE 纪律层为 prompt, 计算层可选装                                  |
 
 **⑥ 任务规划**
 
-| 技能 | 级 | 说明 |
-| --- | -- | --- |
-| what-if-oracle | A | 4-6 分支情景推演 (best/likely/worst/wild card/contrarian/二阶) |
-| consciousness-council | A | 多视角审议会 |
-| brainstorming / writing-plans / grill-me | A | 同④ — 规划链即工程链 |
-| plan-mode / verify-mode | E | Trae 模式绑定技能, 集群无对应模式机制 |
+| 技能                                       | 级 | 说明                                                     |
+| ---------------------------------------- | - | ------------------------------------------------------ |
+| what-if-oracle                           | A | 4-6 分支情景推演 (best/likely/worst/wild card/contrarian/二阶) |
+| consciousness-council                    | A | 多视角审议会                                                 |
+| brainstorming / writing-plans / grill-me | A | 同④ — 规划链即工程链                                           |
+| plan-mode / verify-mode                  | E | Trae 模式绑定技能, 集群无对应模式机制                                 |
 
 ### 7.3 关键结论
 
@@ -435,56 +437,94 @@ frontmatter 抽查 (5 个代表): `paper-lookup` (name+description+metadata, RES
 ### 7.4 落地批次 (并入 §4.5 路线; **已按 §7.5 原生生态对比修正**)
 
 - **P0-原生优先 (装原生, 不迁 Trae)**: obra/superpowers v6.3.0 (工程链 20+ 技能, 替代 §7.2④ 的 Trae 快照 6 件) + anthropics/skills document-skills (docx/pdf/pptx/xlsx 生产级) — 两站 claude code 装 plugin; opencode 走其 README 的 OpenCode 安装路径
-- **P0+定制迁移 (scp 直拷, 原生无等价)**: math-finance-reasoning + what-if-oracle + research-* 编排链 7 个 + ars-academic-pipeline → 两站 `~/.claude/skills/` (~10 个; 先 git 化主控站技能目录做单一事实源)
+
+- **P0+定制迁移 (scp 直拷, 原生无等价)**: math-finance-reasoning + what-if-oracle + research-\* 编排链 7 个 + ars-academic-pipeline → 两站 `~/.claude/skills/` (\~10 个; 先 git 化主控站技能目录做单一事实源)
+
 - **P1**: paper-lookup + literature-review (B 站 REST 连通性实测: arxiv/openalex/crossref 多数免 key); lean4 工具链视需求
+
 - **P2**: research-lookup / exa-search (key 传播 + B 站外网连通性实测; 不通则永久留主控站); opencode-websearch-cited 试点
+
 - **外网不可达预案**: B 站有 github exit 28 史 — plugin 安装失败时走"主控站 git clone → scp 上站 → 本地 plugin 目录安装"三段式
 
 ### 7.5 原生插件生态对比: 更优原生件则不迁 (2026-09-02 补充)
 
 > 背景: §7.2 盘点的是"Trae 有什么可迁"; 本节反向盘点 **claude code / opencode 自身插件生态**, 对每类裁定"迁 Trae 件 vs 装原生" — 原则有原生等价物且更优时**不迁**。
 
-**关键事实**: Trae 里的 superpowers 血统 6 件 (§7.2④) **本就是 obra/superpowers 的静态快照** — 原作已是 claude code 插件市场头部 (v6.3.0, 2026-08-12 更新; ~248k stars / 820k+ 安装, 官方 marketplace 在售)。装原生 = 拿到更新版本 + 更多技能 (20+: 增 subagent-driven-development / systematic-debugging / verification-before-completion / git-worktrees 等) + `/superpowers:brainstorm` 等 slash 命令 + SessionStart hook — 全面优于迁旧快照。
+**关键事实**: Trae 里的 superpowers 血统 6 件 (§7.2④) **本就是 obra/superpowers 的静态快照** — 原作已是 claude code 插件市场头部 (v6.3.0, 2026-08-12 更新; \~248k stars / 820k+ 安装, 官方 marketplace 在售)。装原生 = 拿到更新版本 + 更多技能 (20+: 增 subagent-driven-development / systematic-debugging / verification-before-completion / git-worktrees 等) + `/superpowers:brainstorm` 等 slash 命令 + SessionStart hook — 全面优于迁旧快照。
 
 **claude code 原生生态头部** (官方 marketplace 200+ 插件):
 
-| 来源 | 件 | 内容 | 对本集群价值 |
-| --- | -- | --- | --- |
-| obra/superpowers-marketplace | superpowers core | 20+ 工程技能 + 命令 + SessionStart 注入 | **P0 装** — 替代 Trae 工程链迁移 |
-| | developing-for-claude-code | 42+ 官方文档文件 + 插件开发技能 | P2 (自建技能时) |
-| | private-journal-mcp | 本地语义日志 MCP | 可选 (与 §6.3 记忆层重叠) |
-| anthropics/skills (官方) | document-skills | docx/pdf/pptx/xlsx **生产级实现** (Claude.ai 文档功能同源, 含生成-验证-修复循环) | **P0 装** — 两站出文档用 |
-| | example-skills | skill-creator / mcp-builder / webapp-testing / artifacts-builder | P1-P2 按需 |
-| 官方第一方 | code-review / security-guidance / typescript-lsp / frontend-design / planning-with-files | 多 agent 代码审查 / 安全扫描 / LSP 类型检查 / 前端设计 / 计划落盘 | code-review P1; 其余按需 |
-| 社区头部 | claude-mem (§6.3 已裁定) / context7 (§3.3 已列) / MemPalace / Karpathy skills | 记忆 / 库文档 / 记忆宫殿 / 编码纪律 | 记忆与文档已在前节覆盖 |
+| 来源                           | 件                                                                                        | 内容                                                               | 对本集群价值                   |
+| ---------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------ |
+| obra/superpowers-marketplace | superpowers core                                                                         | 20+ 工程技能 + 命令 + SessionStart 注入                                  | **P0 装** — 替代 Trae 工程链迁移 |
+| <br />                       | developing-for-claude-code                                                               | 42+ 官方文档文件 + 插件开发技能                                              | P2 (自建技能时)               |
+| <br />                       | private-journal-mcp                                                                      | 本地语义日志 MCP                                                       | 可选 (与 §6.3 记忆层重叠)        |
+| anthropics/skills (官方)       | document-skills                                                                          | docx/pdf/pptx/xlsx **生产级实现** (Claude.ai 文档功能同源, 含生成-验证-修复循环)     | **P0 装** — 两站出文档用        |
+| <br />                       | example-skills                                                                           | skill-creator / mcp-builder / webapp-testing / artifacts-builder | P1-P2 按需                 |
+| 官方第一方                        | code-review / security-guidance / typescript-lsp / frontend-design / planning-with-files | 多 agent 代码审查 / 安全扫描 / LSP 类型检查 / 前端设计 / 计划落盘                     | code-review P1; 其余按需     |
+| 社区头部                         | claude-mem (§6.3 已裁定) / context7 (§3.3 已列) / MemPalace / Karpathy skills                 | 记忆 / 库文档 / 记忆宫殿 / 编码纪律                                           | 记忆与文档已在前节覆盖              |
 
 **opencode 原生生态头部** (npm 1000+ 包; awesome-opencode 9.5k stars):
 
-| 件 | 功能 | 对本集群价值 |
-| -- | --- | --- |
-| opencode-scheduler | cron 语法调度周期任务 (systemd/Linux) | P2 — 与集群 D1 看门狗 timer 同范式, 可做站侧例检 |
-| opencode-worktree | git worktree 隔离会话 | P2 — 多任务并行实验时 |
-| opencode-supermemory | 跨会话持久记忆 | 与 §6.3 选型重叠, 备选 |
-| opencode-skillful | 技能懒加载注入 | P2 — 技能多了之后的瘦身手段 |
-| opencode-websearch-cited | 受支持 provider 的原生网页搜索 (Google grounded 风格) | **P1 试** — claude code 内置 WebSearch 是 Anthropic 服务端工具本地后端不可用 (§2.1), 此插件或补此洞 |
-| oh-my-opencode (slim) | 编排 + LSP/AST 工具 + 后台 agent 套件 | P2 — 与自定义 agent 路线重叠, 观察 |
-| subtask2 / micode | /commands 编排扩展 / brainstorm→plan→implement 工作流 | P2 |
+| 件                        | 功能                                             | 对本集群价值                                                                       |
+| ------------------------ | ---------------------------------------------- | ---------------------------------------------------------------------------- |
+| opencode-scheduler       | cron 语法调度周期任务 (systemd/Linux)                  | P2 — 与集群 D1 看门狗 timer 同范式, 可做站侧例检                                            |
+| opencode-worktree        | git worktree 隔离会话                              | P2 — 多任务并行实验时                                                                |
+| opencode-supermemory     | 跨会话持久记忆                                        | 与 §6.3 选型重叠, 备选                                                              |
+| opencode-skillful        | 技能懒加载注入                                        | P2 — 技能多了之后的瘦身手段                                                             |
+| opencode-websearch-cited | 受支持 provider 的原生网页搜索 (Google grounded 风格) | **P1 试** — 补 opencode 侧的网页搜索空缺 (claude code 内置 WebSearch 是 Anthropic 服务端工具本地后端不可用 §2.1; 此插件是否兼容本地后端未知, "受支持的提供商"限定语存疑, 试点裁决) |
+| oh-my-opencode (slim)    | 编排 + LSP/AST 工具 + 后台 agent 套件                  | P2 — 与自定义 agent 路线重叠, 观察                                                     |
+| subtask2 / micode        | /commands 编排扩展 / brainstorm→plan→implement 工作流 | P2                                                                           |
 
 **逐类终裁 (迁 vs 原生)**:
 
-| 类别 | 裁定 | 依据 |
-| --- | --- | --- |
-| ④ 工程规范 | **装原生 obra/superpowers, 不迁 Trae 6 件** | Trae 件 = 其旧快照; 原生 20+ 技能 + 命令 + hook + 持续更新 |
-| 文档处理 (新增类) | **装原生 anthropics document-skills** | 生产级 (含验证-修复循环), Trae 无对应迁移件 |
-| ③ 学术编排 | **迁 Trae (research-* 链 + ars-pipeline)** | 原生无学术工作流等价物 — Scott 定制资产 |
-| ⑤ 数学推理 | **迁 Trae (math-finance-reasoning)** | 原生无等价 (六层架构是从 12 个 Claude 会话提炼的定制件) |
-| ⑥ 任务规划 | **混合**: 通用规划用原生 superpowers; what-if-oracle / consciousness-council 迁移 | what-if 4-6 分支推演原生无直接等价 |
-| ② 学术检索 | **迁 Trae (paper-lookup)** | claude code 无官方学术检索插件; context7 是库文档非论文 |
-| ① 信息检索 | **留主控站 + P1 试 opencode-websearch-cited** | C 类外网限制不变; 内置 WebSearch 本地后端不可用 |
+| 类别         | 裁定                                                                     | 依据                                          |
+| ---------- | ---------------------------------------------------------------------- | ------------------------------------------- |
+| ④ 工程规范     | **装原生 obra/superpowers, 不迁 Trae 6 件**                                  | Trae 件 = 其旧快照; 原生 20+ 技能 + 命令 + hook + 持续更新 |
+| 文档处理 (新增类) | **装原生 anthropics document-skills**                                     | 生产级 (含验证-修复循环), Trae 无对应迁移件                 |
+| ③ 学术编排     | *迁 Trae (research-* 链 + ars-pipeline)\*                                | 原生无学术工作流等价物 — Scott 定制资产                    |
+| ⑤ 数学推理     | **迁 Trae (math-finance-reasoning)**                                    | 原生无等价 (六层架构是从 12 个 Claude 会话提炼的定制件)         |
+| ⑥ 任务规划     | **混合**: 通用规划用原生 superpowers; what-if-oracle / consciousness-council 迁移 | what-if 4-6 分支推演原生无直接等价                     |
+| ② 学术检索     | **迁 Trae (paper-lookup)**                                              | claude code 无官方学术检索插件; context7 是库文档非论文     |
+| ① 信息检索     | **留主控站 + P1 试 opencode-websearch-cited**                               | C 类外网限制不变; 内置 WebSearch 本地后端不可用             |
 
 **总策略修正 (三层)**: 原生优先 (superpowers / document-skills / 官方 code-review) → 定制迁移 (数学推理 / 学术编排 / 学术检索 / what-if — 原生无等价的 Scott 资产) → Trae 兜底 (C 类检索留主控站, E 类宿主绑定弃)。§7.4 批次已同步改写。
 
 **本节参考**: [obra/superpowers](https://github.com/obra/superpowers) · [obra/superpowers-marketplace](https://github.com/obra/superpowers-marketplace) (v6.3.0) · [anthropics/skills](https://github.com/anthropics/skills) · [Best Claude Code Plugins 2026 (designrevision)](https://designrevision.com/blog/best-claude-code-plugins) · [10 top Claude Code plugins (composio/dev.to)](https://dev.to/composiodev/10-top-claude-code-plugins-to-use-in-2026-4gn6) · [awesome-opencode](https://github.com/awesome-opencode/awesome-opencode) · [opencode 官方生态页](https://dev.opencode.ai/docs/ecosystem/) · [Best OpenCode Plugins (composio)](https://composio.dev/content/best-opencode-plugins)
+
+### 7.6 排幻觉审计记录 (2026-09-02, 针对 §6/§7)
+
+> 方法: 逐断言追溯信息源并定级 — **E1** 一手直读 (官方 model card / GitHub·npm README / 本地磁盘实测) · **E2** 官方文档页 · **E3** 可靠第三方 (NVIDIA blog / 实测指南 / 技术媒体) · **E4** 单一博客/社区帖 · **E5** 无直接来源的推断。发现 8 处问题全部已修正进正文。
+
+**修正清单**:
+
+| # | 原断言 | 问题 | 处置 |
+| - | ----- | ---- | ---- |
+| F1 | "Trae 技能层 \~190 个" (§7.1) | 低估 — 目录计数实测 **213** | 已改正文 |
+| F2 | claude-mem worker 端口 :37777 (§6.3) | 第三方文章 (termdock) 与官方 docs 冲突; 官方为 `37700 + (uid % 100)` 每用户不同 | 取官方, 已改正文 |
+| F3 | "claude-mem 72K+ stars 生态最大" (§6.3) | 两来源数字矛盾 (72.4K@2026-05 augmentcode vs 89K+@2026-03 termdock, stars 不可能倒退 — 至少一方失真) | 改为"70k+ 级"保守口径并标注矛盾 |
+| F4 | "claude code 按 \~200k 假设...永远晚于真实上限" (§6.4, 原表述为事实) | **推断被当实证** — 92% 阈值与窗口映射机制有 E4 来源, 但"自定义后端下仍按 200k 计"无任何来源 | 降级为"推断非实证", 补 5min 验证法 (上站跑 `/context` 看窗口基数) |
+| F5 | opencode `limit.context` 嵌套式配置示例 (§6.2) | 两来源格式冲突: 嵌套式 (yahtoo 第三方整理) vs GLM5 案例平铺式 (bswen); `prune` 默认值亦冲突 (官方片段 false vs 第三方 true) | 保留嵌套式但加"格式待站上验证"标注; prune 显式写 true 消歧 |
+| F6 | Auto Memory "v2.1.59+ / 前 200 行或 25KB" (§6.2) | 单一 CSDN 博客来源 (E4) | 加"单一博客来源, 细节待实测"标注 |
+| F7 | "GLM5 同款教训**实证**" (§6.2 注释) | 案例本身真实但属博客级证据 (E4) | 措辞降为"社区案例" |
+| F8 | "opencode-websearch-cited...补 claude code 内置 WebSearch 之洞" (§7.5) | 措辞失准 — 该件是 **opencode** 插件, 补的是 opencode 侧; 且"受支持的提供商"是否含本地后端未知 | 已改精确表述 + 标注存疑待试点 |
+
+**抽验通过的关键断言 (无需改)**:
+
+| 断言 | 来源等级 | 核验方式 |
+| ---- | ------ | ------ |
+| Trae superpowers 血统 6 件 = obra/superpowers 快照 | **E1 级实证** | mdskills.ai 收录的 obra/brainstorming description 与 Trae 本地 SKILL.md **逐字一致**; skill 名单/正文结构 (docs/superpowers/specs 路径引用) 吻合 |
+| superpowers v6.3.0 (2026-08-12) / 820k+ installs / 20+ skills | E1+E3 | marketplace commit 记录 + clauder-navi + marketplace README |
+| nemotron RULER @256k 96.30 / @1M 91.75; gpt-oss @256k 52.30 / @1M 22.30; temp=1.0+top_p=0.95; SWE-Bench 数字 | E1 | build.nvidia.com model card 直读 |
+| claude-mem 支持 opencode (`--ide opencode`) / 注入近 10 session | E1 | GitHub README + docs.claude-mem.ai |
+| opencode-codex-memory: 6h 闲置提取 / 版本须钉死 / 需 ≥1.18 / 全本地 | E1 | npm README 直读 |
+| Trae 插件层 8 个宿主绑定 (browser/chrome/computer-use/lark/...) | E1 | installed-plugins.json 直读 |
+| anthropics document-skills = Claude.ai 文档功能同源, 含生成-验证-修复循环 | E2 | 官方 README ("power Claude's document capabilities") + 实现.review |
+| 多 agent token \~15x | E3 | NVIDIA 官方 blog 引 Anthropic 工程博客 |
+| gpt-oss CoT passback (5+ 轮) / effort low 几乎无推理 | E3 | ivanopcode 实测指南 |
+| ctx 16k→32k 同级 MoE 吞吐 -30% | E3 | corti DGX Spark 实测 (原文"comparable small-active MoE", 非gpt-oss本体 — 归因已按原文限定) |
+
+**残余风险声明**: ① E4 级 claude code 机制细节 (/compact 92% 阈值, /context 用法) 未在本地后端实测 — 均为操作建议非关键路径, 实操时以实际行为为准; ② opencode 官方 config schema 未直接拉取 (open-code.ai 文档页未全文读), §6.2 配置以第三方整理为据 — 上站首装时须过一遍 schema 校验; ③ 本审计覆盖 §6/§7 (本轮新增), §1-§5 为首轮调研 + 附录 subagent 原文, D4 时已过一轮排幻觉 (表格重排提交 1ef4179)。
 
 ***
 
