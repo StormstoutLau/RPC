@@ -23,3 +23,4 @@ Desktop.ini
 
 # D2 运行时生成物
 ops/cluster_status.html
+ops/__pycache__/
