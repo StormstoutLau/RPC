@@ -197,7 +197,7 @@ upstream: null
 | IMPLEMENTATION.md | ✅ | ✅（含 2 处脚本修复的历史，最终版一致） |
 | CHECKLIST.md（本文件） | ✅ | ✅ |
 | UPGRADE_SOP.md（M4 交付物） | ✅ | ✅ |
-| 开发日志 | ✅ | [DEV-LOG-008-vulkan-version-control.md](../../DEV-LOG-008-vulkan-version-control.md) |
+| 开发日志 | ✅ | [DEV-LOG-008-vulkan-version-control.md](../../docs/DEV-LOG-008-vulkan-version-control.md) |
 
 ## 10. 验收结论
 
