@@ -1,0 +1,69 @@
+#!/bin/bash
+# rpc-nodes — B5q-1: 集群 RPC 节点声明式清单 (spec/cluster-bench DESIGN §3)
+# 用法: rpc-nodes            输出存活节点逗号 join (供 --rpc); ≥1 存活 exit 0, 全不可达 exit 2
+#       rpc-nodes --all      输出声明清单 (不探测)
+#       rpc-nodes --start <alias>  各节点 ssh systemctl start rpc-server@<alias> 并等端口
+#       rpc-nodes --stop <alias>   各节点 systemctl stop
+# 测试缝隙: NODES_ENV / RPC_SSH / RPC_PROBE_TIMEOUT (tests/b5q/test_rpc_nodes.sh)
+set -u
+NODES_ENV="${NODES_ENV:-/etc/llama-instances/nodes.env}"
+RPC_SSH="${RPC_SSH:-ssh}"
+PROBE_TIMEOUT="${RPC_PROBE_TIMEOUT:-2}"
+
+[ -f "$NODES_ENV" ] || { echo "FATAL: 节点清单不存在: $NODES_ENV" >&2; exit 3; }
+source "$NODES_ENV"
+[ -n "${RPC_NODES:-}" ] || { echo "FATAL: RPC_NODES 未声明: $NODES_ENV" >&2; exit 3; }
+
+MODE="${1:-}"
+ALIAS="${2:-}"
+
+probe_one() { timeout "$PROBE_TIMEOUT" bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null; }
+
+wait_port() { # wait_port <ip> <port> <tries>
+  local i
+  for i in $(seq 1 "${3:-15}"); do
+    probe_one "$1" "$2" && return 0
+    sleep 2
+  done
+  return 1
+}
+
+case "$MODE" in
+  --all)
+    echo "$RPC_NODES"
+    exit 0
+    ;;
+  --start)
+    [ -n "$ALIAS" ] || { echo "FATAL: --start 需 <alias>" >&2; exit 3; }
+    for node in $RPC_NODES; do
+      ip="${node%%:*}"
+      echo "[rpc-nodes] start rpc-server@${ALIAS} @ ${node}" >&2
+      "$RPC_SSH" "$ip" "sudo systemctl start rpc-server@${ALIAS}" >&2 || exit 4
+      wait_port "$ip" "${node##*:}" || { echo "FATAL: ${node} 端口未就绪" >&2; exit 4; }
+    done
+    # start 成功 → 输出存活列表 (与默认模式一致, 供调用方直接用作 --rpc 值)
+    exec "$0"
+    ;;
+  --stop)
+    [ -n "$ALIAS" ] || { echo "FATAL: --stop 需 <alias>" >&2; exit 3; }
+    for node in $RPC_NODES; do
+      ip="${node%%:*}"
+      echo "[rpc-nodes] stop rpc-server@${ALIAS} @ ${node}" >&2
+      "$RPC_SSH" "$ip" "sudo systemctl stop rpc-server@${ALIAS}" >&2 || exit 4
+    done
+    exit 0
+    ;;
+esac
+
+# 默认: 探测存活 → 逗号 join 输出
+ALIVE=""
+for node in $RPC_NODES; do
+  probe_one "${node%%:*}" "${node##*:}" && ALIVE="${ALIVE}${node},"
+done
+ALIVE="${ALIVE%,}"
+if [ -z "$ALIVE" ]; then
+  echo "FATAL: RPC 节点全不可达: $RPC_NODES" >&2
+  exit 2
+fi
+echo "$ALIVE"
+exit 0

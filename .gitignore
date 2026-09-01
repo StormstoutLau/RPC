@@ -1,0 +1,22 @@
+# ── 机密 (绝不入库) ──
+secrets/
+litellm_config_20260901.yaml
+*.key
+*.pem
+
+# ── 大文件 / 二进制 / 模型 ──
+downloads/
+*.tar.gz
+*.gguf
+*.bin
+
+# ── 备份 / 临时 ──
+# results-ledger.md.bak.* 等手动快照不入库, 历史交给 git
+*.bak
+*.bak.*
+*.bak-*
+.tmp*
+
+# ── 系统垃圾 ──
+Thumbs.db
+Desktop.ini
