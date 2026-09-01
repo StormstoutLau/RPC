@@ -7,7 +7,7 @@ type: design
 version: 1.1
 status: draft
 date: 2026-09-02
-depends: \[Agent生态升级与多智能体协作架构调研 (docs/, 2026-09-02 含 §7.6 排幻觉审计版 + §8 审计任务补充调研)]
+depends: \[Agent生态升级与多智能体协作架构调研 (docs/, 2026-09-02 含 §7.6 排幻觉审计版 + §8 审计任务补充调研含 §8.5 opencode 原生审计件二轮)]
 upstream: [ADR-0001 集群运维框架审计与四项改进决策]
 ---
 
@@ -133,8 +133,8 @@ V0 验证门 (V1→V2→V3→V5, 任一失败只影响对应模块不改全局)
 | math-finance-reasoning                                                      | A 纯 prompt      | 原生无等价（调研 §7.5 终裁⑤）                                                            |
 | what-if-oracle                                                              | A               | 原生无直接等价（§7.5⑥）                                                                |
 | research-scout / idea / baseline / experiment / decision / write / finalize | A ×7            | Research OS 编排链，原生无学术工作流等价（§7.5③）                                             |
-| ars-academic-pipeline                                                       | A               | 同上（§7.5③）；其三层引用锚点是学术审计的先行实现（§8.2 层2）                                          |
-| assertion-audit（自制）                                                         | A               | 断言-证据等级-信息源-逻辑链输出契约——§7.6 手工审计协议技能化，生态无单一对口件（§8.3）                            |
+| ars-academic-pipeline                                                       | A               | 同上（§7.5③）；其三层引用锚点是学术审计的先行实现（§8.2 层2）；**部署源改用 opencode 原生移植版 timpara/opencode-academic-research**（§8.5 改判，两站原生跑不走 Trae 兜底） |
+| assertion-audit（自制）                                                         | A               | 断言-证据等级-信息源-逻辑链输出契约——§7.6 手工审计协议技能化，生态无单一对口件（§8.3）；验收蓝本 = ARS v3.8 claim-audit 的 FNR<0.15/FPR<0.10 校准阈值（§8.5）；Phase 2 可升级为 opencode hook 强制（§8.5 结论2） |
 | cross-examine（自制）                                                           | A               | 审查方规范：干净室自检+逐断言核验+结构化发现（§8.3，融合 #704 干净室/adversarial-review 怀疑论/deglaze 证据反驳） |
 | paper-lookup                                                                | B（REST 多数免 key） | P1 实测连通后定（§7.5②）                                                              |
 | **合计**                                                                      | 12-13 件         | 全部 A 级除 paper-lookup                                                          |
