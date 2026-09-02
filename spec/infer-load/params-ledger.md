@@ -103,14 +103,15 @@ upstream: null
 
 ### 1.8 agent CLI 配置（两站，2026-09-02 定版实测起纳入台账）
 
-| 站点/文件 | 字段 | 值 | 依据 |
-| --- | --- | --- | --- |
-| 两站 `~/.config/opencode/opencode.jsonc` | `model`（顶层默认） | `opencode/nemotron-3.5-lightning-free` | ✅ 2026-09-02 用户决策"免费做默认+本地备选"后切换（21:37）；实测 B 15s / A 20s 两站最稳。**隐私边界：免费模型数据用于改进训练（官方 Privacy 节），敏感内容必须显式 -m 走本地**。备份 `.bak-20260902-2137`（两站）。前一状态：A 站 cluster-local/gpt-oss（2104 钉本地防外泄）/ B 站无键 |
-| B 站 `~/.claude/settings.json` env | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `120000` | ✅ 2026-09-02 恢复：台账既有记录应有而实缺（漂移），claude 对未知模型按 200k 假设 > llama-server n\_ctx 131072 有长会话溢出风险；恢复后冒烟 PASS（119s 热）。备份 `settings.json.bak-20260902-2106` |
-| 两站 opencode 调用形式 | stdin 管道 | `echo "<prompt>" \| opencode run -m <model>` | ✅ 实测：位置参数形式 1.18.25 挂死（init 后无 LLM 调用，opencode.log 实证）；升级窗口须回归验证（G10） |
-| 两站 claude 调用形式 | stdin 显式关闭 | `claude -p "<prompt>" < /dev/null` | ✅ 实测：不关 stdin 有长时间等待风险 |
-| B-claude 冷/热缓存 | 预热策略 | 首次调用前轻量 PING | ✅ 实测：冷缓存 33k 预填 ~20min（N\_CPU\_MOE=8 下 CPU 预填慢）；热缓存 30-120s |
-| 免费模型可用性（Zen 网关） | 两站实测 2026-09-02 | 5/6 可用 | nemotron-3-ultra-free(1M ctx)/nemotron-3.5-lightning-free(262k)/ling-3.0-flash-fin-free/mimo-v2.5-free/big-pickle 可用；**muse-spark-contributor-free 两站均地区封锁（中国 IP）**。全免费 $0 无 key；限额未文档化（非官方源称 ~100 请求/天，E3）；限时免费随时可能下架 |
+| 站点/文件                                  | 字段                               | 值                                            | 依据                                                                                                                                                                                                                      |
+| -------------------------------------- | -------------------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 两站 `~/.config/opencode/opencode.jsonc` | `model`（顶层默认）                    | `opencode/nemotron-3.5-lightning-free`       | ✅ 2026-09-02 用户决策"免费做默认+本地备选"后切换（21:37）；实测 B 15s / A 20s 两站最稳。**隐私边界：免费模型数据用于改进训练（官方 Privacy 节），敏感内容必须显式 -m 走本地**。备份 `.bak-20260902-2137`（两站）。前一状态：A 站 cluster-local/gpt-oss（2104 钉本地防外泄）/ B 站无键                        |
+| B 站 `~/.claude/settings.json` env      | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `120000`                                     | ✅ 2026-09-02 恢复：台账既有记录应有而实缺（漂移），claude 对未知模型按 200k 假设 > llama-server n\_ctx 131072 有长会话溢出风险；恢复后冒烟 PASS（119s 热）。备份 `settings.json.bak-20260902-2106`                                                                     |
+| 两站 opencode 调用形式                       | stdin 管道                         | `echo "<prompt>" \| opencode run -m <model>` | ✅ 实测：位置参数形式 1.18.25 挂死（init 后无 LLM 调用，opencode.log 实证）；升级窗口须回归验证（G10）                                                                                                                                                   |
+| 两站 claude 调用形式                         | stdin 显式关闭                       | `claude -p "<prompt>" < /dev/null`           | ✅ 实测：不关 stdin 有长时间等待风险                                                                                                                                                                                                  |
+| B-claude 冷/热缓存                         | 预热策略                             | 首次调用前轻量 PING                                 | ✅ 实测：冷缓存 33k 预填 \~20min（N\_CPU\_MOE=8 下 CPU 预填慢）；热缓存 30-120s                                                                                                                                                            |
+| 免费模型可用性（Zen 网关）                        | 两站实测 2026-09-02                  | 5/6 可用                                       | nemotron-3-ultra-free(1M ctx)/nemotron-3.5-lightning-free(262k)/ling-3.0-flash-fin-free/mimo-v2.5-free/big-pickle 可用；**muse-spark-contributor-free 两站均地区封锁（中国 IP）**。全免费 $0 无 key；限额未文档化（非官方源称 \~100 请求/天，E3）；限时免费随时可能下架 |
+| ~~qwen-code 插件（OAuth 免费档）~~                | B 站实测 2026-09-02，**装后即删**     | **链路已死，勿重试**                              | `opencode-qwencode-auth@1.3.0` 安装/provider 注册正常，但授权闭环不可达（五重证据）：①`/authorize` 同意页已下线（登录态两轮跳回聊天主页）②token 端点 504（alibaba-ga 网关）③官方停用公告 2026-04-15（qwen-code 文档明文）④插件 issue #14 社区确认 ⑤client\_id 系逆向 qwen-code CLI 所得，npm 末次发布 2026-02-12 早于停用。**免费 Qwen 档不存在**；若需 Qwen 走官方 Coding Plan（月费）接 DashScope。配置已回滚（codex-memory 单插件，默认回归 lightning，冒烟 OK） |
 
 ## 2. 反例区（试过且否决，禁止无意识重试）
 
@@ -132,10 +133,11 @@ upstream: null
 
 ## 4. 修改历史
 
-| 日期         | 变更                                                                         | 动机                                           |
-| ---------- | -------------------------------------------------------------------------- | -------------------------------------------- |
-| 2026-09-02 | 初版建账（D1.3）：6 实例基线 + 3 反例 + 5 缺口                                            | ADR-0001 根因 3（调优结论散落不可复用）                    |
-| 2026-09-02 | 新增 §1.7 网关参数节（rpm/routing\_strategy/fallbacks/num\_retries）；nodes.env 笔误修正 | D1 验收 A6/A7 回填：rpm=30 成为首条新增依据条目（IMPL §6 约定） |
-| 2026-09-02 | 新增 §1.8 agent CLI 配置节（A 站默认模型钉本地 / B 站 MAX\_CONTEXT\_TOKENS 恢复 / 两站调用形式铁律 / B-claude 预热策略） | 4 CLI 定版实测（agent-cli-smoke.sh 4/4 PASS）发现两处配置漂移并修复；D6 调研 v3 联动 |
+| 日期         | 变更                                                                                                | 动机                                                             |
+| ---------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| 2026-09-02 | 初版建账（D1.3）：6 实例基线 + 3 反例 + 5 缺口                                                                   | ADR-0001 根因 3（调优结论散落不可复用）                                      |
+| 2026-09-02 | 新增 §1.7 网关参数节（rpm/routing\_strategy/fallbacks/num\_retries）；nodes.env 笔误修正                        | D1 验收 A6/A7 回填：rpm=30 成为首条新增依据条目（IMPL §6 约定）                   |
+| 2026-09-02 | 新增 §1.8 agent CLI 配置节（A 站默认模型钉本地 / B 站 MAX\_CONTEXT\_TOKENS 恢复 / 两站调用形式铁律 / B-claude 预热策略）        | 4 CLI 定版实测（agent-cli-smoke.sh 4/4 PASS）发现两处配置漂移并修复；D6 调研 v3 联动 |
 | 2026-09-02 | §1.8 默认模型决策变更：两站统一切 `opencode/nemotron-3.5-lightning-free`（免费档），补免费模型可用性行（5/6 可用，muse-spark 地区封锁） | 用户决策"免费做默认+本地备选"；两站实测 B 15s / A 20s 最稳；隐私边界（免费模型数据用于改进）写入手册纪律 |
+| 2026-09-02 | §1.8 追加 qwen-code 插件实测行（装后即删）：OAuth 免费档 2026-04-15 官方停用，授权闭环不可达（同意页下线+token 504 五重证据），勿重试 | 用户要求实测 qwen 插件；五重证据链定案后清理回滚；D6 调研 v3 增补二同步落档 |
 
