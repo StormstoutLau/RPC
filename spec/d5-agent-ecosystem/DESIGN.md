@@ -26,7 +26,7 @@ upstream: \[ADR-0001 集群运维框架审计与四项改进决策]
 **核心设计立场**（继承审计后结论）：
 
 1. **原生优先**：有更优原生插件的不迁移（superpowers v6.3.0 / anthropics document-skills）
-2. **定制迁移**：原生无等价的 Scott 资产才 scp 迁移（\~10 个）
+2. **定制迁移**：原生无等价的 Scott 资产才 scp 迁移（9 件 Trae + 2 件自制；paper-lookup 条件件）
 3. **Trae 兜底**：C 类外网依赖检索永久留主控站
 4. **验证先行**：审计遗留的 4 个"待验证"项（F4/F5/V3/V5）设为 V0 验证门，**不通过则改道**
 
@@ -34,7 +34,7 @@ upstream: \[ADR-0001 集群运维框架审计与四项改进决策]
 
 | 维度    | 现状                                   | 预期（完成后）                                                              |
 | ----- | ------------------------------------ | -------------------------------------------------------------------- |
-| 技能可见性 | 两站 `/` 命令列表为空（无技能）                   | 两站两 CLI 均可列出并触发 superpowers 全链（brainstorm→plan→TDD→execute）+ 定制 10 件 |
+| 技能可见性 | 两站 `/` 命令列表为空（无技能）                   | 两站两 CLI 均可列出并触发 superpowers 全链（brainstorm→plan→TDD→execute）+ 定制 11-12 件（claude code 侧；opencode 侧另加 ARS=T4b） |
 | 文档产出  | 无                                    | 两站可直接产 docx/pdf/pptx/xlsx（anthropics 生产级件，含验证-修复循环）                  |
 | 上下文预算 | opencode 对自定义端点无窗口认知，长会话无界增长直到后端 400 | `limit.context` 声明后 auto-compact 在触线前触发（V1 验证后生效）                    |
 | 跨会话记忆 | 每会话从零开始                              | B 站 codex-memory 试点：隔日会话能回答"上次做了什么"（闲置 6h 后台提取）                      |
@@ -52,7 +52,7 @@ upstream: \[ADR-0001 集群运维框架审计与四项改进决策]
 | opencode 1.18+ 直读 `.claude/skills/`，与 claude code 零成本共用                                        | `~/.claude/skills/` 为单一事实源，一站配置两 CLI 生效                       | 调研 §2.2         |
 | Trae superpowers 血统 6 件 = obra/superpowers 旧快照（E1 级逐字实证）；原生 v6.3.0 更全                          | 工程链装原生，不迁 Trae 快照                                             | 调研 §7.5 / 审计通过项 |
 | anthropics document-skills 是 Claude.ai 文档功能同源生产级实现                                             | 文档处理装原生                                                       | 调研 §7.5         |
-| 定制资产（math-finance-reasoning / research-\* 链 / paper-lookup / what-if-oracle）原生无等价              | scp 迁移约 10 件                                                  | 调研 §7.5 终裁表     |
+| 定制资产（math-finance-reasoning / research-\* 链 / paper-lookup / what-if-oracle）原生无等价 | scp 迁移 11-12 件（9 Trae + 2 自制）                                                  | 调研 §7.5 终裁表     |
 | C 类检索依赖外网 API key；B 站有 github exit 28 史                                                        | 检索永久留主控站 trae；V3 探测决定 plugin 安装路径                             | 调研 §7.3-③       |
 | opencode 配置格式两来源冲突（审计 F5）                                                                      | V1 验证门：以官方 schema 为准，不预设格式                                    | 审计 F5           |
 | "claude code 200k 假设陷阱"系推断非实证（审计 F4）                                                           | V2 验证门：`/context` 看窗口基数，再定 claude code 长会话策略                  | 审计 F4           |
@@ -125,10 +125,11 @@ upstream: \[ADR-0001 集群运维框架审计与四项改进决策]
 
 ```
 V0 验证门 (V1→V2→V3→V5, 任一失败只影响对应模块不改全局)
-  → T1 B 站 opencode 1.18.9→1.18.25 升级 (调研 §3.1 P0 前置)
+  → T1 环境就绪 (两站版本核验 + PR #42150 决策 + ripgrep 预装; B 站升级已于 D4 完成)
   → T2 上下文配置 M2 (V1 过门后)
   → T3 原生插件安装 M4 (V3 决定路径)
-  → T4 定制技能迁移 M1 (scp ~10 件 + 触发验证)
+  → T4 定制技能迁移 M1 (scp 11-12 件 + 触发验证)
+  → T4b ARS 原生部署 M4b (V3 过门后, §5.4 协议)
   → T5 记忆试点 M3 (B 站 codex-memory)
   → T6 验收 + 台账/手册回填
 ```
@@ -146,7 +147,7 @@ V0 验证门 (V1→V2→V3→V5, 任一失败只影响对应模块不改全局)
 | assertion-audit（自制）                                                         | A               | 断言-证据等级-信息源-逻辑链输出契约——§7.6 手工审计协议技能化，生态无单一对口件（§8.3）；验收蓝本 = ARS v3.8 claim-audit 的 FNR<0.15/FPR<0.10 校准阈值（§8.5，E1 实锤）；契约须**显式声明证明力边界**（效仿 gemini-search"结构过滤≠密码学溯源"诚实披露，§8.7）；Phase 2 hook 强制降级为失效后备（§8.9：hooks 层上游零认领） |
 | cross-examine（自制）                                                           | A               | 审查方规范：干净室自检+逐断言核验+结构化发现（§8.3，融合 #704 干净室/adversarial-review 怀疑论/deglaze 证据反驳）；收敛判据并入 adlc "**两连干轮+≥3 独立 lens**"（§8.7 修正后实锤）；跨模型审查立场获 adlc trust-root tier 外部同构实证（§8.5/§8.7）                                           |
 | paper-lookup                                                                | B（REST 多数免 key） | P1 实测连通后定（§7.5②）                                                                                                                                                                                                      |
-| **合计**                                                                      | 12-13 件         | 全部 A 级除 paper-lookup                                                                                                                                                                                                  |
+| **合计**                                                                      | T4 面 11-12 件（9 Trae + 2 自制 + paper-lookup 条件件，claude code 侧可见）+ ARS 归 T4b（opencode 侧） | 全部 A 级除 paper-lookup                                                                                                                                                                                                  |
 
 ### 5.2 opencode provider 声明（M2，格式以 V1 为准）
 
@@ -203,7 +204,7 @@ V0 验证门 (V1→V2→V3→V5, 任一失败只影响对应模块不改全局)
 
 - 描述：原生 plugin 装 superpowers/document-skills，仅迁移原生无等价的定制件，C 类留主控站
 
-- 优点：拿最新版与持续更新；迁移量最小（\~10 件 vs 213 件全迁）；维护责任外移（superpowers 上游）
+- 优点：拿最新版与持续更新；迁移量最小（~11-12 件 vs 213 件全迁）；维护责任外移（superpowers 上游）
 
 - 缺点：依赖 plugin 安装路径可达（V3 门）；原生件不进单一事实源
 
@@ -277,10 +278,10 @@ V0 验证门 (V1→V2→V3→V5, 任一失败只影响对应模块不改全局)
 | 阶段                           | 内容                                                                                                                                                                                             | 测试方法                                                                                      | 依赖门 |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | --- |
 | **V0 验证门** (\~30min, 决定后续路径) | V1: 站上空配置跑 opencode，按官方 schema 校验 limit.context 两种格式哪个生效；V2: 加载 gpt-oss 后 claude code `/context` 看窗口基数；V3: B 站 curl github + npm registry 连通性；V5: research-lookup 单件 scp 后 claude code 会话无报错加载 | 每项产出 GO/NO-GO 记录进 CHECKLIST                                                               | —   |
-| **T1 升级**                    | B 站 opencode 1.18.9→1.18.25（npm 平台包路径，D4 已验证的备选法）；**选型时查 PR #42150（O(N²) 修复）是否已入发布版，入则选含修复版**（§8.9）；两站 `apt install ripgrep`（#23891 首跑下载挂死预防）                                                  | `opencode --version` + PONG 冒烟（调研 §1.1 同款）+ `command -v rg` 非空                            | —   |
+| **T1 环境就绪** | 两站 opencode 版本核验（B 站升级 1.18.25 已于 D4 完成，A 站本就 1.18.25）+ A 站二进制路径核实；**PR #42150（O(N²) 修复）选型决策：入版则升、未入则锁定 1.18.25**（§8.9）；两站 `apt install ripgrep`（#23891 首跑下载挂死预防） | `opencode --version`（预期 1.18.25）+ `which opencode` + PONG 冒烟 + `command -v rg` 非空 | —   |
 | **T2 上下文配置**                 | 两站 opencode.jsonc 写 limit.context + compaction（V1 定的格式）                                                                                                                                        | 人为灌长对话（大文件反复 Read）观察 auto-compact 触发于 \~120k/30k 而非后端 400                                 | V1  |
 | **T3 原生插件**                  | superpowers + document-skills 两站安装（V3 通=marketplace；不通=三段式）                                                                                                                                    | claude code 里 `/superpowers:brainstorm` 响应；docx 生成-验证循环跑一例                                | V3  |
-| **T4 定制迁移**                  | 主控站建 `ops/agent-skills/` git 化 → scp \~10 件 → 两站验证                                                                                                                                             | 每件 `/` 列表可见 + 抽 3 件实际触发（math-finance-reasoning / what-if-oracle / research-scout）出预期结构化输出 | V5  |
+| **T4 定制迁移**                  | 主控站建 `ops/agent-skills/` git 化 → scp 11-12 件 → 两站验证                                                                                                                                             | 每件 `/` 列表可见 + 抽 3 件实际触发（math-finance-reasoning / what-if-oracle / research-scout）出预期结构化输出 | V5  |
 | **T4b ARS 原生部署**             | timpara 移植版按 §5.4 协议部署：V3 二选一路径取定版 tag → 站上 install.sh → V6 首装实测（B 站）→ 第二站推广 → claim-audit 硬门实测                                                                                                | §5.4 验证步骤全过（V6-1/V6-2 → T4b-1/2/3/4）                                                      | V3  |
 | **T5 记忆试点**                  | B 站装 codex-memry（钉版本）→ 正常使用一个会话 → 闲置 6h 触发提取；**claude-mem 属 P2 范围外，V4 门通过后试点验收须含"hooks 无双触发"（#24115 复现用例即 claude-mem 本尊，§8.9）**                                                                | 次日新会话问"上次这个 repo 做了什么"，应能引用前日内容；检查 memories/ 目录有 markdown 产出                              | T1  |
 | **T6 收尾**                    | 验收 + 手册（§2 网关容错后加"Agent 生态"节）+ 台账登记 superpowers 版本                                                                                                                                             | 验收标准全表过（§11）                                                                              | 全部  |
@@ -292,7 +293,7 @@ V0 验证门 (V1→V2→V3→V5, 任一失败只影响对应模块不改全局)
 | A1  | V0 四项验证       | 每项有 GO/NO-GO 结论 + 证据（截图/命令输出）进 CHECKLIST                                                                                                                                                                                |
 | A2  | 上下文配置生效       | 灌长对话至 \~120k（nemotron 路由）触发 auto-compact，无后端 400；gpt-oss 路由同理 @\~30k                                                                                                                                                    |
 | A3  | 原生技能可用        | 两站 claude code：`/superpowers:brainstorm` 有响应且走设计先行流程；document-skills 产出的 docx 过其自带验证脚本                                                                                                                                  |
-| A4  | 定制技能可用        | 12-13 件在两站 `/` 列表可见（含自制 assertion-audit/cross-examine）；抽验 3 件触发出结构化输出（六层推理框架/what-if 分支表/research 卡片）；assertion-audit 触发样例含断言表+证据等级+证明力边界声明；cross-examine 触发样例含干净室自检+逐断言核验+结构化发现（SUPPORTED/UNSUPPORTED/UNVERIFIABLE 三态） |
+| A4  | 定制技能可用        | claude code 侧 11-12 件（9 Trae + 2 自制 + paper-lookup 条件件）/ opencode 侧同 + ARS（T4b，symlink 经 `~/.config/opencode/`——口径分列）；抽验 3 件触发出结构化输出（六层推理框架/what-if 分支表/research 卡片）；assertion-audit 触发样例含断言表+证据等级+证明力边界声明；cross-examine 触发样例含干净室自检+逐断言核验+结构化发现（SUPPORTED/UNSUPPORTED/UNVERIFIABLE 三态） |
 | A5  | 记忆生效          | T5 判据（次日引用前日内容 + memories/ 有产出）；若降级 four-opencode-memory 则验收 MEMORY.md 增量                                                                                                                                               |
 | A6  | 单一事实源对齐       | 两站 `~/.claude/skills/` 与主控站仓库 md5 一致（除各自站特有，应为零差异）                                                                                                                                                                      |
 | A7  | 零自加载不破        | 两站 `systemctl list-unit-files --state=enabled` 无新增推理/agent 相关自启服务                                                                                                                                                       |
