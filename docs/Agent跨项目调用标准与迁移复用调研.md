@@ -90,9 +90,11 @@ upstream: D5 Agent 生态升级（已 verified 2026-09-02）; 调研 §4.2 五�
 
 - 主控站 ssh 调度链路全程畅通（冒烟脚本从主控站发起，heredoc 传远端脚本规避 PowerShell 引用陷阱——R14 铁律在 ssh 场景的等价形式：**远端命令一律** **`ssh host 'bash -s' <<'EOF'`** **或脚本落盘**）
 
-- **配置漂移 2 处（本轮发现并修复，均留 .bak）**：① A 站 opencode 无默认 `model` 键 → 默认解析到**外网免费模型 nemotron-3-ultra-free**（prompt 外泄 + 外部依赖）→ 已钉 `"model": "cluster-local/gpt-oss"`（本地直连）；② B 站 claude settings 缺 `CLAUDE_CODE_MAX_CONTEXT_TOKENS=120000`（台账记录应有而实缺）→ 已恢复写入
+- **配置漂移 2 处（本轮发现并修复，均留 .bak）**：① A 站 opencode 无默认 `model` 键 → 默认解析到**外网免费模型 nemotron-3-ultra-free**（prompt 外泄 + 外部依赖）→ 先钉 `"model": "cluster-local/gpt-oss"`（本地直连），**当晚用户决策"免费做默认+本地备选"后改为 `opencode/nemotron-3.5-lightning-free`**（两站统一，实测 B 15s / A 20s 最稳；隐私纪律：敏感内容显式 -m 走本地——免费模型数据用于改进训练，官方 Privacy 节明文）；② B 站 claude settings 缺 `CLAUDE_CODE_MAX_CONTEXT_TOKENS=120000`（台账记录应有而实缺）→ 已恢复写入
 
-- 推论：**wrapper 必须永远显式** **`-m`** **指定模型**（防默认漂移复现）；A 站默认模型修复是安全边界，不是可选项
+- **免费模型实测（Zen 网关，两站 2026-09-02）**：5/6 可用（nemotron-3-ultra-free 1M ctx / nemotron-3.5-lightning-free 262k / ling-3.0-flash-fin-free 金融版 / mimo-v2.5-free / big-pickle stealth）；**muse-spark-contributor-free 两站均地区封锁（中国 IP）**；全免费 $0 无 key、限时提供、每日限额未文档化（非官方源称 ~100 请求/天，E3）
+
+- 推论：**wrapper 必须永远显式** **`-m`** **指定模型**（防默认漂移复现 + 敏感内容路由控制）；免费默认只覆盖"人在站上裸调用"场景
 
 ## 3. 生态标准与能力盘点
 
