@@ -1,14 +1,15 @@
 # 实施文档：D5 Agent 生态升级与上下文管理落地
 
----
+***
+
 id: d5-agent-ecosystem-IMPLEMENTATION
 type: design
 version: 1.0
 status: draft
 date: 2026-09-02
-depends: [d5-agent-ecosystem-DESIGN v1.3]
-upstream: [ADR-0001 集群运维框架审计与四项改进决策]
----
+depends: \[d5-agent-ecosystem-DESIGN v1.3]
+upstream: \[ADR-0001 集群运维框架审计与四项改进决策]
+-------------------------------------
 
 > **Feature**: D5 Agent 生态升级（两站 claude code / opencode 的技能·插件·上下文管理·跨会话记忆装备）
 > **创建日期**: 2026-09-02
@@ -17,11 +18,11 @@ upstream: [ADR-0001 集群运维框架审计与四项改进决策]
 > **基于设计**: [DESIGN.md](./DESIGN.md) v1.3（所有阶段/验收/不变式编号均引自该版）
 > **基于调研**: [Agent生态升级与多智能体协作架构调研.md](../../docs/Agent生态升级与多智能体协作架构调研.md)（§8.5-§8.9 三轮审计后 E1 结论）
 
----
+***
 
 ## 1. 实施概述
 
-八个阶段：**V0 验证门**（V1 配置格式 / V2 claude code 窗口基数 / V3 外网连通 / V5 技能加载，~30min）→ **T1 环境就绪**（版本核验 + PR #42150 决策 + ripgrep 预装）→ **T2 上下文配置**（两站 opencode limit.context + compaction；claude code CLAUDE.md 骨架）→ **T3 原生插件**（superpowers + document-skills，路径由 V3 裁决）→ **T4 定制迁移**（ops/agent-skills/ git 化 → 11 件 scp + 2 件自制）→ **T4b ARS 原生部署**（timpara 移植版，走已有验证脚本）→ **T5 记忆试点**（B 站 codex-memory）→ **T6 收尾**（手册 + 台账 + CHECKLIST）。
+八个阶段：**V0 验证门**（V1 配置格式 / V2 claude code 窗口基数 / V3 外网连通 / V5 技能加载，\~30min）→ **T1 环境就绪**（版本核验 + PR #42150 决策 + ripgrep 预装）→ **T2 上下文配置**（两站 opencode limit.context + compaction；claude code CLAUDE.md 骨架）→ **T3 原生插件**（superpowers + document-skills，路径由 V3 裁决）→ **T4 定制迁移**（ops/agent-skills/ git 化 → 9 件 Trae 迁移 + 2 件自制，paper-lookup 条件件另计）→ **T4b ARS 原生部署**（timpara 移植版，走已有验证脚本）→ **T5 记忆试点**（B 站 codex-memory）→ **T6 收尾**（手册 + 台账 + CHECKLIST）。
 
 全部操作幂等可重跑；每个阶段独立回滚；不触碰推理层（infer-load / 网关 conf / systemd 服务面），A8 e2e 回归保底。
 
@@ -29,17 +30,17 @@ upstream: [ADR-0001 集群运维框架审计与四项改进决策]
 
 ### 2.1 技术栈与版本基线
 
-| 组件 | A 站 (NEX) | B 站 (GTR-Pro) | 锁定策略 |
-|------|-----------|----------------|---------|
-| opencode | 1.18.25 | 1.18.25（D4 已验收） | 锁版本；PR #42150 决策见 §3.1 |
-| claude code | 2.1.220 | 2.1.252 | 不升级（已支持 plugin 机制；A11 登记） |
-| LiteLLM 网关 | — | `http://scott-lau-GTR-Pro.local:4000` | 不动（D1 域） |
-| 后端模型 | gpt-oss（conf CTX 32768） | nemotron（conf CTX 131072） | 不动（infer-load 域） |
-| ripgrep | apt 待装 | apt 待装 | `apt install ripgrep`（#23891 预防） |
-| 技能源 | c:\Users\Peng\.trae-cn\skills\（11 件 A 类） | — | 只读源，不修改 |
-| ARS 源 | timpara/opencode-academic-research（git 定版 tag） | 同 | 不追 main |
+| 组件          | A 站 (NEX)                                                              | B 站 (GTR-Pro)                         | 锁定策略                             |
+| ----------- | ---------------------------------------------------------------------- | ------------------------------------- | -------------------------------- |
+| opencode    | 1.18.25                                                                | 1.18.25（D4 已验收）                       | 锁版本；PR #42150 决策见 §3.1           |
+| claude code | 2.1.220                                                                | 2.1.252                               | 不升级（已支持 plugin 机制；A11 登记）        |
+| LiteLLM 网关  | —                                                                      | `http://scott-lau-GTR-Pro.local:4000` | 不动（D1 域）                         |
+| 后端模型        | gpt-oss（conf CTX 32768）                                                | nemotron（conf CTX 131072）             | 不动（infer-load 域）                 |
+| ripgrep     | apt 待装                                                                 | apt 待装                                | `apt install ripgrep`（#23891 预防） |
+| 技能源         | c:\Users\Peng.trae-cn\skills\（9 件迁移 + paper-lookup 条件件；自制 2 件不取自 Trae） | —                                     | 只读源，不修改                          |
+| ARS 源       | timpara/opencode-academic-research（git 定版 tag）                         | 同                                     | 不追 main                          |
 
-**SSH 端点**：`scott-lau@scott-lau-NEX.local` / `scott-lau@scott-lau-GTR-Pro.local`（免密已通）。opencode 二进制路径 `~/.opencode/bin/opencode`。
+**SSH 端点**：`scott-lau@scott-lau-NEX.local` / `scott-lau@scott-lau-GTR-Pro.local`（免密已通）。opencode 二进制路径 `~/.opencode/bin/opencode`（B 站 D4 实证；A 站 T1 以 `which opencode` 核实，若不同记入 CHECKLIST）。
 
 ### 2.2 版本控制与台账
 
@@ -75,29 +76,29 @@ d:\RPC\ops\agent-skills\              # 新建，git 管理（单一事实源）
 
 ### 2.4 兼容性矩阵
 
-| 接缝 | 兼容性依据 | 风险与对策 |
-|------|-----------|-----------|
-| Trae SKILL.md → claude code | 格式同源（frontmatter name+description 必填，调研 §2.1） | V5 门单件实测加载；陌生字段仅告警不致命（站上摘除单件即可，DESIGN §7） |
-| claude code skills → opencode 双读 | opencode 1.18+ 原生扫描 `~/.claude/skills/*/SKILL.md`（调研 §2.2，E1） | 一站配置两 CLI 生效；A4 验收两侧各触发一次 |
-| opencode limit.context 两种写法 | 嵌套式 vs 平铺式两来源冲突（审计 F5） | V1 门裁决；写入前先 `cat` 现有配置增量合并，**不覆盖既有 provider 字段** |
-| claude code plugin 安装路径 | marketplace 自动更新破坏链（#41701/#40153，上游零认领） | 插件面仅 2 件；每次升级后核验目录存在 + `/` 列表可见（DESIGN §12）；三段式 fallback 直接拷 skills 目录绕开 plugin 机制（§3.3） |
-| codex-memory ↔ opencode 1.18.25 | README 只声明 ≥1.18（调研 §6.3） | T5 试点 B 站单站先行；失败回退 four-opencode-memory |
-| ARS install.sh ↔ 本集群 | README E1 实锤但未本集群实测 | V6 门（ars-migrate-verify.sh 三模式全跑） |
+| 接缝                               | 兼容性依据                                                         | 风险与对策                                                                                    |
+| -------------------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Trae SKILL.md → claude code      | 格式同源（frontmatter name+description 必填，调研 §2.1）                 | V5 门单件实测加载；陌生字段仅告警不致命（站上摘除单件即可，DESIGN §7）                                                |
+| claude code skills → opencode 双读 | opencode 1.18+ 原生扫描 `~/.claude/skills/*/SKILL.md`（调研 §2.2，E1） | 一站配置两 CLI 生效；A4 验收两侧各触发一次                                                                |
+| opencode limit.context 两种写法      | 嵌套式 vs 平铺式两来源冲突（审计 F5）                                        | V1 门裁决；写入前先 `cat` 现有配置增量合并，**不覆盖既有 provider 字段**                                         |
+| claude code plugin 安装路径          | marketplace 自动更新破坏链（#41701/#40153，上游零认领）                      | 插件面仅 2 件；每次升级后核验目录存在 + `/` 列表可见（DESIGN §12）；三段式 fallback 直接拷 skills 目录绕开 plugin 机制（§3.3） |
+| codex-memory ↔ opencode 1.18.25  | README 只声明 ≥1.18（调研 §6.3）                                     | T5 试点 B 站单站先行；失败回退 four-opencode-memory                                                  |
+| ARS install.sh ↔ 本集群             | README E1 实锤但未本集群实测                                           | V6 门（ars-migrate-verify.sh 三模式全跑）                                                        |
 
 ### 2.5 性能预算
 
-| 预算 | 值 | 依据 |
-|------|---|------|
-| nemotron limit.context | 120000（< conf CTX 131072） | 不变式③：余量给输出，auto-compact 触线前触发 |
-| gpt-oss limit.context | 30000（< conf CTX 32768） | 同上；prune 对 32k 路由尤其关键 |
-| 长会话轮数预算 | <50 轮/会话 | #30067 O(N²)（50-80 轮退化，§8.9 E1）；PR #42150 未入版前的缓解 |
-| 网关 rpm 影响 | codex-memory 闲置提取低频调用，rpm=30 不冲突 | 调研 §6.3 选型裁定 |
-| compaction.reserved | 20000 | 调研 §6.2（gpt-oss 32k 路由压缩后仍留工作区） |
-| skill 触发方式 | 手动 `/` 为主 | 120B 自动触发弱（调研 §2.1 限制②）；12-13 件不稀释 |
+| 预算                     | 值                                | 依据                                                |
+| ---------------------- | -------------------------------- | ------------------------------------------------- |
+| nemotron limit.context | 120000（< conf CTX 131072）        | 不变式③：余量给输出，auto-compact 触线前触发                     |
+| gpt-oss limit.context  | 30000（< conf CTX 32768）          | 同上；prune 对 32k 路由尤其关键                             |
+| 长会话轮数预算                | <50 轮/会话                         | #30067 O(N²)（50-80 轮退化，§8.9 E1）；PR #42150 未入版前的缓解 |
+| 网关 rpm 影响              | codex-memory 闲置提取低频调用，rpm=30 不冲突 | 调研 §6.3 选型裁定                                      |
+| compaction.reserved    | 20000                            | 调研 §6.2（gpt-oss 32k 路由压缩后仍留工作区）                   |
+| skill 触发方式             | 手动 `/` 为主                        | 120B 自动触发弱（调研 §2.1 限制②）；12-13 件不稀释                |
 
 ## 3. 模块实施
 
-### 3.0 V0 验证门（~30min，决定后续路径）
+### 3.0 V0 验证门（\~30min，决定后续路径）
 
 #### 职责
 
@@ -112,8 +113,9 @@ ssh scott-lau@scott-lau-GTR-Pro.local "curl -sI --max-time 5 https://github.com 
 
 ```bash
 # V1: 配置格式裁决（主控站有网，先抓 schema 定结构，再站上空跑验证）
-#   1) 主控站: curl -s https://opencode.ai/config.json | jq '.properties.provider' 结构中
-#      models.<id> 是否含 limit.context 嵌套字段 → 记录结论进 CHECKLIST
+#   1) 主控站 PowerShell（无 jq，用 ConvertFrom-Json）:
+#      (Invoke-RestMethod https://opencode.ai/config.json).properties.provider | ConvertTo-Json -Depth 8
+#      → 人工判读 models.<id> 是否含 limit.context 嵌套字段 → 记录结论进 CHECKLIST
 #   2) B 站: 写最小试验配置（嵌套式）→ opencode run 冒烟 → 无 schema 报错即嵌套式成立
 #      若报错改平铺式重试；两者皆败 → V1 NO-GO，T2 阻塞但 T3/T4/T4b/T5 照常
 # V2: claude code 窗口基数（加载 gpt-oss 后）
@@ -126,7 +128,9 @@ ssh scott-lau@scott-lau-GTR-Pro.local "curl -sI --max-time 5 https://github.com 
 #### 实施要点
 
 - V1/V2/V3/V5 任一失败只影响对应模块（V1↔T2，V3↔T3/T4b 路径，V5↔T4），不改全局（DESIGN §4.4）
+
 - V2 结果直接决定 T2 的 claude code 侧纪律文案措辞（陷阱成立 → 强制短任务+手动 /compact；不成立 → 建议性）
+
 - 每项产出 GO/NO-GO + 证据（命令输出）进 CHECKLIST（A1）
 
 ### 3.1 T1 环境就绪
@@ -157,6 +161,7 @@ sudo apt install -y ripgrep && command -v rg
 #### 实施要点
 
 - 升级分支（a）风险对冲：opencode 有 patch 版内 API 破坏史（#26557/OMO #5575，§8.6.1 E1）——升级后必跑：`opencode run -m cluster-litellm/nemotron 'reply PONG'` + T4b 已装态 `--installed` 模式重验 + T5 记忆功能复验；任一失败 → `opencode upgrade 1.18.25` 回滚
+
 - claude code 不升级理由入台账：2.1.x 已含 plugin 机制；A 站 2.1.220 若遇 T3 版本不兼容报错，届时单独升级并重登台账（不预设）
 
 ### 3.2 T2 上下文配置
@@ -199,7 +204,9 @@ claude code 全局骨架 `~/.claude/CLAUDE.md`（两站同文，V2 结论决定�
 #### 实施要点
 
 - **写入流程**（每站）：`cp opencode.jsonc opencode.jsonc.pre-d5` → `cat` 现有配置 → 增量合并编辑（PowerShell 远端铁律：本地编辑好全文 scp 覆盖，避免远端 sed）→ `opencode run` PONG 冒烟确认 provider 未被破坏
-- **A2 测试法**：人为灌长对话（同一大文件反复 Read 数十次）观察 auto-compact 在 ~120k（nemotron 路由）/ ~30k（gpt-oss 路由）触发而非后端 400；`OPENCODE_DISABLE_AUTOCOMPACT` 环境变量留作排障后备（第三方来源，标注未验证）
+
+- **A2 测试法**：人为灌长对话（同一大文件反复 Read 数十次）观察 auto-compact 在 \~120k（nemotron 路由）/ \~30k（gpt-oss 路由）触发而非后端 400；`OPENCODE_DISABLE_AUTOCOMPACT` 环境变量留作排障后备（第三方来源，标注未验证）
+
 - cluster-local provider 若含同名模型条目，同步加相同 limit（cat 时确认）
 
 ### 3.3 T3 原生插件（superpowers + document-skills）
@@ -223,15 +230,19 @@ claude code 全局骨架 `~/.claude/CLAUDE.md`（两站同文，V2 结论决定�
 #               git clone --depth 1 https://github.com/anthropics/skills
 #   段2: tar.gz 整包 → scp 两站（规避逐文件 scp 静默失败史）
 #   段3 站上: 解包后优先 `claude plugin install <path>`（能力以 `claude plugin --help` 实测为准）；
-#             **fallback（与不变式⑥同构）**: 直接把仓内 skills/ 目录内容拷入 ~/.claude/skills/ ——
+#             **fallback（与不变式⑥同构）**: 定位仓内技能目录（两仓结构未实测——E5，
+#             以 clone 后 find -name SKILL.md 实际布局为准）拷入 ~/.claude/skills/ ——
 #             superpowers/document-skills 本体是纯 prompt 技能集，绕开 plugin 机制零损失
 ```
 
 #### 实施要点
 
 - B 站先行验证后再推 A 站（降低双站同时翻车面）
+
 - 版本登记台账：marketplace 安装记 plugin 版本号；三段式记 clone 的 commit hash
+
 - **#41701 破坏链预防**（A11）：安装完成后立即核验 `~/.claude/plugins/` 目录结构存在 + `/` 列表可见；后续 claude code 每次升级后重跑此核验（DESIGN §12）
+
 - 验收 A3：`/superpowers:brainstorm` 有响应且走设计先行流程；document-skills 产 docx 一例过其自带验证脚本
 
 ### 3.4 T4 定制技能迁移（11 件 + 2 自制）
@@ -317,7 +328,8 @@ description: Adversarial review of another agent's audited output.
 #### 3.4.3 部署与对账
 
 ```powershell
-# 主控站打包（整包单文件 scp，规避多文件静默失败）
+# 主控站打包（整包单文件 scp，规避多文件静默失败；.tmp 当次建、提交前删）
+mkdir d:\RPC\.tmp -Force
 tar -czf d:\RPC\.tmp\agent-skills.tar.gz -C d:\RPC\ops\agent-skills .
 scp d:\RPC\.tmp\agent-skills.tar.gz scott-lau@scott-lau-GTR-Pro.local:/tmp/
 scp d:\RPC\.tmp\agent-skills.tar.gz scott-lau@scott-lau-NEX.local:/tmp/
@@ -333,8 +345,10 @@ cd ~/.claude/skills && find . -name SKILL.md -exec md5sum {} \; | sort
 #### 实施要点
 
 - 部署产物含 `research-lookup` 探针件（V5 用过）——**不入事实源**（C 类外网依赖），验收后从两站删除，避免"看似可用实则不可用"（DESIGN §6.2 B 方案否决理由）
+
 - git 提交节奏：事实源构建后立即 `git add ops/agent-skills && git commit`（防覆盖铁律：每轮修改后立即 commit+push）
-- A4 验收：两站两 CLI `/` 列表 12-13 件可见 + 抽 3 件触发（math-finance-reasoning 六层框架 / what-if-oracle 分支表 / research-scout 卡片）+ assertion-audit 样例含断言表+证据等级+证明力边界 + cross-examine 样例含干净室自检+三态结构化发现
+
+- A4 验收：两站两 CLI `/` 列表可见（claude code 侧 11-12 件 / opencode 侧同 + ARS——ARS symlink 落 `~/.config/opencode/`，claude code 不见，口径分列）+ 抽 3 件触发（math-finance-reasoning 六层框架 / what-if-oracle 分支表 / research-scout 卡片）+ assertion-audit 样例含断言表+证据等级+证明力边界 + cross-examine 样例含干净室自检+三态结构化发现
 
 ### 3.5 T4b ARS 原生部署
 
@@ -359,7 +373,9 @@ git clone --depth 1 --branch <tag> https://github.com/timpara/opencode-academic-
 #### 实施要点
 
 - `<tag>` 钉版不追 main；台账登记 tag + `git rev-parse --short HEAD` + install.sh 实测行为（V6-1 输出）
+
 - 全流程模式终态=已装（B 站）；`--leave-removed` 仅用于首站验证失败后的暂不部署形态
+
 - 脚本已知边界：symlink 判定在 git bash 有平台差异，站上 Ubuntu 实测为准（脚本头注记）
 
 ### 3.6 T5 记忆试点（B 站 codex-memory）
@@ -382,8 +398,11 @@ ls ~/.local/share/opencode/memories/    # 有 markdown/SQLite 产出
 #### 实施要点
 
 - 插件经 npm registry 拉取——**V3 的 npm 探测是硬前置**；npm 不通则 T5 延后（试点性质不阻塞 T6 收尾），不改用手工 vendor（避免引入未审计的本地插件加载路径）
+
 - 回退链：codex-memory 异常 → `four-opencode-memory`（零依赖纯 Markdown）→ A5 判据改为 MEMORY.md 增量
+
 - rpm 影响：后台提取低频调用，rpm=30 网关限流不冲突（§2.5）；若观测到 retry-after 背压，查 LiteLLM 日志确认来源
+
 - claude-mem 属 P2（V4 门），本阶段不装——若未来装入，验收强制含"hooks 无双触发"（#24115 复现例即其本尊，§8.9）
 
 ### 3.7 T6 收尾
@@ -422,36 +441,38 @@ T6 收尾 (手册+台账+CHECKLIST+commit)           ── 验证: A9/A12
 
 T5 的 6h 闲置窗口是唯一不可压缩的等待项——安排在 T2-T4b 执行期间启动闲置计时（并行不阻塞）。
 
+本图是 DESIGN §4.4 线性控制流的并行细化（依赖门以 DESIGN §10 表为准）：T2/T3/T4/T4b 互不依赖，可乱序或并行；字面顺序差异不构成与 DESIGN 的矛盾。
+
 ## 5. 验收标准（对应 DESIGN §11，附命令）
 
-| # | 验收项 | 命令/方法 | 预期 |
-|---|--------|----------|------|
-| A1 | V0 四项验证 | CHECKLIST 记录 | 每项 GO/NO-GO + 证据 |
-| A2 | 上下文配置生效 | 灌长对话至触线 | ~120k/30k 触发 auto-compact，无 400 |
-| A3 | 原生技能可用 | `/superpowers:brainstorm`；docx 生成-验证 | 响应且走设计先行；docx 过验证脚本 |
-| A4 | 定制技能可用 | 两站两 CLI `/` 列表 + 抽验 | 12-13 件可见；3 件出结构化输出；自制件契约字段齐全 |
-| A5 | 记忆生效 | 次日会话问前日内容 | 引用成功 + memories/ 有产出 |
-| A6 | 单一事实源对齐 | 站上 `find ~/.claude/skills -name SKILL.md -exec md5sum {} \| sort` vs 主控站同法 | 零差异（探针件删除后） |
-| A7 | 零自加载不破 | `systemctl list-unit-files --state=enabled` | 与 D1 后基线零新增 |
-| A8 | e2e 回归 | `python ops/cluster.py e2e` | 退出码 0 |
-| A9 | 文档回填 | 手册/台账/CHECKLIST | Agent 生态节 + VERSIONS 表 + 状态更新 |
-| A10 | 环境就绪 | `command -v rg`；`opencode --version`；CHECKLIST | rg 非空；版本与台账一致；PR #42150 决策留痕 |
-| A11 | 版本锁定不破 | 台账 + 插件目录核验 | 版本+理由登记；目录存在+列表可见 |
-| A12 | 长会话预算纪律 | 手册 Agent 生态节 | 轮数预算 + claude code 纪律 + ARS 边界 |
-| A13 | ARS 原生部署 | ars-migrate-verify.sh 全模式 + MANUAL 步骤 | 脚本 GO + claim-audit 拒绝 1 条 fabricated + 台账登记 |
+| #   | 验收项      | 命令/方法                                                                      | 预期                                                                                                                                                   |
+| --- | -------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A1  | V0 四项验证  | CHECKLIST 记录                                                               | 每项 GO/NO-GO + 证据                                                                                                                                     |
+| A2  | 上下文配置生效  | 灌长对话至触线                                                                    | \~120k/30k 触发 auto-compact，无 400                                                                                                                     |
+| A3  | 原生技能可用   | `/superpowers:brainstorm`；docx 生成-验证                                       | 响应且走设计先行；docx 过验证脚本                                                                                                                                  |
+| A4  | 定制技能可用   | 两站两 CLI `/` 列表 + 抽验                                                        | claude code 侧 11-12 件（9 Trae + 2 自制 + paper-lookup 条件件）/ opencode 侧同 + ARS（symlink 经 `~/.config/opencode/`，claude code 不见——口径分列）；3 件出结构化输出；自制件契约字段齐全 |
+| A5  | 记忆生效     | 次日会话问前日内容                                                                  | 引用成功 + memories/ 有产出                                                                                                                                 |
+| A6  | 单一事实源对齐  | 站上 `find ~/.claude/skills -name SKILL.md -exec md5sum {} \| sort` vs 主控站同法 | 零差异（探针件删除后）                                                                                                                                          |
+| A7  | 零自加载不破   | `systemctl list-unit-files --state=enabled`                                | 与 D1 后基线零新增                                                                                                                                          |
+| A8  | e2e 回归   | `python ops/cluster.py e2e`                                                | 退出码 0                                                                                                                                                |
+| A9  | 文档回填     | 手册/台账/CHECKLIST                                                            | Agent 生态节 + VERSIONS 表 + 状态更新                                                                                                                        |
+| A10 | 环境就绪     | `command -v rg`；`opencode --version`；CHECKLIST                             | rg 非空；版本与台账一致；PR #42150 决策留痕                                                                                                                         |
+| A11 | 版本锁定不破   | 台账 + 插件目录核验                                                                | 版本+理由登记；目录存在+列表可见                                                                                                                                    |
+| A12 | 长会话预算纪律  | 手册 Agent 生态节                                                               | 轮数预算 + claude code 纪律 + ARS 边界                                                                                                                       |
+| A13 | ARS 原生部署 | ars-migrate-verify.sh 全模式 + MANUAL 步骤                                      | 脚本 GO + claim-audit 拒绝 1 条 fabricated + 台账登记                                                                                                         |
 
 ## 6. 风险与回滚汇总
 
-| 风险 | 概率 | 影响 | 回滚 |
-|------|------|------|------|
-| V1 两种格式均不生效 | 低 | T2 阻塞 | 仅 T2 延后；`opencode.jsonc.pre-d5` 恢复 |
-| opencode 升级（PR #42150 分支 a）破坏插件面 | 中 | T4b/T5 失效 | `opencode upgrade 1.18.25` 回滚（D4 已验证该路径） |
-| marketplace 安装的插件被自动更新清空（#41701） | 低 | A3 失效 | 三段式 fallback（skills 直拷）；插件面仅 2 件可快速重装 |
-| codex-memory 与 1.18.25 不兼容 | 中 | A5 失败 | four-opencode-memory 替换；再不行 T5 标记"延后"不阻塞验收其余项 |
-| Trae 技能含 claude code 不识别字段 | 低 | 单件不加载 | V5 探针 + 单件摘除（DESIGN §7 处置） |
-| 站上 opencode.jsonc 合并覆盖既有 provider | 低 | 推理调用断 | `.pre-d5` 备份恢复 + PONG 冒烟在每步写后执行 |
-| scp/tar 传输静默损坏 | 低 | A6 不齐 | md5 对账即暴露；重传 |
-| ARS install.sh 越界写入 | 低 | 环境污染 | ars-migrate-verify.sh V6-1 已含越界检测与卸载核验 |
+| 风险                                | 概率 | 影响        | 回滚                                            |
+| --------------------------------- | -- | --------- | --------------------------------------------- |
+| V1 两种格式均不生效                       | 低  | T2 阻塞     | 仅 T2 延后；`opencode.jsonc.pre-d5` 恢复            |
+| opencode 升级（PR #42150 分支 a）破坏插件面  | 中  | T4b/T5 失效 | `opencode upgrade 1.18.25` 回滚（D4 已验证该路径）      |
+| marketplace 安装的插件被自动更新清空（#41701）  | 低  | A3 失效     | 三段式 fallback（skills 直拷）；插件面仅 2 件可快速重装         |
+| codex-memory 与 1.18.25 不兼容        | 中  | A5 失败     | four-opencode-memory 替换；再不行 T5 标记"延后"不阻塞验收其余项 |
+| Trae 技能含 claude code 不识别字段        | 低  | 单件不加载     | V5 探针 + 单件摘除（DESIGN §7 处置）                    |
+| 站上 opencode.jsonc 合并覆盖既有 provider | 低  | 推理调用断     | `.pre-d5` 备份恢复 + PONG 冒烟在每步写后执行               |
+| scp/tar 传输静默损坏                    | 低  | A6 不齐     | md5 对账即暴露；重传                                  |
+| ARS install.sh 越界写入               | 低  | 环境污染      | ars-migrate-verify.sh V6-1 已含越界检测与卸载核验        |
 
 ## 7. 交付物
 
@@ -463,6 +484,6 @@ T5 的 6h 闲置窗口是唯一不可压缩的等待项——安排在 T2-T4b �
 6. 手册"Agent 生态"节 + CHECKLIST.md（A1-A13 记录 + VERSIONS 台账）
 7. 本 IMPLEMENTATION.md 状态更新为 verified（验收全过后）
 
----
+***
 
-**Review 签字**: ___________ 日期: ___________
+**Review 签字**: \_\_\_\_\_\_\_\_\_\_\_ 日期: \_\_\_\_\_\_\_\_\_\_\_
