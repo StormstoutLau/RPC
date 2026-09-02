@@ -94,6 +94,10 @@ upstream: D5 Agent 生态升级（已 verified 2026-09-02）; 调研 §4.2 五�
 
 - **免费模型实测（Zen 网关，两站 2026-09-02）**：5/6 可用（nemotron-3-ultra-free 1M ctx / nemotron-3.5-lightning-free 262k / ling-3.0-flash-fin-free 金融版 / mimo-v2.5-free / big-pickle stealth）；**muse-spark-contributor-free 两站均地区封锁（中国 IP）**；全免费 $0 无 key、限时提供、每日限额未文档化（非官方源称 ~100 请求/天，E3）
 
+- **Qwen OAuth 插件实测（B 站 2026-09-02，装后即删）——链路已死，勿重试**：`opencode-qwencode-auth@1.3.0`（gustavodiasdev 主版本，npm 末次发布 2026-02-12）安装正常、provider 注册正常（qwen-code/coder-model 等 4 模型）、device code 端点仍发码，但**授权闭环不可达**——证据链五重：① `/authorize` 同意页已下线（用户已登录状态下打开 `chat.qwen.ai/authorize?user_code=...&client=qwen-code` 两轮均跳回聊天主页，同意 UI 不存在）；② token 端点轮询返回 **504 Gateway Time-out**（alibaba-ga 网关层）；③ 官方 qwen-code 文档明文"Qwen OAuth free tier was discontinued on **2026-04-15**"，`/auth` 菜单已移除该选项，官方引导转向 Coding Plan/API Key；④ 插件 issue #14 社区确认停用（2026-04-23）；⑤ 常量溯源：插件 client_id（`f0304373...`）即原 qwen-code CLI 公共 ID，端点为逆向所得而非官方合作。**结论：免费 Qwen 档不可用；若需 Qwen 走官方 Alibaba Cloud Coding Plan（$ 月费订阅制，opencode 侧自定义 provider 接 DashScope 端点）**。插件已回滚移除（配置恢复 codex-memory 单插件，默认模型回归 lightning，冒烟 OK）。
+
+- **敏感内容路由（"转述学术格式"诉求的落档结论）**：转述/学术化只保护**标识符**（凭据/路径/文件名，机械脱敏可解），不保护**思想**（未发表方法论/因子逻辑/新定理——学术格式化恰是蒸馏成最可复用训练语料的形式，泄露面与格式无关）。正解是任务卡 `sensitivity` 三档硬路由（wrapper 层机械执行，不依赖 LLM 自查）：`public`（已发表/通用编程 → 免费档）→ `sanitized`（机械 scrubber 正则+gitleaks 脱敏后走远端）→ `local-only`（强制 -m 本地模型，wrapper 拒绝远端路由）。与 Spec_Workflow 哲学同构：机械可验证的门禁优于依赖人的转述纪律。
+
 - 推论：**wrapper 必须永远显式** **`-m`** **指定模型**（防默认漂移复现 + 敏感内容路由控制）；免费默认只覆盖"人在站上裸调用"场景
 
 ## 3. 生态标准与能力盘点
@@ -491,4 +495,13 @@ v3 增补（E2 web 调研 2026-09-02，经调研子代理聚合；关键源）�
 - [自托管 Claude Code 指南](https://www.developersdigest.tech/blog/self-hosting-claude-code-on-your-own-infra)（ANTHROPIC\_BASE\_URL 双变量重定向）
 
 - OpenHands+LiteLLM 自托管实践（[homelab RFC, Stripe Minion 模式复述](https://github.com/jomcgi/homelab/blob/main/docs/decisions/agents/001-background-agents.md)：重试≤2 转人工/PR 留审）
+
+v3 增补二（2026-09-02 晚，Qwen OAuth 插件实测轮）：
+
+- [gustavodiasdev/opencode-qwencode-auth](https://github.com/gustavodiasdev/opencode-qwencode-auth)（插件本体，E1 直抓 + npm 包源码解剖）
+- [OpenCode issue #11557](https://github.com/anomalyco/opencode/issues/11557)（插件进官方生态文档的提交记录，E1）
+- [qwen-code 官方 auth 文档](https://github.com/QwenLM/qwen-code/blob/main/docs/users/configuration/auth.md)（E1 直抓：**"Qwen OAuth free tier was discontinued on 2026-04-15"**，/auth 菜单已移除 OAuth 选项）
+- [qwen-code troubleshooting](https://qwenlm.github.io/qwen-code-docs/de/users/support/troubleshooting/)（E1：官方引导转 Coding Plan/API Key）
+- [插件 issue #14 "Stopped working"](https://github.com/gustavodiasdev/opencode-qwencode-auth/issues/14)（E1：社区确认停用，2026-04-23）
+- B 站实测记录（E1 2026-09-02）：device code 端点 form-encoded+PKCE 复刻仍发码；`/authorize` 同意页两轮跳回主页；token 端点 504（alibaba-ga）
 
