@@ -9,11 +9,11 @@ status: draft
 date: 2026-09-02
 depends: \[d5-agent-ecosystem-DESIGN v1.3]
 upstream: \[ADR-0001 集群运维框架审计与四项改进决策]
--------------------------------------
+---
 
 > **Feature**: D5 Agent 生态升级（两站 claude code / opencode 的技能·插件·上下文管理·跨会话记忆装备）
 > **创建日期**: 2026-09-02
-> **状态**: 草稿（待 Scott review）
+> **状态**: implemented（2026-09-02 V0-T6 执行完毕；实施发现 R14-R20 与回退决策见 CHECKLIST §0.2/§5；A5 次日引用验收待补录）
 > **Spec 步骤**: Step 5-6
 > **基于设计**: [DESIGN.md](./DESIGN.md) v1.3（所有阶段/验收/不变式编号均引自该版）
 > **基于调研**: [Agent生态升级与多智能体协作架构调研.md](../../docs/Agent生态升级与多智能体协作架构调研.md)（§8.5-§8.9 三轮审计后 E1 结论）
@@ -108,7 +108,7 @@ d:\RPC\ops\agent-skills\              # 新建，git 管理（单一事实源）
 
 ```powershell
 # V3: B 站外网连通（github + npm registry，各 5s 超时）
-ssh scott-lau@scott-lau-GTR-Pro.local "curl -sI --max-time 5 https://github.com | Select -First 1; curl -sI --max-time 5 https://registry.npmjs.org | Select -First 1"
+ssh scott-lau@scott-lau-GTR-Pro.local "curl -sI --max-time 5 https://github.com | head -1; curl -sI --max-time 5 https://registry.npmjs.org | head -1"
 ```
 
 ```bash

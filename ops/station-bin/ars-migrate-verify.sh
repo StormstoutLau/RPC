@@ -74,8 +74,11 @@ section "P0 预检"
 [ -f "$ARS_SRC/install.sh" ] || { printf '  [FAIL] 前置 %s/install.sh 不存在\n' "$ARS_SRC"; exit 2; }
 res PASS P0-1 "源目录与 install.sh 存在: $ARS_SRC"
 
-command -v opencode >/dev/null 2>&1 \
-  && res PASS P0-2 "opencode 已安装 ($(opencode --version 2>/dev/null | head -1))" \
+OC_BIN="$(command -v opencode 2>/dev/null || true)"
+[ -z "$OC_BIN" ] && [ -x "$HOME/.opencode/bin/opencode" ] && OC_BIN="$HOME/.opencode/bin/opencode"
+[ -z "$OC_BIN" ] && [ -x /snap/bin/opencode ] && OC_BIN=/snap/bin/opencode
+[ -n "$OC_BIN" ] \
+  && res PASS P0-2 "opencode 已安装 ($("$OC_BIN" --version 2>/dev/null | head -1) @ $OC_BIN)" \
   || { res FAIL P0-2 "opencode 未安装 — V6 验证前提不成立, 中止"; exit 2; }
 command -v rg >/dev/null 2>&1 && res PASS P0-3 "系统 ripgrep 存在 (#23891 预防)" \
                                  || res WARN P0-3 "系统 ripgrep 缺失 — grep/skill 工具有挂死风险, 建议先 apt install ripgrep"
@@ -106,7 +109,7 @@ $ARS_LINKS
 EOF
 
   snapshot "$CLAUDE_DIR" "$WORK/claude-now.txt"
-  CLAUDE_ARS="$(grep -i 'academic' "$WORK/claude-now.txt" || true)"
+  CLAUDE_ARS="$(grep -i 'academic-research' "$WORK/claude-now.txt" || true)"
   [ -z "$CLAUDE_ARS" ] && res PASS T4b-1c "~/.claude 无 ARS 越界件" || res FAIL T4b-1c "~/.claude 出现 ARS 件: $CLAUDE_ARS"
 
   SYSTEMD_NOW="$WORK/systemd-now.txt"; systemd_snapshot > "$SYSTEMD_NOW"
