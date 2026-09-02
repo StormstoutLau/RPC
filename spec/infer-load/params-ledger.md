@@ -49,7 +49,8 @@ upstream: null
 | RPC_TARGET | （空=单机 A 站） | ✅ 双端点架构既定（2026-09-01 换防） |
 | EXTRA_FLAGS | `-fa on` | 无实测依据 |
 | 性能基线 | decode 50.3 t/s | ✅ results-ledger：全库存 decode 冠军（长生成 54.2 / 代码 53.9） |
-| D5 联动 | opencode limit.context 30000 | ✅ D5 已配（conf CTX 变更后需评估是否同步上调——**注意**：claude 无声明走 plain ~32.5k，超 opencode 30000 声明值，若 opencode 走 gpt-oss 长会话需同步提到 ~60000；短任务现状够用） |
+| D5 联动 | opencode limit.context 30000；**claude code A 站 60000**（2026-09-02 晚：settings.json model="gpt-oss-120b" 未识别名 + CLAUDE_CODE_MAX_CONTEXT_TOKENS=60000，/context 显示 60k 实证——已识别模型名如 claude-opus-4-7 会硬用 200k 假设且 MAX_CONTEXT_TOKENS 不生效，故必须用未识别名） | ✅ D5 已配 opencode（30000）；claude A 站补齐（60000）；B 站既有 120000 |
+| 冷缓存注记 | claude code 首条消息 prefill ~70-110s | ✅ 实测：22.6k 系统提示（plain 格式）@ ~300 t/s；llama-server 重启后 slot 缓存清空必现；同会话后续秒级（slot 前缀复用） |
 
 ### 1.3 qwen3.8-flash-next（B 站，已删模型待回归）
 
