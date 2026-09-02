@@ -57,7 +57,7 @@ upstream: \[ADR-0001 集群运维框架审计与四项改进决策]
 | R14 | IMPL V3 命令 `Select -First 1`（Windows 语法误入 Linux ssh）；多行 `python -c` 内嵌经 PowerShell→ssh 三次解析失败（`$()`/换行/引号三坑）                                                            | 执行时改 `head -1`；**铁律第三次实证**——全部远端复杂命令一律脚本文件→scp→执行，无一例外后均零失败                                          |
 | R15 | B 站 claude code **无后端**（settings.json 仅 theme）——IMPL T2 漏项（A4 的 B 站硬前置）                                                                                                 | 已补：settings.json env（LiteLLM 127.0.0.1:4000 + nemotron 映射 + master\_key 站上提取不回显）；PONG 实证             |
 | R16 | V2 获**官方解药**：claude code 警告原文给出 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `modelOverrides`——比"纪律缓解"更硬的机制解                                                                      | B 站 settings.json 已加 `CLAUDE_CODE_MAX_CONTEXT_TOKENS=120000`；CLAUDE.md 骨架措辞升级                        |
-| R17 | **A 站 claude\@32k 完全不可用**：裸系统提示 33274 tokens > CTX 32768（T1 控制 prompt 即 400）——非"短任务可用"而是不可用                                                                             | A 站 claude 边界入手册 §2a.2；A 站若用 claude 需走 LiteLLM→nemotron（USB4）                                        |
+| R17 | **A 站 claude\@32k 完全不可用**：裸系统提示 33274 tokens > CTX 32768（T1 控制 prompt 即 400）——非"短任务可用"而是不可用                                                                             | A 站 claude 边界入手册 §2a.2；A 站若用 claude 需走 LiteLLM→nemotron（USB4）。**⚠ 晚间修正见 §8.3a L14：33k 系 thinking 格式（测试脚本 export 模型名触发）；plain 格式 ~32.5k 压线可用** |
 | R18 | B 站 github **间歇**（3 试 1 通；npm 稳定）——T3 marketplace add / T4b clone 失败；且发现 `anthropic-agent-skills` 为官方保留名（本地目录不可用）+ PS 写 JSON 带 UTF-8 BOM（claude 2.1.220 拒 / 2.1.252 容忍） | T3/T4b 全走**三段式本地镜像**（主控站 clone→tar→scp→本地 marketplace add）；保留名改 `anthropic-skills-local` 绕开；BOM 站上祛除 |
 | R19 | ars-migrate-verify.sh 两处实测 bug：P0-2 探测不认 `~/.opencode/bin`（非交互 PATH）；T4b-1c `grep -i academic` 误中 superpowers 的 test-academic.md                                        | 脚本已修（PATH fallback 探测 / 匹配词收紧 `academic-research`）；修正后 B 站 17 PASS、A 站 32 PASS 全 GO                  |
 | R20 | A2 测试法演化：Read 工具 headless 权限拦截 → `-f` 附件注入法成功（135k tokens 判别干净）；V5 会话级验证用"问模型技能列表"法确立                                                                                   | 方法论入 IMPL 修订记录；A2 判据达成（PONG 无 400，与 claude 无声明时 33k 即 400 构成对照证据链）                                   |
@@ -243,7 +243,26 @@ IMPL/手册承诺"conf CTX ↔ limit.context ↔ MAX_CONTEXT_TOKENS 三方联动
 | L9 | memories/ 备份无自动机制（手册约定手动） | 手册 §2a.3 | 手动纪律；自动化列可选项 |
 | L10 | 上游更新跟踪（superpowers/ARS/document-skills 不追新）无提醒机制 | DESIGN §12 | 升级窗口统一评估兜底 |
 
-### 8.4 P2：新开口
+### 8.3a P0 修正（2026-09-02 晚，cc-switch 排查触发）
+
+| # | 事项 | 实测证据 | 处置 |
+| - | --- | --- | --- |
+| L14 | **R17 结论修正：A 站 claude code 压线可用（非完全不可用）+ D5 测试方法缺陷** | 排查 cc-switch 时发现：①A 站 claude PONG 复测成功（32,478 tokens < 32,768，余量仅 290）②D5 失败根因 = v0-gate-a.sh 曾 `export ANTHROPIC_MODEL=claude-opus-4-7`——已知 Anthropic 模型名触发 thinking-mode 请求格式（+~1,600 tokens → 33,274 超窗）；无 export 走 SONNET 映射（未识别模型名）→ plain 格式恰好通过 ③thinking 格式还有第二重故障：gpt-oss 无限 reasoning 撑满 context（journalctl 实录 task 984：`n_tokens=32767, truncated=1`），claude code 报"response exceeded 64000 output token maximum" | 手册 §2a.2 已改"压线可用+禁显式模型名"；A 站 claude 仅极简短任务（余量 290 tokens，加任何技能即翻车）；**教训：headless 测试须先对照 `claude --help` 默认模型路径，export 模型名即改变请求格式（测试方法污染变量）** |
+
+### 8.4 cc-switch 排查结论（2026-09-02 晚，对应用户问询"是否导致 A 站 claude 不可用"）
+
+**结论：cc-switch 无罪——不在请求路径上，不导致不可用。**
+
+| 排查项 | 结果 |
+| --- | --- |
+| cc-switch 形态 | Tauri GUI provider 管理器（SQLite 存 provider 配置），切换时**重写 `~/.claude/settings.json`**——是"配置写入器"非"流量代理"（A/B 站同装） |
+| A 站当前路径 | settings.json `BASE_URL=127.0.0.1:8080` = llama.cpp **直连**；8080 端口归属 llama-server（ss 实证）；cc-switch 平时不运行（ps 无进程） |
+| cc-switch `enableLocalProxy: true` | 设置项存在但当前 provider（"litellm"，UUID 1a5ea8cf）为直连模式——settings.json 未指向 cc-switch 代理端口 |
+| B 站对照 | cc-switch 已装未运行；B 站 claude D5 全程正常（PONG/A5）——cc-switch 存在本身不构成干扰 |
+| A 站 provider 库 | 3 个 claude provider：litellm(8080 直连,当前)/lm studio(1234)/Claude Official(实指 192.168.1.11:1234 LM Studio)；用户 2026-09-02 17:25 切换操作仅重写 settings.json（env 无实质变化，插件配置被新版 cc-switch 合并保留） |
+| 副发现 | A 站 llama.cpp slot cache 对重复系统提示复用极佳（第二次调用 prompt eval 仅 1 token）——headless 重复调用几乎零 prefill 成本 |
+
+### 8.5 P2：新开口
 
 | # | 事项 | 处置 |
 | - | --- | --- |
