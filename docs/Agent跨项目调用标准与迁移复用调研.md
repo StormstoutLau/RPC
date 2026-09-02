@@ -2,7 +2,7 @@
 
 ***
 
-date: 2026-09-03（v3.2，增补四：Anthropic coordinator 模式逆向分析（泄漏源码 E1 直读 + B 站实测门禁已开）——八条可借鉴模式 + G11 锁粒度细化；v3.1：模型分层路由四档实测 + 协同充分性自审（G11-G14）；v3：四项目实例场景适配 + 开源编排案例对照 + 4 CLI 实测定版；v2：场景澄清后重构：主控站多项目远程调用 + 站上独立工作区）
+date: 2026-09-03（v3.3，增补五：Codex orchestrator/parallel 逆向分析——G11 定案 RwLock 双层锁 + 五段流水升级重试 + 双源对照表（Anthropic 语法/Codex 法律/D6 合并）；v3.2：Anthropic coordinator 模式逆向分析（泄漏源码 E1 直读 + B 站实测门禁已开）——八条可借鉴模式；v3.1：模型分层路由四档实测 + 协同充分性自审（G11-G14）；v3：四项目实例场景适配 + 开源编排案例对照 + 4 CLI 实测定版；v2：场景澄清后重构：主控站多项目远程调用 + 站上独立工作区）
 status: draft（D6 前期调研）
 upstream: D5 Agent 生态升级（已 verified 2026-09-02）; 调研 §4.2 五层循环遗留"任务卡协议"口子
 -----------------------------------------------------------------------
@@ -259,22 +259,22 @@ accept:              # 验收判据(可执行/可核验)
 
 ## 6. 缺口清单与 D6 建议
 
-| #   | 缺口                                                             | 严重度       | D6 处置建议                                                                                                  |
-| --- | -------------------------------------------------------------- | --------- | -------------------------------------------------------------------------------------------------------- |
-| G1  | agent-cli wrapper 未实现（L2 核心）                                   | 高         | D6 主体：PowerShell MVP——`workspace --create/--sync` + `task`（单模型 opencode 路径）先行；claude 路径与 `--continue` 二期 |
-| G2  | 工作区规范未实测（AGENTS.md 薄壳导入行为/claude 遮蔽/codex-memory cwd 键控在工作区场景） | 高         | D6 V0 验证门：用 d:\RPC 自身当试点项目（AGENTS.md 已有雏形）建首个工作区实测                                                       |
-| G3  | ad-hoc 笔记无隔离                                                   | 中         | wrapper `[proj:]` 前缀注入（L2-4）+ 手册纪律                                                                       |
-| G4  | 大项目同步量（Textbook/Coding 全量推不现实）                                 | 中         | `.agentsync` 默认模板 + 首同步大小预警（wrapper 检查 tar 体积, >200MB 拒绝并提示补排除清单）                                        |
-| G5  | A 站无记忆层                                                        | ~~低~~ 已解除 | P1 批次 L6 已装 A 站 codex-memory（两站记忆层同构, 2026-09-02）；本轮实测 A 站 opencode.jsonc 含 plugin 条目佐证。路由仍以 B 站为记忆主站不变  |
-| G6  | 提取记忆路径（6h 闲置）未测（D5 §7-4 遗留）                                    | 低         | 工作区日常使用自然覆盖                                                                                              |
-| G7  | trae 派发对接（五层循环 2→3 层）                                          | 低         | D7 范围; D6 留任务卡接口                                                                                         |
-| G8  | 站上无 Mathematica / R 环境（Auto\_Prover 注入点 B/D、Cpp\_Hub R 基准对拍需要） | 中         | 降级矩阵（注入点留主控站执行 / R 基准转 Python 复算）或站上 apt 预置 r-base（v3 §7）                                                |
-| G9  | 重资产预置策略（Cpp\_Hub third\_party、Auto\_Prover mathlib/.lake 缓存）   | 中         | `.agentsync` 排除 + 站上一次性 tar 预置（不计入常规同步量）（v3 §7）                                                          |
-| G10 | opencode 位置参数 bug（1.18.25 实证）上游未报/未修                           | 低         | wrapper 已规避（stdin 管道形式）；升级窗口评估时回归验证该行为是否修复                                                               |
-| G11 | **并发与互斥**：同工作区双写无锁协议；llama-server 单槽下多任务排队未测（v3 §9.5） | **高** | D6 wrapper MVP 内建工作区锁（flock）+ 后端并发探测；DESIGN 先写并发模型（单工作区单写者）。**Anthropic coordinator 官方同款纪律独立验证 + 细化：锁粒度=文件集而非工作区**（读并行/写按文件集串行/验证可并行若文件区不交叠，§9.6-2） |
-| G12 | 失败恢复：任务中断状态残留/续跑未定义（v3 §9.5）                                   | 中         | 任务卡状态机 + wrapper 幂等回收；进 wrapper MVP 需求                                                                   |
-| G13 | 成本/额度观测：zen 日限额无预警（v3 §9.5）                                    | 中         | wrapper 本地 log 记调用次数；限额触发降级路径（→本地档）定义                                                                    |
-| G14 | 版本协同矩阵：升级回归面未清单化（v3 §9.5）                                      | 低         | 升级窗口回归三件套：agent-cli-smoke.sh + 插件加载 + 记忆读写（与 G10 合并）                                                     |
+| #   | 缺口                                                             | 严重度       | D6 处置建议                                                                                                                                                             |
+| --- | -------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1  | agent-cli wrapper 未实现（L2 核心）                                   | 高         | D6 主体：PowerShell MVP——`workspace --create/--sync` + `task`（单模型 opencode 路径）先行；claude 路径与 `--continue` 二期                                                            |
+| G2  | 工作区规范未实测（AGENTS.md 薄壳导入行为/claude 遮蔽/codex-memory cwd 键控在工作区场景） | 高         | D6 V0 验证门：用 d:\RPC 自身当试点项目（AGENTS.md 已有雏形）建首个工作区实测                                                                                                                  |
+| G3  | ad-hoc 笔记无隔离                                                   | 中         | wrapper `[proj:]` 前缀注入（L2-4）+ 手册纪律                                                                                                                                  |
+| G4  | 大项目同步量（Textbook/Coding 全量推不现实）                                 | 中         | `.agentsync` 默认模板 + 首同步大小预警（wrapper 检查 tar 体积, >200MB 拒绝并提示补排除清单）                                                                                                   |
+| G5  | A 站无记忆层                                                        | ~~低~~ 已解除 | P1 批次 L6 已装 A 站 codex-memory（两站记忆层同构, 2026-09-02）；本轮实测 A 站 opencode.jsonc 含 plugin 条目佐证。路由仍以 B 站为记忆主站不变                                                             |
+| G6  | 提取记忆路径（6h 闲置）未测（D5 §7-4 遗留）                                    | 低         | 工作区日常使用自然覆盖                                                                                                                                                         |
+| G7  | trae 派发对接（五层循环 2→3 层）                                          | 低         | D7 范围; D6 留任务卡接口                                                                                                                                                    |
+| G8  | 站上无 Mathematica / R 环境（Auto\_Prover 注入点 B/D、Cpp\_Hub R 基准对拍需要） | 中         | 降级矩阵（注入点留主控站执行 / R 基准转 Python 复算）或站上 apt 预置 r-base（v3 §7）                                                                                                           |
+| G9  | 重资产预置策略（Cpp\_Hub third\_party、Auto\_Prover mathlib/.lake 缓存）   | 中         | `.agentsync` 排除 + 站上一次性 tar 预置（不计入常规同步量）（v3 §7）                                                                                                                     |
+| G10 | opencode 位置参数 bug（1.18.25 实证）上游未报/未修                           | 低         | wrapper 已规避（stdin 管道形式）；升级窗口评估时回归验证该行为是否修复                                                                                                                          |
+| G11 | **并发与互斥**：同工作区双写无锁协议；llama-server 单槽下多任务排队未测（v3 §9.5）          | **高**     | **方案定案（双源合并）**：工作区级 flock（粗）+ 任务卡 readonly 字段（细，Codex RwLock 模式 §9.7-1）双层；MVP 先工作区级。Anthropic 官方纪律独立验证 + 文件集粒度细化（§9.6-2）。Bash 调用不锁（CLI 内部序列化，exec\_command=true 先例） |
+| G12 | 失败恢复：任务中断状态残留/续跑未定义（v3 §9.5）                                   | 中         | 任务卡状态机 + wrapper 幂等回收；进 wrapper MVP 需求                                                                                                                              |
+| G13 | 成本/额度观测：zen 日限额无预警（v3 §9.5）                                    | 中         | wrapper 本地 log 记调用次数；限额触发降级路径（→本地档）定义                                                                                                                               |
+| G14 | 版本协同矩阵：升级回归面未清单化（v3 §9.5）                                      | 低         | 升级窗口回归三件套：agent-cli-smoke.sh + 插件加载 + 记忆读写（与 G10 合并）                                                                                                                |
 
 **建议路径**：本调研（RESEARCH）→ Scott review → D6 spec（DESIGN→IMPLEMENTATION→CHECKLIST）。D6 范围 = agent-cli MVP（workspace+task 两命令, opencode 单路径）+ 试点工作区（d:\RPC 或小项目）+ G2 验证门；claude 路径/`--continue`/review --peer/trae 对接按缺口分期。
 
@@ -508,15 +508,15 @@ accept:              # 验收判据(可执行/可核验)
 
 #### 9.6.1 可用性实测（E1，B 站 2026-09-03）
 
-| 断言 | 实测 |
-| --- | --- |
+| 断言                              | 实测                                                                                                                                                                                                |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | coordinator 模式在 2.1.258 构建中是否可用 | **可用**——`CLAUDE_CODE_COORDINATOR_MODE=1 claude -p '...'` 后模型自认 "Yes, I am running in coordinator mode"；对照组（无 env）明确 "No, I am running as the main agent"。feature flag `COORDINATOR_MODE` 在现役构建中已开 |
-| 启用代价 | 零成本：单 env var，会话级（matchSessionMode 支持恢复会话时自动对齐模式） |
-| 定位 | **B 站站内编排层**——一个 claude 会话内 spawn 多个 async worker（各带 Bash/Read/Edit/Write/Grep/Glob/Skill 工具面），coordinator 不亲自碰文件 |
+| 启用代价                            | 零成本：单 env var，会话级（matchSessionMode 支持恢复会话时自动对齐模式）                                                                                                                                                 |
+| 定位                              | **B 站站内编排层**——一个 claude 会话内 spawn 多个 async worker（各带 Bash/Read/Edit/Write/Grep/Glob/Skill 工具面），coordinator 不亲自碰文件                                                                                 |
 
 #### 9.6.2 对 D6 的八条可借鉴模式（按价值排序）
 
-1. **task-notification 结构化交接协议**——worker 结果以 `<task-notification>` XML 回流：`task-id / status(completed|failed|killed) / summary / result / usage{total_tokens, tool_uses, duration_ms}`。**直接吸收进 `.agent-run.json` 归一化契约**——usage 三元组正是 G13（额度观测）需要的遥测字段，Anthropic 已定义好 schema。
+1. **task-notification 结构化交接协议**——worker 结果以 `<task-notification>` XML 回流：`task-id / status(completed|failed|killed) / summary / result / usage{total_tokens, tool_uses, duration_ms}`。**直接吸收进** **`.agent-run.json`** **归一化契约**——usage 三元组正是 G13（额度观测）需要的遥测字段，Anthropic 已定义好 schema。
 2. **并发纪律的独立第三方验证**——官方明文 "Read-only tasks run in parallel freely; **Write-heavy tasks one at a time per set of files**"（§4 Concurrency）+ "Verification can sometimes run alongside implementation **on different file areas**"。与我们 G11"单工作区单写者"结论一致但更精细：**锁粒度是文件集不是工作区**（读并行/写串行/验证可与实现并行若文件区不交叠）——D6 flock 设计按此细化。
 3. **Continue vs Spawn 决策表**（§5）——六行决策矩阵，其中两条直接命中我们的设计：**"Verifying code a different worker just wrote → Spawn fresh（Verifier should see the code with fresh eyes, not carry implementation assumptions）"= 站间互审/异构复审的 fresh-eyes 原理**（第三方独立表述）；"Wrong approach entirely → Spawn fresh（wrong-approach context pollutes the retry; avoids anchoring）"= 失败任务换 agent 重试而非续跑。wrapper `--continue` 路由规则照此表实现。
 4. **反懒惰委派铁律**——"Never write 'based on your findings'… You never hand off understanding to another worker"（§5）：编排方必须先消化 worker 产出（Synthesis 阶段是 coordinator 本职）才能派生后续任务，prompt 必须带具体文件路径/行号/错误消息。**这是任务卡"干净室+自包含"规范的官方版**，也与我们"审计者不采信引文/双盲重推导"同构。
@@ -531,7 +531,64 @@ Anthropic 把 **LLM 放在编排席**（spawn/continue/stop 是模型经 prompt 
 
 #### 9.6.4 泄漏源码的其他编排相关资产（目录扫描 E1）
 
-tools/ 下存在完整编排工具族：AgentTool（spawn）/ SendMessageTool（continue）/ TaskStopTool / TaskCreate/Get/List/Update/Output（任务簿）/ TeamCreate/Delete（团队生命周期）/ WorkflowTool（feature('WORKFLOW_SCRIPTS') 门控）/ EnterWorktree/ExitWorktree（worktree 并行——印证 §8.3 worktree 模式官方化）。ALL_AGENT_DISALLOWED_TOOLS 揭示隔离边界：subagent 禁 AskUserQuestion/TaskStop/递归 Agent（防套娃），worker 工具面 = ASYNC_AGENT_ALLOWED_TOOLS（read/write/grep/glob/shell/skill/worktree）+ 可选 MCP 注入——**站上 worker 的工具面子集化设计可直接参考此清单**。
+tools/ 下存在完整编排工具族：AgentTool（spawn）/ SendMessageTool（continue）/ TaskStopTool / TaskCreate/Get/List/Update/Output（任务簿）/ TeamCreate/Delete（团队生命周期）/ WorkflowTool（feature('WORKFLOW\_SCRIPTS') 门控）/ EnterWorktree/ExitWorktree（worktree 并行——印证 §8.3 worktree 模式官方化）。ALL\_AGENT\_DISALLOWED\_TOOLS 揭示隔离边界：subagent 禁 AskUserQuestion/TaskStop/递归 Agent（防套娃），worker 工具面 = ASYNC\_AGENT\_ALLOWED\_TOOLS（read/write/grep/glob/shell/skill/worktree）+ 可选 MCP 注入——**站上 worker 的工具面子集化设计可直接参考此清单**。
+
+### 9.7 Codex orchestrator/parallel 逆向分析（v3.3 增补：开源源码 E1 直读）
+
+> 来源：`D:\ds\codex-main\codex-rs\core\src\tools\orchestrator.rs`（553 行全文直读）+ `parallel.rs`（核心段直读）+ `registry.rs` 并行判定交叉核对。**与 §9.6 Anthropic 泄漏源码形成完美对照实验**：Anthropic 把 LLM 放编排席（纪律靠 prompt），Codex 把编排全部写成 Rust 确定性代码（纪律靠锁）——**Codex 才是与 D6 公理 1 同哲学的参考实现**。
+
+#### 9.7.1 G11 的官方代码级答案：RwLock 并发门（parallel.rs）
+
+Codex 的工具并发控制核心是**一把 tokio RwLock**（`parallel_execution: Arc<RwLock<()>>`）：
+
+```
+supports_parallel == true  → lock.read().await   // 读锁: 多工具同时持锁执行
+supports_parallel == false → lock.write().await  // 写锁: 全局独占, 排空所有并行工具
+```
+
+**判定面三级**（registry.rs + 各工具声明实测汇总）：
+
+| 层级           | 机制                                                                 | 例                                                                                                                                                                     |
+| ------------ | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 工具自声明        | 每工具实现 `supports_parallel_tool_calls()`                             | exec\_command=**true**、list/read\_mcp=true、view\_image=true、tool\_search=true、write\_stdin=true；list\_available\_plugins=**false**、request\_plugin\_install=**false** |
+| 隐藏工具排除       | `exposure != Hidden && runtime.supports_parallel()`                | 隐藏工具永不并行                                                                                                                                                              |
+| **MCP 注解驱动** | `tool_info.supports_parallel_tool_calls \|\| annotations.readOnly` | 外部工具凭 MCP 标准注解 readOnlyHint 声明读安全——**声明式而非启发式**                                                                                                                       |
+
+**对 D6 的直接映射**：wrapper 任务卡加 `readonly: true|false` 字段（MCP 注解模式的任务卡版）——research/分析/审查类任务持共享锁并行 fan-out，implementation 类任务持排它锁独占工作区。**比 Anthropic 的 prompt 纪律（"write-heavy one at a time per set of files"）硬一个量级：RwLock 是 OS 级强制**。与 §9.6-2 的文件集粒度合并定案：**工作区级 flock（粗）+ 任务卡 readonly 声明（细）双层**——MVP 先做工作区级，V2 按任务卡字段细化。
+
+值得注意的实测发现：**exec\_command=true**（shell 命令可并行）——因为 Codex 的 shell 在沙箱内进程受管、输出不落盘冲突；对我们：站上 opencode 的 Bash 调用天然由 CLI 内部序列化，wrapper 层面只锁"工作区文件写"即可，不必锁整 CLI 会话。
+
+#### 9.7.2 orchestrator.rs 五段流水与升级重试（对照 D6 wrapper 生命周期）
+
+```
+approval（批准） → select sandbox（选沙箱） → attempt（执行）
+   → 拒绝时: escalate retry（升级重试: 无沙箱再试, 批准已缓存不重问）
+```
+
+五条可吸收语义：
+
+1. **批准缓存**——首次批准后重试**不再重新请求批准**（`already_approved` 标志）；wrapper 的 audit 门/敏感路由同理：任务卡进 running 态后重试跳过重审
+2. **升级重试是二段式而非无限重试**——sandbox 拒绝 → 恰好一次升级尝试（去沙箱），失败即终态。**印证"重试 ≤2 次转人工"纪律的官方实现形态**
+3. **owner 策略不可升级绕过**——"attachment-owned network policy cannot be bypassed by sandbox escalation"：归属策略（如附件带的网络策略）直接 Rejected，无升级路径。**= sensitivity: local-only 不可被任何 wrapper 参数覆写**（D6 硬边界语义的官方同款）
+4. **严格模式重批**——strict\_auto\_review 下"批准只覆盖沙箱内尝试，无沙箱重试需 fresh guardian review"（代码注释原文）：升级重试须重新审批。审计任务的降级运行须重新过 audit 门
+5. **遥测内建**——sandbox\_outcome(denied/escalated/timed\_out/signal, initial\_duration, escalated\_duration)：**排队等待与执行时长分离计量**（`execution_started_at: OnceLock` 在获锁后才设置）——wrapper 遥测照抄：`.agent-run.json` 记 queue\_s 与 run\_s 两字段（G13 观测的精确形态）
+
+#### 9.7.3 取消语义（G12 补充）
+
+取消令牌触发时先查 `terminal_outcome_reached || is_finished()`——**已完成的工具不取消，等待其结果**；只有真正在跑的才 abort 并发 `notify_tool_aborted` 事件。D6 task abort 语义照抄：中断前先收终态，避免把已完成产物误标 aborted。
+
+#### 9.7.4 双源对照总结（Anthropic vs Codex vs D6 定案）
+
+| 维度   | Anthropic coordinator（§9.6）                          | Codex orchestrator（§9.7）      | D6 定案                           |
+| ---- | ---------------------------------------------------- | ----------------------------- | ------------------------------- |
+| 编排哲学 | LLM 在编排席，纪律靠 prompt                                  | 代码编排，纪律靠锁                     | **代码编排（公理 1）**                  |
+| 并发控制 | 提示词："write-heavy one at a time **per set of files**" | **RwLock + 工具声明 + MCP 注解**    | 工作区 flock + 任务卡 readonly 字段（双层） |
+| 交接协议 | task-notification XML（usage 遥测）                      | ResponseInputItem + 失败按工具类型分流 | .agent-run.json（吸收双方字段）         |
+| 重试   | 失败续跑（SendMessage 带 error context）                    | **二段式升级重试（恰好一次）+ 批准缓存**       | ≤2 次转人工 + 门禁缓存                  |
+| 硬边界  | worker 工具面白名单                                        | **owner 策略不可升级绕过**            | sensitivity: local-only 不可覆写    |
+| 适用场景 | 单站内多文件探索 fan-out                                     | 单会话内工具级安全/并发                  | 跨站任务卡编排（两者都不覆盖的层）               |
+
+**定论**：Anthropic 给了编排的"语法"（怎么交接、怎么写 prompt、何时 continue/spawn），Codex 给了编排的"法律"（怎么强制、怎么锁、怎么升级重试）——D6 DESIGN 直接合并：**协议层抄 Anthropic §9.6-2，强制层抄 Codex §9.7-1/9.7-2，两者拼出完整的 wrapper 规范**。
 
 ## 参考源
 
@@ -606,5 +663,12 @@ v3 增补二（2026-09-02 晚，Qwen OAuth 插件实测轮）：
 v3.2 增补（2026-09-03，Anthropic coordinator 逆向轮）：
 
 - `D:\ds\claude-code-haha-main\src\coordinator\coordinatorMode.ts`（E1 本地泄漏源码直读全文 + `src/constants/tools.ts` 工具面交叉核对——注意：本地泄漏源码，非公开文档，**不得外引 URL，只作设计参考**）
+
 - B 站 coordinator 模式门禁实测（E1 2026-09-03）：`CLAUDE_CODE_COORDINATOR_MODE=1` 生效（模型自认 coordinator），对照组为 main agent——2.1.258 构建已开放该 feature flag
+
+v3.3 增补（2026-09-03，Codex 逆向轮）：
+
+- `D:\ds\codex-main\codex-rs\core\src\tools\orchestrator.rs`（E1 开源源码直读全文 553 行——codex-rs 为 Apache-2.0 开源，可正常引用其公开仓库）
+
+- `D:\ds\codex-main\codex-rs\core\src\tools\parallel.rs` + `registry.rs` 并行判定三级面交叉核对（工具自声明/Hidden 排除/MCP annotations.readOnly 注解驱动）
 
