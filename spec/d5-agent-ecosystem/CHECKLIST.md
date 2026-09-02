@@ -215,6 +215,44 @@ upstream: \[ADR-0001 集群运维框架审计与四项改进决策]
 4. **A5 验证路径边界**：当日早期闭环验证的是**显式笔记路径**（memory_add_note → memories/extensions/ad_hoc/notes/ → 新会话注入引用）；codex-memory 的 **6h 闲置自动提取路径未测**（README 声明的工作流，属插件 bonus 能力非 A5 判据主体）。后续正常使用中自然覆盖，无需专项验收。
 5. A3 的 docx 生成-验证完整循环未跑（技能注入+brainstorm 流程已实证）——document-skills 验证脚本依赖其运行时环境，留首次实际文档任务时自然验证。
 
+## 8. D5 verified 后未收尾事项盘点（2026-09-02 复查，含实时核验）
+
+> 背景：D5 标 verified 后复查遗留。**P0 组为本轮新发现——A11"无自动升级通道激活"系未实测的假断言，三条自动升级通道实测全部开放**，与"版本锁定"铁律（project_memory）直接冲突。
+
+### 8.1 P0：版本锁定三通道未关（E1 实测 2026-09-02）
+
+| # | 通道 | 实测证据 | 后果 | 建议修复 |
+| - | --- | --- | --- | --- |
+| L1 | **A 站 opencode = snap 安装，snapd auto-refresh 活跃** | `snap refresh --time`: timer 00:00~24:00/4（4 次/天），refresh-date 昨天 18:31，tracking latest/stable，无 hold | opencode 1.18.25 会被静默升级（plugin API patch 破坏史 §8.6.1 风险成真） | `sudo snap refresh --hold=forever opencode`（单 snap 永久 hold；不影响其他 snap 安全更新） |
+| L2 | **B 站 opencode autoupdate 未显式关闭** | opencode.jsonc 无 `autoupdate` 字段（走默认值；config schema 含该字段） | 同上 | opencode.jsonc 加 `"autoupdate": false` |
+| L3 | **B 站 claude code 自动更新未禁用** | settings.json 无 DISABLE_AUTOUPDATER / autoupdates 设置 | claude 2.1.252 静默升级（#41701 marketplace 破坏链 + B 站已配后端的行为面回归风险） | settings.json env 加 `"DISABLE_AUTOUPDATER": "1"` |
+
+### 8.2 P0：params-ledger 未登记 D5 配置（E1 主控站 grep 无命中）
+
+IMPL/手册承诺"conf CTX ↔ limit.context ↔ MAX_CONTEXT_TOKENS 三方联动挂 params-ledger 维护链"，但 `spec/infer-load/params-ledger.md`（96 行）**无 limit.context / MAX_CONTEXT_TOKENS / opencode 任何条目**——违反"改站上配置须同步台账"既有约定。修复：补登三条（B 站 opencode limit 120000/30000、B 站 claude MAX_CONTEXT_TOKENS=120000、变更联动规则）。
+
+### 8.3 P1：设计内遗留（按计划分期，无即时风险）
+
+| # | 事项 | 出处 | 处置 |
+| - | --- | --- | --- |
+| L4 | A3 docx 完整循环未跑 | §7-5 | 首次实际文档任务自然验证 |
+| L5 | codex-memory 6h 提取路径未测 | §7-4 | 正常使用覆盖 |
+| L6 | A 站 claude 完全不可用（R17）；A 站无记忆层（G5） | D5 边界 | D6 wrapper 路由规避（默认 opencode）；A 站接 LiteLLM/装 codex-memory 列 P2 |
+| L7 | claude-mem P2 / V4 门 | DESIGN 范围外 | 按需启动 |
+| L8 | PR #42150（O(N²) 修复）跟踪 | A10 | 升级窗口统一评估（手册 §10）；触发时需过 L1-L3 已关的升级门 |
+| L9 | memories/ 备份无自动机制（手册约定手动） | 手册 §2a.3 | 手动纪律；自动化列可选项 |
+| L10 | 上游更新跟踪（superpowers/ARS/document-skills 不追新）无提醒机制 | DESIGN §12 | 升级窗口统一评估兜底 |
+
+### 8.4 P2：新开口
+
+| # | 事项 | 处置 |
+| - | --- | --- |
+| L11 | D6（跨项目调用标准）调研完成（docs/Agent跨项目调用标准与迁移复用调研.md v2）但 spec 未开 | 待 Scott review 后走 D6 spec 流程 |
+| L12 | assertion-audit / cross-examine 已部署未实战 | 首次审计任务自然验证（D6 任务卡 audit:true 是首个用户） |
+| L13 | D5 决策无独立 ADR（D1-D4 共享 ADR-0001） | 可选项：补 ADR-0002 或在 D6 spec 中引用 CHECKLIST 留痕 |
+
+**建议**：L1-L3 + 8.2 台账补登为一次性快任务（~15min，四条命令+一段登记），可与 D6 前置门合并执行；其余按分期走。
+
 ***
 
 **Review 签字（第 1 轮文档审查）**: \_\_\_\_\_\_\_\_\_\_\_ 日期: \_\_\_\_\_\_\_\_\_\_\_
