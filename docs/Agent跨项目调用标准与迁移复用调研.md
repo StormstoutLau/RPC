@@ -2,7 +2,7 @@
 
 ***
 
-date: 2026-09-03（v3.4.1，审计轮：10 项发现修复——R1 剔除 JetBrains 5.3h 无源断言 / R2 B-claude 冷缓存改为估计值+混淆说明 / R3 §0+§1.1"模型后端不出站"随免费档决策回灌限定 / R4 §0+§5.3 R17 拒绝规则随 A-claude 修复更新 / R5 coordinator 实测边界诚实化 / R6 exec_command 归因降级为假设进 G11 验证门 / R7-R10 措辞级修正；v3.4：DeepSeek Harness 逆向 + G8 方案定案；v3.3：Codex 逆向——G11 RwLock 定案；v3.2：Anthropic coordinator 逆向；v3.1：模型分层路由 + 协同自审；v3：四项目适配 + 开源对照 + 4 CLI 定版；v2：场景澄清重构）
+date: 2026-09-03（v3.4.1，审计轮：10 项发现修复——R1 剔除 JetBrains 5.3h 无源断言 / R2 B-claude 冷缓存改为估计值+混淆说明 / R3 §0+§1.1"模型后端不出站"随免费档决策回灌限定 / R4 §0+§5.3 R17 拒绝规则随 A-claude 修复更新 / R5 coordinator 实测边界诚实化 / R6 exec\_command 归因降级为假设进 G11 验证门 / R7-R10 措辞级修正；v3.4：DeepSeek Harness 逆向 + G8 方案定案；v3.3：Codex 逆向——G11 RwLock 定案；v3.2：Anthropic coordinator 逆向；v3.1：模型分层路由 + 协同自审；v3：四项目适配 + 开源对照 + 4 CLI 定版；v2：场景澄清重构）
 status: draft（D6 前期调研）
 upstream: D5 Agent 生态升级（已 verified 2026-09-02）; 调研 §4.2 五层循环遗留"任务卡协议"口子
 -----------------------------------------------------------------------
@@ -12,18 +12,18 @@ upstream: D5 Agent 生态升级（已 verified 2026-09-02）; 调研 §4.2 五�
 
 ## 0. 速览
 
-| 问题                    | 结论                                                                                                                                                           |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 整体拓扑？                 | **主控站 = 编排层（任务源+wrapper+归档），A/B 站 = agent 执行场**。agent CLI 全在站上跑；**本地模型后端（nemotron/gpt-oss）不出站；免费档经 Zen 网关出站（美国托管，隐私边界见 §9.4）**（§1.1，v3.4 审计修订——原"模型后端不出站"未随免费默认决策回灌） |
-| 为什么"站上独立工作区"是隔离的正确单元？ | 生态机制天然挂 cwd：codex-memory 提取记忆按 **cwd 键控**（E1 memory.db 直查）；AGENTS.md/技能发现从 cwd 向上遍历；claude auto-memory 按项目目录隔离——**工作区 = 记忆/指令/技能/会话四重隔离的最小单元**（§4.1）         |
-| 文件怎么同步？               | **tar+scp 推拉**（D5 全程实证路径；本轮实测主控站 Git Bash 无 rsync、站上 rsync 3.2.7 仅用于站内归档）；大项目用 `.agentsync` 排除清单控量（§5.2）                                                     |
-| 工作区里放什么？              | 项目文件子集 + **AGENTS.md（指令单源）** + CLAUDE.md 薄壳（`@AGENTS.md` 导入）+ 项目技能/配置（可选）+ `out/` 产物目录（§5.1）                                                                 |
-| 跨 CLI 指令单源？           | AGENTS.md 为源 + CLAUDE.md 薄壳——claude code 官方明确不原生读 AGENTS.md（#6235, 5200+ reactions, "not planned"），导入是官方推荐模式（§3.1）                                           |
+| 问题                    | 结论                                                                                                                                                                                                                              |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 整体拓扑？                 | **主控站 = 编排层（任务源+wrapper+归档），A/B 站 = agent 执行场**。agent CLI 全在站上跑；**本地模型后端（nemotron/gpt-oss）不出站；免费档经 Zen 网关出站（美国托管，隐私边界见 §9.4）**（§1.1，v3.4 审计修订——原"模型后端不出站"未随免费默认决策回灌）                                                            |
+| 为什么"站上独立工作区"是隔离的正确单元？ | 生态机制天然挂 cwd：codex-memory 提取记忆按 **cwd 键控**（E1 memory.db 直查）；AGENTS.md/技能发现从 cwd 向上遍历；claude auto-memory 按项目目录隔离——**工作区 = 记忆/指令/技能/会话四重隔离的最小单元**（§4.1）                                                                            |
+| 文件怎么同步？               | **tar+scp 推拉**（D5 全程实证路径；本轮实测主控站 Git Bash 无 rsync、站上 rsync 3.2.7 仅用于站内归档）；大项目用 `.agentsync` 排除清单控量（§5.2）                                                                                                                        |
+| 工作区里放什么？              | 项目文件子集 + **AGENTS.md（指令单源）** + CLAUDE.md 薄壳（`@AGENTS.md` 导入）+ 项目技能/配置（可选）+ `out/` 产物目录（§5.1）                                                                                                                                    |
+| 跨 CLI 指令单源？           | AGENTS.md 为源 + CLAUDE.md 薄壳——claude code 官方明确不原生读 AGENTS.md（#6235, 5200+ reactions, "not planned"），导入是官方推荐模式（§3.1）                                                                                                              |
 | 调用入口？                 | 主控站侧 **`agent-cli`** **wrapper**（PowerShell）：`workspace / task / collect / review` 四命令族；封装同步→ssh headless 执行→产物回收全链 + 路由可达性判断（模型路由表见 §9.4；R17"A 站 claude 不可用"已被 e0129ad/af1467c 修复推翻——A-claude 现 PASS 3s 纯文本模式）（§5.3，v3.4 审计修订） |
-| 编排规范？                 | **任务卡生命周期** create→dispatch→execute→collect→archive；`audit: true` 触发 assertion-audit 断言契约；站间互审 `agent-cli review --peer`（cross-examine，对端模型）（§5.5）           |
-| 记忆隔离的坑？               | 提取记忆 cwd 天然隔离 ✓；**ad-hoc 笔记全局平铺**——wrapper 必须自动加 `[proj:<name>]` 前缀（§4.1）                                                                                    |
-| claude 遮蔽陷阱？          | personal > project（反直觉）——12 件用户级技能会遮蔽项目同名技能，项目技能须带前缀命名（§3.2）                                                                                                 |
-| headless 最大的坑？        | claude `--bare` **跳过 CLAUDE.md/插件/记忆**——项目上下文调用禁用（§3.4）                                                                                                      |
+| 编排规范？                 | **任务卡生命周期** create→dispatch→execute→collect→archive；`audit: true` 触发 assertion-audit 断言契约；站间互审 `agent-cli review --peer`（cross-examine，对端模型）（§5.5）                                                                              |
+| 记忆隔离的坑？               | 提取记忆 cwd 天然隔离 ✓；**ad-hoc 笔记全局平铺**——wrapper 必须自动加 `[proj:<name>]` 前缀（§4.1）                                                                                                                                                       |
+| claude 遮蔽陷阱？          | personal > project（反直觉）——12 件用户级技能会遮蔽项目同名技能，项目技能须带前缀命名（§3.2）                                                                                                                                                                    |
+| headless 最大的坑？        | claude `--bare` **跳过 CLAUDE.md/插件/记忆**——项目上下文调用禁用（§3.4）                                                                                                                                                                         |
 
 ## 1. 需求解构（澄清后主场景）
 
@@ -81,12 +81,12 @@ upstream: D5 Agent 生态升级（已 verified 2026-09-02）; 调研 §4.2 五�
 
 ### 2.1 4 CLI 定版实测（2026-09-02 晚，`ops/station-bin/agent-cli-smoke.sh` 4/4 PASS）
 
-| CLI                  | 路由                                       | 实测                   | 关键调用铁律                                                                                                      |
-| -------------------- | ---------------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------- |
-| B-claude (2.1.258)   | LiteLLM(4000)→nemotron                   | **PASS** 热缓存 30-120s | **`< /dev/null`** **显式关闭 stdin**（否则可能长时间等 stdin）；**冷启动慢（估计 ~20min，非测量值**：观察事实=首次无 stdin 重定向调用 >25min 未完成被中断；20min 系算术估计 33k token ÷ ~27 t/s CPU 卸载预填速度，且 stdin 等待与预填两因素未隔离——首次调用前轻量 PING 预热仍是合理纪律）          |
-| B-opencode (1.18.25) | LiteLLM→nemotron/gpt-oss                 | **PASS**             | **必须 stdin 管道形式** `echo "<prompt>" \| opencode run -m <model>`——位置参数形式挂死（init 后无任何 LLM 调用，日志实证；1.18.25 bug） |
-| A-claude (2.1.258)   | 直连本机 llama-server(8080) gpt-oss          | **PASS** 3s          | 同 `< /dev/null`；**CLAUDE\_CODE\_DISABLE\_TOOLS=1 = 纯文本模式无工具调用**（A-claude 只适合文本任务，文件级 agent 任务走 opencode）    |
-| A-opencode (1.18.25) | cluster-litellm(10.10.10.2:4000)/gpt-oss | **PASS**             | 同 stdin 管道形式；provider 三件套 lm-studio-local(禁)/cluster-local/cluster-litellm                                  |
+| CLI                  | 路由                                       | 实测                   | 关键调用铁律                                                                                                                                                                                               |
+| -------------------- | ---------------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| B-claude (2.1.258)   | LiteLLM(4000)→nemotron                   | **PASS** 热缓存 30-120s | **`< /dev/null`** **显式关闭 stdin**（否则可能长时间等 stdin）；**冷启动慢（估计 \~20min，非测量值**：观察事实=首次无 stdin 重定向调用 >25min 未完成被中断；20min 系算术估计 33k token ÷ \~27 t/s CPU 卸载预填速度，且 stdin 等待与预填两因素未隔离——首次调用前轻量 PING 预热仍是合理纪律） |
+| B-opencode (1.18.25) | LiteLLM→nemotron/gpt-oss                 | **PASS**             | **必须 stdin 管道形式** `echo "<prompt>" \| opencode run -m <model>`——位置参数形式挂死（init 后无任何 LLM 调用，日志实证；1.18.25 bug）                                                                                          |
+| A-claude (2.1.258)   | 直连本机 llama-server(8080) gpt-oss          | **PASS** 3s          | 同 `< /dev/null`；**CLAUDE\_CODE\_DISABLE\_TOOLS=1 = 纯文本模式无工具调用**（A-claude 只适合文本任务，文件级 agent 任务走 opencode）                                                                                             |
+| A-opencode (1.18.25) | cluster-litellm(10.10.10.2:4000)/gpt-oss | **PASS**             | 同 stdin 管道形式；provider 三件套 lm-studio-local(禁)/cluster-local/cluster-litellm                                                                                                                           |
 
 - 主控站 ssh 调度链路全程畅通（冒烟脚本从主控站发起，heredoc 传远端脚本规避 PowerShell 引用陷阱——R14 铁律在 ssh 场景的等价形式：**远端命令一律** **`ssh host 'bash -s' <<'EOF'`** **或脚本落盘**）
 
@@ -218,7 +218,7 @@ agent-cli review <proj> --peer [--card <task.md>]             # 站间互审
 
 **wrapper 内建规则**（吸收 D5 全部实测坑；v3.4 审计修订规则 1——R17 已失效）：
 
-1. **路由可达性**（v3.4 修订）：~~gpt-oss + claude 直接拒绝（R17）~~——R17 已被推翻（A 站 CTX 32768→65536 + 模型名修复后 A-claude PASS 3s，§2.1）；现行路由：**nemotron→B 站（记忆主站）优先；gpt-oss→A 站；A-claude 仅限纯文本任务（CLAUDE_CODE_DISABLE_TOOLS=1 无工具面）**；敏感内容强制本地档（§9.4 sensitivity）
+1. **路由可达性**（v3.4 修订）：~~gpt-oss + claude 直接拒绝（R17）~~——R17 已被推翻（A 站 CTX 32768→65536 + 模型名修复后 A-claude PASS 3s，§2.1）；现行路由：**nemotron→B 站（记忆主站）优先；gpt-oss→A 站；A-claude 仅限纯文本任务（CLAUDE\_CODE\_DISABLE\_TOOLS=1 无工具面）**；敏感内容强制本地档（§9.4 sensitivity）
 2. **CLI 分派**：默认 opencode（长上下文/ARS/技能面完整）；claude 用于文本任务（A 站快）/B 站短任务（需预热）
 3. **headless 封装**：项目上下文**不用** **`--bare`**；`--output-format json`（claude）/ `--format json`（opencode）→ 归一化契约 `{proj, cli, model, session_id, exit_code, content, duration_s}`（JSON 落 `out/.agent-run.json`，幂等可追溯）
 4. **笔记命名空间**：task prompt 自动前缀 `[proj:<name>]`（§4.1 补丁）
@@ -259,22 +259,22 @@ accept:              # 验收判据(可执行/可核验)
 
 ## 6. 缺口清单与 D6 建议
 
-| #   | 缺口                                                             | 严重度       | D6 处置建议                                                                                                                                                                                                        |
-| --- | -------------------------------------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| G1  | agent-cli wrapper 未实现（L2 核心）                                   | 高         | D6 主体：PowerShell MVP——`workspace --create/--sync` + `task`（单模型 opencode 路径）先行；claude 路径与 `--continue` 二期                                                                                                       |
-| G2  | 工作区规范未实测（AGENTS.md 薄壳导入行为/claude 遮蔽/codex-memory cwd 键控在工作区场景） | 高         | D6 V0 验证门：用 d:\RPC 自身当试点项目（AGENTS.md 已有雏形）建首个工作区实测                                                                                                                                                             |
-| G3  | ad-hoc 笔记无隔离                                                   | 中         | wrapper `[proj:]` 前缀注入（L2-4）+ 手册纪律                                                                                                                                                                             |
-| G4  | 大项目同步量（Textbook/Coding 全量推不现实）                                 | 中         | `.agentsync` 默认模板 + 首同步大小预警（wrapper 检查 tar 体积, >200MB 拒绝并提示补排除清单）                                                                                                                                              |
-| G5  | A 站无记忆层                                                        | ~~低~~ 配置级已解除（功能路径未测） | P1 批次 L6 已装 A 站 codex-memory（2026-09-02）；本轮实测证据=A 站 opencode.jsonc 含 plugin 条目（配置级佐证，**A 站 memory\_add\_note 实际写入未测**——D5 P1 提交称"装好即用"属自述）。路由仍以 B 站为记忆主站不变；A 站功能验证并入 G2 V0 门                                                             |
-| G6  | 提取记忆路径（6h 闲置）未测（D5 §7-4 遗留）                                    | 低         | 工作区日常使用自然覆盖                                                                                                                                                                                                    |
-| G7  | trae 派发对接（五层循环 2→3 层）                                          | 低         | D7 范围; D6 留任务卡接口                                                                                                                                                                                               |
-| G8  | 站上无 Mathematica / R 环境（Auto\_Prover 注入点 B/D、Cpp\_Hub R 基准对拍需要） | 中         | **方案定案（§9.8.2）**：Mathematica→sympy 部分替代（注入点 B 单向证伪降级可用/D 基本等价，降级链 sympy→数值→Lean4→Mathematica 难例留主控站）；R 走 **CRAN noble-cran40 源装 4.6.x** 对齐主控站（apt 4.3.3 弃用），包版本 sessionInfo 对照+钉版，兰大镜像加速；执行列 D6 T0 预置（与 G9 同批） |
-| G9  | 重资产预置策略（Cpp\_Hub third\_party、Auto\_Prover mathlib/.lake 缓存）   | 中         | `.agentsync` 排除 + 站上一次性 tar 预置（不计入常规同步量）（v3 §7）                                                                                                                                                                |
-| G10 | opencode 位置参数 bug（1.18.25 实证）上游未报/未修                           | 低         | wrapper 已规避（stdin 管道形式）；升级窗口评估时回归验证该行为是否修复                                                                                                                                                                     |
-| G11 | **并发与互斥**：同工作区双写无锁协议；llama-server 单槽下多任务排队未测（v3 §9.5）          | **高**     | **方案定案（双源合并）**：工作区级 flock（粗）+ 任务卡 readonly 字段（细，Codex RwLock 模式 §9.7-1）双层；MVP 先工作区级。Anthropic 官方纪律独立验证 + 文件集粒度细化（§9.6-2）。Bash 调用不锁（CLI 内部序列化，exec\_command=true 先例）                                            |
-| G12 | 失败恢复：任务中断状态残留/续跑未定义（v3 §9.5）                                   | 中         | 任务卡状态机 + wrapper 幂等回收；进 wrapper MVP 需求                                                                                                                                                                         |
-| G13 | 成本/额度观测：zen 日限额无预警（v3 §9.5）                                    | 中         | wrapper 本地 log 记调用次数；限额触发降级路径（→本地档）定义                                                                                                                                                                          |
-| G14 | 版本协同矩阵：升级回归面未清单化（v3 §9.5）                                      | 低         | 升级窗口回归三件套：agent-cli-smoke.sh + 插件加载 + 记忆读写（与 G10 合并）                                                                                                                                                           |
+| #   | 缺口                                                             | 严重度                  | D6 处置建议                                                                                                                                                                                                        |
+| --- | -------------------------------------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1  | agent-cli wrapper 未实现（L2 核心）                                   | 高                    | D6 主体：PowerShell MVP——`workspace --create/--sync` + `task`（单模型 opencode 路径）先行；claude 路径与 `--continue` 二期                                                                                                       |
+| G2  | 工作区规范未实测（AGENTS.md 薄壳导入行为/claude 遮蔽/codex-memory cwd 键控在工作区场景） | 高                    | D6 V0 验证门：用 d:\RPC 自身当试点项目（AGENTS.md 已有雏形）建首个工作区实测                                                                                                                                                             |
+| G3  | ad-hoc 笔记无隔离                                                   | 中                    | wrapper `[proj:]` 前缀注入（L2-4）+ 手册纪律                                                                                                                                                                             |
+| G4  | 大项目同步量（Textbook/Coding 全量推不现实）                                 | 中                    | `.agentsync` 默认模板 + 首同步大小预警（wrapper 检查 tar 体积, >200MB 拒绝并提示补排除清单）                                                                                                                                              |
+| G5  | A 站无记忆层                                                        | ~~低~~ 配置级已解除（功能路径未测） | P1 批次 L6 已装 A 站 codex-memory（2026-09-02）；本轮实测证据=A 站 opencode.jsonc 含 plugin 条目（配置级佐证，**A 站 memory\_add\_note 实际写入未测**——D5 P1 提交称"装好即用"属自述）。路由仍以 B 站为记忆主站不变；A 站功能验证并入 G2 V0 门                                   |
+| G6  | 提取记忆路径（6h 闲置）未测（D5 §7-4 遗留）                                    | 低                    | 工作区日常使用自然覆盖                                                                                                                                                                                                    |
+| G7  | trae 派发对接（五层循环 2→3 层）                                          | 低                    | D7 范围; D6 留任务卡接口                                                                                                                                                                                               |
+| G8  | 站上无 Mathematica / R 环境（Auto\_Prover 注入点 B/D、Cpp\_Hub R 基准对拍需要） | 中                    | **方案定案（§9.8.2）**：Mathematica→sympy 部分替代（注入点 B 单向证伪降级可用/D 基本等价，降级链 sympy→数值→Lean4→Mathematica 难例留主控站）；R 走 **CRAN noble-cran40 源装 4.6.x** 对齐主控站（apt 4.3.3 弃用），包版本 sessionInfo 对照+钉版，兰大镜像加速；执行列 D6 T0 预置（与 G9 同批） |
+| G9  | 重资产预置策略（Cpp\_Hub third\_party、Auto\_Prover mathlib/.lake 缓存）   | 中                    | `.agentsync` 排除 + 站上一次性 tar 预置（不计入常规同步量）（v3 §7）                                                                                                                                                                |
+| G10 | opencode 位置参数 bug（1.18.25 实证）上游未报/未修                           | 低                    | wrapper 已规避（stdin 管道形式）；升级窗口评估时回归验证该行为是否修复                                                                                                                                                                     |
+| G11 | **并发与互斥**：同工作区双写无锁协议；llama-server 单槽下多任务排队未测（v3 §9.5）          | **高**                | **方案定案（双源合并）**：工作区级 flock（粗）+ 任务卡 readonly 字段（细，Codex RwLock 模式 §9.7-1）双层；MVP 先工作区级。Anthropic 官方纪律独立验证 + 文件集粒度细化（§9.6-2）。Bash 调用不锁（CLI 内部序列化，exec\_command=true 先例）                                            |
+| G12 | 失败恢复：任务中断状态残留/续跑未定义（v3 §9.5）                                   | 中                    | 任务卡状态机 + wrapper 幂等回收；进 wrapper MVP 需求                                                                                                                                                                         |
+| G13 | 成本/额度观测：zen 日限额无预警（v3 §9.5）                                    | 中                    | wrapper 本地 log 记调用次数；限额触发降级路径（→本地档）定义                                                                                                                                                                          |
+| G14 | 版本协同矩阵：升级回归面未清单化（v3 §9.5）                                      | 低                    | 升级窗口回归三件套：agent-cli-smoke.sh + 插件加载 + 记忆读写（与 G10 合并）                                                                                                                                                           |
 
 **建议路径**：本调研（RESEARCH）→ Scott review → D6 spec（DESIGN→IMPLEMENTATION→CHECKLIST）。D6 范围 = agent-cli MVP（workspace+task 两命令, opencode 单路径）+ 试点工作区（d:\RPC 或小项目）+ G2 验证门；claude 路径/`--continue`/review --peer/trae 对接按缺口分期。
 
@@ -479,7 +479,7 @@ accept:              # 验收判据(可执行/可核验)
 
 - 调用层：4 CLI 调用形式铁律 + 冒烟脚本（4/4 PASS）
 
-- 路由层：模型→CLI→站映射 + R17 边界 + §9.4 分层路由（新）
+- 路由层：模型→CLI→站映射（R17 已失效，A-claude 修复后可用，§2.1）+ §9.4 分层路由（新）
 
 - 隔离层：工作区四重隔离机制（memory.db cwd 键控 E1）+ `.agentsync` 四型
 
@@ -512,8 +512,8 @@ accept:              # 验收判据(可执行/可核验)
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | coordinator 模式在 2.1.258 构建中是否可用 | **可用**——`CLAUDE_CODE_COORDINATOR_MODE=1 claude -p '...'` 后模型自认 "Yes, I am running in coordinator mode"；对照组（无 env）明确 "No, I am running as the main agent"。feature flag `COORDINATOR_MODE` 在现役构建中已开 |
 | 启用代价                            | 零成本：单 env var，会话级（matchSessionMode 支持恢复会话时自动对齐模式）                                                                                                                                                 |
-| 实测边界（v3.4 审计标注，诚实披露） | **本轮实测仅证明系统提示注入生效**（模型自认 coordinator 角色即模式激活）；headless 下 AgentTool 实际 spawn async worker、task-notification 回流**未实测**——列为启用前验证项，勿据本表直接投产                                          |
-| 定位（待验证）                        | **B 站站内编排层候选**——设计上一个 claude 会话 spawn 多个 async worker（各带 Bash/Read/Edit/Write/Grep/Glob/Skill 工具面），coordinator 不亲自碰文件                                                                                 |
+| 实测边界（v3.4 审计标注，诚实披露）            | **本轮实测仅证明系统提示注入生效**（模型自认 coordinator 角色即模式激活）；headless 下 AgentTool 实际 spawn async worker、task-notification 回流**未实测**——列为启用前验证项，勿据本表直接投产                                                           |
+| 定位（待验证）                         | **B 站站内编排层候选**——设计上一个 claude 会话 spawn 多个 async worker（各带 Bash/Read/Edit/Write/Grep/Glob/Skill 工具面），coordinator 不亲自碰文件                                                                             |
 
 #### 9.6.2 对 D6 的八条可借鉴模式（按价值排序）
 
@@ -618,7 +618,7 @@ DeepSeek 官方开源 agent harness（MIT，TypeScript/pnpm/Cordis 框架，deve
 
 **R 两站安装（Cpp\_Hub 基准对拍）——CRAN noble-cran40 源对齐主控站版本**：
 
-- **版本一致性方案**：不装 apt 默认 4.3.3，走 **CRAN 官方 `noble-cran40` 源**（提供 R 4.6.\* 系列，与主控站 4.6.1 同系）。**精度注意（v3.4 审计补充）**：apt 源给的是**当前最新 4.6.x**，与主控站 4.6.1 同 major.minor 但 patch 可能更新——若首试点出现基准漂移且怀疑 R 本体版本，精确钉版走 Posit r-builds 版本化 deb（`r-4.6.1_1_amd64.deb`，E2 检索已见）；两站均 noble 且 CRAN 可达性已实测；国内加速用兰大镜像（0.5s）替代 cloud（2.6s）
+- **版本一致性方案**：不装 apt 默认 4.3.3，走 **CRAN 官方** **`noble-cran40`** **源**（提供 R 4.6.\* 系列，与主控站 4.6.1 同系）。**精度注意（v3.4 审计补充）**：apt 源给的是**当前最新 4.6.x**，与主控站 4.6.1 同 major.minor 但 patch 可能更新——若首试点出现基准漂移且怀疑 R 本体版本，精确钉版走 Posit r-builds 版本化 deb（`r-4.6.1_1_amd64.deb`，E2 检索已见）；两站均 noble 且 CRAN 可达性已实测；国内加速用兰大镜像（0.5s）替代 cloud（2.6s）
 
 - **Cpp\_Hub 依赖包**（fixtures 提取）：forecast / rugarch / urca / ARDL / midasr / Spillover / vars——全 CRAN 包；`r-base` 后 `install.packages()` 源码编译（noble 有编译工具链）或 r2u 二进制仓库（24000+ 包免编译，c2d4u 已停更勿用）
 
