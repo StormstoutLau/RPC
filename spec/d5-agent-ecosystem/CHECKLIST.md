@@ -7,7 +7,7 @@ type: design
 version: 1.0
 status: draft
 date: 2026-09-02
-depends: [d5-agent-ecosystem-IMPLEMENTATION, Agent生态升级与多智能体协作架构调研 (docs/)]
+depends: [d5-agent-ecosystem-IMPLEMENTATION, d5-agent-ecosystem-DESIGN, Agent生态升级与多智能体协作架构调研 (docs/)]
 upstream: [ADR-0001 集群运维框架审计与四项改进决策]
 ---
 
@@ -17,13 +17,13 @@ upstream: [ADR-0001 集群运维框架审计与四项改进决策]
 > **Spec 步骤**: Step 7-8, 10
 > **基于实施**: [IMPLEMENTATION.md](./IMPLEMENTATION.md) v1.0（含 R1-R6 修正）
 > **基于设计**: [DESIGN.md](./DESIGN.md) v1.3
-> **审查轮次**: 第 1 轮（文档审查，实施前门）
+> **审查轮次**: 第 1-2 轮（文档审查，实施前门）
 
 ---
 
 ## 0. 审查结论速览
 
-**结论：有条件通过（6 项已修正进 IMPLEMENTATION，3 项为实施时待核注记，无阻断项）。**
+**结论：有条件通过（6 项已修正进 IMPLEMENTATION，3 项为实施时待核注记，无阻断项；第 2 轮交叉审查另见 §0.1）。**
 
 | # | 审查发现 | 性质 | 处置 |
 | - | ------- | ---- | ---- |
@@ -37,6 +37,19 @@ upstream: [ADR-0001 集群运维框架审计与四项改进决策]
 | R8 | V2/A4 依赖两站 claude code 已接本地后端——调研 §1.2 称已接通但未登记各站环境变量指向 | 待核注记 | 不改 IMPL；T1 执行时实测记录 `ANTHROPIC_BASE_URL` 等指向进 §6 台账（V2 前置） |
 | R9 | codex-memory `@0.6.5` 版本号与 `"plugin": [...]` 键名均来自调研 §6.3（E2，README 转述） | 来源标注 | 实施时若与 README 现版不符，以 README 为准并更新 IMPL §3.6 |
 
+### 0.1 第 2 轮交叉审查（2026-09-02，三文档对齐 + 逻辑一致性）
+
+**结论：修正后通过（4 项发现全部当轮修正；修正后三文档口径链一致）。**
+
+| # | 审查发现 | 性质 | 处置 |
+| - | ------- | ---- | ---- |
+| R10 | DESIGN §4.4/§10 T1 仍把"B 站 opencode 1.18.9→1.18.25 升级"列为待办——D4 已于 2026-09-01 完成该升级（D4 验收 #4，本表 §1.1 亦已登记为 E1）；且 §4.4 控制流图缺 T4b 行（§4.2 模块表/§10 阶段表均有） | DESIGN 内部过时 + 不自洽 | 已修正：T1 改"环境就绪"（版本核验+PR #42150 决策+ripgrep+A 站路径核实）；§4.4 补 T4b 行 |
+| R11 | DESIGN 残留 v1.0 时代计数口径 6 处（立场②"~10 个"/§2 预期效果"定制 10 件"/§3.1 表"约 10 件"/§6.1"~10 件"/§10 T4"~10 件"/§5.1 合计与 §11 A4"12-13 件"未分列），与 IMPL 修正后口径不一致——R1/R2 第 1 轮只修了 IMPL 侧未回灌 DESIGN | 跨文档计数漂移（修正不闭环） | 已修正：DESIGN 7 处全部对齐（T4 面 11-12 件 claude code 侧 / opencode 侧 +ARS） |
+| R12 | IMPL R1 修正不彻底：§3.4 标题仍"（11 件 + 2 自制）"、职责行仍"复制 Trae 11 件"、§2.5 仍"12-13 件不稀释" | R1 残留 | 已修正 3 处 |
+| R13 | CHECKLIST 自身 3 处：§2.1"七阶段"计数措辞（实为 V0+7T=8 行）、§1.1 CTX 复核指向悬空（"见 §3 T1"但 §3 T1 行无 cat .env 步骤）、frontmatter depends 缺 DESIGN | 自身瑕疵 | 已修正 |
+
+**第 2 轮修正后一致性声明**: 技能计数口径三文档同构——T4 面 = 9 Trae + 2 自制 + paper-lookup 条件件（=11-12 件，claude code 侧可见）；opencode 侧另见 ARS（T4b，symlink 落 `~/.config/opencode/`）；T 阶段 = V0 + T1/T2/T3/T4/T4b/T5/T6（八行，§4.4/§10/IMPL §4 三处一致）；A1-A13 三表（DESIGN §11/IMPL §5/本表 §4）同构；依赖门（V1↔T2 / V3↔T3+T4b / V5↔T4 / T1↔T5）跨文档一致。
+
 ## 1. 事实核验（Anti-Hallucination Review, 2026-09-02）
 
 **方法**: IMPL 全部事实性声明与既有 E1 证据（本仓库文档/实测记录/Trae 技能源 LS）比对；E2/E5 项显式标注。
@@ -49,7 +62,7 @@ upstream: [ADR-0001 集群运维框架审计与四项改进决策]
 | A 站 opencode 1.18.25 | E1：调研 §1.1 实测表（2026-09-01） | ✅ |
 | claude code A 2.1.220 / B 2.1.252 | E1：调研 §1.1 实测表 | ✅ |
 | LiteLLM 网关 `http://scott-lau-GTR-Pro.local:4000` | E1：手册 §1 端点表 grep（本轮复核） | ✅ |
-| nemotron CTX 131072 / gpt-oss CTX 32768 | E1：params-ledger 维护链（T2 前再 cat 一次 .env 复核，见 §3 T1） | ✅（复核项见 §3） |
+| nemotron CTX 131072 / gpt-oss CTX 32768 | E1：params-ledger 维护链（T2 实施时 cat .env 同步复核） | ✅ |
 | SSH 免密已通 | E1：D1-D4 全程 ssh 操作记录 | ✅ |
 | A 站 opencode 二进制路径 | **R6 待核**：T1 `which opencode` | ⬜ |
 
@@ -87,9 +100,10 @@ upstream: [ADR-0001 集群运维框架审计与四项改进决策]
 
 | 检查项 | 状态 |
 | ----- | --- |
-| DESIGN §10 七阶段（V0/T1-T6+T4b）→ IMPL §3 八模块逐一对应 | ☑ |
+| DESIGN §10 八行（V0 + T1-T6 + T4b）→ IMPL §3 八模块逐一对应 | ☑ |
+| DESIGN §4.4 控制流（R10 修正后含 T4b 行/T1 环境就绪）→ 与 §10/IMPL §4 一致 | ☑（R10 修正） |
 | DESIGN §10 依赖门（V1↔T2 / V3↔T3、T4b / V5↔T4 / T1↔T5）→ IMPL §4 DAG | ☑（R7 留档：DAG 为并行细化） |
-| DESIGN §5.1 技能清单 12-13 件 → IMPL §3.4（9 Trae + 2 自制 + paper-lookup 条件 + ARS 归 T4b） | ☑（R1/R2 口径修正后） |
+| DESIGN §5.1 合计（R11 修正后：T4 面 11-12 件 + ARS 归 T4b）→ IMPL §3.4（9 Trae + 2 自制 + paper-lookup 条件） | ☑（R1/R2/R11 口径修正后） |
 | DESIGN §5.4 ARS 协议（V6/T4b-1~4）→ IMPL §3.5 全引用 ars-migrate-verify.sh | ☑ |
 | DESIGN §8 不变式①-⑦ → IMPL 覆盖：①§2.2/②A7/③§2.5/④§3.4 frontmatter 核验/⑤§3.0/⑥§3.3 fallback 同构+§3.1/⑦§3.4.2 全文 | ☑ |
 | DESIGN §11 A1-A13 → IMPL §5 全表命令化（A4 口径修正后） | ☑ |
