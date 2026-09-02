@@ -4,7 +4,7 @@
 
 id: d5-agent-ecosystem-DESIGN
 type: design
-version: 1.2
+version: 1.3
 status: draft
 date: 2026-09-02
 depends: \[Agent生态升级与多智能体协作架构调研 (docs/, 2026-09-02 含 §7.6 排幻觉审计版 + §8 审计任务补充调研; §8.5-§8.9 经三轮排幻觉审计: 18 载荷直抓 17 实锤 3 修正, 全部 E1)]
@@ -99,17 +99,20 @@ upstream: \[ADR-0001 集群运维框架审计与四项改进决策]
 
 - **superpowers 原生件例外**：它由 plugin 机制安装并自更新（V3 通外网时）或三段式装定版（V3 不通时），**不进**单一事实源（避免与 plugin 自更新冲突）；只在台账登记版本
 
+- **ARS 移植版同类例外**：timpara/opencode-academic-research 由整仓 git 部署 + 站上 install.sh symlink（§5.4），不进单一事实源；台账登记 tag + commit hash
+
 - 记忆层是 CLI 会话级机制，**不违反零自加载**（无常驻 systemd 服务）；claude-mem worker 若 P2 装入则新增常驻进程，届时按 D1 先例更新零自加载豁免清单（本设计内不装）
 
 ### 4.2 模块划分
 
-| 模块       | 职责                               | 输入                        | 输出                            | 依赖                |
-| -------- | -------------------------------- | ------------------------- | ----------------------------- | ----------------- |
-| M1 技能库   | 单一事实源 + 部署同步                     | 定制件 + 原生件版本登记             | 两站 `~/.claude/skills/`        | git / scp         |
-| M2 上下文配置 | opencode 窗口声明与压缩策略               | conf CTX 实值（131072/32768） | limit.context + compaction 配置 | V1 验证             |
-| M3 记忆层   | 跨会话记忆（B 站试点）                     | opencode 会话流              | memory markdown + SQLite      | opencode ≥1.18.25 |
-| M4 原生插件  | superpowers + document-skills 安装 | plugin marketplace / 三段式  | 两站 claude code 技能集            | V3 验证             |
-| M5 验证门   | V0 四项前置验证                        | 审计遗留待验证项                  | GO/NO-GO 逐项裁决                 | 无                 |
+| 模块           | 职责                               | 输入                        | 输出                            | 依赖                |
+| ------------ | -------------------------------- | ------------------------- | ----------------------------- | ----------------- |
+| M1 技能库       | 单一事实源 + 部署同步                     | 定制件 + 原生件版本登记             | 两站 `~/.claude/skills/`        | git / scp         |
+| M2 上下文配置     | opencode 窗口声明与压缩策略               | conf CTX 实值（131072/32768） | limit.context + compaction 配置 | V1 验证             |
+| M3 记忆层       | 跨会话记忆（B 站试点）                     | opencode 会话流              | memory markdown + SQLite      | opencode ≥1.18.25 |
+| M4 原生插件      | superpowers + document-skills 安装 | plugin marketplace / 三段式  | 两站 claude code 技能集            | V3 验证             |
+| M4b ARS 原生部署 | ARS 移植版整仓部署与 V6 验证（§5.4）         | timpara 仓定版 tag           | 站上 symlink + 台账登记             | V3 路径 / V6 实测     |
+| M5 验证门       | V0 四项前置验证                        | 审计遗留待验证项                  | GO/NO-GO 逐项裁决                 | 无                 |
 
 ### 4.3 数据流
 
@@ -154,12 +157,43 @@ V0 验证门 (V1→V2→V3→V5, 任一失败只影响对应模块不改全局)
 
 ### 5.3 站侧落点
 
-| 项           | 位置                                         |
-| ----------- | ------------------------------------------ |
-| 技能目录        | `~/.claude/skills/<name>/SKILL.md`（两站）     |
-| opencode 配置 | `~/.config/opencode/opencode.jsonc`（两站）    |
-| 记忆数据        | `~/.local/share/opencode/memories/`（B 站试点） |
-| 版本台账        | `spec/d5-agent-ecosystem/` 内随 CHECKLIST 登记 |
+| 项              | 位置                                               |
+| -------------- | ------------------------------------------------ |
+| 技能目录           | `~/.claude/skills/<name>/SKILL.md`（两站）           |
+| opencode 配置    | `~/.config/opencode/opencode.jsonc`（两站）          |
+| 记忆数据           | `~/.local/share/opencode/memories/`（B 站试点）       |
+| ARS 移植版源目录     | `~/tools/opencode-academic-research/`（两站，git 定版） |
+| ARS symlink 落点 | `~/.config/opencode/`（install.sh 产出，两站）          |
+| 版本台账           | `spec/d5-agent-ecosystem/` 内随 CHECKLIST 登记       |
+
+### 5.4 opencode 原生插件部署与验证协议（M4b：ARS 移植版）
+
+> 调研 §8.5 改判后**唯一的 opencode 原生插件迁移对象**（CiteAgent/oy/omre/adlc/gemini-search 五件裁定不装）。机制与 T4 纯 prompt 件（scp 单目录到 `~/.claude/skills/`）不同：整仓 git 部署 + 站上 `./install.sh` symlink 到 `~/.config/opencode/`（调研 §8.5，E1 README 实锤）。README 描述未经本集群实测 → 部署前设 **V6 验证门**（验证先行立场：E1 文档 ≠ 本集群实测行为）。
+
+**部署路径（二选一，复用 V3 外网结论）**：
+
+- V3 通：站上 `git clone --depth 1 --branch <tag>` 直接部署
+
+- V3 不通：主控站 clone 同 tag → `tar.gz` 整包 scp（整目录打包规避逐文件 scp 静默失败史）→ 站上解包至 `~/tools/opencode-academic-research/`
+
+- 无论哪条路径，**install.sh 必须站上执行**——symlink 指向站上路径，主控站 Win10 无 bash symlink 语义，跨机 symlink 无效
+
+- 版本钉 tag 不追 main（同内核锁定先例；上游跟踪约定见 §12"ARS 移植版跟踪"行）
+
+**验证步骤**：
+
+| #     | 步骤                    | 通过判据                                                                                                                                                                        | 依据                          |
+| ----- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| V6-1  | 单站首装实测（B 站先行，V6 门主体）  | install.sh 实际落点与 README 声明一致（`~/.config/opencode/` symlink 有效，`readlink -f` 目标存在）；**无越界写入**（`~/.claude/` 不出现 ARS 件——不污染 claude code 侧技能面）；**可卸载干净**（rm symlink + 源目录后无残留配置） | 验证先行（§8.5 README E1 ≠ 站上实测） |
+| V6-2  | plugin 组件故障面隔离        | 临时移除/禁用 plugin 组件后，skills+commands 面仍可见可触发（plugin 组件是增强非承重——plugin API 有 #26557/OMO #5575 静默破坏史，不变式⑥）                                                                       | §8.6.1                      |
+| T4b-1 | 第二站推广                 | A 站重复部署，同 V6-1 判据                                                                                                                                                           | —                           |
+| T4b-2 | opencode 冒烟（离线面）      | 会话内 ARS 技能/命令可见；触发一条**离线**命令出预期输出；检索类命令按 V3 结论标注站上可用性（外网依赖，B 站 exit 28 史）                                                                                                   | §7.3-③                      |
+| T4b-3 | claim-audit 硬门实测（外网面） | 构造含 fabricated-reference 的最小样本，`ARS_CLAIM_AUDIT=1` 下 5 类 HIGH-WARN 之一触发且**拒绝输出**；在网络可达侧执行（A 站或 V3 通时的 B 站）                                                                  | §8.5 E1                     |
+| T4b-4 | 集成回归                  | A7 零自加载不破（install.sh 不装任何 systemd 面）+ A8 e2e 绿                                                                                                                              | 不变式②                        |
+
+**台账登记**：tag + commit hash + 两站源路径 + V6-1 实测行为记录（install.sh 写了什么/写到哪/如何卸载）。
+
+**边界标注**：ARS 的 claim-audit 与检索类命令依赖外网抓取——站上可用性以 V3 为准，离线场景降级为"三层引用锚点格式内建但抽查链路不通"；此边界写入手册 Agent 生态节（A12 同批）。
 
 ## 6. 替代方案
 
@@ -245,25 +279,27 @@ V0 验证门 (V1→V2→V3→V5, 任一失败只影响对应模块不改全局)
 | **T2 上下文配置**                 | 两站 opencode.jsonc 写 limit.context + compaction（V1 定的格式）                                                                                                                                        | 人为灌长对话（大文件反复 Read）观察 auto-compact 触发于 \~120k/30k 而非后端 400                                 | V1  |
 | **T3 原生插件**                  | superpowers + document-skills 两站安装（V3 通=marketplace；不通=三段式）                                                                                                                                    | claude code 里 `/superpowers:brainstorm` 响应；docx 生成-验证循环跑一例                                | V3  |
 | **T4 定制迁移**                  | 主控站建 `ops/agent-skills/` git 化 → scp \~10 件 → 两站验证                                                                                                                                             | 每件 `/` 列表可见 + 抽 3 件实际触发（math-finance-reasoning / what-if-oracle / research-scout）出预期结构化输出 | V5  |
+| **T4b ARS 原生部署**             | timpara 移植版按 §5.4 协议部署：V3 二选一路径取定版 tag → 站上 install.sh → V6 首装实测（B 站）→ 第二站推广 → claim-audit 硬门实测                                                                                                | §5.4 验证步骤全过（V6-1/V6-2 → T4b-1/2/3/4）                                                      | V3  |
 | **T5 记忆试点**                  | B 站装 codex-memry（钉版本）→ 正常使用一个会话 → 闲置 6h 触发提取；**claude-mem 属 P2 范围外，V4 门通过后试点验收须含"hooks 无双触发"（#24115 复现用例即 claude-mem 本尊，§8.9）**                                                                | 次日新会话问"上次这个 repo 做了什么"，应能引用前日内容；检查 memories/ 目录有 markdown 产出                              | T1  |
 | **T6 收尾**                    | 验收 + 手册（§2 网关容错后加"Agent 生态"节）+ 台账登记 superpowers 版本                                                                                                                                             | 验收标准全表过（§11）                                                                              | 全部  |
 
 ## 11. 验收标准
 
-| #   | 验收项           | 通过判据                                                                                                                                                                                                                    | <br /> |
-| --- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----- |
-| A1  | V0 四项验证       | 每项有 GO/NO-GO 结论 + 证据（截图/命令输出）进 CHECKLIST                                                                                                                                                                                | <br /> |
-| A2  | 上下文配置生效       | 灌长对话至 \~120k（nemotron 路由）触发 auto-compact，无后端 400；gpt-oss 路由同理 @\~30k                                                                                                                                                    | <br /> |
-| A3  | 原生技能可用        | 两站 claude code：`/superpowers:brainstorm` 有响应且走设计先行流程；document-skills 产出的 docx 过其自带验证脚本                                                                                                                                  | <br /> |
-| A4  | 定制技能可用        | 12-13 件在两站 `/` 列表可见（含自制 assertion-audit/cross-examine）；抽验 3 件触发出结构化输出（六层推理框架/what-if 分支表/research 卡片）；assertion-audit 触发样例含断言表+证据等级+证明力边界声明；cross-examine 触发样例含干净室自检+逐断言核验+结构化发现（SUPPORTED/UNSUPPORTED/UNVERIFIABLE 三态） | <br /> |
-| A5  | 记忆生效          | T5 判据（次日引用前日内容 + memories/ 有产出）；若降级 four-opencode-memory 则验收 MEMORY.md 增量                                                                                                                                               | <br /> |
-| A6  | 单一事实源对齐       | 两站 `~/.claude/skills/` 与主控站仓库 md5 一致（除各自站特有，应为零差异）                                                                                                                                                                      | <br /> |
-| A7  | 零自加载不破        | 两站 `systemctl list-unit-files --state=enabled` 无新增推理/agent 相关自启服务                                                                                                                                                       | <br /> |
-| A8  | e2e 回归        | `python ops/cluster.py e2e` 退出码 0（生态装备不碰推理链路，回归应为绿）                                                                                                                                                                     | <br /> |
-| A9  | 文档回填          | 手册新增 Agent 生态节 + superpowers 版本入台账 + 本 spec CHECKLIST 状态更新                                                                                                                                                              | <br /> |
-| A10 | 环境就绪（稳定性审计落地） | 两站 `command -v rg` 非空（#23891 首跑下载挂死预防）；`opencode --version` 输出与台账登记版本一致（锁版本核验）；含 PR #42150 选型决策记录（选/不选含修复版，含理由）进 CHECKLIST                                                                                              | <br /> |
-| A11 | 版本锁定不破        | 两站 claude code 版本与 opencode 版本登记台账并有锁定理由；无自动升级通道激活（marketplace 自动更新关闭或插件面为空——#41701/#40153 破坏链预防）                                                                                                                       | <br /> |
-| A12 | 长会话预算纪律       | 手册 Agent 生态节含轮数预算指引（O(N²) 退化阈值 <50 轮，#30067）；claude code 短任务+手动 /compact 纪律（V2 结论回填）                                                                                                                                    | <br /> |
+| #   | 验收项           | 通过判据                                                                                                                                                                                                                    |
+| --- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A1  | V0 四项验证       | 每项有 GO/NO-GO 结论 + 证据（截图/命令输出）进 CHECKLIST                                                                                                                                                                                |
+| A2  | 上下文配置生效       | 灌长对话至 \~120k（nemotron 路由）触发 auto-compact，无后端 400；gpt-oss 路由同理 @\~30k                                                                                                                                                    |
+| A3  | 原生技能可用        | 两站 claude code：`/superpowers:brainstorm` 有响应且走设计先行流程；document-skills 产出的 docx 过其自带验证脚本                                                                                                                                  |
+| A4  | 定制技能可用        | 12-13 件在两站 `/` 列表可见（含自制 assertion-audit/cross-examine）；抽验 3 件触发出结构化输出（六层推理框架/what-if 分支表/research 卡片）；assertion-audit 触发样例含断言表+证据等级+证明力边界声明；cross-examine 触发样例含干净室自检+逐断言核验+结构化发现（SUPPORTED/UNSUPPORTED/UNVERIFIABLE 三态） |
+| A5  | 记忆生效          | T5 判据（次日引用前日内容 + memories/ 有产出）；若降级 four-opencode-memory 则验收 MEMORY.md 增量                                                                                                                                               |
+| A6  | 单一事实源对齐       | 两站 `~/.claude/skills/` 与主控站仓库 md5 一致（除各自站特有，应为零差异）                                                                                                                                                                      |
+| A7  | 零自加载不破        | 两站 `systemctl list-unit-files --state=enabled` 无新增推理/agent 相关自启服务                                                                                                                                                       |
+| A8  | e2e 回归        | `python ops/cluster.py e2e` 退出码 0（生态装备不碰推理链路，回归应为绿）                                                                                                                                                                     |
+| A9  | 文档回填          | 手册新增 Agent 生态节 + superpowers 版本入台账 + 本 spec CHECKLIST 状态更新                                                                                                                                                              |
+| A10 | 环境就绪（稳定性审计落地） | 两站 `command -v rg` 非空（#23891 首跑下载挂死预防）；`opencode --version` 输出与台账登记版本一致（锁版本核验）；含 PR #42150 选型决策记录（选/不选含修复版，含理由）进 CHECKLIST                                                                                              |
+| A11 | 版本锁定不破        | 两站 claude code 版本与 opencode 版本登记台账并有锁定理由；无自动升级通道激活（marketplace 自动更新关闭或插件面为空——#41701/#40153 破坏链预防）                                                                                                                       |
+| A12 | 长会话预算纪律       | 手册 Agent 生态节含轮数预算指引（O(N²) 退化阈值 <50 轮，#30067）；claude code 短任务+手动 /compact 纪律（V2 结论回填）；ARS 外网依赖边界（claim-audit/检索类命令按 V3 结论标注）                                                                                             |
+| A13 | ARS 原生部署      | §5.4 协议全过：V6-1 首装实测（落点与 README 一致 / 无越界写入 `~/.claude/` / 可卸载干净）+ V6-2 plugin 组件禁用后 skills/commands 仍可用 + 两站部署 + claim-audit 硬门实测拒绝 1 条 fabricated claim + 台账登记 tag+hash+install.sh 实测行为                                 |
 
 ## 12. 维护管理
 
