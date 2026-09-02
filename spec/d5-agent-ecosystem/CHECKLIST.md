@@ -195,10 +195,10 @@ upstream: \[ADR-0001 集群运维框架审计与四项改进决策]
 
 | 项                   | 值                                                                               | 锁定理由/备注                                                                     |
 | ------------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| opencode（A 站）       | 1.18.25 @ /snap/bin/opencode                                                    | snap 装（既有 mount 点）；PR #42150 分支 b                                           |
-| opencode（B 站）       | 1.18.25 @ \~/.opencode/bin/opencode                                             | D4 装定；锁版禁自动升级                                                               |
-| claude code（A 站）    | 2.1.220 @ \~/.nvm/versions/node/v24.15.0/bin/claude                             | 不升级；**32k 后端不可用边界（R17）**                                                    |
-| claude code（B 站）    | 2.1.252 @ \~/.nvm/versions/node/v22.23.2/bin/claude                             | 不升级；已接 LiteLLM nemotron + MAX\_CONTEXT\_TOKENS=120000                       |
+| opencode（A 站）       | 1.18.25 @ /snap/bin/opencode                                                    | snap 装；**snap hold=forever（§8.1 L1 已关）**；PR #42150 分支 b                        |
+| opencode（B 站）       | 1.18.25 @ \~/.opencode/bin/opencode                                             | D4 装定；**autoupdate=false（§8.1 L2 已关）**                                             |
+| claude code（A 站）    | **2.1.258**（2026-09-02 漂移后锁定，原 2.1.220）@ \~/.nvm/versions/node/v24.15.0/bin/claude | npm 全局包；DISABLE_AUTOUPDATER=1（§8.1 L3）；model=gpt-oss-120b 未识别名 + MAX_CONTEXT_TOKENS=60000（§8.3a L14）；CTX 65536 后可用 |
+| claude code（B 站）    | **2.1.258**（2026-09-02 漂移后锁定，原 2.1.252）@ \~/.nvm/versions/node/v22.23.2/bin/claude | npm 全局包；DISABLE_AUTOUPDATER=1（§8.1 L3）；LiteLLM nemotron + MAX_CONTEXT_TOKENS=120000 |
 | PR #42150 决策        | 分支 b（锁定 1.18.25）                                                                | v1.18.26 最新版无 O(N²) 修复；<50 轮纪律替代                                            |
 | superpowers         | 6.3.0（本地镜像 marketplace `~/tools/plugins/superpowers-local-marketplace`）         | 不追新；升级走主控站重 clone→tar→`claude plugin update`                                |
 | document-skills     | anthropics/skills clone 定版（marketplace 名 anthropic-skills-local，官方保留名绕开）        | 同上；4 技能 xlsx/docx/pptx/pdf                                                  |
@@ -219,17 +219,19 @@ upstream: \[ADR-0001 集群运维框架审计与四项改进决策]
 
 > 背景：D5 标 verified 后复查遗留。**P0 组为本轮新发现——A11"无自动升级通道激活"系未实测的假断言，三条自动升级通道实测全部开放**，与"版本锁定"铁律（project_memory）直接冲突。
 
-### 8.1 P0：版本锁定三通道未关（E1 实测 2026-09-02）
+### 8.1 P0：版本锁定三通道未关（E1 实测 2026-09-02；**同日已全部修复 ✅**）
 
-| # | 通道 | 实测证据 | 后果 | 建议修复 |
+| # | 通道 | 实测证据 | 后果 | 修复（已执行，2026-09-02 晚） |
 | - | --- | --- | --- | --- |
-| L1 | **A 站 opencode = snap 安装，snapd auto-refresh 活跃** | `snap refresh --time`: timer 00:00~24:00/4（4 次/天），refresh-date 昨天 18:31，tracking latest/stable，无 hold | opencode 1.18.25 会被静默升级（plugin API patch 破坏史 §8.6.1 风险成真） | `sudo snap refresh --hold=forever opencode`（单 snap 永久 hold；不影响其他 snap 安全更新） |
-| L2 | **B 站 opencode autoupdate 未显式关闭** | opencode.jsonc 无 `autoupdate` 字段（走默认值；config schema 含该字段） | 同上 | opencode.jsonc 加 `"autoupdate": false` |
-| L3 | **B 站 claude code 自动更新未禁用** | settings.json 无 DISABLE_AUTOUPDATER / autoupdates 设置 | claude 2.1.252 静默升级（#41701 marketplace 破坏链 + B 站已配后端的行为面回归风险） | settings.json env 加 `"DISABLE_AUTOUPDATER": "1"` |
+| L1 | **A 站 opencode = snap 安装，snapd auto-refresh 活跃** | `snap refresh --time`: timer 00:00~24:00/4（4 次/天），refresh-date 昨天 18:31，tracking latest/stable，无 hold | opencode 1.18.25 会被静默升级（plugin API patch 破坏史 §8.6.1 风险成真） | ✅ `sudo snap refresh --hold=forever opencode`（snap info 确认 `hold: forever`；PONG 回归过） |
+| L2 | **B 站 opencode autoupdate 未显式关闭** | opencode.jsonc 无 `autoupdate` 字段（走默认值；config schema 含该字段） | 同上 | ✅ opencode.jsonc 加 `"autoupdate": false`（PONG 回归过） |
+| L3 | **两站 claude code 自动更新未禁用** | settings.json 无 DISABLE_AUTOUPDATER；**且实测已漂移：两站均 2.1.25x → 2.1.258**（A 站 220→258，B 站 252→258，与 npm registry latest 一致——漂移在 D5 verified 与本轮修复之间发生，所幸 2.1.258 功能回归全过：A 站 PONG/`/context` 60k/实战 binary search；B 站 PONG） | claude 静默升级（#41701 marketplace 破坏链 + 行为面回归风险） | ✅ 两站 settings.json env 均加 `"DISABLE_AUTOUPDATER": "1"`（A 站 PONG/B 站 PONG 回归过）；**版本保持 2.1.258 不回退**（已验证可用；回退引入风险无收益） |
 
-### 8.2 P0：params-ledger 未登记 D5 配置（E1 主控站 grep 无命中）
+### 8.2 P0：params-ledger 未登记 D5 配置（E1 主控站 grep 无命中；**同日已修复 ✅**）
 
-IMPL/手册承诺"conf CTX ↔ limit.context ↔ MAX_CONTEXT_TOKENS 三方联动挂 params-ledger 维护链"，但 `spec/infer-load/params-ledger.md`（96 行）**无 limit.context / MAX_CONTEXT_TOKENS / opencode 任何条目**——违反"改站上配置须同步台账"既有约定。修复：补登三条（B 站 opencode limit 120000/30000、B 站 claude MAX_CONTEXT_TOKENS=120000、变更联动规则）。
+IMPL/手册承诺"conf CTX ↔ limit.context ↔ MAX_CONTEXT_TOKENS 三方联动挂 params-ledger 维护链"，但 `spec/infer-load/params-ledger.md`（96 行）**无 limit.context / MAX_CONTEXT_TOKENS / opencode 任何条目**——违反"改站上配置须同步台账"既有约定。
+
+✅ 已修复（2026-09-02，分两次提交）：§1.1 nemotron 加"D5 联动"行（opencode 120000 + claude B 120000 + 联动铁律）；§1.2 gpt-oss 加 D5 联动行（opencode 30000 + claude A 60000 + 未识别模型名依据）+ 冷缓存注记行（CTX 65536 同批）。
 
 ### 8.3 P1：设计内遗留（按计划分期，无即时风险）
 
