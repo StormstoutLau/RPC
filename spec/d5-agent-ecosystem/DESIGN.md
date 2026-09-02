@@ -193,6 +193,8 @@ V0 验证门 (V1→V2→V3→V5, 任一失败只影响对应模块不改全局)
 
 **台账登记**：tag + commit hash + 两站源路径 + V6-1 实测行为记录（install.sh 写了什么/写到哪/如何卸载）。
 
+**验证脚本**：[ops/station-bin/ars-migrate-verify.sh](../../ops/station-bin/ars-migrate-verify.sh)（V6-1/V6-2/T4b-2 文件面/T4b-4 自动化；T4b-3 备样本打 MANUAL 指引；三种模式 `--leave-removed`/`--installed`；退出码 0=GO/1=NO-GO/2=前置错误；已过 bash -n 语法校验与本机 mock 全流程自测——symlink 判定项在 git bash 属平台差异，以站上实测为准）。站上执行：scp 上站 → `sed -i 's/\r$//' ars-migrate-verify.sh` → `chmod +x` → 运行。
+
 **边界标注**：ARS 的 claim-audit 与检索类命令依赖外网抓取——站上可用性以 V3 为准，离线场景降级为"三层引用锚点格式内建但抽查链路不通"；此边界写入手册 Agent 生态节（A12 同批）。
 
 ## 6. 替代方案
