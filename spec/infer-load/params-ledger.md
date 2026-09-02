@@ -38,6 +38,7 @@ upstream: null
 | RPC_TARGET | （空=单机） | ✅ results-ledger：80G 单机可容，RPC 是 -17.3% decode 税而非必需（17.3→20.3 t/s） |
 | EXTRA_FLAGS | `-fa on` | 无实测依据（全实例统一，未做过 off 对比） |
 | 后端判定 | llama-single | ✅ 权重 80G > 65G 阈但单机可容，实测最优（见 RPC_TARGET 行） |
+| D5 联动 | opencode limit.context 120000（B 站网关路由）；claude code B 站 `CLAUDE_CODE_MAX_CONTEXT_TOKENS=120000`（settings.json env） | ✅ D5 配置（2026-09-02）；**联动铁律**：改本行 CTX 必须同步两者（120000 < 131072 留输出余量的比例关系保持） |
 
 ### 1.2 gpt-oss-120b（A 站单机，速度档）
 
