@@ -2,7 +2,7 @@
 
 ***
 
-date: 2026-09-02（v3，增补：四项目实例场景适配 + 开源编排案例对照 + 4 CLI 实测定版；v2：场景澄清后重构：主控站多项目远程调用 + 站上独立工作区）
+date: 2026-09-02（v3.1，增补三：模型分层路由四档实测 + 协同充分性自审（G11-G14）；v3：四项目实例场景适配 + 开源编排案例对照 + 4 CLI 实测定版；v2：场景澄清后重构：主控站多项目远程调用 + 站上独立工作区）
 status: draft（D6 前期调研）
 upstream: D5 Agent 生态升级（已 verified 2026-09-02）; 调研 §4.2 五层循环遗留"任务卡协议"口子
 -----------------------------------------------------------------------
@@ -90,13 +90,13 @@ upstream: D5 Agent 生态升级（已 verified 2026-09-02）; 调研 §4.2 五�
 
 - 主控站 ssh 调度链路全程畅通（冒烟脚本从主控站发起，heredoc 传远端脚本规避 PowerShell 引用陷阱——R14 铁律在 ssh 场景的等价形式：**远端命令一律** **`ssh host 'bash -s' <<'EOF'`** **或脚本落盘**）
 
-- **配置漂移 2 处（本轮发现并修复，均留 .bak）**：① A 站 opencode 无默认 `model` 键 → 默认解析到**外网免费模型 nemotron-3-ultra-free**（prompt 外泄 + 外部依赖）→ 先钉 `"model": "cluster-local/gpt-oss"`（本地直连），**当晚用户决策"免费做默认+本地备选"后改为 `opencode/nemotron-3.5-lightning-free`**（两站统一，实测 B 15s / A 20s 最稳；隐私纪律：敏感内容显式 -m 走本地——免费模型数据用于改进训练，官方 Privacy 节明文）；② B 站 claude settings 缺 `CLAUDE_CODE_MAX_CONTEXT_TOKENS=120000`（台账记录应有而实缺）→ 已恢复写入
+- **配置漂移 2 处（本轮发现并修复，均留 .bak）**：① A 站 opencode 无默认 `model` 键 → 默认解析到**外网免费模型 nemotron-3-ultra-free**（prompt 外泄 + 外部依赖）→ 先钉 `"model": "cluster-local/gpt-oss"`（本地直连），**当晚用户决策"免费做默认+本地备选"后改为** **`opencode/nemotron-3.5-lightning-free`**（两站统一，实测 B 15s / A 20s 最稳；隐私纪律：敏感内容显式 -m 走本地——免费模型数据用于改进训练，官方 Privacy 节明文）；② B 站 claude settings 缺 `CLAUDE_CODE_MAX_CONTEXT_TOKENS=120000`（台账记录应有而实缺）→ 已恢复写入
 
-- **免费模型实测（Zen 网关，两站 2026-09-02）**：5/6 可用（nemotron-3-ultra-free 1M ctx / nemotron-3.5-lightning-free 262k / ling-3.0-flash-fin-free 金融版 / mimo-v2.5-free / big-pickle stealth）；**muse-spark-contributor-free 两站均地区封锁（中国 IP）**；全免费 $0 无 key、限时提供、每日限额未文档化（非官方源称 ~100 请求/天，E3）
+- **免费模型实测（Zen 网关，两站 2026-09-02）**：5/6 可用（nemotron-3-ultra-free 1M ctx / nemotron-3.5-lightning-free 262k / ling-3.0-flash-fin-free 金融版 / mimo-v2.5-free / big-pickle stealth）；**muse-spark-contributor-free 两站均地区封锁（中国 IP）**；全免费 $0 无 key、限时提供、每日限额未文档化（非官方源称 \~100 请求/天，E3）
 
-- **Qwen OAuth 插件实测（B 站 2026-09-02，装后即删）——链路已死，勿重试**：`opencode-qwencode-auth@1.3.0`（gustavodiasdev 主版本，npm 末次发布 2026-02-12）安装正常、provider 注册正常（qwen-code/coder-model 等 4 模型）、device code 端点仍发码，但**授权闭环不可达**——证据链五重：① `/authorize` 同意页已下线（用户已登录状态下打开 `chat.qwen.ai/authorize?user_code=...&client=qwen-code` 两轮均跳回聊天主页，同意 UI 不存在）；② token 端点轮询返回 **504 Gateway Time-out**（alibaba-ga 网关层）；③ 官方 qwen-code 文档明文"Qwen OAuth free tier was discontinued on **2026-04-15**"，`/auth` 菜单已移除该选项，官方引导转向 Coding Plan/API Key；④ 插件 issue #14 社区确认停用（2026-04-23）；⑤ 常量溯源：插件 client_id（`f0304373...`）即原 qwen-code CLI 公共 ID，端点为逆向所得而非官方合作。**结论：免费 Qwen 档不可用；若需 Qwen 走官方 Alibaba Cloud Coding Plan（$ 月费订阅制，opencode 侧自定义 provider 接 DashScope 端点）**。插件已回滚移除（配置恢复 codex-memory 单插件，默认模型回归 lightning，冒烟 OK）。
+- **Qwen OAuth 插件实测（B 站 2026-09-02，装后即删）——链路已死，勿重试**：`opencode-qwencode-auth@1.3.0`（gustavodiasdev 主版本，npm 末次发布 2026-02-12）安装正常、provider 注册正常（qwen-code/coder-model 等 4 模型）、device code 端点仍发码，但**授权闭环不可达**——证据链五重：① `/authorize` 同意页已下线（用户已登录状态下打开 `chat.qwen.ai/authorize?user_code=...&client=qwen-code` 两轮均跳回聊天主页，同意 UI 不存在）；② token 端点轮询返回 **504 Gateway Time-out**（alibaba-ga 网关层）；③ 官方 qwen-code 文档明文"Qwen OAuth free tier was discontinued on **2026-04-15**"，`/auth` 菜单已移除该选项，官方引导转向 Coding Plan/API Key；④ 插件 issue #14 社区确认停用（2026-04-23）；⑤ 常量溯源：插件 client\_id（`f0304373...`）即原 qwen-code CLI 公共 ID，端点为逆向所得而非官方合作。**结论：免费 Qwen 档不可用；若需 Qwen 走官方 Alibaba Cloud Coding Plan（$ 月费订阅制，opencode 侧自定义 provider 接 DashScope 端点）**。插件已回滚移除（配置恢复 codex-memory 单插件，默认模型回归 lightning，冒烟 OK）。
 
-- **敏感内容路由（"转述学术格式"诉求的落档结论）**：转述/学术化只保护**标识符**（凭据/路径/文件名，机械脱敏可解），不保护**思想**（未发表方法论/因子逻辑/新定理——学术格式化恰是蒸馏成最可复用训练语料的形式，泄露面与格式无关）。正解是任务卡 `sensitivity` 三档硬路由（wrapper 层机械执行，不依赖 LLM 自查）：`public`（已发表/通用编程 → 免费档）→ `sanitized`（机械 scrubber 正则+gitleaks 脱敏后走远端）→ `local-only`（强制 -m 本地模型，wrapper 拒绝远端路由）。与 Spec_Workflow 哲学同构：机械可验证的门禁优于依赖人的转述纪律。
+- **敏感内容路由（"转述学术格式"诉求的落档结论）**：转述/学术化只保护**标识符**（凭据/路径/文件名，机械脱敏可解），不保护**思想**（未发表方法论/因子逻辑/新定理——学术格式化恰是蒸馏成最可复用训练语料的形式，泄露面与格式无关）。正解是任务卡 `sensitivity` 三档硬路由（wrapper 层机械执行，不依赖 LLM 自查）：`public`（已发表/通用编程 → 免费档）→ `sanitized`（机械 scrubber 正则+gitleaks 脱敏后走远端）→ `local-only`（强制 -m 本地模型，wrapper 拒绝远端路由）。与 Spec\_Workflow 哲学同构：机械可验证的门禁优于依赖人的转述纪律。
 
 - 推论：**wrapper 必须永远显式** **`-m`** **指定模型**（防默认漂移复现 + 敏感内容路由控制）；免费默认只覆盖"人在站上裸调用"场景
 
@@ -271,6 +271,10 @@ accept:              # 验收判据(可执行/可核验)
 | G8  | 站上无 Mathematica / R 环境（Auto\_Prover 注入点 B/D、Cpp\_Hub R 基准对拍需要） | 中         | 降级矩阵（注入点留主控站执行 / R 基准转 Python 复算）或站上 apt 预置 r-base（v3 §7）                                                |
 | G9  | 重资产预置策略（Cpp\_Hub third\_party、Auto\_Prover mathlib/.lake 缓存）   | 中         | `.agentsync` 排除 + 站上一次性 tar 预置（不计入常规同步量）（v3 §7）                                                          |
 | G10 | opencode 位置参数 bug（1.18.25 实证）上游未报/未修                           | 低         | wrapper 已规避（stdin 管道形式）；升级窗口评估时回归验证该行为是否修复                                                               |
+| G11 | **并发与互斥**：同工作区双写无锁协议；llama-server 单槽下多任务排队未测（v3 §9.5） | **高** | D6 wrapper MVP 内建工作区锁（flock）+ 后端并发探测；DESIGN 先写并发模型（单工作区单写者）                                             |
+| G12 | 失败恢复：任务中断状态残留/续跑未定义（v3 §9.5）                            | 中         | 任务卡状态机 + wrapper 幂等回收；进 wrapper MVP 需求                                                                               |
+| G13 | 成本/额度观测：zen 日限额无预警（v3 §9.5）                                 | 中         | wrapper 本地 log 记调用次数；限额触发降级路径（→本地档）定义                                                                       |
+| G14 | 版本协同矩阵：升级回归面未清单化（v3 §9.5）                                | 低         | 升级窗口回归三件套：agent-cli-smoke.sh + 插件加载 + 记忆读写（与 G10 合并）                                                              |
 
 **建议路径**：本调研（RESEARCH）→ Scott review → D6 spec（DESIGN→IMPLEMENTATION→CHECKLIST）。D6 范围 = agent-cli MVP（workspace+task 两命令, opencode 单路径）+ 试点工作区（d:\RPC 或小项目）+ G2 验证门；claude 路径/`--continue`/review --peer/trae 对接按缺口分期。
 
@@ -440,6 +444,56 @@ accept:              # 验收判据(可执行/可核验)
 
 - G8/G9 处置进 D6 DESIGN 的风险表；G10 记入升级窗口回归清单
 
+### 9.4 模型分层路由（v3 增补三：2026-09-02 四档同题实测，E1）
+
+**问题**：复杂任务需要切更大模型——但"更大"在哪一层？实测同一中等推理任务（概率题，4 档全对）的延迟与能力矩阵：
+
+| 档位 | 模型 | 延迟 (B 站) | 窗口 | 成本 | 定位 |
+| --- | --- | --- | --- | --- | --- |
+| 免费·快 | `opencode/nemotron-3.5-lightning-free`（默认） | **13s** | 262k | $0 | 日常轻任务（默认档） |
+| 免费·大 | `opencode/nemotron-3-ultra-free` | 39s（A 站 45s 波动） | **1M** | $0 | 长文档/大代码库理解 |
+| 本地·旗舰 | `cluster-litellm/nemotron`（120B-A12B） | 38-43s | 120k | 电费 | 深度推理/敏感内容（数据不出站） |
+| 本地·快 | `cluster-litellm/gpt-oss`（120B MXFP4） | **18s** | 30k | 电费 | 代码迭代/高频调用 |
+
+**关键事实**（实测推翻直觉）：
+1. **免费档不是劣质档**——四档同题全对；zen lightning 13s 比**本地旗舰快 3 倍**（云端算力 vs 395 单卡）。"复杂任务必须切本地大模型"不成立；真正的分层轴是**窗口需求**与**隐私边界**，不是智力。
+2. **本地档的不可替代价值 = 数据不出站 + 无限额**——深度任务时长会打满 zen 未文档化的日限额（E3 ~100 请求/天）；敏感内容（sensitivity: local-only）只有本地档合规。
+3. **切档是显式 `-m` 一步的事**，无需改配置——wrapper `task --model` 字段已预留（§5.3）。
+
+**路由规则建议**（写进 wrapper 路由表 + 手册）：
+
+| 任务特征 | 路由 |
+| --- | --- |
+| 默认/问答/轻整理 | lightning（免费） |
+| 单文件 >262k token / 多文件聚合分析 | ultra（免费 1M） |
+| 敏感内容 / 长会话高频打满限额 / 离线纪律 | 本地 nemotron |
+| 代码高频迭代（30k 内）| 本地 gpt-oss |
+| 站间互审（review --peer） | 产出方与审查方强制异档异站 |
+
+### 9.5 agent CLI 协同调研充分性自审（v3 增补三）
+
+**结论：已覆盖 7 层，存在 4 个真缺口（G11-G14）**。
+
+已充分覆盖（有实测或文档依据）：
+- 调用层：4 CLI 调用形式铁律 + 冒烟脚本（4/4 PASS）
+- 路由层：模型→CLI→站映射 + R17 边界 + §9.4 分层路由（新）
+- 隔离层：工作区四重隔离机制（memory.db cwd 键控 E1）+ `.agentsync` 四型
+- 交接层：任务卡生命周期 + audit 断言契约
+- 审查层：站间互审（异站异构）+ 开源五公理印证
+- 同步层：tar+scp 推拉（D5 全程实证）
+- 记忆层：codex-memory 两站同构 + ad-hoc 前缀补丁
+
+**真缺口**（按严重度）：
+
+| #  | 缺口 | 严重度 | 说明 |
+| -- | --- | --- | --- |
+| G11 | **并发与互斥**：两 CLI 同时写同一工作区（人 TUI + wrapper task 并行）无锁协议；llama-server 单并发槽（slots=1, is_processing 互斥）下多任务排队行为未测 | 高 | 串行流水已定义，但并行 fan-out 的写冲突与后端排队是真实风险；D6 wrapper MVP 须内建工作区锁（flock）+ 后端并发探测 |
+| G12 | **失败恢复**：任务中断（ssh 断/超时/站断电）后的状态残留与续跑未定义——任务卡停在哪个态、半成品 out/ 是否污染下次 sync | 中 | 需要任务卡状态机（pending/running/done/failed）+ wrapper 幂等回收；对应 LangGraph checkpoint 公理（§8.5-1） |
+| G13 | **成本/额度观测**：zen 免费档日限额未文档化且无用量反馈——打到限额才有报错，无预警 | 中 | wrapper 记录每次远端调用次数（本地 log 就够）；限额触发时的降级路径（→本地档）待定义 |
+| G14 | **版本协同矩阵**：升级窗口的回归面未清单化——opencode 升级会否破坏 stdin 管道形式（G10）、plugin API、codex-memory 兼容 | 低 | 升级窗口评估时跑 agent-cli-smoke.sh + 插件加载 + 记忆读写三件套 |
+
+**自审定论**：G1（wrapper 未实现）仍是主缺口，G11 是**新增的最高优先级设计约束**——D6 DESIGN 必须先写并发模型（单工作区单写者原则）再写命令面；G12/G13 进 wrapper MVP 需求；G14 进升级窗口回归清单（与 G10 合并）。
+
 ## 参考源
 
 - [agents.md](https://agents.md)（标准主页, E1 直抓 2026-09-02）
@@ -499,9 +553,14 @@ v3 增补（E2 web 调研 2026-09-02，经调研子代理聚合；关键源）�
 v3 增补二（2026-09-02 晚，Qwen OAuth 插件实测轮）：
 
 - [gustavodiasdev/opencode-qwencode-auth](https://github.com/gustavodiasdev/opencode-qwencode-auth)（插件本体，E1 直抓 + npm 包源码解剖）
+
 - [OpenCode issue #11557](https://github.com/anomalyco/opencode/issues/11557)（插件进官方生态文档的提交记录，E1）
+
 - [qwen-code 官方 auth 文档](https://github.com/QwenLM/qwen-code/blob/main/docs/users/configuration/auth.md)（E1 直抓：**"Qwen OAuth free tier was discontinued on 2026-04-15"**，/auth 菜单已移除 OAuth 选项）
+
 - [qwen-code troubleshooting](https://qwenlm.github.io/qwen-code-docs/de/users/support/troubleshooting/)（E1：官方引导转 Coding Plan/API Key）
+
 - [插件 issue #14 "Stopped working"](https://github.com/gustavodiasdev/opencode-qwencode-auth/issues/14)（E1：社区确认停用，2026-04-23）
+
 - B 站实测记录（E1 2026-09-02）：device code 端点 form-encoded+PKCE 复刻仍发码；`/authorize` 同意页两轮跳回主页；token 端点 504（alibaba-ga）
 
