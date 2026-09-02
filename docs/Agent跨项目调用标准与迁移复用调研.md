@@ -2,7 +2,7 @@
 
 ***
 
-date: 2026-09-03（v3.3，增补五：Codex orchestrator/parallel 逆向分析——G11 定案 RwLock 双层锁 + 五段流水升级重试 + 双源对照表（Anthropic 语法/Codex 法律/D6 合并）；v3.2：Anthropic coordinator 模式逆向分析（泄漏源码 E1 直读 + B 站实测门禁已开）——八条可借鉴模式；v3.1：模型分层路由四档实测 + 协同充分性自审（G11-G14）；v3：四项目实例场景适配 + 开源编排案例对照 + 4 CLI 实测定版；v2：场景澄清后重构：主控站多项目远程调用 + 站上独立工作区）
+date: 2026-09-03（v3.4，增补六：DeepSeek Harness 逆向（第四源——G12 compaction 孤儿锁语义/"Model-visible means logged"不变量/subagent 六 provider）+ **G8 方案定案**（Mathematica→sympy 部分替代降级链 + R 走 CRAN noble-cran40 对齐主控站 4.6.x + 包版本钉版流程，两站实测基线）；v3.3：Codex orchestrator/parallel 逆向——G11 定案 RwLock 双层锁 + 五段流水升级重试 + 双源对照表；v3.2：Anthropic coordinator 逆向——八条可借鉴模式 + B 站实测门禁已开；v3.1：模型分层路由四档实测 + 协同充分性自审（G11-G14）；v3：四项目实例场景适配 + 开源编排案例对照 + 4 CLI 实测定版；v2：场景澄清后重构：主控站多项目远程调用 + 站上独立工作区）
 status: draft（D6 前期调研）
 upstream: D5 Agent 生态升级（已 verified 2026-09-02）; 调研 §4.2 五层循环遗留"任务卡协议"口子
 -----------------------------------------------------------------------
@@ -268,7 +268,7 @@ accept:              # 验收判据(可执行/可核验)
 | G5  | A 站无记忆层                                                        | ~~低~~ 已解除 | P1 批次 L6 已装 A 站 codex-memory（两站记忆层同构, 2026-09-02）；本轮实测 A 站 opencode.jsonc 含 plugin 条目佐证。路由仍以 B 站为记忆主站不变                                                             |
 | G6  | 提取记忆路径（6h 闲置）未测（D5 §7-4 遗留）                                    | 低         | 工作区日常使用自然覆盖                                                                                                                                                         |
 | G7  | trae 派发对接（五层循环 2→3 层）                                          | 低         | D7 范围; D6 留任务卡接口                                                                                                                                                    |
-| G8  | 站上无 Mathematica / R 环境（Auto\_Prover 注入点 B/D、Cpp\_Hub R 基准对拍需要） | 中         | 降级矩阵（注入点留主控站执行 / R 基准转 Python 复算）或站上 apt 预置 r-base（v3 §7）                                                                                                           |
+| G8  | 站上无 Mathematica / R 环境（Auto\_Prover 注入点 B/D、Cpp\_Hub R 基准对拍需要） | 中         | **方案定案（§9.8.2）**：Mathematica→sympy 部分替代（注入点 B 单向证伪降级可用/D 基本等价，降级链 sympy→数值→Lean4→Mathematica 难例留主控站）；R 走 **CRAN noble-cran40 源装 4.6.x** 对齐主控站（apt 4.3.3 弃用），包版本 sessionInfo 对照+钉版，兰大镜像加速；执行列 D6 T0 预置（与 G9 同批） |
 | G9  | 重资产预置策略（Cpp\_Hub third\_party、Auto\_Prover mathlib/.lake 缓存）   | 中         | `.agentsync` 排除 + 站上一次性 tar 预置（不计入常规同步量）（v3 §7）                                                                                                                     |
 | G10 | opencode 位置参数 bug（1.18.25 实证）上游未报/未修                           | 低         | wrapper 已规避（stdin 管道形式）；升级窗口评估时回归验证该行为是否修复                                                                                                                          |
 | G11 | **并发与互斥**：同工作区双写无锁协议；llama-server 单槽下多任务排队未测（v3 §9.5）          | **高**     | **方案定案（双源合并）**：工作区级 flock（粗）+ 任务卡 readonly 字段（细，Codex RwLock 模式 §9.7-1）双层；MVP 先工作区级。Anthropic 官方纪律独立验证 + 文件集粒度细化（§9.6-2）。Bash 调用不锁（CLI 内部序列化，exec\_command=true 先例） |
@@ -590,6 +590,38 @@ approval（批准） → select sandbox（选沙箱） → attempt（执行）
 
 **定论**：Anthropic 给了编排的"语法"（怎么交接、怎么写 prompt、何时 continue/spawn），Codex 给了编排的"法律"（怎么强制、怎么锁、怎么升级重试）——D6 DESIGN 直接合并：**协议层抄 Anthropic §9.6-2，强制层抄 Codex §9.7-1/9.7-2，两者拼出完整的 wrapper 规范**。
 
+### 9.8 DeepSeek Harness 逆向分析（v3.4 增补六：开源源码 E1 直读）+ G8 方案定案
+
+#### 9.8.1 dsh 架构速览（`D:\ds\deepseek-harness-master`，E1 直读 architecture.md/subagent/compaction/invariants 文档）
+
+DeepSeek 官方开源 agent harness（MIT，TypeScript/pnpm/Cordis 框架，developer preview 且声明会有破坏性变更）。核心设计："一切皆插件"——模型适配器、工具注册表、会话日志、agent loop 本身全部是可替换插件；**capability seam**（Service Definition / Provider / Consumer 三角色）让 provider 一换整个产品跟着换（文件系统与子进程共享执行世界，指向远程沙箱时 Bash/PTY/LSP 一起搬走）。
+
+**与 D6 的关系定位：第四个独立验证源，不是组件**。dsh 是完整 harness（TS 全栈），与"PowerShell wrapper + 站上 CLI"不同构；但其三条机制设计直接命中我们的缺口：
+
+1. **G12 最强参考——compaction 锁语义**（docs/subsystems/compaction.md E1）：`compaction/start` 先落锁 → 摘要 → `compaction/end` 最后释放；崩溃中断产生的是 **detectable orphaned lock**（有 start 无 end）而非"假称已完成"——"Releasing the lock last turns a crash mid-operation into a detectable orphaned lock rather than a compaction/end that falsely claims compaction finished"。**G12 任务卡状态机照此设计：任务开始先写 running 标记（带 PID/时间戳），完成最后写 done；中断残留的 running 可被机械识别为孤儿并清理**——比单纯状态机多一层"崩溃可检测性"设计原则
+2. **"Model-visible means logged" 运行时不变量**（E1）：任何到达模型请求的内容必须可从日志重建，运行时断言强制。对 D6：**wrapper 发给 agent 的一切（prompt/附件/注入的 audit 契约）必须落在 .agent-run.json——审计追溯的完备性由不变量保证，不靠自觉**
+3. **subagent 六 provider 同接口**（in-process / fork-in-process / ACP / codex / claude-code / dsh-sdk）——worker 异构性证明：spawn/fork/跨产品子代理可以统一在一个接口后面。D7+ 若做站内编排可参考
+
+#### 9.8.2 G8 方案定案：Mathematica→sympy 替代 + R 两站安装（E1 实测 + E2 调研）
+
+**实测基线（2026-09-03）**：两站 Ubuntu 24.04.4（noble）· Python 3.12.3 有，sympy/numpy/scipy 未装 · apt 默认源 R 候选 **4.3.3**（比主控站 R 4.6.1 旧两个 minor）· 主控站 R 4.6.1 (2026-06-24 ucrt, "Happy Hop") · 网络可达性：cloud.r-project.org 0.4-2.6s / 兰大 CRAN 镜像 0.5-0.6s / pypi 0.6-1.4s（全通，国内镜像更快）。
+
+**Mathematica→sympy（Auto\_Prover 注入点 B/D）——部分替代，能力边界须声明**：
+
+| 注入点 | Mathematica 能力 | sympy 对应 | 判定 |
+| --- | --- | --- | --- |
+| B: FindInstance/Reduce/Resolve（符号反例搜索） | 实数域 CAD 完整、反例搜索强 | `solveset`/`reduce_inequalities`/部分 CAD | **降级可用**：快速证伪（找到反例=确认假）有效；**找不到反例≠真**（单向证伪语义） |
+| D: verify\_latex\_identity（恒等式预验证） | `Simplify[a-b]==0` 确定性强 | `simplify(a-b)==0` + `parse\_latex`（需 antlr4） | **基本等价**（多项式/初等函数域） |
+
+降级链定案（Auto\_Prover 型任务卡路由）：**sympy 快筛（免费快）→ 数值验证（已有 Stage 2）→ Lean4 形式化（已有 Stage 3）→ Mathematica 仅留主控站处理 CAD 级难例**——sympy 装两站（`pip install sympy antlr4-python3-runtime numpy scipy`，pypi 可达已实测），作为注入点 B/D 的第一层降级而非完整替代。
+
+**R 两站安装（Cpp\_Hub 基准对拍）——CRAN noble-cran40 源对齐主控站版本**：
+
+- **版本一致性方案**：不装 apt 默认 4.3.3，走 **CRAN 官方 `noble-cran40` 源**（提供 R 4.6.\* 系列，与主控站 4.6.1 同系）——两站均 noble 且 CRAN 可达性已实测；国内加速用兰大镜像（0.5s）替代 cloud（2.6s）
+- **Cpp\_Hub 依赖包**（fixtures 提取）：forecast / rugarch / urca / ARDL / midasr / Spillover / vars——全 CRAN 包；`r-base` 后 `install.packages()` 源码编译（noble 有编译工具链）或 r2u 二进制仓库（24000+ 包免编译，c2d4u 已停更勿用）
+- **数值一致性风险与流程**：baseline .inc 由主控站 R 4.6.1 + 特定包版本生成，容差 1e-10——站上包版本差异可能漂移超容差。**对齐流程定案：站上装完后跑 `sessionInfo()` 输出包版本清单，与主控站生成 baseline 时的版本对照；不一致的包按主控站版本钉（`remotes::install_version()`）；首个试点以主控站 baseline 为金标准比对站上复算值**
+- 执行列 D6 实施阶段 T0 预置（重资产预置通道，与 G9 同批）
+
 ## 参考源
 
 - [agents.md](https://agents.md)（标准主页, E1 直抓 2026-09-02）
@@ -669,6 +701,12 @@ v3.2 增补（2026-09-03，Anthropic coordinator 逆向轮）：
 v3.3 增补（2026-09-03，Codex 逆向轮）：
 
 - `D:\ds\codex-main\codex-rs\core\src\tools\orchestrator.rs`（E1 开源源码直读全文 553 行——codex-rs 为 Apache-2.0 开源，可正常引用其公开仓库）
-
 - `D:\ds\codex-main\codex-rs\core\src\tools\parallel.rs` + `registry.rs` 并行判定三级面交叉核对（工具自声明/Hidden 排除/MCP annotations.readOnly 注解驱动）
+
+v3.4 增补（2026-09-03，dsh 逆向 + G8 定案轮）：
+
+- `D:\ds\deepseek-harness-master`（E1 开源源码直读：README/architecture.md/docs/subsystems/compaction.md/invariants.md/subagent README——MIT 开源）
+- [CRAN Ubuntu 官方仓库说明](https://cran.case.edu/bin/linux/ubuntu/)（E1 直抓：noble-cran40 提供 R 4.6.\* 系列；c2d4u 停更勿用，r2u 为二进制替代）
+- 两站实测基线（E1 2026-09-03）：Ubuntu 24.04.4 noble / Python 3.12.3 / apt 默认源 R 4.3.3 / cloud.r-project.org 与兰大镜像与 pypi 全可达
+- 主控站版本基线（E1）：R 4.6.1 (2026-06-24 ucrt, "Happy Hop")；Cpp\_Hub fixtures 依赖提取（forecast/rugarch/urca/ARDL/midasr/Spillover/vars）
 
