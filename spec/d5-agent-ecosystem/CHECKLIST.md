@@ -233,17 +233,17 @@ IMPL/手册承诺"conf CTX ↔ limit.context ↔ MAX_CONTEXT_TOKENS 三方联动
 
 ✅ 已修复（2026-09-02，分两次提交）：§1.1 nemotron 加"D5 联动"行（opencode 120000 + claude B 120000 + 联动铁律）；§1.2 gpt-oss 加 D5 联动行（opencode 30000 + claude A 60000 + 未识别模型名依据）+ 冷缓存注记行（CTX 65536 同批）。
 
-### 8.3 P1：设计内遗留（按计划分期，无即时风险）
+### 8.3 P1：设计内遗留（2026-09-02 晚批次处理完毕 ✅）
 
-| # | 事项 | 出处 | 处置 |
-| - | --- | --- | --- |
-| L4 | A3 docx 完整循环未跑 | §7-5 | 首次实际文档任务自然验证 |
-| L5 | codex-memory 6h 提取路径未测 | §7-4 | 正常使用覆盖 |
-| L6 | A 站 claude 完全不可用（R17）；A 站无记忆层（G5） | D5 边界 | D6 wrapper 路由规避（默认 opencode）；A 站接 LiteLLM/装 codex-memory 列 P2 |
-| L7 | claude-mem P2 / V4 门 | DESIGN 范围外 | 按需启动 |
-| L8 | PR #42150（O(N²) 修复）跟踪 | A10 | 升级窗口统一评估（手册 §10）；触发时需过 L1-L3 已关的升级门 |
-| L9 | memories/ 备份无自动机制（手册约定手动） | 手册 §2a.3 | 手动纪律；自动化列可选项 |
-| L10 | 上游更新跟踪（superpowers/ARS/document-skills 不追新）无提醒机制 | DESIGN §12 | 升级窗口统一评估兜底 |
+| # | 事项 | 处置结果 |
+| - | --- | --- |
+| L4 | A3 docx 完整循环未跑 | ✅ **已闭环**（2026-09-02 实测）：B 站 claude 调 document-skills:docx 生成 cluster-report.docx（8.7KB，真 Word 2007+ 容器 22 部件）→ **技能自带 validate.py "All validations PASSED!"**（6 段落）+ 主控站独立 zip 结构抽验双过——A3 判据全量达成 |
+| L5 | codex-memory 6h 提取路径未测 | ✅ **状态查清**（E1 memory_jobs 直查）：提取机制活跃（`memory_consolidate_global` running + 历史 stage1 jobs done）；stage1_outputs 0 行=尚无足够长会话（短会话自然现象，非故障）；T5 会话 6h 阈值 22:25 后自然覆盖，无需专项测试 |
+| L6 | A 站 claude 不可用（R17）+ A 站无记忆层（G5） | ✅ **双解**：claude 可用性已修（CTX 65536 + model 未识别名，§8.3a L14）；**A 站 codex-memory@0.6.5 已装**（与 B 站同款）——即装即用实证（memory_add_note 写入 + 笔记落盘 + memory.db 40KB 生成，笔记带 `[proj:rpc-d5]` 前缀示范命名空间约定）——两站记忆层同构 |
+| L7 | claude-mem P2 / V4 门 | ⏸ 维持范围外（按需启动；codex-memory 双站就绪后优先级进一步降低） |
+| L8 | PR #42150（O(N²) 修复）跟踪 | ✅ **复查 2026-09-02**：最新仍 v1.18.26，无 O(N²) 修复——维持分支 b 锁定（<50 轮纪律继续）；下次复查随升级窗口 |
+| L9 | memories/ 备份无自动机制 | ✅ **backup-memories.sh 已交付**（station-bin）：sqlite 在线快照（防 WAL 不一致）+ memories/ 打包 + 保留 7 份轮换；首份备份已生成（4.6K）；手动纪律：每周/大变更前跑 |
+| L10 | 上游更新跟踪无提醒机制 | ✅ **baseline 已记录（2026-09-02 查询，零漂移）**：superpowers v6.3.0（08-12）=已装 / ARS 1d3032f（08-30）=已装 / anthropics/skills 5304866（09-01）=已装——三件上游均无更新，升级窗口对比此 baseline |
 
 ### 8.3a P0 修正（2026-09-02 晚，cc-switch 排查触发）
 
