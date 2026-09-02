@@ -2,7 +2,7 @@
 
 ***
 
-date: 2026-09-02（v2，场景澄清后重构：主控站多项目远程调用 + 站上独立工作区）
+date: 2026-09-02（v3，增补：四项目实例场景适配 + 开源编排案例对照 + 4 CLI 实测定版；v2：场景澄清后重构：主控站多项目远程调用 + 站上独立工作区）
 status: draft（D6 前期调研）
 upstream: D5 Agent 生态升级（已 verified 2026-09-02）; 调研 §4.2 五层循环遗留"任务卡协议"口子
 -----------------------------------------------------------------------
@@ -65,19 +65,34 @@ upstream: D5 Agent 生态升级（已 verified 2026-09-02）; 调研 §4.2 五�
 | trae（编排层）    | 五层循环派发（调研 §4.2） | 任务卡 + `audit: true` 断言契约 + `review --peer` 站间互审 |
 | 人在站上（运维场景）   | 直接进工作区交互续作      | TUI + `-c` 续接（工作区即 cwd）                         |
 
-## 2. 现状基线（D5 后，E1）
+## 2. 现状基线（D5 后，E1；2026-09-02 晚增补 CLI 定版实测）
 
 - 两站 4 CLI 装备同构：12 定制技能（用户级 `~/.claude/skills/`，双 CLI 读，md5 零差异）、superpowers 6.3.0 + document-skills（claude 插件，本地镜像）、ARS @1d3032f（opencode 侧 symlink）、codex-memory 0.6.5（B 站 opencode）
 
 - headless 已实证：`claude -p`（PONG/技能列表）、`opencode run -m`（PONG/A2 135k 附件）、`opencode run --command`（ARS 命令面）
 
-- 后端边界（实测）：A 站 claude\@32k **不可用**（R17）；B 站 claude 走 LiteLLM nemotron + MAX\_CONTEXT\_TOKENS=120000（R15/R16）；两站 opencode 双 provider
+- 后端边界（实测）：A 站 claude\@32k **不可用**（R17）→ 已被后续修复推翻（见下）；B 站 claude 走 LiteLLM nemotron + MAX\_CONTEXT\_TOKENS=120000（R15/R16）；两站 opencode 双 provider
 
 - 窗口预算已声明：opencode limit.context（120000/30000）+ compaction
 
 - 网络边界（实测）：B 站 github 间歇（R18）、npm 稳定、arxiv 间歇、crossref/eutils 稳定
 
 - **同步链实测（本轮 E1）**：主控站 Git Bash **无 rsync**（which 无输出）→ 推拉定案 tar+scp（D5 已全程实证）；站上 rsync 3.2.7 可用于站内归档/清理
+
+### 2.1 4 CLI 定版实测（2026-09-02 晚，`ops/station-bin/agent-cli-smoke.sh` 4/4 PASS）
+
+| CLI                  | 路由                                       | 实测                   | 关键调用铁律                                                                                                      |
+| -------------------- | ---------------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------- |
+| B-claude (2.1.258)   | LiteLLM(4000)→nemotron                   | **PASS** 热缓存 30-120s | **`< /dev/null`** **显式关闭 stdin**（否则可能长时间等 stdin）；冷缓存 \~20min（33k 系统提示预填，8 专家 CPU 卸载），首次调用需预热或接受慢启动          |
+| B-opencode (1.18.25) | LiteLLM→nemotron/gpt-oss                 | **PASS**             | **必须 stdin 管道形式** `echo "<prompt>" \| opencode run -m <model>`——位置参数形式挂死（init 后无任何 LLM 调用，日志实证；1.18.25 bug） |
+| A-claude (2.1.258)   | 直连本机 llama-server(8080) gpt-oss          | **PASS** 3s          | 同 `< /dev/null`；**CLAUDE\_CODE\_DISABLE\_TOOLS=1 = 纯文本模式无工具调用**（A-claude 只适合文本任务，文件级 agent 任务走 opencode）    |
+| A-opencode (1.18.25) | cluster-litellm(10.10.10.2:4000)/gpt-oss | **PASS**             | 同 stdin 管道形式；provider 三件套 lm-studio-local(禁)/cluster-local/cluster-litellm                                  |
+
+- 主控站 ssh 调度链路全程畅通（冒烟脚本从主控站发起，heredoc 传远端脚本规避 PowerShell 引用陷阱——R14 铁律在 ssh 场景的等价形式：**远端命令一律** **`ssh host 'bash -s' <<'EOF'`** **或脚本落盘**）
+
+- **配置漂移 2 处（本轮发现并修复，均留 .bak）**：① A 站 opencode 无默认 `model` 键 → 默认解析到**外网免费模型 nemotron-3-ultra-free**（prompt 外泄 + 外部依赖）→ 已钉 `"model": "cluster-local/gpt-oss"`（本地直连）；② B 站 claude settings 缺 `CLAUDE_CODE_MAX_CONTEXT_TOKENS=120000`（台账记录应有而实缺）→ 已恢复写入
+
+- 推论：**wrapper 必须永远显式** **`-m`** **指定模型**（防默认漂移复现）；A 站默认模型修复是安全边界，不是可选项
 
 ## 3. 生态标准与能力盘点
 
@@ -238,17 +253,186 @@ accept:              # 验收判据(可执行/可核验)
 
 ## 6. 缺口清单与 D6 建议
 
-| #  | 缺口                                                             | 严重度 | D6 处置建议                                                                                                  |
-| -- | -------------------------------------------------------------- | --- | -------------------------------------------------------------------------------------------------------- |
-| G1 | agent-cli wrapper 未实现（L2 核心）                                   | 高   | D6 主体：PowerShell MVP——`workspace --create/--sync` + `task`（单模型 opencode 路径）先行；claude 路径与 `--continue` 二期 |
-| G2 | 工作区规范未实测（AGENTS.md 薄壳导入行为/claude 遮蔽/codex-memory cwd 键控在工作区场景） | 高   | D6 V0 验证门：用 d:\RPC 自身当试点项目（AGENTS.md 已有雏形）建首个工作区实测                                                       |
-| G3 | ad-hoc 笔记无隔离                                                   | 中   | wrapper `[proj:]` 前缀注入（L2-4）+ 手册纪律                                                                       |
-| G4 | 大项目同步量（Textbook/Coding 全量推不现实）                                 | 中   | `.agentsync` 默认模板 + 首同步大小预警（wrapper 检查 tar 体积, >200MB 拒绝并提示补排除清单）                                        |
-| G5 | A 站无记忆层                                                        | 低   | 路由规则内建"记忆主站=B 站"；A 站 codex-memory 复制试点列 P2                                                               |
-| G6 | 提取记忆路径（6h 闲置）未测（D5 §7-4 遗留）                                    | 低   | 工作区日常使用自然覆盖                                                                                              |
-| G7 | trae 派发对接（五层循环 2→3 层）                                          | 低   | D7 范围; D6 留任务卡接口                                                                                         |
+| #   | 缺口                                                             | 严重度       | D6 处置建议                                                                                                  |
+| --- | -------------------------------------------------------------- | --------- | -------------------------------------------------------------------------------------------------------- |
+| G1  | agent-cli wrapper 未实现（L2 核心）                                   | 高         | D6 主体：PowerShell MVP——`workspace --create/--sync` + `task`（单模型 opencode 路径）先行；claude 路径与 `--continue` 二期 |
+| G2  | 工作区规范未实测（AGENTS.md 薄壳导入行为/claude 遮蔽/codex-memory cwd 键控在工作区场景） | 高         | D6 V0 验证门：用 d:\RPC 自身当试点项目（AGENTS.md 已有雏形）建首个工作区实测                                                       |
+| G3  | ad-hoc 笔记无隔离                                                   | 中         | wrapper `[proj:]` 前缀注入（L2-4）+ 手册纪律                                                                       |
+| G4  | 大项目同步量（Textbook/Coding 全量推不现实）                                 | 中         | `.agentsync` 默认模板 + 首同步大小预警（wrapper 检查 tar 体积, >200MB 拒绝并提示补排除清单）                                        |
+| G5  | A 站无记忆层                                                        | ~~低~~ 已解除 | P1 批次 L6 已装 A 站 codex-memory（两站记忆层同构, 2026-09-02）；本轮实测 A 站 opencode.jsonc 含 plugin 条目佐证。路由仍以 B 站为记忆主站不变  |
+| G6  | 提取记忆路径（6h 闲置）未测（D5 §7-4 遗留）                                    | 低         | 工作区日常使用自然覆盖                                                                                              |
+| G7  | trae 派发对接（五层循环 2→3 层）                                          | 低         | D7 范围; D6 留任务卡接口                                                                                         |
+| G8  | 站上无 Mathematica / R 环境（Auto\_Prover 注入点 B/D、Cpp\_Hub R 基准对拍需要） | 中         | 降级矩阵（注入点留主控站执行 / R 基准转 Python 复算）或站上 apt 预置 r-base（v3 §7）                                                |
+| G9  | 重资产预置策略（Cpp\_Hub third\_party、Auto\_Prover mathlib/.lake 缓存）   | 中         | `.agentsync` 排除 + 站上一次性 tar 预置（不计入常规同步量）（v3 §7）                                                          |
+| G10 | opencode 位置参数 bug（1.18.25 实证）上游未报/未修                           | 低         | wrapper 已规避（stdin 管道形式）；升级窗口评估时回归验证该行为是否修复                                                               |
 
 **建议路径**：本调研（RESEARCH）→ Scott review → D6 spec（DESIGN→IMPLEMENTATION→CHECKLIST）。D6 范围 = agent-cli MVP（workspace+task 两命令, opencode 单路径）+ 试点工作区（d:\RPC 或小项目）+ G2 验证门；claude 路径/`--continue`/review --peer/trae 对接按缺口分期。
+
+## 7. 四项目实例场景适配（v3 增补，E1 目录结构 + 关键文档直读）
+
+> 用户主控站四个真实开发实例——D:\Paper、F:\Spec\_Workflow、F:\Auto\_Prover、F:\Cpp\_Hub——分别代表四类典型 agent 任务形态。逐一分析"agent 在站上干什么活、同步什么、怎么验收、缺什么环境"。
+
+### 7.1 D:\Paper（paper2kg）— 数据密集型 Python CLI，机械验收齐备
+
+**性质**：论文 PDF 知识库工具（扫描/分类/重命名/GROBID 抽取/arXiv-CrossRef 元数据 fallback）+ pilot\_distill 数学技能蒸馏（多 LLM NLI 等价验证 + Lean4 spot 检查）。Python 3.10+，pyproject 管理，**177 个 pytest**。
+
+**agent 场景**：① 分类规则迭代（YAML 规则 + 测试回归）；② pilot\_distill 的"LLM 生成 → 独立验证"循环（NLI 等价、数值复算 d2\_numerical\_replication）——本身就是断言契约的样板间。
+
+**适配**：
+
+- 同步轻：源码 + rules YAML 体积小；`raw_md/`、`new_papers/` 论文正文目录按 `.agentsync` 排除（按需附指定文件）
+
+- **机械验收判据现成**：任务卡 `accept: python -m pytest paper_cli/tests/ -q`（177 例秒级）
+
+- 依赖边界：GROBID 需 Docker（站上无）→ phase2 抽取功能降级；arXiv API 间歇（B 站网络边界）→ 元数据 fallback 链有文件名兜底，天然容错
+
+- 模型分工：分类/整理类读密集任务 → gpt-oss 速度档；蒸馏质量评估 → nemotron 长上下文
+
+### 7.2 F:\Spec\_Workflow — 方法论母体（给 agent 立法，不被 agent 执行）
+
+**性质**：纯文档仓库（无源码无构建）：10 步 Spec 流程宪法 + 四件套模板 + 6 份 ADR + 断言 A/B/C 分级 + M7 证据账本（方法论自实证）。
+
+**agent 场景**：它不是"被调用的执行对象"，而是**调用标准本身的宪法来源**——
+
+- 任务卡生命周期 ↔ 10 步流程的 Review 门禁
+
+- `audit: true` 断言契约 ↔ ASSERTION\_EVIDENCE\_FRAMEWORK
+
+- 站间互审 ↔ 异构基座复审（M7 第 4 条复发规律：审计修正自身含计数错误，异基座复验才能发现）
+
+- **所有工作区的 AGENTS.md 骨架应从 SPEC\_PROCESS.md + spec/templates/ 衍生**（模板即 agent 指令的标准化产物）
+
+**适配**：纯 md 同步零成本；机械验收 = 文档契约 DC1-DC4 校验（dc\_validator.py 已有）。**这是四项目中唯一"agent 读它、而非它用 agent"的——D6 wrapper 的验收协议直接复用其分级体系**。
+
+### 7.3 F:\Auto\_Prover（proof\_pipeline）— 已自建编排层的多 LLM 流水线（最复杂案例）
+
+**性质**：自动定理证明 6 阶段流水线（知识检索→NL→LaTeX 多 LLM 独立翻译+共识→数值证伪→Lean4 翻译→agentic proving）+ 6 个 MCP server + Mathematica 桥 + ATLAS 桥（subprocess stdin/stdout JSON 协议）。
+
+**agent 场景**——本项目**已经自建了 mini 编排层**，是 D6 标准最重要的先例：
+
+- `model_gateway.py` 定义 4 模型角色（orchestrator/reasoner/tactician/auxiliary）——与集群双端点**天然对齐**：reasoner→nemotron（120k 窗口长推导），tactician→gpt-oss（高频低延迟 tactic 采样，Pass\@k 并行）
+
+- Stage 1"3-5 个 LLM 独立翻译 + 交叉验证共识度"= **站间互审的天然需求方**（nemotron 翻译 → gpt-oss 复核，异构模型族）
+
+- Stage 3b Lean4 REPL 逐步执行 = 执行锚定（机械验证先于 LLM 判断）的完整实例
+
+- agent\_runner.py 的 stdin/stdout JSON 协议 = 轻量 agent 接口的现成参考（MCP 归调用方、CLI 归被调用方——O7 决策方案 B2）
+
+**适配**：
+
+- Mathematica 桥站上不可用（Linux 无授权）→ 注入点 B/D（FindInstance/verify\_latex\_identity）降级或留主控站执行（G8）
+
+- Lean4 工具链重资产：mathlib 编译缓存 `.lake/` 极大 → `.agentsync` 排除 + 站上一次性预置（G9）
+
+- MCP servers（Python）站上 uv 可装；128G 统一内存正好跑 lake build 循环
+
+- **双向编排**：主控站 Trae ↔ 站上 agent CLI ↔ proof\_pipeline MCP servers——D6 任务卡需要预留"工具型 MCP 挂载"位
+
+### 7.4 F:\Cpp\_Hub — 编译密集型 C++ 库（吃满站上算力）
+
+**性质**：C++ 量化金融库（8 Phase + ADR + 基准对齐：R/Stata/论文基准 1e-10 容差三源交叉验证）+ pybind11 + CUDA GPU MC。
+
+**agent 场景**：LLM 生成初稿（阶段 1）→ 站上编译 + ctest 回归（阶段 2 基准对齐是护城河）——**编译任务正好利用 A/B 站 16 核 + 128G 统一内存，比主控站 Win10 快**；三源交叉验证策略已制度化 = 任务卡 accept 判据样板（`cmake --build && ctest` + 基准对齐脚本）。
+
+**适配**：
+
+- `third_party/`（Eigen 全量 + autodiff + BLAS）体积大 → `.agentsync` 排除 + 站上一次性 tar 预置（G9）
+
+- R 基准脚本（fixtures/\*.R 生成 baseline .inc）→ 站上需 r-base（G8，apt 可装）；CUDA GPU MC → 站上是 AMD 集成显卡，**CUDA 不可用 → gpu\_mc.cu 排除或 HIP 移植另列任务**
+
+- C++ 工具链（gcc/cmake）站上齐备；建议站上预置 ccache 加速增量编译
+
+- 模型分工：代码初稿/迭代 → gpt-oss（快）；长上下文跨模块 review → nemotron（120k）
+
+### 7.5 场景适配矩阵（汇总）
+
+| 项目             | 任务形态              | 推荐路由                       | `.agentsync` 要点             | 机械验收判据               | 环境缺口               |
+| -------------- | ----------------- | -------------------------- | --------------------------- | -------------------- | ------------------ |
+| Paper          | 数据整理/规则迭代/蒸馏验证    | 读密集→gpt-oss；质量评→nemotron   | 排除 raw\_md/、new\_papers/    | pytest 177 例         | GROBID(Docker)→降级  |
+| Spec\_Workflow | 文档/方法论（被读不被执行）    | 任一站                        | 纯 md 无需排除                   | DC1-DC4 契约校验         | 无                  |
+| Auto\_Prover   | 多 LLM 编排/形式化/证明搜索 | 双站协作（翻译共识+互审）              | 排除 .lake/（预置）               | lake build + REPL 逐步 | Mathematica→降级（G8） |
+| Cpp\_Hub       | 编译/基准对齐           | 初稿→gpt-oss；review→nemotron | 排除 third\_party/（预置）、gpu MC | ctest + 基准对齐         | R 可装（G8）；CUDA 排除   |
+
+**矩阵推论**：四项目恰好覆盖"读密集/文档/编排密集/编译密集"四象限——D6 wrapper 的 `.agentsync` 默认模板应按此**分型四份**（Python 型/C++ 型/文档型/Lean4 型），而非单一模板。
+
+## 8. 开源社区案例对照（v3 增补，E2 web 调研 2026-09-02）
+
+> 41 条事实（来源见参考源 v3 增补），按"机制 ↔ 本集群对应物"提炼。目的不是照搬，而是**验证 D6 草案方向 + 吸收可落地的编排规则细节**。
+
+### 8.1 编排规则框架
+
+| 开源机制                           | 事实要点                                      | 对 D6 标准的启示                                                  |
+| ------------------------------ | ----------------------------------------- | ----------------------------------------------------------- |
+| LangGraph interrupt/checkpoint | 任意节点暂停 + 状态持久化 + `Command(resume=...)` 恢复 | 任务卡生命周期应有**显式暂停点**（人工审查位）；wrapper `--continue` 对应 resume 语义 |
+| LangGraph Functional API       | Retry Policy + 任务级超时 + 工具调用前审批            | wrapper `--timeout`（已规划）+ **失败重试上限 2 次转人工**（Stripe 同款纪律）    |
+| CrewAI max\_iter / max\_rpm    | 单任务迭代数与频率硬限流                              | 与本集群"长会话 <50 轮"O(N²) 纪律同构；rpm 网关已在 LiteLLM 落地               |
+| AutoGen SelectorGroupChat      | LLM 动态选下一个发言者                             | **不采纳**——群聊式编排失控面大；维持本集群"编排方中心化星型分派"（确定性路由是代码不是模型）          |
+| MetaGPT "Code = SOP(Team)"     | 结构化中间产物（PRD/数据结构/API）抑制级联幻觉               | 与 Spec\_Workflow 四件套**同一哲学**；任务卡 = 结构化交接单元（第三方独立印证方法论方向）    |
+
+### 8.2 自动化科研流水线
+
+| 案例                         | 事实要点                                                                                                         | 对 D6 标准的启示                                                              |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| AI Scientist v1/v2（Sakana） | 端到端四环节 + 自动评审 + Docker 沙箱 + 3600s 超时；**第三方复现（Beel & Kan）：12 实验中 5 个（42%）因编码错误失败**、幻觉数值与陈旧引用、单篇仍需 \~3.5h 人工介入 | 无人值守科研不可信；**`audit: true`** **+ 人工审收口必须有**（实证支撑）；站上工作区 = 沙箱等价物；任务级超时制度化 |
+| Agent Laboratory（AMD）      | 人给 idea + 各阶段人类反馈使论文质量 +0.58（NeurIPS 评分）；检查点恢复                                                               | 五层循环"人工层"价值的第三方实证；wrapper 长任务应支持断点续跑（任务卡状态持久化）                          |
+| AutoSurvey                 | 引用可溯源 + LLM evaluator 四维打分（coverage/structure/relevance/citation）                                            | 调研类任务卡的 accept 判据模板：**引用四档标注 + 可溯源**（与 E1-E5 分级同构）                      |
+
+### 8.3 agentic coding 工程化
+
+| 案例                                 | 事实要点                                             | 对 D6 标准的启示                                                           |
+| ---------------------------------- | ------------------------------------------------ | -------------------------------------------------------------------- |
+| Claude Code subagents              | `.claude/agents/*.md` 独立上下文窗口 + description 自动委派 | 工作区隔离与 subagent 隔离**同构**（上下文边界 = 隔离单元）；站上可用 `.claude/agents/` 定义项目角色 |
+| Claude Code hooks                  | 生命周期确定性脚本拦截，退出码 2 阻断工具调用                         | precommit-dc-validator 已是此模式；**任务卡验收可挂 PostToolUse 型 hook**（确定性收口）   |
+| claude-code-action                 | `@claude` 触发 + actor 权限校验 + 不可信输入须用带权限检查版本       | D7 trae 派发的雏形：任务卡触发 + 身份校验；**信任边界设计**（base-action 无信任边界的前车之鉴）        |
+| git worktrees 并行（官方 best practice） | 每 agent 独立 worktree + 独立分支，避免文件碰撞/上下文污染          | 站间 A/B 并行 fan-out 的 git 版；**工作区模型是其集群推广**（A/B 站 = 两个物理 worktree）     |
+| Backlog.md 三检查点                    | 审 spec → 审 plan → 审 code（一任务 = 一上下文 = 一 PR）      | 任务卡 create→dispatch→collect 的人工收口对齐；**"一任务一工作区会话"纪律**                |
+| Task Master                        | PRD→tasks.json 持久上下文 + 主/研究/备用三档模型               | 任务卡 JSON 化持久（wrapper 已规划）；主/备模型路由 = LiteLLM fallbacks 已落地            |
+
+### 8.4 自托管 LLM + agent 集群（同构案例）
+
+| 案例                                            | 事实要点                                                                  | 对 D6 标准的启示                                                                 |
+| --------------------------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| LiteLLM Router                                | 负载均衡/冷却/回退链/指数退避                                                      | **已落地**（D1 fallbacks）——方向正确                                                |
+| Claude Code 自托管网关                             | 仅 ANTHROPIC\_BASE\_URL + TOKEN 双变量即可重定向                               | A-claude 实证（llama-server 原生 anthropic 端点直连）；B-claude 走网关——**双形态并存已在本集群实现** |
+| OpenHands + 集群内 LiteLLM（Stripe "Minion" 模式复述） | 每 agent 独立沙箱 + 确定性编排器预取上下文 + lint 快反馈 + **重试 ≤2 次后转人工** + 输出 PR 留人工审查 | **与本集群"工作区 + 任务卡 + 人审收口"高度同构**——独立第三方验证了 D6 架构方向                           |
+
+### 8.5 提炼：五条通用编排公理（跨案例收敛）
+
+1. **确定性编排器 + LLM 执行者**：路由/超时/重试是代码不是模型判断（LangGraph、Stripe Minion、CrewAI max\_iter 共同指向）
+2. **结构化交接抑制级联幻觉**：中间产物必须结构化（MetaGPT SOP、Spec\_Workflow 四件套、任务卡）
+3. **执行锚定先于 LLM 判断**：编译/测试/基准/REPL 是验收真值源（SWE-agent ACI、Cpp\_Hub 基准对齐、Lean4 REPL）
+4. **人工审查点不可全撤**：质量增益有实证（Agent Laboratory +0.58），无人值守失败率有实证（AI Scientist 42%）——审计收口是必要成本不是可选项
+5. **隔离单元 = 上下文边界**：subagent/worktree/工作区/沙箱 pod 本质同构——站上工作区是本集群的隔离原语
+
+## 9. 环境适配修订（v3 增补：对 §5 草案的 delta）
+
+结合 §7 四项目实例 + §8 开源公理 + 本轮 CLI 实测，对 §5 标准草案追加修订：
+
+### 9.1 L2 wrapper 规范追加（吸收 §2.1 实测铁律）
+
+1. **opencode 调用形式**：一律 `echo "<prompt>" | opencode run -m <provider/model>`（stdin 管道；位置参数形式 1.18.25 挂死——G10）
+2. **claude 调用形式**：一律 `claude -p "<prompt>" < /dev/null`（显式关 stdin）
+3. **永远显式** **`-m`/模型映射**：不依赖任何站上默认模型（A 站默认曾漂移到外网模型——安全边界）
+4. **B-claude 预热策略**：wrapper `task` 首次调用 B-claude 前自动发一次轻量 PING 预热（冷缓存 \~20min → 预热后 30-120s）；或任务卡声明 `coldstart: true` 接受慢启动
+5. **任务级超时 + 重试上限**：默认 timeout 可配；失败重试 ≤2 次后转人工（§8.5 公理 1；Stripe 纪律）
+
+### 9.2 L0 工作区规范追加（吸收 §7 矩阵）
+
+- `.agentsync` 默认模板**按项目形态分四型**：Python 型（排 `__pycache__/*.egg-info/.venv/raw 数据目录`）、C++ 型（排 `third_party/build/ccache 缓存`）、文档型（几乎不排）、Lean4 型（排 `.lake/`）
+
+- 重资产（third\_party/mathlib 缓存）走"站上一次性预置"通道，不进常规同步
+
+- 工作区可选挂载项目 MCP server（Auto\_Prover 型项目）——任务卡预留 `tools:` 字段
+
+### 9.3 D6 范围修订建议
+
+原范围（agent-cli MVP + 试点工作区 + G2 验证门）维持，追加：
+
+- wrapper MVP 直接吸收 §9.1 全部铁律（冒烟脚本 `ops/station-bin/agent-cli-smoke.sh` 已固化调用形式，wrapper 复用其远端执行模式）
+
+- 试点项目建议从 **Paper（Python 型，验收判据现成）** 起步，第二试点 Cpp\_Hub（验证重资产预置通道）
+
+- G8/G9 处置进 D6 DESIGN 的风险表；G10 记入升级窗口回归清单
 
 ## 参考源
 
@@ -273,4 +457,36 @@ accept:              # 验收判据(可执行/可核验)
 - D5 交付物（E1）: CHECKLIST §3/§6 台账、手册 §2a、ars-migrate-verify.sh / a5-nextday-verify.sh 实测记录
 
 - JetBrains 2025 调研（双文件维护损耗月均 5.3h; E2 转述）
+
+v3 增补（E2 web 调研 2026-09-02，经调研子代理聚合；关键源）：
+
+- [LangGraph interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts.md) / [LangGraph Functional API](https://docs.langchain.com/oss/python/langgraph/use-functional-api)（interrupt/checkpoint/resume + Retry Policy/审批）
+
+- [CrewAI HITL 文档](https://docs.crewai.com/en/learn/human-in-the-loop)（human\_input/Webhook 暂停-恢复模式）+ CrewAI 源码（max\_iter/max\_rpm, E2）
+
+- [AutoGen 0.4 GroupChat](http://microsoft.github.io/autogen/0.4.8/user-guide/core-user-guide/design-patterns/group-chat.html) / [SelectorGroupChat](http://microsoft.github.io/autogen/0.5.4/user-guide/agentchat-user-guide/selector-group-chat.html)（事件驱动 Actor + 状态保存恢复）
+
+- [MetaGPT](https://github.com/FoundationAgents/MetaGPT)（[arXiv:2308.00352](https://arxiv.org/pdf/2308.00352), Code=SOP(Team) 结构化中间产物）
+
+- [AI Scientist v1](https://arxiv.org/pdf/2408.06292) / [AI-Scientist-v2](https://github.com/SakanaAI/AI-Scientist-v2)（BFTS/自动评审；v2 相关工作 2026 年见 Nature, [sakana.ai/ai-scientist-nature](https://sakana.ai/ai-scientist-nature/)）
+
+- [Beel & Kan 对 AI Scientist 的复现评估](https://www.comp.nus.edu.sg/~kanmy/papers/papers/2502.14297v2.pdf)（42% 实验失败/幻觉引用/3.5h 人工介入——人工审必要性实证）
+
+- [Agent Laboratory](https://arxiv.org/pdf/2501.04227.pdf)（AMD/Schmidgall, 三阶段 + 人类反馈 +0.58 + 检查点恢复）
+
+- [AutoSurvey](https://arxiv.org/pdf/2406.10252v2)（四阶段 + 引用溯源 + evaluator 打分）
+
+- [Claude Code Subagents](https://docs.anthropic.com/en/docs/claude-code/sub-agents) / [claude-code-action](https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md)（.claude/agents 定义/权限校验）
+
+- [Claude Code best practices（worktree 并行）](https://www.anthropic.com/engineering/claude-code-best-practices)
+
+- [Backlog.md](https://github.com/MrLesk/Backlog.md)（三人工检查点）/ [Task Master](https://github.com/eyaltoledano/claude-task-master)（tasks.json 持久 + 三档模型）
+
+- [SWE-agent ACI](https://arxiv.org/pdf/2405.15793v2)（Agent-Computer Interface + guardrails 消融）
+
+- [OpenHands Runtime](https://docs.openhands.dev/openhands/usage/architecture/runtime)（沙箱 client-server）
+
+- [自托管 Claude Code 指南](https://www.developersdigest.tech/blog/self-hosting-claude-code-on-your-own-infra)（ANTHROPIC\_BASE\_URL 双变量重定向）
+
+- OpenHands+LiteLLM 自托管实践（[homelab RFC, Stripe Minion 模式复述](https://github.com/jomcgi/homelab/blob/main/docs/decisions/agents/001-background-agents.md)：重试≤2 转人工/PR 留审）
 

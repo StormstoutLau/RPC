@@ -13,7 +13,7 @@ upstream: null
 
 > **Feature**: 逐模型参数取值与实测依据台账
 > **创建日期**: 2026-09-02（D1.3 交付）
-> **维护约定**: **每次改 `/etc/llama-instances/*.env` 调参，必须同步更新本台账**（写入 [双机推理集群使用手册](../../docs/双机推理集群使用手册.md) conf 调参小节的引用）
+> **维护约定**: **每次改** **`/etc/llama-instances/*.env`** **调参，必须同步更新本台账**（写入 [双机推理集群使用手册](../../docs/双机推理集群使用手册.md) conf 调参小节的引用）
 > **数据源**: conf 实测 2026-09-02 E1；性能依据 [results-ledger](../model-eval/results-ledger.md)
 
 ***
@@ -30,98 +30,110 @@ upstream: null
 
 ### 1.1 nvidia-nemotron-3-super-120b-a12b（现役主力，B 站单机）
 
-| 字段 | 值 | 依据 |
-| ---- | -- | ---- |
-| CTX | 131072 | ✅ results-ledger：KV 仅 1G @128k，服务常开无压力；24k/96.5k needle 全过（96.5k 5 针 5/5 PASS, prefill ~158 t/s 不掉速）；原生上限 1M |
-| THREADS | 16 | 无实测依据（模板默认，未做扫描） |
-| N_CPU_MOE | 8 | 无实测依据（模板默认；nemotron 为 nemotron_h_moe 混合架构 80/88 层 mamba+MoE，理论 CPU-MOE 卸载有意义但未对比 0/8/16） |
-| RPC_TARGET | （空=单机） | ✅ results-ledger：80G 单机可容，RPC 是 -17.3% decode 税而非必需（17.3→20.3 t/s） |
-| EXTRA_FLAGS | `-fa on` | 无实测依据（全实例统一，未做过 off 对比） |
-| 后端判定 | llama-single | ✅ 权重 80G > 65G 阈但单机可容，实测最优（见 RPC_TARGET 行） |
-| D5 联动 | opencode limit.context 120000（B 站网关路由）；claude code B 站 `CLAUDE_CODE_MAX_CONTEXT_TOKENS=120000`（settings.json env） | ✅ D5 配置（2026-09-02）；**联动铁律**：改本行 CTX 必须同步两者（120000 < 131072 留输出余量的比例关系保持） |
+| 字段           | 值                                                                                                                 | 依据                                                                                                            |
+| ------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| CTX          | 131072                                                                                                            | ✅ results-ledger：KV 仅 1G @128k，服务常开无压力；24k/96.5k needle 全过（96.5k 5 针 5/5 PASS, prefill \~158 t/s 不掉速）；原生上限 1M |
+| THREADS      | 16                                                                                                                | 无实测依据（模板默认，未做扫描）                                                                                              |
+| N\_CPU\_MOE  | 8                                                                                                                 | 无实测依据（模板默认；nemotron 为 nemotron\_h\_moe 混合架构 80/88 层 mamba+MoE，理论 CPU-MOE 卸载有意义但未对比 0/8/16）                    |
+| RPC\_TARGET  | （空=单机）                                                                                                            | ✅ results-ledger：80G 单机可容，RPC 是 -17.3% decode 税而非必需（17.3→20.3 t/s）                                            |
+| EXTRA\_FLAGS | `-fa on`                                                                                                          | 无实测依据（全实例统一，未做过 off 对比）                                                                                       |
+| 后端判定         | llama-single                                                                                                      | ✅ 权重 80G > 65G 阈但单机可容，实测最优（见 RPC\_TARGET 行）                                                                   |
+| D5 联动        | opencode limit.context 120000（B 站网关路由）；claude code B 站 `CLAUDE_CODE_MAX_CONTEXT_TOKENS=120000`（settings.json env） | ✅ D5 配置（2026-09-02）；**联动铁律**：改本行 CTX 必须同步两者（120000 < 131072 留输出余量的比例关系保持）                                     |
 
 ### 1.2 gpt-oss-120b（A 站单机，速度档）
 
-| 字段 | 值 | 依据 |
-| ---- | -- | ---- |
-| CTX | **65536**（2026-09-02 由 32768 上调） | ✅ claude code 系统提示 ~32.5k + 输出共享 32768 时余量仅 290 tokens（实测 PONG 过但实际任务必截断）→ 65536 后实测完整 binary search 输出（~400 tokens）无截断；KV 成本仅 +1.1G（GTT 60.5→61.6，余 55.6G）；短会话 decode 不受 ctx 上限影响（KV 实际长度函数）；模型原生 131k，65536 在原生范围内。**注意区分**：此决策不改"用户拿 gpt-oss 跑长会话不合适"的既有结论（RULER@256k 52.3 弱）——场景是 claude code 系统提示大、实际工作距离短 |
-| THREADS | 16 | 无实测依据（模板默认） |
-| N_CPU_MOE | **0** | ⚠️ **无台账依据**（与其余实例的 8 不同，来源不可考——疑为 gpt-oss MoE 全 GPU 卸载的尝试，但无对比记录） |
-| RPC_TARGET | （空=单机 A 站） | ✅ 双端点架构既定（2026-09-01 换防） |
-| EXTRA_FLAGS | `-fa on` | 无实测依据 |
-| 性能基线 | decode 50.3 t/s | ✅ results-ledger：全库存 decode 冠军（长生成 54.2 / 代码 53.9） |
-| D5 联动 | opencode limit.context 30000；**claude code A 站 60000**（2026-09-02 晚：settings.json model="gpt-oss-120b" 未识别名 + CLAUDE_CODE_MAX_CONTEXT_TOKENS=60000，/context 显示 60k 实证——已识别模型名如 claude-opus-4-7 会硬用 200k 假设且 MAX_CONTEXT_TOKENS 不生效，故必须用未识别名） | ✅ D5 已配 opencode（30000）；claude A 站补齐（60000）；B 站既有 120000 |
-| 冷缓存注记 | claude code 首条消息 prefill ~70-110s | ✅ 实测：22.6k 系统提示（plain 格式）@ ~300 t/s；llama-server 重启后 slot 缓存清空必现；同会话后续秒级（slot 前缀复用） |
+| 字段           | 值                                                                                                                                                                                                                                                  | 依据                                                                                                                                                                                                                                                                                                                 |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| CTX          | **65536**（2026-09-02 由 32768 上调）                                                                                                                                                                                                                   | ✅ claude code 系统提示 \~32.5k + 输出共享 32768 时余量仅 290 tokens（实测 PONG 过但实际任务必截断）→ 65536 后实测完整 binary search 输出（\~400 tokens）无截断；KV 成本仅 +1.1G（GTT 60.5→61.6，余 55.6G）；短会话 decode 不受 ctx 上限影响（KV 实际长度函数）；模型原生 131k，65536 在原生范围内。**注意区分**：此决策不改"用户拿 gpt-oss 跑长会话不合适"的既有结论（RULER\@256k 52.3 弱）——场景是 claude code 系统提示大、实际工作距离短 |
+| THREADS      | 16                                                                                                                                                                                                                                                 | 无实测依据（模板默认）                                                                                                                                                                                                                                                                                                        |
+| N\_CPU\_MOE  | **0**                                                                                                                                                                                                                                              | ⚠️ **无台账依据**（与其余实例的 8 不同，来源不可考——疑为 gpt-oss MoE 全 GPU 卸载的尝试，但无对比记录）                                                                                                                                                                                                                                                 |
+| RPC\_TARGET  | （空=单机 A 站）                                                                                                                                                                                                                                         | ✅ 双端点架构既定（2026-09-01 换防）                                                                                                                                                                                                                                                                                           |
+| EXTRA\_FLAGS | `-fa on`                                                                                                                                                                                                                                           | 无实测依据                                                                                                                                                                                                                                                                                                              |
+| 性能基线         | decode 50.3 t/s                                                                                                                                                                                                                                    | ✅ results-ledger：全库存 decode 冠军（长生成 54.2 / 代码 53.9）                                                                                                                                                                                                                                                                 |
+| D5 联动        | opencode limit.context 30000；**claude code A 站 60000**（2026-09-02 晚：settings.json model="gpt-oss-120b" 未识别名 + CLAUDE\_CODE\_MAX\_CONTEXT\_TOKENS=60000，/context 显示 60k 实证——已识别模型名如 claude-opus-4-7 会硬用 200k 假设且 MAX\_CONTEXT\_TOKENS 不生效，故必须用未识别名） | ✅ D5 已配 opencode（30000）；claude A 站补齐（60000）；B 站既有 120000                                                                                                                                                                                                                                                           |
+| 冷缓存注记        | claude code 首条消息 prefill \~70-110s                                                                                                                                                                                                                 | ✅ 实测：22.6k 系统提示（plain 格式）@ \~300 t/s；llama-server 重启后 slot 缓存清空必现；同会话后续秒级（slot 前缀复用）                                                                                                                                                                                                                               |
 
 ### 1.3 qwen3.8-flash-next（B 站，已删模型待回归）
 
-| 字段 | 值 | 依据 |
-| ---- | -- | ---- |
-| CTX | 262144 | ✅ results-ledger 冒烟 ctx 262144 tg 15.7 t/s（262k 满档未单独压测，原生 1M 内） |
-| THREADS | 16 | 无实测依据（模板默认） |
-| N_CPU_MOE | 8 | 无实测依据（模板默认） |
-| RPC_TARGET | auto | 无实测依据（auto 语义=B5i wrapper 自动判定，未记录判定结果） |
-| 备注 | 模型文件已删（模型下架清理批次） | conf 保留作回归位 |
+| 字段          | 值                | 依据                                                               |
+| ----------- | ---------------- | ---------------------------------------------------------------- |
+| CTX         | 262144           | ✅ results-ledger 冒烟 ctx 262144 tg 15.7 t/s（262k 满档未单独压测，原生 1M 内） |
+| THREADS     | 16               | 无实测依据（模板默认）                                                      |
+| N\_CPU\_MOE | 8                | 无实测依据（模板默认）                                                      |
+| RPC\_TARGET | auto             | 无实测依据（auto 语义=B5i wrapper 自动判定，未记录判定结果）                          |
+| 备注          | 模型文件已删（模型下架清理批次） | conf 保留作回归位                                                      |
 
 ### 1.4 glm-5.3-flash（B 站，待测）
 
-| 字段 | 值 | 依据 |
-| ---- | -- | ---- |
-| CTX | 32768 | 无实测依据（模板默认） |
-| THREADS | 16 | 无实测依据 |
-| N_CPU_MOE | 8 | 无实测依据 |
-| RPC_TARGET | 10.10.10.1:50052 | 无实测依据 |
-| 已知边界 | 手册 §8: 加载报 `unknown model architecture: glm5next`（架构秒失败，非参数问题） | E2 |
+| 字段          | 值                                                              | 依据          |
+| ----------- | -------------------------------------------------------------- | ----------- |
+| CTX         | 32768                                                          | 无实测依据（模板默认） |
+| THREADS     | 16                                                             | 无实测依据       |
+| N\_CPU\_MOE | 8                                                              | 无实测依据       |
+| RPC\_TARGET | 10.10.10.1:50052                                               | 无实测依据       |
+| 已知边界        | 手册 §8: 加载报 `unknown model architecture: glm5next`（架构秒失败，非参数问题） | E2          |
 
 ### 1.5 deepseek-v4-flash-0731（B 站 RPC 类）
 
-| 字段 | 值 | 依据 |
-| ---- | -- | ---- |
-| CTX | 32768 | 无实测依据（模板默认） |
-| THREADS | 16 | 无实测依据 |
-| N_CPU_MOE | 8 | 无实测依据 |
-| RPC_TARGET | 10.10.10.1:50052 | ✅ 145G Q4 权重超单机，RPC 必需（B5i 判定规则） |
-| 性能基线 | tg ~6.3 t/s 标称 | ✅ results-ledger（标称≠评测耗时：reasoning 精简时单题 13-46s） |
+| 字段          | 值                | 依据                                               |
+| ----------- | ---------------- | ------------------------------------------------ |
+| CTX         | 32768            | 无实测依据（模板默认）                                      |
+| THREADS     | 16               | 无实测依据                                            |
+| N\_CPU\_MOE | 8                | 无实测依据                                            |
+| RPC\_TARGET | 10.10.10.1:50052 | ✅ 145G Q4 权重超单机，RPC 必需（B5i 判定规则）                 |
+| 性能基线        | tg \~6.3 t/s 标称  | ✅ results-ledger（标称≠评测耗时：reasoning 精简时单题 13-46s） |
 
 ### 1.6 gpt-oss-120b-fable-5-distilled（B 站 RPC 类，蒸馏变体）
 
-| 字段 | 值 | 依据 |
-| ---- | -- | ---- |
-| CTX | 32768 | 无实测依据（模板默认） |
-| THREADS | 16 | 无实测依据 |
-| N_CPU_MOE | 8 | 无实测依据 |
-| RPC_TARGET | auto | 无实测依据 |
+| 字段          | 值     | 依据          |
+| ----------- | ----- | ----------- |
+| CTX         | 32768 | 无实测依据（模板默认） |
+| THREADS     | 16    | 无实测依据       |
+| N\_CPU\_MOE | 8     | 无实测依据       |
+| RPC\_TARGET | auto  | 无实测依据       |
 
-### 1.7 网关参数（B 站 ~/litellm/config.yaml，D1 起纳入台账）
+### 1.7 网关参数（B 站 \~/litellm/config.yaml，D1 起纳入台账）
 
-| 字段 | 值 | 依据 |
-| ---- | -- | ---- |
-| rpm（两路由） | 30 | ✅ D1-A6 实测（2026-09-02）：40 并发两轮复现，超限请求被 retry-after=60s 延迟重试背压，llama-server 接收速率压在 30/min 内，无 5xx。依据为 4-agent 峰值估计（平均 0.5 req/s 之上）非精确调优 |
-| routing_strategy | usage-based-routing-v2 | ✅ D1-A6 实测发现：默认 simple-shuffle 不注册 rpm pre-call handler（`async_routing_strategy_pre_call_checks` 只遍历已注册策略 handler），rpm 完全不拦截（40 并发全 200 直通）；v2 注册 `LowestTPMLoggingHandler_v2` 后 enforcement 生效。源码 lowest_tpm_rpm_v2.py L135-190（B 站实文件核验） |
-| fallbacks | 双向互备 nemotron↔gpt-oss | ✅ D1-A4 实测：停 nemotron 后 `model=nemotron` 请求由 gpt-oss 服务（响应 model 字段痕迹确证）；已知边界：nemotron 128k → gpt-oss 32k 超长请求报错非截断 |
-| num_retries | 1（D1 前既有值，未动） | ⚠️ 该值 + rpm 的 retry-after:60 头 = 超限隐性背压行为之源（请求压 60s 后成功而非 429）；若需 fail-fast 需改 0（未做，权衡见 IMPL v1.1 A6） |
+| 字段                | 值                      | 依据                                                                                                                                                                                                                                            |
+| ----------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| rpm（两路由）          | 30                     | ✅ D1-A6 实测（2026-09-02）：40 并发两轮复现，超限请求被 retry-after=60s 延迟重试背压，llama-server 接收速率压在 30/min 内，无 5xx。依据为 4-agent 峰值估计（平均 0.5 req/s 之上）非精确调优                                                                                                       |
+| routing\_strategy | usage-based-routing-v2 | ✅ D1-A6 实测发现：默认 simple-shuffle 不注册 rpm pre-call handler（`async_routing_strategy_pre_call_checks` 只遍历已注册策略 handler），rpm 完全不拦截（40 并发全 200 直通）；v2 注册 `LowestTPMLoggingHandler_v2` 后 enforcement 生效。源码 lowest\_tpm\_rpm\_v2.py L135-190（B 站实文件核验） |
+| fallbacks         | 双向互备 nemotron↔gpt-oss  | ✅ D1-A4 实测：停 nemotron 后 `model=nemotron` 请求由 gpt-oss 服务（响应 model 字段痕迹确证）；已知边界：nemotron 128k → gpt-oss 32k 超长请求报错非截断                                                                                                                           |
+| num\_retries      | 1（D1 前既有值，未动）          | ⚠️ 该值 + rpm 的 retry-after:60 头 = 超限隐性背压行为之源（请求压 60s 后成功而非 429）；若需 fail-fast 需改 0（未做，权衡见 IMPL v1.1 A6）                                                                                                                                         |
+
+### 1.8 agent CLI 配置（两站，2026-09-02 定版实测起纳入台账）
+
+| 站点/文件 | 字段 | 值 | 依据 |
+| --- | --- | --- | --- |
+| A 站 `~/.config/opencode/opencode.jsonc` | `model`（顶层默认） | `cluster-local/gpt-oss` | ✅ 2026-09-02 实测修复：原缺失该键 → 默认解析到**外网免费模型 nemotron-3-ultra-free**（prompt 外泄 + 外部依赖）；钉本地后冒烟 PASS。备份 `opencode.jsonc.bak-20260902-2104` |
+| B 站 `~/.claude/settings.json` env | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `120000` | ✅ 2026-09-02 恢复：台账既有记录应有而实缺（漂移），claude 对未知模型按 200k 假设 > llama-server n\_ctx 131072 有长会话溢出风险；恢复后冒烟 PASS（119s 热）。备份 `settings.json.bak-20260902-2106` |
+| 两站 opencode 调用形式 | stdin 管道 | `echo "<prompt>" \| opencode run -m <model>` | ✅ 实测：位置参数形式 1.18.25 挂死（init 后无 LLM 调用，opencode.log 实证）；升级窗口须回归验证（G10） |
+| 两站 claude 调用形式 | stdin 显式关闭 | `claude -p "<prompt>" < /dev/null` | ✅ 实测：不关 stdin 有长时间等待风险 |
+| B-claude 冷/热缓存 | 预热策略 | 首次调用前轻量 PING | ✅ 实测：冷缓存 33k 预填 ~20min（N\_CPU\_MOE=8 下 CPU 预填慢）；热缓存 30-120s |
 
 ## 2. 反例区（试过且否决，禁止无意识重试）
 
-| # | 配置 | 实测结果 | 结论 | 来源 |
-| - | ---- | ------- | ---- | ---- |
-| X1 | gpt-oss + ngram-simple 投机解码 | 25.2/22.6/24.8 t/s vs 裸 AR 50.3 t/s（**-52%**） | gpt-oss 思考型输出低 n-gram 重复，draft 命中率低而验证开销照付——**禁用** | results-ledger（gpt-oss 节） |
-| X2 | nemotron 双机 RPC（vs 单机） | decode 17.3 vs 20.3 t/s（**-17.3%**） | 80G 模型单机可容时 RPC 是延迟税（每 token ~38.7 次跨链命令）——**单机优先** | results-ledger（nemotron 节） |
-| X3 | m27-q4ks thinking 禁用后预算控制 | 6 次尝试零产出（nothink 6144/12288/16384 均 length） | 无 reasoning 分离架构的模型，禁思考只改输出形态不解决预算失控——**按模型分型而非题型** | results-ledger（m27 节） |
+| #  | 配置                          | 实测结果                                          | 结论                                                   | 来源                         |
+| -- | --------------------------- | --------------------------------------------- | ---------------------------------------------------- | -------------------------- |
+| X1 | gpt-oss + ngram-simple 投机解码 | 25.2/22.6/24.8 t/s vs 裸 AR 50.3 t/s（**-52%**） | gpt-oss 思考型输出低 n-gram 重复，draft 命中率低而验证开销照付——**禁用**   | results-ledger（gpt-oss 节）  |
+| X2 | nemotron 双机 RPC（vs 单机）      | decode 17.3 vs 20.3 t/s（**-17.3%**）           | 80G 模型单机可容时 RPC 是延迟税（每 token \~38.7 次跨链命令）——**单机优先** | results-ledger（nemotron 节） |
+| X3 | m27-q4ks thinking 禁用后预算控制   | 6 次尝试零产出（nothink 6144/12288/16384 均 length）   | 无 reasoning 分离架构的模型，禁思考只改输出形态不解决预算失控——**按模型分型而非题型**  | results-ledger（m27 节）      |
 
 ## 3. 缺口区（显式声明未调优，未来调优时的起点）
 
-| # | 缺口 | 影响 | 建议优先级 |
-| - | ---- | ---- | --------- |
-| G1 | THREADS=16 全实例统一，从未扫描（8/16/32 对比） | Strix Halo 16 核（Zen5），llama.cpp CPU 层与 GPU 卸载的线程分工未知 | 低（GPU 推理下 CPU threads 多为辅助角色） |
-| G2 | N_CPU_MOE 0 vs 8 无对比实测 | gpt-oss（0）与其余（8）的选择无依据；MoE CPU 卸载对 395 的收益未量化 | 中（nemotron mamba+MoE 混合架构可能有感） |
-| G3 | batch/ubatch 走默认值 | prefill 吞吐与 GTT 峰值的权衡未探索（96.5k needle prefill 158 t/s 已够用） | 低 |
-| G4 | CTX 32k 档（gpt-oss/glm/deepseek/fable）无压测 | 32k→128k 的 KV 增量与吞吐代价未知（gpt-oss 原生 128k） | 中（若 4-agent 集群需要长上下文） |
-| G5 | `-fa on` 无 off 对比 | flash attention 在 Vulkan 后端的收益未单独量化 | 低 |
+| #  | 缺口                                       | 影响                                                         | 建议优先级                          |
+| -- | ---------------------------------------- | ---------------------------------------------------------- | ------------------------------ |
+| G1 | THREADS=16 全实例统一，从未扫描（8/16/32 对比）        | Strix Halo 16 核（Zen5），llama.cpp CPU 层与 GPU 卸载的线程分工未知       | 低（GPU 推理下 CPU threads 多为辅助角色）  |
+| G2 | N\_CPU\_MOE 0 vs 8 无对比实测                 | gpt-oss（0）与其余（8）的选择无依据；MoE CPU 卸载对 395 的收益未量化              | 中（nemotron mamba+MoE 混合架构可能有感） |
+| G3 | batch/ubatch 走默认值                        | prefill 吞吐与 GTT 峰值的权衡未探索（96.5k needle prefill 158 t/s 已够用） | 低                              |
+| G4 | CTX 32k 档（gpt-oss/glm/deepseek/fable）无压测 | 32k→128k 的 KV 增量与吞吐代价未知（gpt-oss 原生 128k）                   | 中（若 4-agent 集群需要长上下文）          |
+| G5 | `-fa on` 无 off 对比                        | flash attention 在 Vulkan 后端的收益未单独量化                        | 低                              |
 
 ## 4. 修改历史
 
-| 日期 | 变更 | 动机 |
-| ---- | ---- | ---- |
-| 2026-09-02 | 初版建账（D1.3）：6 实例基线 + 3 反例 + 5 缺口 | ADR-0001 根因 3（调优结论散落不可复用） |
-| 2026-09-02 | 新增 §1.7 网关参数节（rpm/routing_strategy/fallbacks/num_retries）；nodes.env 笔误修正 | D1 验收 A6/A7 回填：rpm=30 成为首条新增依据条目（IMPL §6 约定） |
+| 日期         | 变更                                                                         | 动机                                           |
+| ---------- | -------------------------------------------------------------------------- | -------------------------------------------- |
+| 2026-09-02 | 初版建账（D1.3）：6 实例基线 + 3 反例 + 5 缺口                                            | ADR-0001 根因 3（调优结论散落不可复用）                    |
+| 2026-09-02 | 新增 §1.7 网关参数节（rpm/routing\_strategy/fallbacks/num\_retries）；nodes.env 笔误修正 | D1 验收 A6/A7 回填：rpm=30 成为首条新增依据条目（IMPL §6 约定） |
+| 2026-09-02 | 新增 §1.8 agent CLI 配置节（A 站默认模型钉本地 / B 站 MAX\_CONTEXT\_TOKENS 恢复 / 两站调用形式铁律 / B-claude 预热策略） | 4 CLI 定版实测（agent-cli-smoke.sh 4/4 PASS）发现两处配置漂移并修复；D6 调研 v3 联动 |
+
