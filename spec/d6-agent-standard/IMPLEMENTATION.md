@@ -4,8 +4,8 @@
 
 id: d6-agent-standard-IMPLEMENTATION
 type: implementation
-version: 1.1
-status: draft（Step 6 review 修正后）
+version: 1.2
+status: draft（Step 6 review + 对齐审计修正后）
 date: 2026-09-03
 depends: \[d6-agent-standard-DESIGN v1.3 (approved 2026-09-03, 含 F1 定案)]
 upstream: \[d6-agent-standard-DESIGN]
@@ -47,7 +47,7 @@ upstream: \[d6-agent-standard-DESIGN]
 ```powershell
 agent-cli.ps1
 ├── param 块（$Command, $Proj, $Card, $Model, $Cli, $Sensitivity, $Timeout, $Attach）
-├── $ROUTE_TABLE（哈希表，编译期固化 §9.4 路由：nemotron→B, gpt-oss→A, lightning/ultra→Zen 免费, 拒绝未知）
+├── $ROUTE_TABLE（哈希表，编译期固化 §9.4 路由 + DESIGN §6.1 别名映射表：nemotron→cluster-litellm/nemotron, gpt-oss→cluster-litellm/gpt-oss, lightning→opencode/nemotron-3.5-lightning-free, ultra/free-1m→opencode/nemotron-3-ultra-free, 拒绝未知——BP-2 修正：别名与完整 ID 双表示统一于此）
 ├── Invoke-RemoteScript（R14：本地生成 /tmp/agent-cli-run-<ts>.sh → scp → ssh bash）
 ├── Invoke-Workspace（M1：tar 打包[.agentsync 过滤]→scp→远端解包；--create 建骨架）
 ├── Invoke-Router（M3：拒绝规则 → sensitivity 检查 → sanitized scrubber → 调用参数）
@@ -141,7 +141,7 @@ agent-cli.ps1
 | A8 | 路由拒绝 | `task --model 不存在` 退出码 2；`--sensitivity local-only --model opencode/nemotron-3.5-lightning-free` 退出码 4 |
 | A9 | 锁互斥 | 后台跑长 task，并发第二个 → 退出码 3 且报占用者 PID |
 | A10 | 孤儿恢复 | 手动 kill 远端进程 → 再跑 task → 检测 orphaned + out/ 归档 + 新任务成功 |
-| A11 | 端到端本地 | `task paper --card test-cards/echo.md --model nemotron` → 退出 0 + .agent-run.json 契约字段齐（**含 M1 哈希三字段非空：prompt_sha256/attach/content_digest**）+ agent-out\<ts>\ 有产物 |
+| A11 | 端到端本地 | `task paper --card test-cards/echo.md --model nemotron` → 退出 0 + .agent-run.json 契约字段齐（**含 M1 哈希三字段非空：prompt_sha256/attach/content_digest**）+ agent-out\<ts>\ 有产物；**BP-3 附断言**：远端脚本落盘件 grep `opencode run -m` 前无位置参数形式（stdin 管道铁律运行时可见）；**BP-4 附断言**：queue_s 字段已填充（测试卡 flock 段前 sleep 2s 制造可测排队差） |
 | A12 | 免费档契约 | 同卡 `--model lightning` → .agent-run.json model 字段=opencode/... + 台账一行 |
 | A13 | 错误注入 | timeout_s: 5 卡死循环任务 → 退出码 6 + state=failed{timeout}；网络失败用 wrapper 可控注入模拟（无效 SSH 端口/断开网卡隧道——**禁止杀 sshd**，m2 修正：sshd 是站级服务，动它会误伤全站连接）→ 验证重试 1 次语义 |
 | A14 | Paper 试点 | 真实任务卡跑通 → pytest accept 判据输出回收 + 主控站 git diff 无越界文件（单向流不变式 6） |
