@@ -13,7 +13,7 @@ upstream: \[d6-agent-standard-DESIGN]
 
 > **Feature**: 主控站 agent-cli wrapper MVP（workspace + task 两命令，opencode 单路径，试点 Paper）
 > **创建日期**: 2026-09-03
-> **状态**: 进行中（T0 六门 5 PASS + 1 部分验证；T1 A7 PASS；T2-T5 待验收）
+> **状态**: 进行中（T0 六门 5 PASS + 1 部分验证；T1 A7 PASS；T2 A8/A9/A10 PASS；T3-T5 待验收）
 > **Spec 步骤**: Step 7-8, 10
 > **基于实施**: [IMPLEMENTATION.md](./IMPLEMENTATION.md)（v1.2，含 M1-M4+m1-m2+BP-3/BP-4 修正）
 > **基于设计**: [DESIGN.md](./DESIGN.md)（v1.4 approved，F1 定案为后续升级项目；BP-1 契约补 readonly 字段 / BP-2 别名映射表）
@@ -75,17 +75,17 @@ upstream: \[d6-agent-standard-DESIGN]
 
 ### 2.2 T1：workspace（M1）
 
-| #  | 验收项   | 通过判据                 | 状态 | 证据     |
-| -- | ----- | -------------------- | -- | ------ |
+| #  | 验收项   | 通过判据                 | 状态 | 证据                                                                                                                                                                                                                                                                                                                                                                                                        |
+| -- | ----- | -------------------- | -- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | A7 | 建区+同步 | B 站四件套齐 + md5 与主控站一致 | ☑  | `workspace paper --create` → B 站 \~/agent-workspaces/paper/ 落位 AGENTS.md/CLAUDE.md/.agentsync/out 四件套；AGENTS.md 远端 md5 `0269e34849d151adcc6405b6f75cb722` 与主控站本地 staging md5 完全一致（主控站 2026-09-03 12:42-12:43）。前置修复：ssh config 补 User scott-lau（原默认解析为 peng 导致 publickey 拒绝）；here-string 中 `\$W` 被 PS 展开为空串→统一改 `` `$W `` 转义（`$Script:/$proj` 本地展开、`$W` 留给远端 bash）。archive/sync 路径 T1 placeholder，T5 前不再回填 |
 
 ### 2.3 T2：router + lock/state（M3+M4）
 
 | #   | 验收项  | 通过判据                          | 状态 | 证据     |
 | --- | ---- | ----------------------------- | -- | ------ |
-| A8  | 路由拒绝 | model 缺失/未知→2；local-only+免费→4 | ☐  | <br /> |
-| A9  | 锁互斥  | 并发第二 task→3 且报 PID            | ☐  | <br /> |
-| A10 | 孤儿恢复 | kill 后 orphaned 归档+新任务成功      | ☐  | <br /> |
+| A8  | 路由拒绝 | model 缺失/未知→2；local-only+免费→4 | ☑  | `route --model does-not-exist` → REJECT exit 2；`route --sensitivity public`(无 model) → exit 2；`route --model lightning --sensitivity local-only` → REJECT exit 4（无覆写通道）；control `route --model nemotron --sensitivity local-only` → ROUTE ok exit 0（主控站 2026-09-03 13:07） |
+| A9  | 锁互斥  | 并发第二 task→3 且报 PID            | ☑  | HSTD 标准格式持锁(pid 22191 存活)→并发标准 acquire → `LOCK_HELD owner_pid=22191` + exit 3（flock -n 非阻塞立即返回）（B 站 2026-09-03 13:13） |
+| A10 | 孤儿恢复 | kill 后 orphaned 归档+新任务成功      | ☑  | 残留 running pid 22191(死)→acquire 孤儿检测→out/partial.txt 归档至 out/orphaned/→state 改写 orphaned→重取锁新 running pid 22682, exit 0（B 站 2026-09-03 13:16；二次验证 ORPHAN_RECOVERED pid=18948 亦通过） |
 
 ### 2.4 T3：task 全链 + collect（M2+M5）
 

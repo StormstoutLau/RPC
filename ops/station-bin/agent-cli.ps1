@@ -17,7 +17,12 @@ param(
     [switch]$Archive,
     [string]$Type = '',          # .agentsync template: python|cpp|doc|lean4
     [string]$HostName = '',      # target station override: B|A (default B)
-    [string]$KeyFile = ''        # ssh key (optional)
+    [string]$KeyFile = '',       # ssh key (optional)
+    [string]$Model = '',         # route cmd: model alias or full id
+    [string]$Sensitivity = '',   # route cmd: public|sanitized|local-only
+    [string]$Act = '',           # lock cmd: acquire|release|status
+    [int]$Hold = 0,              # lock cmd: seconds to hold after acquire (A9 test)
+    [string]$RemoteHost = ''     # lock cmd: actual remote host; default B
 )
 
 # ---------------- constants / env ----------------
@@ -198,6 +203,112 @@ echo "sync OK: `$(du -sh "`$W" | cut -f1)"
     else { throw "unknown workspace action: $act (create|sync|archive)" }
 }
 
+# ---------------- M3 router ----------------
+
+function Resolve-Model {
+    # returns hashtable @{ id; station } or $null if resolution fails (unknown alias/id)
+    param([string]$model)
+    if (-not $model) { return $null }
+    $name = $model.Trim()
+    if ($Script:ROUTE_TABLE.ContainsKey($name)) { return $Script:ROUTE_TABLE[$name] }
+    return $null
+}
+
+function Invoke-Router {
+    # D6 M3: three hard reject rules -> caller exit code (2/4/0).
+    #   rule A: model missing          -> reject exit 2
+    #   rule C: model not in route     -> reject exit 2
+    #   rule B: local-only + opencode/*(Zen egress) -> reject exit 4  (owner-policy: no override)
+    param(
+        [string]$model,
+        [string]$sensitivity
+    )
+    if (-not $sensitivity) { $sensitivity = 'public' }
+
+    # rule A: missing model (explicit-model invariant #3)
+    if (-not $model) { Write-Host 'REJECT missing-model (exit 2) - explicit model required (inv 3)'; return 2 }
+
+    # resolve alias/full-id -> @{id;station}
+    $r = Resolve-Model $model
+    if (-not $r) { Write-Host "REJECT unknown-model ($model) exit 2 - not in route table"; return 2 }
+
+    $id = $r['id']
+    $station = $r['station']
+
+    # rule B: local-only never goes to Zen egress (opencode/* => outbound)
+    if ($sensitivity -eq 'local-only' -and $id -match '^opencode/') {
+        Write-Host "REJECT local-only+remote ($id) exit 4 - no override channel (owner-policy)"; return 4
+    }
+
+    Write-Host "ROUTE ok: $model -> $id (station $station, sensitivity=$sensitivity)"
+    return 0
+}
+
+# ---------------- M4 lock/state ----------------
+
+function Invoke-LockState {
+    # D6 M4: acquire/release/status on remote .agent-lock + .agent-state.json (orphan detection)
+    # Lock held on station via flock fd 9 (R14: remote script on disk). Exit codes:
+    #   0 ok (or orphan recovered) / 3 lock held (owner pid reported) / 2 bad act.
+    # hold>0 (acquire only): keep script running that many secs so A9 can observe contention.
+    param(
+        [string]$act,       # acquire|release|status
+        [string]$proj,
+        [string]$hold,      # seconds to hold lock after acquire (A9 concurrency test)
+        [string]$hostName
+    )
+    if (-not $hostName) { $hostName = 'scott-lau-GTR-Pro.local' }
+    $W = "$Script:WORKSPACE_ROOT/$proj"
+    if (-not $hold) { $hold = '0' }
+
+    $sleepLine = ''
+    if ($act -eq 'acquire' -and [int]$hold -gt 0) { $sleepLine = "sleep $hold  # hold fd open for A9 contention test" }
+
+    # PS5.1 gotcha: inside here-string the REMOTE vars must be backtick-escaped.
+    # Only PS-side vars ($act, $sleepLine) are interpolated here directly.
+    $body = @"
+set -u
+W="$W"
+S="`$W/.agent-state.json"
+mkdir -p "`$W" "`$W/out"
+case "$act" in
+  acquire)
+    # orphan check first: running + dead pid => archive out/ -> orphaned -> recoverable
+    if [ -f "`$S" ]; then
+      st=`$(grep -o '"state": *"[^"]*"' "`$S" | head -1 | cut -d'"' -f4 2>/dev/null)
+      pid=`$(grep -o '"pid": *[0-9]*' "`$S" | grep -o '[0-9]*' | head -1)
+      if [ "`$st" = running ] && [ -n "`$pid" ] && ! kill -0 "`$pid" 2>/dev/null; then
+        mkdir -p "`$W/out/orphaned"
+        cp -r "`$W/out/"* "`$W/out/orphaned/" 2>/dev/null || true
+        printf '{"state":"orphaned","pid":%s,"ts_start":"%s","task_id":"","host":"agent-cli"}' "`$pid" "`$(date -Is)" > "`$S"
+        echo "ORPHAN_RECOVERED pid=`$pid archived out/ -> orphaned, then re-acquire"
+      fi
+    fi
+    exec 9> "`$W/.agent-lock"
+    if ! flock -n 9; then
+      owner=`$(grep -o '"pid": *[0-9]*' "`$S" 2>/dev/null | grep -o '[0-9]*' | head -1)
+      [ -z "`$owner" ] && owner=unknown
+      echo "LOCK_HELD owner_pid=`$owner"
+      exit 3
+    fi
+    printf '{"state":"running","pid":%d,"ts_start":"%s","task_id":"locktest","host":"agent-cli"}' "`$$" "`$(date -Is)" > "`$S"
+    echo "LOCK_ACQUIRED pid=`$$"
+    $sleepLine
+    ;;
+  release)
+    printf '{"state":"done","pid":%d,"ts_start":"%s","task_id":"locktest","host":"agent-cli"}' "`$$" "`$(date -Is)" > "`$S"
+    echo "LOCK_RELEASED pid=`$$"
+    ;;
+  status)
+    if [ -f "`$S" ]; then cat "`$S"; echo; else echo "NO_STATE"; fi
+    ;;
+  *) echo "bad lock action: $act"; exit 2 ;;
+esac
+"@
+    $code = Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-lock-$act.sh"
+    return $code
+}
+
 # ---------------- entry ----------------
 try {
     if ($Command -eq 'workspace') {
@@ -205,6 +316,19 @@ try {
         if (-not $Proj) { $Proj = $env:AGENT_CLI_PROJ }
         Invoke-Workspace -proj $Proj -act $act -type $Type
         exit 0
+    }
+    elseif ($Command -eq 'route') {
+        # M3 router diagnostic (A8). usage: agent-cli route --model <name> [--sensitivity <x>]
+        if (-not $Model) { Write-Host 'usage: agent-cli route --model <alias|full-id> [--sensitivity public|sanitized|local-only]'; exit 2 }
+        $code = Invoke-Router -model $Model -sensitivity $Sensitivity
+        exit $code
+    }
+    elseif ($Command -eq 'lock') {
+        # M4 lock/state diagnostic (A9/A10). usage: agent-cli lock <proj> --acquire|--release|--status [--hold <s>]
+        if (-not $Act) { Write-Host 'usage: agent-cli lock <proj> --acquire [--hold <s>] | --release | --status'; exit 2 }
+        if (-not $Proj) { $Proj = $env:AGENT_CLI_PROJ }
+        $code = Invoke-LockState -act $Act -proj $Proj -hold $Hold -hostName $RemoteHost
+        exit $code
     }
     elseif ($Command -eq 'task') {
         Write-Host '[T1 placeholder] task cmd implemented in T3. usage: agent-cli task <proj> ...'
