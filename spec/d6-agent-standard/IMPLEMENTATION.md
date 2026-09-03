@@ -99,6 +99,8 @@ agent-cli.ps1
 - .agentsync 四型模板落盘（python: `__pycache__/ .venv *.egg-info raw_md/ new_papers/ *.duckdb`；cpp: `build/ third_party/ *.o`；doc: 空；lean4: `.lake/`）。**重资产预置通道归属（M3）**：cpp 型排除 `third_party/` 后站上缺编译依赖——`workspace --preset <tar>` 子命令（一次性推送重资产到 `~/agent-workspaces/<proj>/third_party/`，不计入常规 sync）**列 G8/G9 T0 批次实施**（与 R/CRAN sympy 预置同批，DESIGN §11.3 分期移交）；MVP 试点 Paper（python 型）不涉及，Cpp_Hub 试点前必须先过该批次
 - 验收：A7
 
+> **T1 实测补充（2026-09-03，Paper sync 排除配置）**：四型模板是**默认起点**，大源码项目必须配置项目级 `~/.agentsync`（D:\Paper 根目录若存在同名 `.agentsync`，`Get-AgentsyncExcludes` 优先读它，模板作 fallback）。实测 D:\Paper 5.6GB 超 200MB cap 被拒——根因是 `paper_origin/`(2.9GB) + `Paper_Organized_v2/`(2.6GB) 两个纯 PDF 资料库 + 全局 *.pdf(4960 个)。排除后降至 **7.0MB**（远低于 cap，B 站工作区源码齐全 + 0 PDF）。**经验**：① 顶层资料库目录整体排除最有效（`paper_origin/` 等）② 全局大文件类型一字排开（`*.pdf *.caj *.zip *.docx *.dta *.db *...`）③ 编译/缓存产物统一排除（`__pycache__/ .mypy_cache/ *.olean *.pyc .db`）④ 排除语法用 `--exclude=<pat>` 且 `--exclude` 必须置于 tar 位置参数 `.` **之前**（GNU tar 位置语义，非 `--exclude` 可任意放）。Paper 实际排除清单见 `D:\Paper\.agentsync`（paper_origin/ Paper_Organized_v2/ + PDF/caj/zip/office 等类型 + 编译缓存 + .git/tmp/out + D6 内部文件）。T5 Paper 试点因该配置不再因 sync 超限失败。
+
 ### T2：M3 router + M4 lock/state
 
 - Invoke-Router：三拒绝规则（退出码 2/4/2）+ sanitized scrubber（正则清单：密钥模式 `sk-[A-Za-z0-9]{16,}`/邮箱/绝对路径 `D:\\`/`F:\\`；gitleaks 若主控站有则挂，无则纯正则版）

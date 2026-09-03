@@ -364,7 +364,7 @@ M3 接受两种表示：完整 ID 直接查路由表；别名先经本表解析�
 
 - G8 环境预置（T0 独立批次）：R/CRAN noble-cran40 + sympy；wrapper 不感知，仅登记
 
-- **.agentsync 四型模板（Review F3 移交）**：§3.1 决策引用 §7.5 已定"分四型"（Python/C++/文档/Lean4），四个模板的具体排除清单为 IMPLEMENTATION 阶段产出（M1 workspace 落地时随建）
+- **.agentsync 四型模板（Review F3 移交）**：§3.1 决策引用 §7.5 已定"分四型"（Python/C++/文档/Lean4），四个模板的具体排除清单为 IMPLEMENTATION 阶段产出（M1 workspace 落地时随建）。**实测补充（2026-09-03）**：四型模板是默认起点，大源码项目须配置项目级 `D:\<proj>\.agentsync`（存在则 `Get-AgentsyncExcludes` 优先读，模板 fallback）。D:\Paper 5.6GB 实测：排除顶层资料库（paper_origin/ 2.9GB + Paper_Organized_v2/ 2.6GB）+ 全局大文件类型（*.pdf 4960 个等）+ 编译缓存 → 降至 7.0MB，B 站工作区源码齐全 + 0 PDF，sync 不再超 200MB cap（G4）。**朝向**：cpp/.lean4 大依赖项目沿此模式，用 README/config 定义对待（见 IMPLEMENTATION T1 补充）。
 
 - **后端并发探测（F1 升级项，登记待排期）**：MVP 观测先行（queue\_s 被动记录）；探测模块（调 /slots + 槽位占用则拒/等）**单独立项，随 V2/并发 fan-out 阶段实施**（触发条件：queue\_s 数据显示排队成为常态时）
 
