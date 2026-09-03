@@ -5,7 +5,7 @@
 id: d6-agent-standard-DESIGN
 type: design
 version: 1.3
-status: Review 通过（F1 定案，待签字）
+status: approved（Step 3-4 通过，Scott 签字 2026-09-03）
 date: 2026-09-03
 depends: \[Agent跨项目调用标准与迁移复用调研 (docs/, v3.4.1 2026-09-03 含幻觉审计轮: 1 项剔除 + 2 项决策链断裂修复 + 7 项证据强度修正)]
 upstream: \[D5 Agent 生态升级 (verified 2026-09-02), ADR-0001]
@@ -357,4 +357,4 @@ accept:                                                   # 验收判据（可�
 
 ***
 
-**Review 签字**: \_\_\_\_\_\_\_\_\_ 日期: \_\_\_\_\_\_\_\_\_
+**Review 签字**: Scott（2026-09-03 会话批准："执行吧" = 批准 v1.3 全部内容，含 F1 定案为后续升级项目） 日期: 2026-09-03
