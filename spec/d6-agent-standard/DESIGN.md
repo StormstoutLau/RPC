@@ -4,8 +4,8 @@
 
 id: d6-agent-standard-DESIGN
 type: design
-version: 1.0
-status: draft
+version: 1.1
+status: Review 通过（待 Scott 签字）
 date: 2026-09-03
 depends: \[Agent跨项目调用标准与迁移复用调研 (docs/, v3.4.1 2026-09-03 含幻觉审计轮: 1 项剔除 + 2 项决策链断裂修复 + 7 项证据强度修正)]
 upstream: \[D5 Agent 生态升级 (verified 2026-09-02), ADR-0001]
@@ -13,7 +13,8 @@ upstream: \[D5 Agent 生态升级 (verified 2026-09-02), ADR-0001]
 
 > **Feature**: D6 agent-cli wrapper MVP（主控站→两站 agent CLI 的跨项目调用标准：工作区 + 任务卡 + 并发锁 + 敏感路由）
 > **创建日期**: 2026-09-03
-> **状态**: 草稿（待 Scott review）
+> **状态**: Review 通过（v1.1，Step 4 gate 完成，待 Scott 签字）；v1.0 曾为草稿
+> **Review 记录（v1.0→v1.1）**: 6 项 minor 发现全处理——F1 后端并发探测降级须 Scott 确认（批准项）/ F2 补 sanitized scrubber 归属 / F3 .agentsync 四型移交 IMPLEMENTATION / F4 TUI 并发边界登记为已知限制 / F6 架构图补免费档出站 / F7 重试语义适配注记。无 major、无幻觉、无断裂（引用核验全部命中）。
 > **Spec 步骤**: Step 3-4
 > **基于调研**: [Agent跨项目调用标准与迁移复用调研.md](../../docs/Agent跨项目调用标准与迁移复用调研.md)（v3.4.1 审计后版；**本文真值源约定：模型路由与 CLI 边界以调研 §2.1/§9.4 实测层为准，§0/§5 仅作导览**——审计元教训 R11/R3）
 > **G1-G14 缺口清单**: 调研 §6（本文逐条收编或显式移交）
@@ -90,6 +91,8 @@ upstream: \[D5 Agent 生态升级 (verified 2026-09-02), ADR-0001]
   任何 agent-cli task 执行前必须获取；执行期间持有；释放即写 done
   人 TUI 直接进工作区不受锁约束（纪律告知：task 运行中勿手动进同工作区——
   V0 验证门第 5 项若证伪"Bash 不锁"，则把 TUI 互斥也列入 V2）
+  ⚠ 已知边界（Review F4）：flock 只互斥 wrapper-vs-wrapper，不互斥 wrapper-vs-手动TUI；
+  缓解 = 纪律告知 + V0-5 联动验证，接受为 MVP 风险（同工作区手动作业与任务并发的写冲突概率低）
 
 层 2（细，V2，MVP 仅留字段）: 任务卡 readonly 声明
   readonly: true  → 共享语义（research/分析/审查可并行 fan-out）
@@ -99,7 +102,7 @@ upstream: \[D5 Agent 生态升级 (verified 2026-09-02), ADR-0001]
 
 **依据**：Codex parallel.rs RwLock 模式（§9.7.1，E1 源码直读）+ Anthropic 文件集粒度纪律（§9.6-2 第三方验证）。**锁粒度演进方向**：文件集级（"write-heavy one at a time per set of files"），MVP 从工作区级起步是简化非终点。
 
-**llama-server 单槽注意**：后端 slots=1（is_processing 互斥），两站各自的单并发槽意味着"同站并行任务在后端排队"——wrapper 不做后端并发探测（G11 原案降级：观测先行，.agent-run.json 的 queue_s 字段天然记录排队时长，MVP 后按数据决定是否加探测）。
+**llama-server 单槽注意**：后端 slots=1（is_processing 互斥），两站各自的单并发槽意味着"同站并行任务在后端排队"——wrapper 不做后端并发探测（G11 原案降级：观测先行，.agent-run.json 的 queue_s 字段天然记录排队时长，MVP 后按数据决定是否加探测）。**⚠ 批准项（Review F1）**：调研 G11 处置原建议 wrapper MVP 内建"后端并发探测"；本设计明确降级为"观测先行（queue_s）+ 按数据再定"，属对调研建议的有意简化——**需 Scott 确认接受此降级**，否则 V2 需补探测模块。
 
 ### 4.2 整体架构
 
@@ -116,6 +119,10 @@ upstream: \[D5 Agent 生态升级 (verified 2026-09-02), ADR-0001]
 └────────────────────────────┘ ←───────────── │  cwd=工作区 → opencode (stdin 管道)│
                                                 │  记忆: cwd 键控自动隔离            │
                                                 └─────────────────────────────────┘
+      ╔══ 免费档（sensitivity: public 时，Review F6 补绘）══╗
+      ║ M3 路由 → opencode/<free-model> → 经 Zen 网关出站（美国托管）║
+      ║ 隐私边界：免费模型数据用于改进训练，local-only 永不走此路径 ║
+      ╚══════════════════════════════════════════════════════════╝
 ```
 
 ### 4.3 模块划分
@@ -124,7 +131,7 @@ upstream: \[D5 Agent 生态升级 (verified 2026-09-02), ADR-0001]
 | --- | --- | --- | --- | --- |
 | M1 workspace | 建区/同步/归档（tar+scp 推拉 + .agentsync 过滤） | proj 名, .agentsync | 站上工作区目录 | scp/ssh |
 | M2 task | 全链编排：sync→lock→run→collect→unlock | 任务卡/命令行参数 | .agent-run.json + out/ 产物 | M1, M3, M4, M5 |
-| M3 router | 模型→CLI→站映射 + sensitivity 三档 + 拒绝规则 | model, sensitivity, cli | 目标站+调用参数 | §9.4 表（编译进代码） |
+| M3 router | 模型→CLI→站映射 + sensitivity 三档 + 拒绝规则 + **sanitized 前置 scrubber（Review F2 补充）** | model, sensitivity, cli | 目标站+调用参数 | §9.4 表（编译进代码） |
 | M4 lock/state | flock 获取/释放 + 状态机（孤儿检测） | 工作区路径 | 锁句柄/状态文件 | ssh |
 | M5 collect | out/ 整包回收 + git diff 拉回 | 工作区路径 | 主控站产物目录 | tar+scp |
 
@@ -148,7 +155,7 @@ upstream: \[D5 Agent 生态升级 (verified 2026-09-02), ADR-0001]
 
 - **锁占用**：立即退出（退出码 3），报占用者 PID/任务 ID
 - **超时**（默认 900s 可配）：kill 远端进程 → 状态写 failed{reason:timeout} → 释放锁
-- **失败重试**：仅网络类失败（ssh 断）自动重试 1 次；模型输出失败不重试（转人工）——总计 ≤2 次尝试（Codex 二段式语义，§9.7.2）
+- **失败重试**：仅网络类失败（ssh 断）自动重试 1 次；模型输出失败不重试（转人工）——总计 ≤2 次尝试（Codex 二段式语义，§9.7.2）。**适配注记（Review F7）**：Codex 原语义是"沙箱拒绝→恰好一次去沙箱升级重试"；本设计无沙箱概念，故把"升级尝试"重释为"仅网络类失败重试"，模型/文件系统失败直接转人工——语义等价（都不无限重试）、更贴合 CLI 场景，非调研结论偏差
 - **孤儿检测**：task 启动时若见 running 态且 PID 不存活 → 标记 orphaned 归档 out/（不删除）→ 重新取锁
 - **sensitivity: local-only + 免费/远端 model 参数**：M3 直接拒绝（退出码 4），无覆写通道（owner 策略不可升级绕过语义，§9.7.2）
 
@@ -173,6 +180,7 @@ agent-cli task <proj> [--card <task.md>] [--model <m>] [--cli auto|opencode]
 - `--model` 缺失且任务卡无 `model` 字段 → 拒绝（退出码 2，防默认漂移，§9.1-3）
 - `sensitivity: local-only` + model ∈ {opencode/*} → 拒绝（退出码 4）
 - model 不在 §9.4 路由表 → 拒绝（退出码 2）
+- **sanitized 前置**（Review F2 补充）：`sensitivity: sanitized` 时 M3 先跑机械 scrubber（regex + gitleaks，§2.1 敏感路由定义），命中即拦截并报脱敏项；**未通过 scrubber 的任务绝不进入远端路径**（消毒正确性是机械可验证门禁，非 LLM 自查）
 
 ### 5.2 远端执行脚本契约（R14 铁律）
 
@@ -318,6 +326,7 @@ accept:                                                   # 验收判据（可�
 - trae 派发（D7）：任务卡即接口（6.1 schema 冻结）
 - readonly 层 2 锁（V2）：按任务卡字段细化（4.1）
 - G8 环境预置（T0 独立批次）：R/CRAN noble-cran40 + sympy；wrapper 不感知，仅登记
+- **.agentsync 四型模板（Review F3 移交）**：§3.1 决策引用 §7.5 已定"分四型"（Python/C++/文档/Lean4），四个模板的具体排除清单为 IMPLEMENTATION 阶段产出（M1 workspace 落地时随建）
 - G14 升级回归三件套：agent-cli-smoke.sh + 插件加载 + 记忆读写（并入既有升级窗口流程）
 
 ***
