@@ -4,8 +4,8 @@
 
 id: d6-agent-standard-DESIGN
 type: design
-version: 1.3
-status: approved（Step 3-4 通过，Scott 签字 2026-09-03）
+version: 1.4
+status: approved（Step 3-4 通过，Scott 签字 2026-09-03；v1.4 对齐审计回灌：BP-1 契约补 readonly / BP-2 别名映射表，均为 schema 补全非行为变更）
 date: 2026-09-03
 depends: \[Agent跨项目调用标准与迁移复用调研 (docs/, v3.4.1 2026-09-03 含幻觉审计轮: 1 项剔除 + 2 项决策链断裂修复 + 7 项证据强度修正)]
 upstream: \[D5 Agent 生态升级 (verified 2026-09-02), ADR-0001]
@@ -215,6 +215,18 @@ accept:                                                   # 验收判据（可�
 （干净室：只含任务+判据，禁止预装结论/预消化证据）
 ```
 
+**model 别名 → 完整 ID 映射**（对齐审计 BP-2 补，2026-09-03；别名与完整 ID 两套表示在此统一，M3 路由与拒绝规则按完整 ID 判定）：
+
+| 别名（任务卡/命令行友好形式） | 完整 ID（opencode -m 实参） | 站/网关 | 依据 |
+| --- | --- | --- | --- |
+| `nemotron` | `cluster-litellm/nemotron` | B 站 LiteLLM | 调研 §9.4 |
+| `gpt-oss` | `cluster-litellm/gpt-oss`（B 网关）或 `cluster-local/gpt-oss`（A 本地）——默认前者 | A/B | 调研 §9.4 |
+| `lightning` | `opencode/nemotron-3.5-lightning-free` | Zen 免费网关 | 调研 §2.1/§9.4 |
+| `ultra` | `opencode/nemotron-3-ultra-free` | Zen 免费网关 | 调研 §9.4 |
+| `free-1m` | `opencode/nemotron-3-ultra-free`（1M ctx 同款）——`ultra` 语义别名，保留枚举完整性 | Zen 免费网关 | 调研 §9.4 |
+
+M3 接受两种表示：完整 ID 直接查路由表；别名先经本表解析再查。解析失败（未知别名/未知 ID）→ 退出码 2。
+
 ### 6.2 .agent-run.json（契约归一，吸收 task-notification + Codex 遥测）
 
 ```json
@@ -222,6 +234,7 @@ accept:                                                   # 验收判据（可�
   "proj": "paper", "task_id": "task-20260903-001",
   "cli": "opencode", "model": "cluster-litellm/nemotron",
   "sensitivity": "local-only",
+  "readonly": false,
   "session_id": "<opencode session>",
   "exit_code": 0, "status": "completed | failed | timeout | orphaned",
   "content_digest": "sha256:...",           # 全文不落（防敏感内容二次落盘），摘要+站上 out/ 原文
@@ -231,6 +244,8 @@ accept:                                                   # 验收判据（可�
   "prompt_sha256": "", "attach": []        // Model-visible means logged（§9.8.1）：一切注入留哈希
 }
 ```
+
+> readonly 字段（对齐审计 BP-1 补，2026-09-03）：任务卡 §6.1 的 readonly 解析后写入本契约——MVP 仅记录（全部按排它处理，4.1 层 2 语义），V2 激活共享/排它语义时无需改 schema。
 
 ### 6.3 .agent-state.json（状态机，dsh 孤儿锁语义 §9.8.1）
 
