@@ -65,8 +65,13 @@ function Get-TargetHost([string]$station) {
 }
 
 function Test-RemoteReach([string]$hostName) {
-    $r = ssh -o ConnectTimeout=8 -o BatchMode=yes $hostName 'echo alive' 2>$null
-    return ($LASTEXITCODE -eq 0 -and $r -match 'alive')
+    # PS5.1 landmine (confirmed 2026-09-03): native stderr redirect (2>$null) under EAP=Stop
+    # throws NativeCommandError (e.g. DNS failure text) instead of returning - treat any throw as unreachable.
+    try {
+        $r = ssh -o ConnectTimeout=8 -o BatchMode=yes $hostName 'echo alive' 2>$null
+        return ($LASTEXITCODE -eq 0 -and "$r" -match 'alive')
+    }
+    catch { return $false }
 }
 
 function Invoke-RemoteScript {
@@ -82,7 +87,7 @@ function Invoke-RemoteScript {
         Write-Output '[retry] remote reach failed, retry once'
         Start-Sleep -Seconds 2
     }
-    if (-not (Test-RemoteReach $HostName)) { throw "remote unreachable: $HostName (ensure station online)" }
+    if (-not (Test-RemoteReach $HostName)) { throw "NETFAIL: remote unreachable: $HostName (ensure station online)" }
     if (-not $LocalName) { $LocalName = "agent-cli-run-$([DateTime]::Now.ToString('HHmmss')).sh" }
 
     $localPath = Join-Path $Script:TMP_ROOT $LocalName
@@ -91,16 +96,34 @@ function Invoke-RemoteScript {
     [System.IO.File]::WriteAllText($localPath, $ScriptBody, $utf8NoBom)
 
     scp -q -o ConnectTimeout=10 $localPath "${HostName}:/tmp/${LocalName}"
-    if ($LASTEXITCODE -ne 0) { throw "scp failed: $LocalName" }
+    if ($LASTEXITCODE -ne 0) { throw "NETFAIL: scp failed: $LocalName" }
 
-    $sshOut = ssh -o ConnectTimeout=10 $HostName "bash /tmp/${LocalName}" 2>&1
-    $code = $LASTEXITCODE
+    # PS5.1: 2>&1 under EAP=Stop throws NativeCommandError when ssh writes stderr (network fail
+    # confirmed 2026-09-03) - catch and classify by message, then by rc.
+    try {
+        $sshOut = ssh -o ConnectTimeout=10 $HostName "bash /tmp/${LocalName}" 2>&1
+        $code = $LASTEXITCODE
+    }
+    catch {
+        $sshOut = @("$($_.Exception.Message)")   # NativeCommandError text (e.g. DNS failure)
+        $code = 255
+    }
     # ssh network-level failure -> retry once (inv 7 gate-cache: retry does NOT re-run scrubber; only network retry per DESIGN §4.5/F7)
     if ($code -ne 0 -and ($sshOut -match 'Could not resolve hostname|Connection (refused|timed out|reset)|Network is unreachable|port 22')) {
         Write-Host "[retry] ssh network failure (rc=$code), retry once (gate-cache: scrubber not re-run)"
         Start-Sleep -Seconds 2
-        $sshOut = ssh -o ConnectTimeout=10 $HostName "bash /tmp/${LocalName}" 2>&1
-        $code = $LASTEXITCODE
+        try {
+            $sshOut = ssh -o ConnectTimeout=10 $HostName "bash /tmp/${LocalName}" 2>&1
+            $code = $LASTEXITCODE
+        }
+        catch {
+            $sshOut = @("$($_.Exception.Message)")
+            $code = 255
+        }
+        # P2-2 (D6 audit): still network-class after retry => terminal network failure -> exit code 5 (DESIGN §8)
+        if ($code -ne 0 -and ($sshOut -match 'Could not resolve hostname|Connection (refused|timed out|reset)|Network is unreachable|port 22')) {
+            throw "NETFAIL: ssh exec failed after retry (rc=$code, host=$HostName)"
+        }
     }
     foreach ($ln in $sshOut) { Write-Host $ln }   # stream remote stdout to console, NOT into return value
     Remove-Item $localPath -ErrorAction SilentlyContinue
@@ -166,7 +189,7 @@ function Invoke-Workspace {
 
         # 3. scp
         scp -q -o ConnectTimeout=10 $tarFile "${hostName}:/tmp/agent-cli-create-$proj.tar"
-        if ($LASTEXITCODE -ne 0) { throw 'scp skeleton failed' }
+        if ($LASTEXITCODE -ne 0) { throw "NETFAIL: scp skeleton failed" }
 
         # 4. remote mkdir + extract
         $body = @"
@@ -201,6 +224,7 @@ md5sum AGENTS.md CLAUDE.md .agentsync
         $size = (Get-Item $tarFile).Length
         if ($size -gt 200MB) { throw "sync pkg $([math]::Round($size/1MB,1))MB > 200MB cap, add excludes (G4)" }
         scp -q -o ConnectTimeout=10 $tarFile "${hostName}:/tmp/agent-cli-sync-$proj.tar"
+        if ($LASTEXITCODE -ne 0) { throw "NETFAIL: scp sync failed (rc=$LASTEXITCODE) - station likely down" }
         $body = @"
 set -eu
 W="$Script:WORKSPACE_ROOT/$proj"
@@ -326,21 +350,36 @@ esac
 # ---------------- M2 task full-chain ----------------
 
 function Get-FrontMatter {
-    # minimal front-matter parser from a task card md
+    # minimal front-matter parser from a task card md.
+    # P1b (D6 audit 2026-09-03): the card BODY is the clean-room task spec (DESIGN §6.1
+    # "正文为干净室任务描述") and MUST be transmitted - previously only the one-line
+    # front-matter task: was sent and the whole body was silently dropped (A14 finding:
+    # model self-designed the deliverable + self-authored its tests => self-certifying accept).
     param([string]$Path)
-    $h = @{ model=''; sensitivity=''; readonly=$false; timeout_s=900; task=''; cli='opencode' }
-    $inFreq = $false; $bodyRead = $false
-    foreach ($l in (Get-Content $Path)) {
+    $h = @{ model=''; sensitivity=''; readonly=$false; timeout_s=900; task=''; cli='opencode'; accept=@(); body='' }
+    $inFreq = $false; $bodyRead = $false; $curKey = ''
+    $bodyLines = @()
+    $lines = [System.IO.File]::ReadAllLines($Path, [System.Text.UTF8Encoding]::new($false))
+    foreach ($l in $lines) {
         if ($l.Trim() -eq '---') { if (-not $inFreq) { $inFreq = $true; continue } else { $inFreq = $false; $bodyRead = $true; continue } }
         if ($inFreq -and $l -match '^\s*([A-Za-z_]+)\s*:\s*(.*)$') {
             $k = $matches[1].ToLower(); $v = $matches[2].Trim()
-            if ($h.ContainsKey($k)) { $h[$k] = $v }
+            $curKey = ''
+            if ($h.ContainsKey($k)) {
+                if ($k -eq 'accept') { $curKey = 'accept' }
+                else { $h[$k] = $v }
+            }
+        }
+        elseif ($inFreq -and $curKey -eq 'accept' -and $l -match '^\s*-\s+(.+)$') {
+            $h['accept'] += $matches[1].Trim()
         }
         elseif ($bodyRead) {
+            $bodyLines += $l
             $t = $l -replace '^#{1,6}\s*任务描述\s*', '' -replace '^#{1,6}\s*', ''
             if (-not $h['task'] -and $t.Trim()) { $h['task'] = $t.Trim() }
         }
     }
+    $h['body'] = (($bodyLines -join "`n").Trim())
     if ($h['readonly'] -eq 'true') { $h['readonly'] = $true } else { $h['readonly'] = $false }
     $ts = 0
     if (-not [int]::TryParse([string]$h['timeout_s'], [ref]$ts) -or $ts -le 0) { $ts = 900 }
@@ -352,6 +391,33 @@ function Get-Sha256Text([string]$text) {
     $sha = [Security.Cryptography.SHA256]::Create()
     $bytes = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text))
     return (($bytes | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
+function Invoke-Scrubber {
+    # D6 audit P1 (2026-09-03): regex-only sanitizer for sensitivity=sanitized (IMPL T2 scope).
+    # Patterns: api keys (sk-...), emails, windows absolute paths. Runs on console BEFORE
+    # the prompt leaves (invariant 2: scrub on console, remote only receives sanitized text).
+    # R4: prints masked previews of hit lines for human confirmation; no whitelist in MVP.
+    param([string]$text)
+    $rules = @(
+        @{ name = 'api-key';  re = 'sk-[A-Za-z0-9_\-]{16,}';                             repl = '[REDACTED-KEY]' },
+        @{ name = 'email';    re = '[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}';   repl = '[REDACTED-EMAIL]' },
+        @{ name = 'win-path'; re = '(?i)\b[A-Z]:\\\S+';                                    repl = '[REDACTED-PATH]' }
+    )
+    $hits = 0
+    foreach ($r in $rules) {
+        $ms = [regex]::Matches($text, $r['re'])
+        if ($ms.Count -gt 0) {
+            $hits += $ms.Count
+            foreach ($m in $ms) {
+                $preview = if ($m.Value.Length -gt 8) { $m.Value.Substring(0, 8) + '...' } else { $m.Value }
+                Write-Host "SCRUB[$($r['name'])] hit: $preview (len=$($m.Value.Length)) -> $($r['repl'])"
+            }
+            $text = [regex]::Replace($text, $r['re'], $r['repl'])
+        }
+    }
+    if ($hits -gt 0) { Write-Host "SCRUB total hits: $hits (sanitized gate active)" }
+    return $text
 }
 
 function Invoke-Task {
@@ -389,12 +455,29 @@ function Invoke-Task {
     # 3) sync source subset (never overwrite out/); target station is B (memory master) ws root
     Write-Host "TASK sync source -> $proj (model=$id station=$station sens=$sens readonly=$readonly)"
     try { Invoke-Workspace -proj $proj -act 'sync' -type $type | Out-Null }
-    catch { Write-Host "sync failed: $($_.Exception.Message)"; return 6 }
+    catch {
+        $msg = $_.Exception.Message
+        if ($msg -like 'NETFAIL*') { Write-Host "sync network failure: $msg"; return 5 }   # P2-2: DESIGN §8
+        Write-Host "sync failed: $msg"; return 6
+    }
 
     # 4) prompt + M1 hash (inv 5: Model-visible means logged)
+    #    P1b: card BODY (clean-room spec) is transmitted with the task line.
+    #    P1a: sanitized gate scrubs on console BEFORE hashing/encoding (inv 2).
     $promptFull = "[proj:$proj]`n$($fm['task'])"
+    if ($fm['body']) { $promptFull += "`n`n" + $fm['body'] }
+    if ($sens -eq 'sanitized') {
+        Write-Host 'SANITIZED gate: scrubbing prompt before it leaves console (P1a)'
+        $promptFull = Invoke-Scrubber $promptFull
+    }
     $promptSha = Get-Sha256Text $promptFull
     $promptB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($promptFull))
+
+    # 4b) accept criteria (A14): executable verification gate run remotely after agent completes
+    $accept = @($fm['accept'])
+    if ($accept.Count -gt 0 -and $accept[0]) { $accept = @($accept | Where-Object { $_.Trim() }) } else { $accept = @() }
+    $acceptB64 = ''
+    if ($accept.Count -gt 0) { $acceptB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($accept -join "`n"))) }
 
     # 5) fused remote script: orphan->flock->state->opencode(stdin)->state->output (R14)
     $W = "$Script:WORKSPACE_ROOT/$proj"
@@ -426,15 +509,40 @@ printf '{"state":"running","pid":%d,"ts_start":"%s","task_id":"%s","host":"agent
 sleep 2   # artificial intake gap (BP-4: makes queue_s measurable on contention holder)
 printf '%s' "$promptB64" | base64 -d > "`$W/out/.prompt.txt"
 echo "PIPE_STDIN_OK"
+cd "`$W" || exit 8    # cwd=workspace so agent reads AGENTS.md + project files (inv 4: stdin pipe, not cwd hijack)
+R0=`$(date +%s%N)     # P2-1: run clock starts here (queue = lock+intake up to this point)
 timeout $timeout opencode run -m "$id" < "`$W/out/.prompt.txt" > "`$W/out/.agent-output.txt" 2>&1
 RC=`$?
-Q1=`$(date +%s%N)
+R1=`$(date +%s%N)
+# accept gate (A14): run executable criteria in workspace after agent completes
+ACCEPT_B64="$acceptB64"
+ACCEPT_OK=1
+if [ -n "`$ACCEPT_B64" ]; then
+  echo "`$ACCEPT_B64" | base64 -d > "`$W/out/.accept-cmds.txt"
+  : > "`$W/out/.accept-output.txt"
+  i=0
+  while IFS= read -r c || [ -n "`$c" ]; do
+    [ -z "`$c" ] && continue
+    ((i++))
+    echo "=== ACCEPT_CMD[`$i] >>> `$c" >> "`$W/out/.accept-output.txt"
+    ( cd "`$W" && eval "`$c" ) >> "`$W/out/.accept-output.txt" 2>&1
+    arc=`$?
+    echo "--- ACCEPT_RC[`$i]=`$arc" >> "`$W/out/.accept-output.txt"
+    [ "`$arc" -ne 0 ] && ACCEPT_OK=0
+  done < "`$W/out/.accept-cmds.txt"
+  echo "ACCEPT_OK=`$ACCEPT_OK"
+fi
 printf '{"state":"done","pid":%d,"ts_start":"%s","task_id":"%s","host":"agent-cli"}' "`$$" "`$(date -Is)" "$ts" > "`$S"
-QUEUE=`$(( (Q1-Q0)/1000000 ))
+QUEUE=`$(( (R0-Q0)/1000000000 ))    # P2-1: queue = lock wait + intake (sleep 2 => ~2s)
+RUNS=`$(( (R1-R0)/1000000000 ))      # P2-1: run = agent generation wall time
 echo "QUEUE_S=`$QUEUE"
+echo "RUN_S=`$RUNS"
 echo "TASK_RC=`$RC"
+echo "ACCEPT_OK=`$ACCEPT_OK"
 echo "OUT_BYTES=`$(wc -c < "`$W/out/.agent-output.txt" 2>/dev/null)"
-printf 'QUEUE_S=%s\nTASK_RC=%s\n' "`$QUEUE" "`$RC" > "`$W/out/.meta"
+printf 'QUEUE_S=%s\nRUN_S=%s\nTASK_RC=%s\nACCEPT_OK=%s\n' "`$QUEUE" "`$RUNS" "`$RC" "`$ACCEPT_OK" > "`$W/out/.meta"
+# task succeeds only if agent ok AND (no accept criteria OR accept all pass)
+if [ -n "`$ACCEPT_B64" ] && [ "`$ACCEPT_OK" -ne 1 ]; then exit 9; fi
 exit `$RC
 "@
     $code = Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-task-$ts.sh"
@@ -442,18 +550,27 @@ exit `$RC
     if ($code -eq 124) { $code = 6 }
     Write-Host "TASK remote excode=$code"
 
-    # 6) collect: pull out/.meta + out/.agent-output.txt, compute content_digest (M1)
+    # 6) collect: pull out/.meta + out/.agent-output.txt + out/.accept-output.txt, compute content_digest (M1)
     $outTxt = Join-Path $env:TEMP "agent-cli-out-$ts.txt"
     $metaTxt = Join-Path $env:TEMP "agent-cli-meta-$ts.txt"
+    $accTxt = Join-Path $env:TEMP "agent-cli-accept-$ts.txt"
     scp -q -o ConnectTimeout=10 "${hostName}:$W/out/.agent-output.txt" "$outTxt" 2>$null
     scp -q -o ConnectTimeout=10 "${hostName}:$W/out/.meta" "$metaTxt" 2>$null
-    $queue_s = 0
+    if ($accept.Count -gt 0) { scp -q -o ConnectTimeout=10 "${hostName}:$W/out/.accept-output.txt" "$accTxt" 2>$null }
+    $queue_s = 0; $run_s = 0; $accept_ok = $null
     if (Test-Path $metaTxt) {
         $m = Get-Content $metaTxt | Out-String
         if ($m -match 'QUEUE_S=(\d+)') { $queue_s = [int]$matches[1] }
+        if ($m -match 'RUN_S=(\d+)')   { $run_s = [int]$matches[1] }      # P2-1: run_s now measured (R1-R0)
+        if ($m -match 'ACCEPT_OK=(\d+)') { $accept_ok = [int]$matches[1] }
     }
     $contentSha = ''
     if (Test-Path $outTxt) { $contentSha = Get-Sha256Text ([IO.File]::ReadAllText($outTxt)) }
+    # accept gate: remote exit 9 => agent ok but accept criteria failed (DESIGN §8 not exposed; local marker)
+    $acceptPassed = $true
+    if ($accept.Count -gt 0) { $acceptPassed = ($accept_ok -eq 1) }
+    $codeReal = $code
+    if ($code -eq 9) { $code = 1 }  # map accept-gate failure to generic failed for shell return
 
     # 7) .agent-run.json under <proj>/agent-out/<ts>/ (DESIGN §6.2)
     $projOutRoot = Join-Path $projRoot 'agent-out'
@@ -469,19 +586,21 @@ exit `$RC
         readonly = $readonly
         session_id = ''
         exit_code = $code
-        status = if ($code -eq 0) { 'completed' } elseif ($code -eq 6) { 'timeout' } else { 'failed' }
+        status = if ($code -eq 0 -and $acceptPassed) { 'completed' } elseif ($code -eq 6) { 'timeout' } else { 'failed' }
         content_digest = "sha256:$contentSha"
         usage = [ordered]@{ total_tokens = 0; tool_uses = 0 }
         queue_s = $queue_s
-        run_s = 0
+        run_s = $run_s
         timestamp_start = ''
         timestamp_end = ''
         prompt_sha256 = "sha256:$promptSha"
         attach = @()
+        accept = [ordered]@{ cmd = $accept; passed = $acceptPassed }
     }
-    $run | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $runDir '.agent-run.json') -Encoding utf8
+    $run | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $runDir '.agent-run.json') -Encoding utf8
     # move pulled output into runDir
     if (Test-Path $outTxt) { Move-Item $outTxt (Join-Path $runDir 'agent-output.txt') -Force }
+    if (Test-Path $accTxt) { Move-Item $accTxt (Join-Path $runDir 'accept-output.txt') -Force }
     Remove-Item (Join-Path $projRoot 'agent-out\.agent-run.json') -ErrorAction SilentlyContinue
 
     # 8) ledger line (G13)
@@ -528,5 +647,7 @@ try {
 }
 catch {
     Write-Host "ERROR: $($_.Exception.Message)"
+    # P2-2 (D6 audit): terminal network failure (reach/exec after retry) -> DESIGN §8 exit code 5
+    if ($_.Exception.Message -like 'NETFAIL*') { exit 5 }
     exit 1
 }
