@@ -22,7 +22,8 @@ param(
     [string]$Sensitivity = '',   # route cmd: public|sanitized|local-only
     [string]$Act = '',           # lock cmd: acquire|release|status
     [int]$Hold = 0,              # lock cmd: seconds to hold after acquire (A9 test)
-    [string]$RemoteHost = ''     # lock cmd: actual remote host; default B
+    [string]$RemoteHost = '',    # lock cmd: actual remote host; default B
+    [string]$Card = ''           # task cmd: path to task card md
 )
 
 # ---------------- constants / env ----------------
@@ -87,8 +88,9 @@ function Invoke-RemoteScript {
     scp -q -o ConnectTimeout=10 $localPath "${HostName}:/tmp/${LocalName}"
     if ($LASTEXITCODE -ne 0) { throw "scp failed: $LocalName" }
 
-    ssh -o ConnectTimeout=10 $HostName "bash /tmp/${LocalName}"
+    $sshOut = ssh -o ConnectTimeout=10 $HostName "bash /tmp/${LocalName}" 2>&1
     $code = $LASTEXITCODE
+    foreach ($ln in $sshOut) { Write-Host $ln }   # stream remote stdout to console, NOT into return value
     Remove-Item $localPath -ErrorAction SilentlyContinue
     return $code
 }
@@ -180,9 +182,9 @@ md5sum AGENTS.md CLAUDE.md .agentsync
         if (Test-Path $tarFile) { Remove-Item $tarFile -Force }
         Push-Location $projRoot
         try {
-            $cmd = @($Script:GNU_TAR) + @('--force-local','-cf', $tarFile, '.') + $exArgs
-            & $cmd
-            if ($LASTEXITCODE -ne 0) { throw 'tar sync failed (trim .agentsync if exceed)' }
+            $tarArgs = @('-cf', $tarFile, '--force-local') + $exArgs + @('.')
+            & $Script:GNU_TAR @tarArgs
+            if ($LASTEXITCODE -ne 0) { throw "tar sync failed (rc=$LASTEXITCODE; trim .agentsync if exceed)" }
         } finally { Pop-Location }
         $size = (Get-Item $tarFile).Length
         if ($size -gt 200MB) { throw "sync pkg $([math]::Round($size/1MB,1))MB > 200MB cap, add excludes (G4)" }
@@ -309,6 +311,175 @@ esac
     return $code
 }
 
+# ---------------- M2 task full-chain ----------------
+
+function Get-FrontMatter {
+    # minimal front-matter parser from a task card md
+    param([string]$Path)
+    $h = @{ model=''; sensitivity=''; readonly=$false; timeout_s=900; task=''; cli='opencode' }
+    $inFreq = $false; $bodyRead = $false
+    foreach ($l in (Get-Content $Path)) {
+        if ($l.Trim() -eq '---') { if (-not $inFreq) { $inFreq = $true; continue } else { $inFreq = $false; $bodyRead = $true; continue } }
+        if ($inFreq -and $l -match '^\s*([A-Za-z_]+)\s*:\s*(.*)$') {
+            $k = $matches[1].ToLower(); $v = $matches[2].Trim()
+            if ($h.ContainsKey($k)) { $h[$k] = $v }
+        }
+        elseif ($bodyRead) {
+            $t = $l -replace '^#{1,6}\s*任务描述\s*', '' -replace '^#{1,6}\s*', ''
+            if (-not $h['task'] -and $t.Trim()) { $h['task'] = $t.Trim() }
+        }
+    }
+    if ($h['readonly'] -eq 'true') { $h['readonly'] = $true } else { $h['readonly'] = $false }
+    $ts = 0
+    if (-not [int]::TryParse([string]$h['timeout_s'], [ref]$ts) -or $ts -le 0) { $ts = 900 }
+    $h['timeout_s'] = $ts
+    return $h
+}
+
+function Get-Sha256Text([string]$text) {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $bytes = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text))
+    return (($bytes | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
+function Invoke-Task {
+    # D6 M2: full chain sync->lock->run->collect->unlock for a single task card.
+    # prompt is transferred via base64 (immune to quote hell); remote reads it and
+    # pipes to opencode via stdin (inv 4: no position-arg form).
+    param(
+        [string]$proj,
+        [string]$card,       # local path to task card md
+        [string]$model,      # alias/full-id override
+        [string]$sensitive,  # sensitivity override
+        [string]$type,       # .agentsync type for sync step
+        [string]$hostName
+    )
+    if (-not $card) { Write-Host 'task requires --card <task.md>'; return 2 }
+    if (-not (Test-Path $card)) { throw "card not found: $card" }
+    $projRoot = $Script:PROJECTS[$proj]
+    if (-not $projRoot -or -not (Test-Path $projRoot)) { throw "unknown/missing project: $proj (registered: $($Script:PROJECTS.Keys -join ','))" }
+
+    # 1) card front-matter
+    $fm = Get-FrontMatter $card
+    $m = if ($model) { $model } else { if ($fm['model']) { $fm['model'] } else { '' } }
+    $sens = if ($sensitive) { $sensitive } else { if ($fm['sensitivity']) { $fm['sensitivity'] } else { 'public' } }
+    if (-not $m) { Write-Host 'REJECT missing-model (exit 2) - card has no model and no --model (inv 3)'; return 2 }
+    $readonly = [bool]$fm['readonly']
+    $timeout = [int]$fm['timeout_s']
+
+    # 2) M3 route (reuse Resolve-Model + local-only gate)
+    $r = Resolve-Model $m
+    if (-not $r) { Write-Host "REJECT unknown-model ($m) exit 2 - not in route table"; return 2 }
+    $id = $r['id']; $station = $r['station']
+    if ($sens -eq 'local-only' -and $id -match '^opencode/') { Write-Host "REJECT local-only+remote ($id) exit 4 - no override channel"; return 4 }
+    if (-not $hostName) { $hostName = Get-TargetHost $station }
+
+    # 3) sync source subset (never overwrite out/); target station is B (memory master) ws root
+    Write-Host "TASK sync source -> $proj (model=$id station=$station sens=$sens readonly=$readonly)"
+    try { Invoke-Workspace -proj $proj -act 'sync' -type $type | Out-Null }
+    catch { Write-Host "sync failed: $($_.Exception.Message)"; return 6 }
+
+    # 4) prompt + M1 hash (inv 5: Model-visible means logged)
+    $promptFull = "[proj:$proj]`n$($fm['task'])"
+    $promptSha = Get-Sha256Text $promptFull
+    $promptB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($promptFull))
+
+    # 5) fused remote script: orphan->flock->state->opencode(stdin)->state->output (R14)
+    $W = "$Script:WORKSPACE_ROOT/$proj"
+    $ts = [DateTime]::Now.ToString('yyyyMMddHHmmssffff')
+    $body = @"
+set -u
+W="$W"
+S="`$W/.agent-state.json"
+mkdir -p "`$W" "`$W/out"
+# orphan check
+if [ -f "`$S" ]; then
+  st=`$(grep -o '"state": *"[^"]*"' "`$S" | head -1 | cut -d'"' -f4 2>/dev/null)
+  pid=`$(grep -o '"pid": *[0-9]*' "`$S" | grep -o '[0-9]*' | head -1)
+  if [ "`$st" = running ] && [ -n "`$pid" ] && ! kill -0 "`$pid" 2>/dev/null; then
+    mkdir -p "`$W/out/orphaned"
+    cp -r "`$W/out/"* "`$W/out/orphaned/" 2>/dev/null || true
+    echo "ORPHAN_RECOVERED pid=`$pid"
+  fi
+fi
+exec 9> "`$W/.agent-lock"
+if ! flock -n 9; then
+  owner=`$(grep -o '"pid": *[0-9]*' "`$S" 2>/dev/null | grep -o '[0-9]*' | head -1)
+  [ -z "`$owner" ] && owner=unknown
+  echo "LOCK_HELD owner_pid=`$owner"
+  exit 3
+fi
+Q0=`$(date +%s%N)
+printf '{"state":"running","pid":%d,"ts_start":"%s","task_id":"%s","host":"agent-cli"}' "`$$" "`$(date -Is)" "$ts" > "`$S"
+sleep 2   # artificial intake gap (BP-4: makes queue_s measurable on contention holder)
+printf '%s' "$promptB64" | base64 -d > "`$W/out/.prompt.txt"
+echo "PIPE_STDIN_OK"
+timeout $timeout opencode run -m "$id" < "`$W/out/.prompt.txt" > "`$W/out/.agent-output.txt" 2>&1
+RC=`$?
+Q1=`$(date +%s%N)
+printf '{"state":"done","pid":%d,"ts_start":"%s","task_id":"%s","host":"agent-cli"}' "`$$" "`$(date -Is)" "$ts" > "`$S"
+QUEUE=`$(( (Q1-Q0)/1000000 ))
+echo "QUEUE_S=`$QUEUE"
+echo "TASK_RC=`$RC"
+echo "OUT_BYTES=`$(wc -c < "`$W/out/.agent-output.txt" 2>/dev/null)"
+printf 'QUEUE_S=%s\nTASK_RC=%s\n' "`$QUEUE" "`$RC" > "`$W/out/.meta"
+exit `$RC
+"@
+    $code = Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-task-$ts.sh"
+    if ($code -ne 0) { Write-Host "TASK remote exit=$code (model run rc)"; }
+
+    # 6) collect: pull out/.meta + out/.agent-output.txt, compute content_digest (M1)
+    $outTxt = Join-Path $env:TEMP "agent-cli-out-$ts.txt"
+    $metaTxt = Join-Path $env:TEMP "agent-cli-meta-$ts.txt"
+    scp -q -o ConnectTimeout=10 "${hostName}:$W/out/.agent-output.txt" "$outTxt" 2>$null
+    scp -q -o ConnectTimeout=10 "${hostName}:$W/out/.meta" "$metaTxt" 2>$null
+    $queue_s = 0
+    if (Test-Path $metaTxt) {
+        $m = Get-Content $metaTxt | Out-String
+        if ($m -match 'QUEUE_S=(\d+)') { $queue_s = [int]$matches[1] }
+    }
+    $contentSha = ''
+    if (Test-Path $outTxt) { $contentSha = Get-Sha256Text ([IO.File]::ReadAllText($outTxt)) }
+
+    # 7) .agent-run.json under <proj>/agent-out/<ts>/ (DESIGN §6.2)
+    $projOutRoot = Join-Path $projRoot 'agent-out'
+    if (-not (Test-Path $projOutRoot)) { New-Item -ItemType Directory -Path $projOutRoot -Force | Out-Null }
+    $runDir = Join-Path $projOutRoot $ts
+    New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+    $run = [ordered]@{
+        proj = $proj
+        task_id = "task-$ts"
+        cli = 'opencode'
+        model = $id
+        sensitivity = $sens
+        readonly = $readonly
+        session_id = ''
+        exit_code = $code
+        status = if ($code -eq 0) { 'completed' } elseif ($code -eq 124) { 'timeout' } else { 'failed' }
+        content_digest = "sha256:$contentSha"
+        usage = [ordered]@{ total_tokens = 0; tool_uses = 0 }
+        queue_s = $queue_s
+        run_s = 0
+        timestamp_start = ''
+        timestamp_end = ''
+        prompt_sha256 = "sha256:$promptSha"
+        attach = @()
+    }
+    $run | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $runDir '.agent-run.json') -Encoding utf8
+    # move pulled output into runDir
+    if (Test-Path $outTxt) { Move-Item $outTxt (Join-Path $runDir 'agent-output.txt') -Force }
+    Remove-Item (Join-Path $projRoot 'agent-out\.agent-run.json') -ErrorAction SilentlyContinue
+
+    # 8) ledger line (G13)
+    $ledger = Join-Path $projRoot 'agent-runs.log'
+    $line = "$ts,$proj,$id,$sens,$code,0,0"
+    Add-Content -Path $ledger -Value $line -Encoding utf8
+
+    Write-Host "TASK_DONE dir=$runDir exit=$code prompt_sha256=sha256:$promptSha content_digest=sha256:$contentSha"
+    Write-Host "ledger+=$line"
+    return $code
+}
+
 # ---------------- entry ----------------
 try {
     if ($Command -eq 'workspace') {
@@ -331,8 +502,9 @@ try {
         exit $code
     }
     elseif ($Command -eq 'task') {
-        Write-Host '[T1 placeholder] task cmd implemented in T3. usage: agent-cli task <proj> ...'
-        exit 0
+        # M2 full chain. usage: agent-cli task <proj> --card <task.md> [--model <m>] [--sensitivity <x>]
+        $code = Invoke-Task -proj $Proj -card $Card -model $Model -sensitive $Sensitivity -type $Type -hostName $RemoteHost
+        exit $code
     }
     else {
         Write-Host "usage:"; Write-Host "  agent-cli workspace <proj> [--create|--sync|--archive] [--type python|cpp|doc|lean4]"
