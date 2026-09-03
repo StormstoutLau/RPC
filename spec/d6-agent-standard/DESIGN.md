@@ -4,8 +4,8 @@
 
 id: d6-agent-standard-DESIGN
 type: design
-version: 1.1
-status: Review 通过（待 Scott 签字）
+version: 1.2
+status: Review 通过（F1 已批准，待签字）
 date: 2026-09-03
 depends: \[Agent跨项目调用标准与迁移复用调研 (docs/, v3.4.1 2026-09-03 含幻觉审计轮: 1 项剔除 + 2 项决策链断裂修复 + 7 项证据强度修正)]
 upstream: \[D5 Agent 生态升级 (verified 2026-09-02), ADR-0001]
@@ -13,8 +13,8 @@ upstream: \[D5 Agent 生态升级 (verified 2026-09-02), ADR-0001]
 
 > **Feature**: D6 agent-cli wrapper MVP（主控站→两站 agent CLI 的跨项目调用标准：工作区 + 任务卡 + 并发锁 + 敏感路由）
 > **创建日期**: 2026-09-03
-> **状态**: Review 通过（v1.1，Step 4 gate 完成，待 Scott 签字）；v1.0 曾为草稿
-> **Review 记录（v1.0→v1.1）**: 6 项 minor 发现全处理——F1 后端并发探测降级须 Scott 确认（批准项）/ F2 补 sanitized scrubber 归属 / F3 .agentsync 四型移交 IMPLEMENTATION / F4 TUI 并发边界登记为已知限制 / F6 架构图补免费档出站 / F7 重试语义适配注记。无 major、无幻觉、无断裂（引用核验全部命中）。
+> **状态**: Review 通过（v1.2，Step 4 gate + F1 批准完成，待签字）；v1.0 曾为草稿
+> **Review 记录（v1.0→v1.2）**: 6 项 minor 发现全处理——F1 后端并发探测降级**已获 Scott 批准**（2026-09-03，观测先行 queue_s + V2 按数据补探测）/ F2 补 sanitized scrubber 归属 / F3 .agentsync 四型移交 IMPLEMENTATION / F4 TUI 并发边界登记为已知限制 / F6 架构图补免费档出站 / F7 重试语义适配注记。无 major、无幻觉、无断裂（引用核验全部命中）。待文末签字。
 > **Spec 步骤**: Step 3-4
 > **基于调研**: [Agent跨项目调用标准与迁移复用调研.md](../../docs/Agent跨项目调用标准与迁移复用调研.md)（v3.4.1 审计后版；**本文真值源约定：模型路由与 CLI 边界以调研 §2.1/§9.4 实测层为准，§0/§5 仅作导览**——审计元教训 R11/R3）
 > **G1-G14 缺口清单**: 调研 §6（本文逐条收编或显式移交）
