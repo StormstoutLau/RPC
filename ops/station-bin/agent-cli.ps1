@@ -77,6 +77,11 @@ function Invoke-RemoteScript {
         [string]$ScriptBody,
         [string]$LocalName
     )
+    if (-not (Test-RemoteReach $HostName)) {
+        # ssh reach failure -> retry once (inv 7 gate-cache: network-only retry per DESIGN §4.5/F7)
+        Write-Output '[retry] remote reach failed, retry once'
+        Start-Sleep -Seconds 2
+    }
     if (-not (Test-RemoteReach $HostName)) { throw "remote unreachable: $HostName (ensure station online)" }
     if (-not $LocalName) { $LocalName = "agent-cli-run-$([DateTime]::Now.ToString('HHmmss')).sh" }
 
@@ -90,6 +95,13 @@ function Invoke-RemoteScript {
 
     $sshOut = ssh -o ConnectTimeout=10 $HostName "bash /tmp/${LocalName}" 2>&1
     $code = $LASTEXITCODE
+    # ssh network-level failure -> retry once (inv 7 gate-cache: retry does NOT re-run scrubber; only network retry per DESIGN §4.5/F7)
+    if ($code -ne 0 -and ($sshOut -match 'Could not resolve hostname|Connection (refused|timed out|reset)|Network is unreachable|port 22')) {
+        Write-Host "[retry] ssh network failure (rc=$code), retry once (gate-cache: scrubber not re-run)"
+        Start-Sleep -Seconds 2
+        $sshOut = ssh -o ConnectTimeout=10 $HostName "bash /tmp/${LocalName}" 2>&1
+        $code = $LASTEXITCODE
+    }
     foreach ($ln in $sshOut) { Write-Host $ln }   # stream remote stdout to console, NOT into return value
     Remove-Item $localPath -ErrorAction SilentlyContinue
     return $code
@@ -426,7 +438,9 @@ printf 'QUEUE_S=%s\nTASK_RC=%s\n' "`$QUEUE" "`$RC" > "`$W/out/.meta"
 exit `$RC
 "@
     $code = Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-task-$ts.sh"
-    if ($code -ne 0) { Write-Host "TASK remote exit=$code (model run rc)"; }
+    # DESIGN §9.5 exit-code dispatch: 124(timeout by `timeout`) -> 6; other remote run rc preserved as failure
+    if ($code -eq 124) { $code = 6 }
+    Write-Host "TASK remote excode=$code"
 
     # 6) collect: pull out/.meta + out/.agent-output.txt, compute content_digest (M1)
     $outTxt = Join-Path $env:TEMP "agent-cli-out-$ts.txt"
@@ -455,7 +469,7 @@ exit `$RC
         readonly = $readonly
         session_id = ''
         exit_code = $code
-        status = if ($code -eq 0) { 'completed' } elseif ($code -eq 124) { 'timeout' } else { 'failed' }
+        status = if ($code -eq 0) { 'completed' } elseif ($code -eq 6) { 'timeout' } else { 'failed' }
         content_digest = "sha256:$contentSha"
         usage = [ordered]@{ total_tokens = 0; tool_uses = 0 }
         queue_s = $queue_s

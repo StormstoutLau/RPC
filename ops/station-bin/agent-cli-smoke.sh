@@ -102,4 +102,37 @@ fi
 
 echo "--------------------------------"
 echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
+
+# ---------------------------------------------------------------- D6 agent-cli wrapper（第四节，2026-09-03）
+# 端到端探活: agent-cli task 全链（sync->lock->run->collect->.agent-run.json）+ 超时退出码 6 (A13)
+# 前置: powershell + B 站 paper 工作区存在（workspace paper --create 已建）+ B 站 backend 已加载
+ACF=d:/RPC/ops/station-bin/agent-cli.ps1
+CARD=d:/RPC/spec/d6-agent-standard/test-cards/echo.md
+PS=powershell.exe
+if [ "$SCOPE" = "ALL" ]; then
+  B_BACKEND=$(ssh -o ConnectTimeout=10 scott-lau@scott-lau-GTR-Pro.local "pgrep -c -f llama-server" 2>/dev/null || echo 0)
+  if [ "${B_BACKEND:-0}" -lt 1 ]; then
+    report d6-task SKIP "B backend 未加载, 先 infer-load (agent-cli 端到端依赖模型)"
+    report d6-timeout SKIP "B backend 未加载, 跳过超时注入"
+  else
+    OUT=$("$PS" -NoProfile -ExecutionPolicy Bypass -File "$ACF" task paper --card "$CARD" --model nemotron 2>&1) || true
+    if echo "$OUT" | grep -q 'TASK_DONE .* exit=0'; then
+      report d6-task PASS "agent-cli task 端到端 exit=0"
+    else
+      report d6-task FAIL "no exit=0 in: $OUT"
+    fi
+    # 超时注入: timeout_s=5 卡死任务 -> wrapper 退出码 6 (A13)
+    TMOUT=d:/RPC/spec/d6-agent-standard/test-cards/timeout.md
+    "$PS" -NoProfile -ExecutionPolicy Bypass -File "$ACF" task paper --card "$TMOUT" --model nemotron >/dev/null 2>&1
+    tc=$?
+    if [ "$tc" -eq 6 ]; then
+      report d6-timeout PASS "timeout_s=5 -> exit 6 (A13)"
+    else
+      report d6-timeout FAIL "expected 6 got $tc"
+    fi
+  fi
+fi
+
+echo "--------------------------------"
+echo "TOTAL PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
 [ "$FAIL" -eq 0 ]

@@ -13,7 +13,7 @@ upstream: \[d6-agent-standard-DESIGN]
 
 > **Feature**: 主控站 agent-cli wrapper MVP（workspace + task 两命令，opencode 单路径，试点 Paper）
 > **创建日期**: 2026-09-03
-> **状态**: 进行中（T0 六门 5 PASS + 1 部分验证；T1 A7 PASS；T2 A8/A9/A10 PASS；T3 A11/A12 PASS；T4-T5 待验收）
+> **状态**: 进行中（T0 六门 5 PASS + 1 部分验证；T1 A7 PASS；T2 A8/A9/A10 PASS；T3 A11/A12 PASS；T4 A13 PASS；T5 待验收）
 > **Spec 步骤**: Step 7-8, 10
 > **基于实施**: [IMPLEMENTATION.md](./IMPLEMENTATION.md)（v1.2，含 M1-M4+m1-m2+BP-3/BP-4 修正）
 > **基于设计**: [DESIGN.md](./DESIGN.md)（v1.4 approved，F1 定案为后续升级项目；BP-1 契约补 readonly 字段 / BP-2 别名映射表）
@@ -81,24 +81,24 @@ upstream: \[d6-agent-standard-DESIGN]
 
 ### 2.3 T2：router + lock/state（M3+M4）
 
-| #   | 验收项  | 通过判据                          | 状态 | 证据     |
-| --- | ---- | ----------------------------- | -- | ------ |
+| #   | 验收项  | 通过判据                          | 状态 | 证据                                                                                                                                                                                                                                                                        |
+| --- | ---- | ----------------------------- | -- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | A8  | 路由拒绝 | model 缺失/未知→2；local-only+免费→4 | ☑  | `route --model does-not-exist` → REJECT exit 2；`route --sensitivity public`(无 model) → exit 2；`route --model lightning --sensitivity local-only` → REJECT exit 4（无覆写通道）；control `route --model nemotron --sensitivity local-only` → ROUTE ok exit 0（主控站 2026-09-03 13:07） |
-| A9  | 锁互斥  | 并发第二 task→3 且报 PID            | ☑  | HSTD 标准格式持锁(pid 22191 存活)→并发标准 acquire → `LOCK_HELD owner_pid=22191` + exit 3（flock -n 非阻塞立即返回）（B 站 2026-09-03 13:13） |
-| A10 | 孤儿恢复 | kill 后 orphaned 归档+新任务成功      | ☑  | 残留 running pid 22191(死)→acquire 孤儿检测→out/partial.txt 归档至 out/orphaned/→state 改写 orphaned→重取锁新 running pid 22682, exit 0（B 站 2026-09-03 13:16；二次验证 ORPHAN_RECOVERED pid=18948 亦通过） |
+| A9  | 锁互斥  | 并发第二 task→3 且报 PID            | ☑  | HSTD 标准格式持锁(pid 22191 存活)→并发标准 acquire → `LOCK_HELD owner_pid=22191` + exit 3（flock -n 非阻塞立即返回）（B 站 2026-09-03 13:13）                                                                                                                                                     |
+| A10 | 孤儿恢复 | kill 后 orphaned 归档+新任务成功      | ☑  | 残留 running pid 22191(死)→acquire 孤儿检测→out/partial.txt 归档至 out/orphaned/→state 改写 orphaned→重取锁新 running pid 22682, exit 0（B 站 2026-09-03 13:16；二次验证 ORPHAN\_RECOVERED pid=18948 亦通过）                                                                                        |
 
 ### 2.4 T3：task 全链 + collect（M2+M5）
 
-| #   | 验收项   | 通过判据                                                                                        | 状态 | 证据     | <br /> |
-| --- | ----- | ------------------------------------------------------------------------------------------- | -- | ------ | :----- |
-| A11 | 端到端本地 | 退出 0 + 契约字段齐（含哈希三字段非空 + readonly 字段非 null）+ 产物回收 + stdin 管道运行时断言 + queue\_s 填充（BP-3/BP-4 补） | ☑  | `task probe --card test-cards/echo.md`(model nemotron, local-only) → TASK\_EXIT=0；.agent-run.json 契约齐：readonly=false(非null) + content\_digest=sha256:ba2b0b41... + prompt\_sha256=sha256:efd1803e... + attach=[] + queue\_s=14734(填充) + status=completed；产物 agent-output.txt 回收(含模型输出)；远端脚本 stdin 管道 `< .prompt.txt`：PIPE\_STDIN\_OK + opencode 无位置参数形式（inv 4 铁律，BP-3）；queue\_s 填充（BP-4）——B 站 2026-09-03 13:40。**期间修复**：Invoke-RemoteScript 用 `\$W` 反斜杠转义致 PS 展开为空串/grep 崩溃（A7 同类）→ 统一改反引号 `` `$ ``；ssh stdout 混入函数返回值→改 Write-Host 透出只返回退出码；sync tar `& $cmd` 数组展开异常 + `--exclude` 位置错→改 splatting + exclude 前置；D:\Paper 源码 5.6GB 超 200MB cap→验收改用 probe 最小工作区（M1 源码子集语义，Paper 大源码另行配置 .agentsync 属 T5） | <br /> |
-| A12 | 免费档契约 | model 字段=opencode/... + 台账一行                                                                | ☑  | `task probe --card test-cards/echo.md --model lightning --sensitivity public` → model=opencode/nemotron-3.5-lightning-free（免费档完整 ID，路由正确）+ 台账行 `202609031343177444,probe,opencode/nemotron-3.5-lightning-free,public,0,0,0`；契约 status=completed exit=0 + content\_digest=sha256:7b71...（B 站 2026-09-03 13:43） | <br /> |
+| #   | 验收项   | 通过判据                                                                                        | 状态 | 证据                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | <br /> |
+| --- | ----- | ------------------------------------------------------------------------------------------- | -- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----- |
+| A11 | 端到端本地 | 退出 0 + 契约字段齐（含哈希三字段非空 + readonly 字段非 null）+ 产物回收 + stdin 管道运行时断言 + queue\_s 填充（BP-3/BP-4 补） | ☑  | `task probe --card test-cards/echo.md`(model nemotron, local-only) → TASK\_EXIT=0；.agent-run.json 契约齐：readonly=false(非null) + content\_digest=sha256:ba2b0b41... + prompt\_sha256=sha256:efd1803e... + attach=\[] + queue\_s=14734(填充) + status=completed；产物 agent-output.txt 回收(含模型输出)；远端脚本 stdin 管道 `< .prompt.txt`：PIPE\_STDIN\_OK + opencode 无位置参数形式（inv 4 铁律，BP-3）；queue\_s 填充（BP-4）——B 站 2026-09-03 13:40。**期间修复**：Invoke-RemoteScript 用 `\$W` 反斜杠转义致 PS 展开为空串/grep 崩溃（A7 同类）→ 统一改反引号 `` `$ ``；ssh stdout 混入函数返回值→改 Write-Host 透出只返回退出码；sync tar `& $cmd` 数组展开异常 + `--exclude` 位置错→改 splatting + exclude 前置；D:\Paper 源码 5.6GB 超 200MB cap→验收改用 probe 最小工作区（M1 源码子集语义，Paper 大源码另行配置 .agentsync 属 T5） | <br /> |
+| A12 | 免费档契约 | model 字段=opencode/... + 台账一行                                                                | ☑  | `task probe --card test-cards/echo.md --model lightning --sensitivity public` → model=opencode/nemotron-3.5-lightning-free（免费档完整 ID，路由正确）+ 台账行 `202609031343177444,probe,opencode/nemotron-3.5-lightning-free,public,0,0,0`；契约 status=completed exit=0 + content\_digest=sha256:7b71...（B 站 2026-09-03 13:43）                                                                                                                                                                                                                                                                                                                                                                                             | <br /> |
 
 ### 2.5 T4：错误路径 + 冒烟
 
 | #   | 验收项  | 通过判据                                      | 状态 | 证据     |
 | --- | ---- | ----------------------------------------- | -- | ------ |
-| A13 | 错误注入 | 超时→6+failed{timeout}；网络注入→重试 1 次（禁杀 sshd） | ☐  | <br /> |
+| A13 | 错误注入 | 超时→6+failed{timeout}；网络注入→重试 1 次（禁杀 sshd） | ☑  | 超时注入：`task paper --card timeout.md`(timeout\_s:5 卡死) → opencode 被 timeout kill(TASK\_RC=124) → 映射 excode 6 → 进程退出码 **6** + run.json `exit\_code=6 status=timeout`（D:\Paper\agent-out\20260903135818...，B 站 2026-09-03 13:58）；网络重试：`Invoke-RemoteScript` 对 ssh 网络类（reach 失败 + 执行连接失败）各 retry 1 次（gate-cache scrubber 不重跑），无效 host 实测 8.5s 时延（含 2s retry sleep + 双探活，单次远快于此）证明重试路径生效（主控站 2026-09-03 14:00）。smoke 增补第四节：agent-cli task 端到端探活 + 超时注入，backend 未加载时 SKIP 降级（实测 FAIL=0），加载时 PASS/FAIL | <br /> |
 
 ### 2.6 T5：Paper 试点
 
