@@ -13,7 +13,7 @@ upstream: \[d6-agent-standard-DESIGN]
 
 > **Feature**: 主控站 agent-cli wrapper MVP（workspace + task 两命令，opencode 单路径，试点 Paper）
 > **创建日期**: 2026-09-03
-> **状态**: 待验收（T0 未开始）
+> **状态**: 进行中（T0 六门 5 PASS + 1 部分验证；T1 A7 PASS；T2-T5 待验收）
 > **Spec 步骤**: Step 7-8, 10
 > **基于实施**: [IMPLEMENTATION.md](./IMPLEMENTATION.md)（v1.2，含 M1-M4+m1-m2+BP-3/BP-4 修正）
 > **基于设计**: [DESIGN.md](./DESIGN.md)（v1.4 approved，F1 定案为后续升级项目；BP-1 契约补 readonly 字段 / BP-2 别名映射表）
@@ -62,14 +62,14 @@ upstream: \[d6-agent-standard-DESIGN]
 
 ### 2.1 T0：V0 六门（前置验证，**2026-09-03 已完成：5 PASS + 1 部分验证**）
 
-| #  | 验收项              | 通过判据（IMPL §7）               | 状态 | 证据（输出摘要+时间戳） |
-| -- | ---------------- | --------------------------- | -- | ------------ |
-| A1 | V0-1 薄壳导入        | v0probe 会话回答含 AGENTS.md 标记句 | ☑ | opencode 读 CLAUDE.md 薄壳→Read AGENTS.md→原文复述 V0PROBE-MARKER-7391（B 站 2026-09-03 12:07）；A1b 对照 PASS：/tmp 下 Glob 0 matches→答"无" |
-| A2 | V0-2 claude 遮蔽   | proj-test 项目技能可见不被遮蔽        | ☑ | opencode 会话列出 17 技能含 proj-test（与 12 用户级共存无遮蔽）（B 站 2026-09-03 12:05） |
-| A3 | V0-3 cwd 键控      | v0probe 笔记不串到 /tmp 会话       | ⚠ | **部分验证/判据修正**：ad-hoc 笔记（memory_add_note）跨 cwd 可读（/tmp 会话经 memory_search 命中 v0probe 笔记）——此为调研 §4.1 已知行为 G3（ad-hoc 全局平铺），wrapper [proj:] 前缀补丁的设计依据而非缺陷。**提取路径的 cwd 键控**（真正的验证对象）需 6h 闲置→G6 已列自然覆盖（B 站 2026-09-03 12:08）。判据应修正为"提取记忆不串"而非"ad-hoc 笔记不串" |
-| A4 | V0-4 A 站记忆       | A 站 memory\_add\_note 跨会话复述 | ☑ | A 站写入 astation-memory-test-5566→新会话 memory_list/read 命中并全文复述（A 站 2026-09-03 12:15） |
-| A5 | V0-5 Bash 不锁     | 同文件并发写两行可读无损坏（v1.1 M2 判据）   | ☑ | 双 opencode 并发写 /tmp/v0probe-test.txt→cat 2 行 LINE-FROM-A/B 完好无损坏（B 站 2026-09-03 12:18）；**额外发现**：headless 模式 opencode 写工作区外文件被 external_directory 权限自动拒绝（沙箱效果），wrapper 设计需注意任务产物应在工作区内 |
-| A6 | V0-6 flock 跨 ssh | ssh2 取锁失败退出                 | ☑ | ssh1 持锁 sleep 15（HELD）→ssh2 flock -n 取锁 EXIT=1 失败→等待后 ssh1 完成（B 站 2026-09-03 12:18）；flock 跨独立 ssh 连接互斥语义正确 |
+| #  | 验收项              | 通过判据（IMPL §7）               | 状态 | 证据（输出摘要+时间戳）                                                                                                                                                                                                                                            |
+| -- | ---------------- | --------------------------- | -- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A1 | V0-1 薄壳导入        | v0probe 会话回答含 AGENTS.md 标记句 | ☑  | opencode 读 CLAUDE.md 薄壳→Read AGENTS.md→原文复述 V0PROBE-MARKER-7391（B 站 2026-09-03 12:07）；A1b 对照 PASS：/tmp 下 Glob 0 matches→答"无"                                                                                                                            |
+| A2 | V0-2 claude 遮蔽   | proj-test 项目技能可见不被遮蔽        | ☑  | opencode 会话列出 17 技能含 proj-test（与 12 用户级共存无遮蔽）（B 站 2026-09-03 12:05）                                                                                                                                                                                     |
+| A3 | V0-3 cwd 键控      | v0probe 笔记不串到 /tmp 会话       | ⚠  | **部分验证/判据修正**：ad-hoc 笔记（memory\_add\_note）跨 cwd 可读（/tmp 会话经 memory\_search 命中 v0probe 笔记）——此为调研 §4.1 已知行为 G3（ad-hoc 全局平铺），wrapper \[proj:] 前缀补丁的设计依据而非缺陷。**提取路径的 cwd 键控**（真正的验证对象）需 6h 闲置→G6 已列自然覆盖（B 站 2026-09-03 12:08）。判据应修正为"提取记忆不串"而非"ad-hoc 笔记不串" |
+| A4 | V0-4 A 站记忆       | A 站 memory\_add\_note 跨会话复述 | ☑  | A 站写入 astation-memory-test-5566→新会话 memory\_list/read 命中并全文复述（A 站 2026-09-03 12:15）                                                                                                                                                                     |
+| A5 | V0-5 Bash 不锁     | 同文件并发写两行可读无损坏（v1.1 M2 判据）   | ☑  | 双 opencode 并发写 /tmp/v0probe-test.txt→cat 2 行 LINE-FROM-A/B 完好无损坏（B 站 2026-09-03 12:18）；**额外发现**：headless 模式 opencode 写工作区外文件被 external\_directory 权限自动拒绝（沙箱效果），wrapper 设计需注意任务产物应在工作区内                                                                  |
+| A6 | V0-6 flock 跨 ssh | ssh2 取锁失败退出                 | ☑  | ssh1 持锁 sleep 15（HELD）→ssh2 flock -n 取锁 EXIT=1 失败→等待后 ssh1 完成（B 站 2026-09-03 12:18）；flock 跨独立 ssh 连接互斥语义正确                                                                                                                                              |
 
 > T0 任一门不通过 → 记录 + DESIGN §11.1 改道 + 回灌，不硬闯。
 
@@ -77,7 +77,7 @@ upstream: \[d6-agent-standard-DESIGN]
 
 | #  | 验收项   | 通过判据                 | 状态 | 证据     |
 | -- | ----- | -------------------- | -- | ------ |
-| A7 | 建区+同步 | B 站四件套齐 + md5 与主控站一致 | ☐  | <br /> |
+| A7 | 建区+同步 | B 站四件套齐 + md5 与主控站一致 | ☑  | `workspace paper --create` → B 站 \~/agent-workspaces/paper/ 落位 AGENTS.md/CLAUDE.md/.agentsync/out 四件套；AGENTS.md 远端 md5 `0269e34849d151adcc6405b6f75cb722` 与主控站本地 staging md5 完全一致（主控站 2026-09-03 12:42-12:43）。前置修复：ssh config 补 User scott-lau（原默认解析为 peng 导致 publickey 拒绝）；here-string 中 `\$W` 被 PS 展开为空串→统一改 `` `$W `` 转义（`$Script:/$proj` 本地展开、`$W` 留给远端 bash）。archive/sync 路径 T1 placeholder，T5 前不再回填 |
 
 ### 2.3 T2：router + lock/state（M3+M4）
 
@@ -91,8 +91,8 @@ upstream: \[d6-agent-standard-DESIGN]
 
 | #   | 验收项   | 通过判据                                                                                        | 状态 | 证据     | <br /> |
 | --- | ----- | ------------------------------------------------------------------------------------------- | -- | ------ | :----- |
-| A11 | 端到端本地 | 退出 0 + 契约字段齐（含哈希三字段非空 + readonly 字段非 null）+ 产物回收 + stdin 管道运行时断言 + queue\_s 填充（BP-3/BP-4 补） | ☐  | <br /> |        |
-| A12 | 免费档契约 | model 字段=opencode/... + 台账一行                                                                | ☐  | <br /> |        |
+| A11 | 端到端本地 | 退出 0 + 契约字段齐（含哈希三字段非空 + readonly 字段非 null）+ 产物回收 + stdin 管道运行时断言 + queue\_s 填充（BP-3/BP-4 补） | ☐  | <br /> | <br /> |
+| A12 | 免费档契约 | model 字段=opencode/... + 台账一行                                                                | ☐  | <br /> | <br /> |
 
 ### 2.5 T4：错误路径 + 冒烟
 
