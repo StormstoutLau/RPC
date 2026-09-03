@@ -1,9 +1,10 @@
 #!/bin/bash
-# infer-load <alias前缀> [--backend llama-rpc|llama-single|vllm] [--port N] [--ctx N] [--threads N]
-# 首次加载自动生成默认 conf (打印路径, 可编辑后 systemctl restart llama-server@<alias>)
+# infer-load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm] [--port N] [--ctx N] [--threads N]
+# 默认后端 = unsloth (unsloth studio run 加载, 引擎=LLAMA_SERVER_PATH 指向的 llama-server)
+# 旧后端 llama-rpc/llama-single/vllm 保留 (systemd llama-server 路径), 可用 --backend 显式回退
+# 首次加载自动生成默认 conf (打印路径)
 set -uo pipefail
 AWORK="scott-lau@scott-lau-NEX.local"
-AWORK_IP=192.168.1.11
 
 PREFIX=""; BACKEND=""; PORT=""; CTX=""; THREADS=""
 while [ $# -gt 0 ]; do
@@ -15,7 +16,7 @@ while [ $# -gt 0 ]; do
     *) PREFIX="$1"; shift ;;
   esac
 done
-[ -n "$PREFIX" ] || { echo "用法: infer-load <alias前缀> [--backend ...] [--port N]"; exit 1; }
+[ -n "$PREFIX" ] || { echo "用法: infer-load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm] [--port N]"; exit 1; }
 
 log() { echo "[infer-load] $(date '+%H:%M:%S') $*"; }
 
@@ -30,28 +31,23 @@ ALIAS="$MATCHES"
 # ---- [2] 定位模型文件 + 生成 conf (若缺) ----
 CONF="/etc/llama-instances/${ALIAS}.env"
 if [ ! -f "$CONF" ]; then
-  # 找 repo 目录
   REPO=$(find -L /data/models/gguf -mindepth 2 -maxdepth 2 -type d 2>/dev/null | \
     while read -r d; do a=$(basename "$d" | sed 's/-GGUF$//' | tr 'A-Z' 'a-z'); \
     case "$a" in minimax-m2.7*) a="m27-q4ks";; esac; [ "$a" = "$ALIAS" ] && echo "$d"; done | head -1)
   [ -z "$REPO" ] && { echo "ERROR: repo not found"; exit 1; }
-  # 主权重优先级: 合并单文件 (B5j 产物, 排除分片/mmproj) > 分片首片 (未合并)
   F=$(find -L "$REPO" -name '*.gguf' ! -name '*-of-0000*.gguf' ! -name 'mmproj*' -size +1G -printf '%s %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
   [ -z "$F" ] && F=$(find -L "$REPO" -name '*-00001-of-*.gguf' | head -1)
   [ -z "$F" ] && F=$(find -L "$REPO" -name '*.gguf' | head -1)
-  # 大小判定: F 为分片首片(未合并)→repo 总量 (防首片 header-only); F 为合并单文件→文件本身
   if echo "$F" | grep -q -- '-of-0000'; then SZ=$(du -smL "$REPO" | cut -f1); else SZ=$(( $(stat -c%s "$F") / 1048576 )); fi
-  # 后端默认判定
+  # 后端默认判定: 默认 unsloth (除 embedding 小模型用 llama-single)
   if [ -z "$BACKEND" ]; then
-    case "$ALIAS" in all-minilm*) BACKEND="llama-single";; *) \
-      if [ "$SZ" -gt 66560 ]; then BACKEND="llama-rpc"; else BACKEND="llama-single"; fi ;;
-    esac
+    case "$ALIAS" in all-minilm*) BACKEND="llama-single";; *) BACKEND="unsloth";; esac
   fi
   RPCV=""; [ "$BACKEND" = "llama-rpc" ] && RPCV="auto"
   NCM=0; [ "$BACKEND" = "llama-rpc" ] && NCM=8
   EMB=""; case "$ALIAS" in all-minilm*) EMB="--embedding";; esac
   sudo tee "$CONF" >/dev/null <<CEOF
-# B5i 自动生成 ($(date '+%F %T')) — 可编辑后 systemctl restart llama-server@${ALIAS}
+# B5i 自动生成 ($(date '+%F %T')) [默认后端 unsloth] — 可编辑后 infer-load(重载) 或 systemctl 回退
 MODEL_PATH=${F}
 PORT=${PORT:-8080}
 CTX=${CTX:-32768}
@@ -59,15 +55,21 @@ THREADS=${THREADS:-16}
 N_CPU_MOE=${NCM}
 RPC_TARGET=${RPCV}
 EXTRA_FLAGS="-fa on ${EMB}"
+BACKEND=${BACKEND}
 CEOF
   log "conf 生成: $CONF (backend=$BACKEND)"
 fi
 source "$CONF"
+# conf 优先级: 显式 --backend > conf BACKEND > 默认 unsloth
+BACKEND="${BACKEND:-${CONF_BACKEND:-unsloth}}"
 [ -n "$PORT" ] && PORT_NUM="$PORT" || PORT_NUM="${PORT:-8080}"
 
-# ---- [3] 互斥: 停另一后端 ----
-log "停旧实例 (llama/vllm)..."
+# ---- [3] 互斥: 停另一后端 (systemd llama + vllm + unsloth) ----
+log "停旧实例 (llama/vllm/unsloth)..."
 sudo systemctl stop 'llama-server@*' 2>/dev/null || true
+# 清理 unsloth studio 进程 (命令行含 'unsloth studio run') 与底层 llama-server (防自匹配)
+pkill -9 -f "[u]nsloth studio run" 2>/dev/null || true
+pkill -9 -x llama-server 2>/dev/null || true
 if pgrep -f 'vllm.entrypoint[s]' >/dev/null 2>&1; then
   log "停 vLLM (Ray 双机)..."
   pkill -f 'vllm.entrypoint[s]' 2>/dev/null || true
@@ -76,7 +78,7 @@ if pgrep -f 'vllm.entrypoint[s]' >/dev/null 2>&1; then
   ssh -o BatchMode=yes "$AWORK" "pkill -f '^ray::' 2>/dev/null; /home/scott-lau/vllm-rocm/bin/ray stop -f 2>/dev/null" 2>/dev/null || true
 fi
 
-wait_gtt() {  # $1=tag, $2=ssh target (空=本地)
+wait_gtt() {
   for i in $(seq 1 90); do
     if [ -n "$2" ]; then
       used=$(ssh -o BatchMode=yes "$2" "cat /sys/class/drm/card*/device/mem_info_gtt_used 2>/dev/null | head -1")
@@ -96,23 +98,63 @@ else
   log "A GTT 跳过 (单机模式: RPC_TARGET 空, A 站资源与本加载无关)"
 fi
 
-# ---- [4] vLLM 路径 ----
+# ---- [4] vLLM 路径 (回退) ----
 if [ "$BACKEND" = "vllm" ]; then
   log "vLLM 路径: 调 a4_vllm_launch.sh (仅 m27-awq 验证)..."
   exec bash /home/scott-lau/scripts/a4_vllm_launch.sh
 fi
 
-# ---- [5] A 站 rpc-server (分布式) ----
+# ---- [5] A 站 rpc-server (分布式, llama-rpc 回退) ----
 if [ -n "${RPC_TARGET:-}" ]; then
-  log "A 站起 rpc-server@${ALIAS} (cache /data/rpccache/${ALIAS})..."
+  log "A 站起 rpc-server@${ALIAS}..."
   ssh -o BatchMode=yes "$AWORK" "sudo systemctl start rpc-server@${ALIAS}"
 fi
 
-# ---- [6] B 站 llama-server ----
+# ---- [6a] unsloth 后端 (默认) ----
+if [ "$BACKEND" = "unsloth" ]; then
+  log "unsloth 后端: 起 unsloth studio gpt-oss(${ALIAS}) port ${PORT_NUM} ctx ${CTX:-32768}..."
+  export LLAMA_SERVER_PATH="${LLAMA_SERVER_PATH:-/home/scott-lau/llama.cpp-vulkan-b10715/llama-server}"
+  cd /home/scott-lau
+  UN_LOG="/home/scott-lau/.unsloth/run-${ALIAS}.log"
+  nohup "$HOME/.local/bin/unsloth" studio run --model "$MODEL_PATH" \
+    --port "${PORT_NUM}" --api-only \
+    --flash-attn on --no-context-shift -c "${CTX:-32768}" --device Vulkan0 --kv-unified \
+    --cache-type-k q8_0 --cache-type-v q8_0 \
+    > "$UN_LOG" 2>&1 &
+  log "unsloth launched pid=$! log=$UN_LOG"
+  # unsloth 可能改写 --port (占用则自动+1); 从日志解析实际端口
+  ACT_PORT="$PORT_NUM"
+  for i in $(seq 1 40); do
+    P=$(grep -oE "running at http://127.0.0.1:[0-9]+" "$UN_LOG" | head -1 | grep -oE "[0-9]+$")
+    [ -n "$P" ] && { ACT_PORT="$P"; break; }
+    sleep 3
+  done
+  log "unsloth 实际端口: ${ACT_PORT}"
+  # 解析 API Key (unsloth 每次重启重铸; /v1/models 需认证)
+  UN_KEY=$(grep -oE "sk-unsloth-[a-f0-9]+" "$UN_LOG" | tail -1)
+  # 等就绪: /v1/models (unsloth, 带认证) 确认模型可服务
+  for i in $(seq 1 120); do
+    if [ -n "$UN_KEY" ]; then
+      curl -sf --max-time 2 -H "Authorization: Bearer ${UN_KEY}" "http://127.0.0.1:${ACT_PORT}/v1/models" >/dev/null 2>&1
+    else
+      curl -sf --max-time 2 "http://127.0.0.1:${ACT_PORT}/v1/models" >/dev/null 2>&1
+    fi
+    if [ $? -eq 0 ]; then
+      log "READY ✓ :${ACT_PORT} (unsloth ${ALIAS})"
+      [ -n "$UN_KEY" ] && log "API Key: $UN_KEY"
+      exit 0
+    fi
+    sleep 3
+  done
+  log "ERROR: unsloth 健康检查超时 — tail $UN_LOG 排查"
+  exit 1
+fi
+
+# ---- [6b] B 站 llama-server (systemd 回退) ----
 log "B 站起 llama-server@${ALIAS} (port ${PORT_NUM})..."
 sudo systemctl start "llama-server@${ALIAS}"
 
-# ---- [7] 健康检查 (-f: 503 Loading model 不算就绪) ----
+# ---- [7] 健康检查 ----
 for i in $(seq 1 120); do
   if curl -sf --max-time 2 "http://127.0.0.1:${PORT_NUM}/health" >/dev/null 2>&1; then
     log "READY ✓ :${PORT_NUM} (llama-server@${ALIAS})"

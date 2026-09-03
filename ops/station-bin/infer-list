@@ -40,7 +40,7 @@ echo "$B_LIST" | while IFS='|' read -r a repo sz f; do
   case "$a" in
     m27-awq) BE="vllm" ;;
     all-minilm*) BE="llama-emb" ;;
-    *) if [ "$sz" -gt 66560 ]; then BE="llama-rpc"; else BE="llama-single"; fi ;;
+    *) BE="unsloth" ;;
   esac
   printf "%-38s %-6s %-7s %-12s %s\n" "$a" "$LOC" "${G}G" "$BE" "$CF"
 done
