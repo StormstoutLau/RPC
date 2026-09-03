@@ -13,7 +13,7 @@ upstream: \[d6-agent-standard-DESIGN]
 
 > **Feature**: 主控站 agent-cli wrapper MVP（workspace + task 两命令，opencode 单路径，试点 Paper）
 > **创建日期**: 2026-09-03
-> **状态**: 进行中（T0 六门 5 PASS + 1 部分验证；T1 A7 PASS；T2 A8/A9/A10 PASS；T3-T5 待验收）
+> **状态**: 进行中（T0 六门 5 PASS + 1 部分验证；T1 A7 PASS；T2 A8/A9/A10 PASS；T3 A11/A12 PASS；T4-T5 待验收）
 > **Spec 步骤**: Step 7-8, 10
 > **基于实施**: [IMPLEMENTATION.md](./IMPLEMENTATION.md)（v1.2，含 M1-M4+m1-m2+BP-3/BP-4 修正）
 > **基于设计**: [DESIGN.md](./DESIGN.md)（v1.4 approved，F1 定案为后续升级项目；BP-1 契约补 readonly 字段 / BP-2 别名映射表）
@@ -91,8 +91,8 @@ upstream: \[d6-agent-standard-DESIGN]
 
 | #   | 验收项   | 通过判据                                                                                        | 状态 | 证据     | <br /> |
 | --- | ----- | ------------------------------------------------------------------------------------------- | -- | ------ | :----- |
-| A11 | 端到端本地 | 退出 0 + 契约字段齐（含哈希三字段非空 + readonly 字段非 null）+ 产物回收 + stdin 管道运行时断言 + queue\_s 填充（BP-3/BP-4 补） | ☐  | <br /> | <br /> |
-| A12 | 免费档契约 | model 字段=opencode/... + 台账一行                                                                | ☐  | <br /> | <br /> |
+| A11 | 端到端本地 | 退出 0 + 契约字段齐（含哈希三字段非空 + readonly 字段非 null）+ 产物回收 + stdin 管道运行时断言 + queue\_s 填充（BP-3/BP-4 补） | ☑  | `task probe --card test-cards/echo.md`(model nemotron, local-only) → TASK\_EXIT=0；.agent-run.json 契约齐：readonly=false(非null) + content\_digest=sha256:ba2b0b41... + prompt\_sha256=sha256:efd1803e... + attach=[] + queue\_s=14734(填充) + status=completed；产物 agent-output.txt 回收(含模型输出)；远端脚本 stdin 管道 `< .prompt.txt`：PIPE\_STDIN\_OK + opencode 无位置参数形式（inv 4 铁律，BP-3）；queue\_s 填充（BP-4）——B 站 2026-09-03 13:40。**期间修复**：Invoke-RemoteScript 用 `\$W` 反斜杠转义致 PS 展开为空串/grep 崩溃（A7 同类）→ 统一改反引号 `` `$ ``；ssh stdout 混入函数返回值→改 Write-Host 透出只返回退出码；sync tar `& $cmd` 数组展开异常 + `--exclude` 位置错→改 splatting + exclude 前置；D:\Paper 源码 5.6GB 超 200MB cap→验收改用 probe 最小工作区（M1 源码子集语义，Paper 大源码另行配置 .agentsync 属 T5） | <br /> |
+| A12 | 免费档契约 | model 字段=opencode/... + 台账一行                                                                | ☑  | `task probe --card test-cards/echo.md --model lightning --sensitivity public` → model=opencode/nemotron-3.5-lightning-free（免费档完整 ID，路由正确）+ 台账行 `202609031343177444,probe,opencode/nemotron-3.5-lightning-free,public,0,0,0`；契约 status=completed exit=0 + content\_digest=sha256:7b71...（B 站 2026-09-03 13:43） | <br /> |
 
 ### 2.5 T4：错误路径 + 冒烟
 
