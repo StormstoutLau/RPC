@@ -1,10 +1,13 @@
 #!/bin/bash
-# infer-unload — 停两站全部推理实例, 等 GTT 释放
+# infer-unload — 停两站全部推理实例 (systemd llama + vllm + unsloth), 等 GTT 释放
 set -uo pipefail
 AWORK="scott-lau@scott-lau-NEX.local"
 log() { echo "[infer-unload] $(date '+%H:%M:%S') $*"; }
 log "停 B 站 llama-server@*..."
 sudo systemctl stop 'llama-server@*' 2>/dev/null || true
+log "停 B 站 unsloth 实例..."
+pkill -9 -f "[u]nsloth studio run" 2>/dev/null || true
+pkill -9 -x llama-server 2>/dev/null || true
 if pgrep -f 'vllm.entrypoint[s]' >/dev/null 2>&1; then
   log "停 vLLM..."
   pkill -f 'vllm.entrypoint[s]' 2>/dev/null || true
