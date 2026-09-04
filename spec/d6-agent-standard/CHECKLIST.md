@@ -264,6 +264,7 @@ upstream: \[d6-agent-standard-DESIGN]
 | **跨站** 多站独立实例 | 同批 4 个 readonly：A 串行 4 次 vs A+B 各 2 次（cross-station） | cross-station 总耗时 ≤ A 串行 ×~1.6（对照 §8.4 同站并发仅微慢 3%） | A `running`=2 **且** B `running`=2（证分散两实例） | V2 设计输入（可先做前瞻实验） |
 
 > **BS-2 L1 实测（2026-09-04，详见 BLINDSCAN §8.7.5）**：✅ **已通过**。直连 gpt-oss-120b 单轮 `tool_calls=1`（模型内编译期并行不成立）；编排层 3 线程并行墙钟 **52.1s ≪ 串行和 110.9s**（≈max，判据收敛）→ fan-out 押编排层并发 HTTP 实证成立。无法用 `engine_stats.running`（该 llama-server 无 `/properties`），改以**墙钟收敛**作客观判据。
+> **跨站 L1 实测（2026-09-04，详见 BLINDSCAN §8.7.6）**：✅ **已通过**。A 串行 4 次 6.8s vs A+B 各 2 并发 cross_wall=4.8s（ratio 0.71 ≤ 1.6 判据），~1.4× 数据面收益。两站 8080 均仅监听 127.0.0.1，跨站采用 B 站 SSH 隧道 `18081→A:8080` 无侵入方案。同站内 2 并发仍被带宽顶起（单请求 1.7→4.8s），与 §8.4 一致；**落地含义：扇出优先跨站各 1 并发**。脚本：`ops/station-bin/_bs2_cross.py`。
 > ⚠️ **网关 auth 前置清理项（根因已改定，2026-09-04 二次核实）**：B:4000 LiteLLM 401「Invalid token payload」的**真凶是后端换载后 key 不同步**——本地 8080 unsloth 实例 9/4 03:24 重载（gpt-oss-120b，自带 `sk-unsloth-...`），但 litellm 仍为 9/3 旧进程、`nemotron` 路由写死占位 `api_key: sk-local-noauth`（直打 8080 逐字复现 401；用真实 unsloth key 返 200）；叠加 fallback `gpt-oss`→A:8080 未监听 → 双后端全挂。修复：①config 改真实 key + 重启 litellm；②拉起 A:8080；或绕网关走直连。**非**最初所记"master_key 库内哈希不匹配"。
 
 > 优先级：**BS-2 最先**（决定扇出能否发起，是 BS-1/跨站前置；§8.7.4 实验①直发网关 vs 绕网关直连 unsloth 一次性区分「网关剥字段 vs 后端不支持」两真凶）。
