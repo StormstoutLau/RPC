@@ -247,6 +247,8 @@ M3 接受两种表示：完整 ID 直接查路由表；别名先经本表解析�
 
 > readonly 字段（对齐审计 BP-1 补，2026-09-03）：任务卡 §6.1 的 readonly 解析后写入本契约——MVP 仅记录（全部按排它处理，4.1 层 2 语义），V2 激活共享/排它语义时无需改 schema。
 
+> **accept 判据输出字段（T5 落地 2026-09-03）**：当任务卡 §6.1 含 `accept` 列表时，本契约补 `"accept": {"cmd": [...], "passed": bool}`（脚本实现各判据并在工作区执行，逐条记 `ACCEPT_RC`；产出一并回收为 `accept-output.txt`）。MVP 中 accept 门控独立于 agent 退出状态：agent 完成（RC=0）但 accept 有任一条失败即整任务 status=failed，即使 agent 因超时被杀（RC=124→6）accept 判据仍照常执行并以 ACCEPT_OK 如实回收判语——反证可观测设计（§9.8.1），与 A14 实测一致。
+
 ### 6.3 .agent-state.json（状态机，dsh 孤儿锁语义 §9.8.1）
 
 ```json

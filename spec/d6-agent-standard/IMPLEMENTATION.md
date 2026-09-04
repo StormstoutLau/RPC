@@ -129,6 +129,23 @@ agent-cli.ps1
 - 手册 §2a 增补 agent-cli 命令节；台账 §1.8 联动；CHECKLIST.md 全回填
 - 验收：A14（试点闭环）
 
+> **T5 实测补充（2026-09-03，A14 试点闭环，A14 PASS）**：真实任务卡 `test-cards/paper-pilot.md`（model nemotron / local-only / accept 双 pytest）已跑通。B 站工作区 opencode 实际创建 `paper_cli/code_check.py` + `paper_cli/tests/test_code_check.py`，accept 门控 pytest `11 passed`，classifier 回归 `29 passed` 独立复核通过，产物回收至 `D:\Paper\agent-out\<ts>\`，main git 无越界（单向流不变式 6）。
+>
+> **T5 期间 wrapper 三项补齐（A14 前置，均已在 agent-cli.ps1 落地）**：
+> ① **accept 判据执行与产物回收（DESIGN §6.1 accept 字段落地，MVP 新增能力）**：Get-FrontMatter 扩展 accept 列表解析（`accept:` 键后 `- cmd` 行）；Invoke-Task 在 opencode 完成后于工作区顺序执行 accept 命令（bash 循环 `eval`，`( cd "$W" && eval "$c" )`），逐条记 ACCEPT_RC 至 `out/.accept-output.txt`，任一条非 0 即 ACCEPT_OK=0 → 远端 exit 9 → 主控站映射 exit 1 / status=failed，且 accept-output.txt 随 collect 回收、run.json 补 `accept.{cmd,passed}` 字段。**注意**：accept 循环内 bash 变量必须全部反引号 `` `$ `` 转义（`$ACCEPT_B64/$c/$arc/$i/$ACCEPT_OK`），否则 PS 双引号 here-string 会展开为空串；自增用 `((i++))` 而非 `i=$((i+1))`（后者 `$(( ))` 被 PS 当子表达式求值报"i not recognized"）。
+> ② **Get-FrontMatter UTF-8 读取（PS5.1 默认 ANSI 坑，A14 卡点）**：原 `Get-Content $Path` 在 PS 5.1 以系统 ANSI(GBK) 读 UTF-8 卡，中文 prompt 变乱码（实测 `鏂板 code_check 鏍￠獙...`）→ 模型误判"已有等价功能（normalizer 处理 HTML tag）"只分析不落文件。改 `[System.IO.File]::ReadAllLines($Path, [System.Text.UTF8Encoding]::new($false))` 后中文 prompt 正常，模型正确落盘两个新文件。**教训**：ASCII 卡（echo/timeout）此前不暴露此坑，中文任务卡才触发。
+> ③ **远端执行体补 `cd "$W"`（cwd=工作区）**：原 opencode 在 ssh 登录 home 运行（`Invoke-RemoteScript` 的 `bash /tmp/*.sh` 不 cd），读不到项目文件；echo 卡因不读文件未暴露。补 `cd "$W" || exit 5` 后方可让 agent 见 AGENTS.md + 项目源码。
+>
+> **A14 注记（模型运行时特性，非管线缺陷）**：opencode 写毕解决方案后自跑**全量 470 测试套件**（test_phase2_*）作最终校验，至 92% 被 1800s `timeout` kill（TASK_RC=124 → exit 6，run.json status=failed{timeout}）。交付物正确且 accept 门控通过（A14 判据回收成立），但 agent 因全量自验超过时间预算未以 exit 0 收束。反证 accept 门控独立于 agent 退出状态、仍准确回收判语——设计成立。**运维含义**：nemotron Q4 全量校验 paper 470 测试不现实，任务卡 timeout 需按验证规模给足（或 accept 限定目标子集，本例已限定 test_code_check + test_classifier）。
+
+> **验收修复批（2026-09-03 16:30，验收审查后执行，四项全部实机复验）**：
+> ① **P1a sanitized scrubber 落地**：`Invoke-Scrubber` 三模式正则（sk-密钥/邮箱/Win 绝对路径）+ 命中打印脱敏预览；`sens=sanitized` 时 prompt 在主控站编码前过滤（不变式 2）。A8b 植入三类样串实测：远端 .prompt.txt 零明文（grep count=0）+ 模型回复 A8B-PROBE-OK 无 LEAK。
+> ② **P1b 任务卡正文传输（修复批新发现，严重度同 P1）**：Get-FrontMatter 原来只传 front-matter task: 一行（A14 时远端 prompt 仅 81 字节），**正文规格全部静默丢弃**——取证：model-authored code_check.py 实现的是 validate_classification（模型自设计）而非卡规格 is_well_formed_code，"11 passed"系模型自写实现+自写测试的自证通过。修复：Get-FrontMatter 补 body 捕获，prompt = [proj:] + task 行 + 正文全文（A8b 实证 469 字符完整到达远端）。**教训**：echo/timeout 类无正文依赖的测试卡永远暴露不了此缺陷；验收卡必须含正文依赖。
+> ③ **P2-1 queue_s/run_s 语义修复**：远端脚本 R0/R1 双时间戳（R0=opencode 启动前、R1=完成），queue_s=(R0-Q0)/1e9（锁等待+入队）、run_s=(R1-R0)/1e9（生成墙钟）；.meta 补 RUN_S 行、run.json run_s 实填。A8b 实测 QUEUE_S=2（恰为 BP-4 sleep 2）/RUN_S=31。
+> ④ **P2-2 退出码 5 落地**：**根因 = PS5.1 NativeCommandError 地雷**——EAP=Stop 下原生命令 stderr 重定向（`2>$null`/`2>&1`）直接抛异常（诊断脚本实证 TYPE: NativeCommandError），绕过退出码分派 → 实得 exit 1。修复：Test-RemoteReach/ssh exec 全部包 try/catch 归一网络类 + NETFAIL 前缀贯穿（探活/exec/scp 三层）+ entry catch 映射 exit 5；实机 `-RemoteHost <invalid>` → EXIT=5。
+> ⑤ 附带修复：sync/create 的 scp 补 rc 检查（原 scp 失败会继续用陈旧 tar 解包）。全链回归：echo 卡 lightning 实测 exit 0 + QUEUE_S=2/RUN_S=20 + A11-PROBE-OK。
+> ⑥ **验收判据多命令执行（paper-pilot 重跑实证，严重度 P2）**：A8b 的 accept 循环此前**只执行第一条命令**、第二条被静默丢弃——根因 1：`.accept-cmds.txt` 末行无换行（`$accept -join "\n"` 末条无 `\n`），`bash while read` **跳过未结尾的最后一行**（实测 `while IFS= read -r c` 对文武文件 total=1）；根因 2：`.meta` 的 printf 第 4 参数 `$ACCEPT_OK` 漏反引号，被 PS 插值成空串 → 主控侧 `ACCEPT_OK=` 始终读不到。修复：`while IFS= read -r c || [ -n "$c" ]`（保证处理末行）+ printf 补 `` `$ACCEPT_OK ``。**复验**：patch 后 paper-pilot 重跑，accept-output 现含 ACCEPT_CMD[1]（code_check 13 passed）+ ACCEPT_CMD[2]（classifier **29 passed** 回归），meta `ACCEPT_OK=1`，exit 0；且模型按正文规格实现 `is_well_formed_code`（非自设计）。**教训**：单命令 accept 卡永远暴露不了"末命令被丢"缺陷；多 accept 命令的卡才是判据完整执行的试金石。
+
 ## 7. 验收标准（命令化，全部可脚本执行）
 
 | # | 验收项 | 命令/判据 |
