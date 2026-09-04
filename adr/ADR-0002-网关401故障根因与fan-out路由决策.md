@@ -155,7 +155,7 @@ LiteLLM 网关 :4000 对 `master_key=sk-RPC-gz...` 也返回 401「Invalid token
 
 - ✅ **跨站直连链路已闭环（2026-09-04，§8.7.6）**：A:8080 现监听且已加载；两站 8080 均仅监听 127.0.0.1，故用 B 站 SSH 隧道 `18081→A:8080` 作为编排层接入。编排层并发扇出 A/B 各 2 次：cross\_wall=4.8s ≤ A 串行 6.8s×1.6（ratio 0.71）→ 跨站判据通过，\~1.4× 数据面收益。观测：同站内 2 并发仍被统一内存带宽顶起（单请求 1.7→4.8s），与 §8.4 一致；**落地含义 = 扇出优先跨站各 1 并发**。
 
-- ⚠️ **`nemotron`** **别名直连 8080 后，长上下文/gpt-oss 语义是否满足现有任务**：仍开放（现载 gpt-oss-120b，非 nemotron 1M ctx）。若任务强依赖 nemotron 长上下文语义，需另行 reload nemotron——模型选型，不在本 ADR 决策范围。
+- ⚠️ **`nemotron` 别名直连 8080 后，长上下文/gpt-oss 语义是否满足现有任务**：✅ **已裁定（2026-09-04，无需 reload）**——已核对原 `nemotron` conf 的 CTX 本就是 **131072（128k）**（`/etc/llama-instances/*nemotron*.env`），**并非 1M**；现载 gpt-oss 亦为 128k（`-c 131072`）+ `--kv-unified`，两载上下文窗口**一致**。且 agent 链路 opencode `limit.context=120000` / claude `CLAUDE_CODE_MAX_CONTEXT_TOKENS=120000` 均 < 128k → 上下文维度无失配，**不构成 reload nemotron 的理由**。残余差异仅模型质量/能力（gpt-oss vs nemotron 语义取用）属模型选型，不在本 ADR 决策范围（params-ledger §1.2）。
 
 ### 失效条件（何时重审本 ADR）
 
