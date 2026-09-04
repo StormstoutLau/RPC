@@ -26,8 +26,10 @@ upstream: \[d6-agent-standard-DESIGN]
 ## 2. BS-2【硬】网关/请求方言可能强制 parallel_tool_calls=false，令 fan-out 静默变串行
 
 - **证据**: [codex-pooler #180](https://github.com/icoretech/codex-pooler/issues/180) 实锤——经第三方网关（OpenAI-compatible **Lite 方言**）跑模型时，`task` 工具 fan-out **永远串行**（3/3 次仅一个 sibling 调用）；官方 OAuth 才并行。Lite 方言锁死 `parallel_tool_calls=false`（openai/codex #26487 引入，Lite 是"耦合请求方言"非单纯并发开关）。
+- **证据（2026-09-04 深化，剥字段是普遍故障源，非单点）**: [LiteLLM #38612](https://github.com/BerriAI/litellm/issues/38612) —— `chatgpt` provider 的 transformation 用 `allowed_keys` 白名单**剥掉 `parallel_tool_calls`**，后端看到 Lite header + 默认 true → 400，**网关剥字段→静默方言漂移的官方案例**；[sub2api #6107/#6084](https://github.com/Wei-Shaw/sub2api/pull/6107) —— OpenAI 硬性要求 Responses-Lite 必须 `parallel_tool_calls:false`，网关强制降 false。共同指向：**修字段不治本，网关是方言不确定面**。
 - **与 D6 冲突**: D6 并发相走 **LiteLLM / Zen 网关**（DESIGN §9.4）。若网关是 Lite 方言，opencode 的 `task` 工具扇出在 parent **单轮内发不出多个子代理** → 社区 Orca 式"并行赛马"策略不生效，且无报错（静默）。
 - **落点（V2 验收前提, 提升为 V0 新增门）**: 用一条 3-sibling `task` 提示词实测网关是否放行多 tool call。这是 D6 真值源约定（§2.1/§9.4 实测层）的正确归因入口。
+- **落点（2026-09-04 深化，正面解药）**: 扇出可靠性分两条路线——①**模型内并行工具**（依赖 `parallel_tool_calls` 方言，被网关剥字段→不可靠，❌）；②**编排层并发 HTTP 发起**（多线程各发完整独立请求，不依赖方言→健壮，✅，Hermes `async_delegation`/Codex `multi_agent max_threads`/D6 `task` 多 agent 同构）。**BS-2 解药是把扇出从模型内编译期并行下沉到编排层运行期并行**，而非修网关字段。
 
 ## 3. BS-3【硬】单槽是硬瓶颈；gfx1151 + 多槽有已知 slot-0 stuck bug
 
@@ -119,6 +121,38 @@ upstream: \[d6-agent-standard-DESIGN]
 4. **编排「依赖 DAG / 健康监控 / 崩溃恢复」普遍空缺**: 连 Hermes 官方都把「委派→多智能体」列为未竟愿景、CrewAI 用 Flow 骨架补确定性、Temporal 用外部平台补耐久——D6 的「确定性 wrapper + 任务卡状态机」方向正确，**无需追这些框架**，维持保守正确。
 
 **状态**: §8.6 为调研补充（Hermes 主控站源码实读 + 社区综述），非复现结论；沿用 finalized。
+
+### 8.7 跨站扇出专项（2026-09-04 调研，V2 设计输入）
+
+> BS-3/BS-6 已定"同站并行收益被槽位/带宽封顶"，V2 倾向跨站。本小节把跨站扇出的**数据面算力来源 + 编排侧前置 + 互补关系**补全，作为 V2 设计输入。
+
+#### 8.7.1 数据面：跨站 = 唯一真并行来源
+
+- llama-server 单实例 = **单 `server_context`（专用单线程）+ 单一共享 batch**（`server_queue`→`update_slots` 合并进一次 `llama_decode`，官方 README-dev 明示）；并发数被 `n_parallel`/slot 封顶，且 `prefill 兼容性 / 内存带宽` 都在**单站物理资源**内收敛（uma:1 已验证，§8.4）。
+- **跨站扇出**将请求分发到 **A、B 各自独立的 llama-server 实例** → 各自的 batch、KV、内存带宽**物理独立** → A+B 各一槽 = **真正 2x 数据面并行**，规避"单站 prefill 被内存带宽串行化"。这是跨站面向 BS-3/BS-6 的正解。
+
+#### 8.7.2 编排侧前置（D6 V2 需新增）
+
+1. **M3 扩展**：readonly 任务复制为 N 份（N=候选站）各跑各的。`readonly` 无写冲突 → **无需跨站 flock**（flock 仍只在本站互斥写任务，DESIGN §4.1 双层锁语义不变）。
+2. **同步**：M1 已支持多站推拉（各自 `~/agent-workspaces/<proj>/`）；M5 两站 out/ 各自回收 → 主控台汇总。
+3. **硬前置**：两站 unsloth 健康（infer-load 域：load-mem-gate / health 认证 / wait-gtt）；同模型（gpt-oss 两站均有）→ 纯净 cross-station 扇出；B 站 nemotron / Zen 出站可作为异构补充。
+4. **限制**：仅 `readonly`（research/分析/审查）有效；`implementation`（写）仍单工作区排它。
+
+#### 8.7.3 与 BS-2 的互补关系（V2 定位）
+
+| 层 | 要解决的问题 | 解药 |
+| --- | --- | --- |
+| BS-2（控制面） | 扇出**能否发起**（网关剥字段/方言漂移） | 编排层并发 HTTP，绕开网关方言（§2 落点②） |
+| 跨站（数据面） | 发起后**是否真并行**（单站 batch+带宽收敛） | 多站独立实例 2x |
+
+→ 两者互补，**D6 V2 的"跨站扇出 + 编排层并发发盘"同时命中两个解药**（与 Hermes 上轮结论闭环：Hermes 进程内并发 HTTP 绕方言；跨站绕带宽）。
+
+#### 8.7.4 可验证实验（区分两真凶，非复现）
+
+- ① 同一条 3-sibling fan-out 请求：**直发 B 站 LiteLLM** vs **绕网关直连 A 站 unsloth**，对比是否串行 → 界定"网关剥字段 vs 后端不支持"谁是真凶（BS-2 归因）。
+- ② 同批 4 个独立 readonly 任务：**A 站串行 4 次** vs **A+B 各 2 次（cross-station）** 总耗时对比 → 量化跨站数据面收益（对照 §8.4 同站并发的 ≈串行）。
+
+**状态**: §8.7 为跨站扇出专项调研（源码/设计输入），非实机复现；沿用 finalized。
 
 ## 9. 备份与重启预案
 
