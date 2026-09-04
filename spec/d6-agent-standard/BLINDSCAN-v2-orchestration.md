@@ -207,15 +207,23 @@ upstream: \[d6-agent-standard-DESIGN]
 
 - 并行批个别请求 tool\_calls=0（模型行为方差，非扇出机制问题）。
 
-**实测 3 —— 网关路径（对照组）当前故障**：
+**实测 3 —— 网关路径（对照组）当前故障（根因详见 §8.7.5 下方更正）**：
 
-- B:4000 LiteLLM：连 `master_key=sk-RPC-gz...` 都返回 **401「Invalid token payload」**，`sk-unsloth-*`/`sk-local-noauth` 报 400；`/v1/models` 报 Internal error。
-
-- **结论**：网关段无法完成对照（非"剥字段"，是**网关自身 auth 配置损坏**——master\_key 明文与库内哈希不匹配的独立 ops bug），需单独修复；**不掩盖** BS-2 设计结论（fan-out 押编排层，已由实测 1/2 直接证成）。
+- B:4000 LiteLLM：连 `master_key=sk-RPC-gz...` 也返 **401「Invalid token payload」**，`/v1/models` 报 Internal error（注：此错误逐字源自**上游后端**对过期的占位 key 拒绝，非网关 frontdoor 校验，见下文更正）。
 
 - config 语义：`nemotron → B:8080`（现载 gpt-oss）、`gpt-oss → A:10.10.10.1:8080`，rpm 30，usage-based-routing-v2。
 
-**BS-2 门当前判定**：✅ **通过**（编排层并发 HTTP 墙钟收敛 52.1s≪110.9s；单轮 tool\_call=1 证模型内并行不成立）。网关 auth 401 为独立前置清理项（非本门判据），列入 CHECKLIST 待办。
+**⚠️ 根因更正（2026-09-04 二次核实，最初"master\_key 哈希不匹配"断言有误）**：
+
+- **真凶 = 后端实例换载后 key 不同步**：本地 8080 unsloth 实例今 03:24 重新拉起（gpt-oss-120b-MXFP4，自带 `sk-unsloth-...` key），但 litellm 进程仍为 9/3 旧进程、config 的 `nemotron` 路由写死占位 `api_key: sk-local-noauth`。实测：同后端用 `sk-local-noauth` 直打 8080 返「Invalid token payload」逐字复现；用真实 `sk-unsloth-0895...` 直打返 200。
+
+- **叠加**：fallback `gpt-oss`→A(10.10.10.1:8080) 连接被拒（A 的 llama-server 未监听，A 主机本身通 USB4/LAN）→ 双后端全挂 → 网关 401。
+
+- **与"AB 更新"的关系**：是**更新/换载后配置不同步**（后端 key 变了、litellm 未重启、A 端未拉起），非更新损坏网关二进制。
+
+- 修复路径：①config `nemotron` 路由 `api_key` 改真实 unsloth key + 重启 litellm；②拉起 A:8080；③或走直连（编排层并发 HTTP 实证，fan-out 押编排层，天然绕网关）。
+
+**BS-2 门判定**：✅ **通过**（编排层并发 HTTP 墙钟收敛 52.1s≪110.9s；单轮 tool\_call=1 证模型内并行不成立；网关不可用本身反证 fan-out 须绕网关押编排层）。
 
 ## 9. 备份与重启预案
 
