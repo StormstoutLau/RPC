@@ -248,8 +248,23 @@ upstream: \[d6-agent-standard-DESIGN]
 | 强验收改进：accept 附主控站侧 golden 测试（防模型自写测试自证通过）                     | —   | 下一任务卡设计时          | 登记（P1b 遗留）                                                                                           |
 | P3 批：attach/archive/probe 证据腐化登记/ledger 沙箱/性能口径（§7.2）         | —   | 二期或纪律项            | 登记                                                                                                   |
 | F1 后端并发探测（升级项目）                                               | —   | V2/排队成常态时         | 挂起（DESIGN §11.3；P2-1 前置已解除——queue\_s/run\_s 已修复）                                    |
-| **BS-1 V0 门：跨工作区并行需 isolate\_db**（BLINDSCAN §1）                  | 实施者 | V2 fan-out 前置       | 登记（BLINDSCAN §7）                                                                          |
-| **BS-2 V0 门：网关是否放行多 tool call**（BLINDSCAN §2）                   | 实施者 | V2 fan-out 前置       | 登记（BLINDSCAN §7；3-sibling task 实测，附 LiteLLM/Zen 方言判定）                               |
+| **BS-1 V0 门：跨工作区并行需 isolate\_db**（BLINDSCAN §1）                  | 实施者 | V2 fan-out 前置       | 登记（BLINDSCAN §7；L1 验证设计见下「BS 验证门」）                                        |
+| **BS-2 V0 门：网关是否放行多 tool call**（BLINDSCAN §2）                   | 实施者 | V2 fan-out 前置       | 登记（BLINDSCAN §7；3-sibling task 实测，附 LiteLLM/Zen 方言判定；L1 验证设计见下）      |
 | G8/G9 预置批次（R/sympy/重资产）                                       | —   | Cpp\_Hub 试点前      | 挂起                                                                                                   |
 | 手册/台账联动（T5）                                                   | 实施者 | T5                | ☑                                                                                                    |
+
+### BS 验证门（2026-09-04 落档，L1 判据先行）
+
+> L1 微基准验证设计见 BLINDSCAN §8.7.4。方法铁律：**隔离单变量 + 对照基线 + 客观 running 判据（unsloth /properties running、llama queue\_s）+ 重复 N 次取中位数 + 判据先行**（通过阈值先写死，禁止事后调判据让结果好看）。推进顺序：L1→L2 端到端（真实 readonly 卡）→L3 回归（agent-cli-smoke + A 抽检）。
+
+| 门 | L1 验证方法 | 通过判据（先写死） | 客观并行判据 | 归属 |
+| --- | --- | --- | --- | --- |
+| **BS-1** isolate\_db | 同批 4 个 opencode 写任务：现役共享 db vs 各自 `XDG\_DATA\_HOME` | 隔离后并发两写耗时 < 现役基线（已测 5.2ms 排队即收益判据）；SQLite busy 命中归零 | busy\_timeout 命中次数↓ | V0 前置 |
+| **BS-2** 编排层并发 HTTP | 3-sibling：现役经网关单轮 tool call vs 编排层并行发起 | 完成时间窗 < 串行基线；后端真并发（墙钟收敛或 `running` 达并发数） | 墙钟收敛；或 `engine\_stats.running`=3 | V0 前置 |
+| **跨站** 多站独立实例 | 同批 4 个 readonly：A 串行 4 次 vs A+B 各 2 次（cross-station） | cross-station 总耗时 ≤ A 串行 ×~1.6（对照 §8.4 同站并发仅微慢 3%） | A `running`=2 **且** B `running`=2（证分散两实例） | V2 设计输入（可先做前瞻实验） |
+
+> **BS-2 L1 实测（2026-09-04，详见 BLINDSCAN §8.7.5）**：✅ **已通过**。直连 gpt-oss-120b 单轮 `tool_calls=1`（模型内编译期并行不成立）；编排层 3 线程并行墙钟 **52.1s ≪ 串行和 110.9s**（≈max，判据收敛）→ fan-out 押编排层并发 HTTP 实证成立。无法用 `engine_stats.running`（该 llama-server 无 `/properties`），改以**墙钟收敛**作客观判据。
+> ⚠️ **网关 auth 前置清理项（独立）**：B:4000 LiteLLM 连 `master_key` 都返 401「Invalid token payload」、`/v1/models` Internal error → 网关段现不可用，为独立 ops bug（master_key 明文与库内哈希不匹配），需在跑真实网关路由前修复（候选：`litellm` 重设 master key / 清理持久化 key 表）。不属本门判据，单列跟踪。
+
+> 优先级：**BS-2 最先**（决定扇出能否发起，是 BS-1/跨站前置；§8.7.4 实验①直发网关 vs 绕网关直连 unsloth 一次性区分「网关剥字段 vs 后端不支持」两真凶）。
 
