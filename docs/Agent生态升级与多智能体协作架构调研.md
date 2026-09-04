@@ -732,6 +732,47 @@ description: Adversarial review of another agent's audited output.
 
 ***
 
+## 9. 补充调研: Hermes Agent 编排机制与社区编排案例 (2026-09-04)
+
+> 背景: 主控站已安装 Hermes Agent（`C:\Users\Peng\.hermes\hermes-agent`，Nous Research）。本节 = Hermes 编排**源码实读**结论 + 社区编排**框架**综述。与 §2/附录 C（多 agent 降幻觉）互补——附录 C 讲「实践纪律」，本节讲「编排框架机制」。spec 侧落点见 `spec/d6-agent-standard/BLINDSCAN-v2-orchestration.md §8.6.3`。
+
+### 9.1 Hermes 编排架构（源码证据）
+
+| 模块 | 职责 | 关键机制（源码行证） |
+| --- | --- | --- |
+| `tools/delegate_tool.py` | 子代理委托（单/批） | `DELEGATE_BLOCKED_TOOLS` 子代理禁用 `delegate_task/clarify/memory/send_message/cronjob`（防递归/用户交互/共享内存/副作用/越权调度）；`_DEFAULT_MAX_CONCURRENT_CHILDREN=10`；批模式用 `DaemonThreadPoolExecutor(max_workers=max_children)` **join 自身**——fan-out 必须全部完成才产出一份汇总，父轮次用 `wait()` 短超时轮询以支持中断退出（避免 `as_completed()` 卡死）。子代理各自独立 `task_id` → 独立 terminal session + file-ops 缓存（**工作区隔离**） |
+| `agent/subagent_lifecycle.py` | 子代理生命周期（插件契约） | 状态机 `PENDING→STARTING→RUNNING→(SUCCEEDED/FAILED/INTERRUPTED/CANCELLED)`；`_EXECUTOR=DaemonThreadPoolExecutor(max_workers=8)`；终端态保留 3600s 后清理；handle 用 **HMAC capability 校验**防伪造；`role ∈ {leaf, orchestrator}`——嵌套委托靠 `orchestrator` 角色显式授予，非模型自决 |
+| `tools/async_delegation.py` | 异步委托/并行工作流 | 持久化 daemon executor（不随 `with` 块销毁）；`_persist_dispatch/_persist_completion` **落盘任务记录**，跨进程重启可恢复；完成经 `process_registry.completion_queue` 回传；批模式逐任务持久化+单份合并结果回传 |
+| `agent/moa_loop.py` | MoA（Mixture of Agents） | 非模型工具、斜杠命令标记单轮 MoA；`call_llm` 并行查询**参考模型**（`_MAX_REFERENCE_WORKERS=8`），全 in-flight 收集完成后由**聚合器**综合；一次性（参考模型互不可见、无迭代）；带 PII 脱敏 |
+| `batch_runner.py` | 离线批量数据跑批 | `multiprocessing.Pool(processes=num_workers)` 批并行；每批独立 `batch_*.jsonl` + 增量写 + `os.fsync`；`checkpoint.json` + **按内容匹配已完成 prompt** 的 resume（不靠索引）——崩溃后只补未完成 |
+
+### 9.2 Hermes 官方路线
+
+**官方 issue #344（multi-agent 愿景）**：当前 `delegate_task` 是「委派」非「多智能体」——子代理**不可互谈、不可共享状态、无依赖感知**（批任务全平行）、无崩溃恢复、无健康监控、无重试、无合成步骤。拆出的子 issue 借鉴 CAMEL-AI/OpenPlanter：验收准绳+独立裁判（#356）、Inception harden 子代理 prompt（#375）、对抗式辩论（#376）、共享内存池（#377）。**这印证「依赖 DAG、可恢复重放、健康监控」是编排的普遍空缺**（对照 D6 BS-4/BS-5）。
+
+### 9.3 社区编排案例对比（2026-03/04 综述）
+
+| 框架 | 编排模型 | 持久化/恢复 | 与本集群的相关点 |
+| --- | --- | --- | --- |
+| **Gas Town**（Mayor/Polecats） | 层次+角色：Mayor 编排分发，Polecats 并行 worker | **git hooks 作状态机**，靠 git 历史跨重启存活 | 「git 即状态」异构版任务卡；但状态在 git 非独立 DB |
+| **OpenAI Agents SDK**（Swarm 继任） | Mesh/handoff：Agent 间握手转移 | 无状态+外部 memory | 最小抽象；D6 是单工作区排它锁，非自由握手，不需要 |
+| **LangGraph 1.0** | 图/DAG：节点=agent，边=转移；条件分支/并行边/子图 | **逐步 checkpoint** + `interrupt()` 时间旅行调试 | BS-5「按 key 重放」可借鉴其 checkpointed state |
+| **CrewAI**（v1.10+，46K★） | 角色/团队 + Flows（事件驱动确定性骨架） | `@persist()` 工作流状态**可恢复**；agents 持久认知记忆 | 角色分工+Flow 骨架分离 = 确定性控制面与推理面解耦，与 D6「确定性 wrapper + agent 推理」同构 |
+| **AutoGen** | Group chat：多 agent 对话环 | 弱（无生产部署/重试） | 反例：缺恢复即不可生产 |
+| **Temporal**（非 agent 专用） | 持久执行平台；workflow 落库 + 从 checkpoint 重放 | **内建重试语义/状态管理** | BS-5 耐久性参考底座 |
+| **Tonbi / Hermes Kanban** | **SQLite 看板为唯一事实源**；调度器分发卡片→代理；并行 worker；崩溃即取未完成卡片续跑 | 单 SQLite 文件，无消息队列无轮询；自愈（死任务回收重生） | **与本集群高度同构**：任务卡 + 单文件状态 + 崩溃续跑 + 事件驱动 + 可审计 |
+
+### 9.4 与本集群的关系（D6 V2 落点摘要）
+
+1. **工作区隔离已验证成熟范式**: Hermes 子代理独立 `task_id`、Tonbi 单看板——D6「单工作区单写者」与业界隔离思路一致，**保留**。
+2. **BS-5 可吸收两种成熟持久化**: batch_runner「按内容 resume」+ LangGraph/CrewAI「@persist/checkpoint」，叠加现有「任务卡 key + 孤儿锁幂等」→ 二期重放更稳。
+3. **BS-2（网关纯串行扇出）的规避备选**: Hermes 用 `ThreadPoolExecutor` **进程内真并行**绕开网关 parallel_tool_calls 方言问题 → 提示 D6 若要「单轮多子代理发起」，**同站进程内多线程**可作规避备选（代价：同站统一内存带宽竞争，回 BS-6 结论，仍倾向跨站扇出）。
+4. **编排「依赖 DAG / 健康监控 / 崩溃恢复」普遍空缺**: 连 Hermes 官方都把「委派→多智能体」列为未竟愿景、CrewAI 用 Flow 骨架补确定性、Temporal 用外部平台补耐久 → D6「确定性 wrapper + 任务卡状态机」方向正确，**无需追这些框架**。
+
+**本节参考**: 本机 `C:\Users\Peng\.hermes\hermes-agent` 源码（delegate_tool.py / subagent_lifecycle.py / async_delegation.py / moa_loop.py / batch_runner.py）· [Hermes Agent 官方文档](https://hermes-agent.nousresearch.com/docs/) · [Hermes Agent GitHub](https://github.com/NousResearch/hermes-agent) · [Hermes multi-agent 愿景 issue #344](https://github.com/NousResearch/hermes-agent/issues/344) · [Agent Orchestration Frameworks Compared (getbeam)](https://getbeam.dev/blog/agent-orchestration-frameworks-compared-2026.html) · [Top 5 Open-Source Agent Orchestration Platforms (orloj)](https://www.orloj.dev/blog/top-5-agent-orchestration-platforms) · multi-agent topology 综述（附录 C 已有链接）
+
+---
+
 # 附录 A: OpenCode CLI 生态调研全文 (subagent 检索原始输出)
 
 > 检索时间: 2026-09-01 · 检索工具: Trae general\_purpose\_task subagent (web 调研)
