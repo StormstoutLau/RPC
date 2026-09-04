@@ -101,6 +101,8 @@ upstream: null
 
 ### 1.7 网关参数（B 站 \~/litellm/config.yaml，D1 起纳入台账）
 
+> ⚠️ **进程已下线（2026-09-04，ADR-0002 方案 C 收尾）**：litellm 网关进程已 `pkill` 停止，端口 4000 释放。下线依据三重证据闭环——B 站无 ESTABLISHED 客户端 + B 站 opencode/claude 配置无 `:4000` 引用 + 主控站 opencode/claude/agent-cli 亦无 `:4000` 引用（全链直连 8080）。下表为**历史生效记录**，仅存档语义，不再运行时生效；config.yaml 保留未动，如需恢复可 `litellm --config .../config.yaml` 重启。
+
 | 字段                | 值                      | 依据                                                                                                                                                                                                                                            |
 | ----------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | rpm（两路由）          | 30                     | ✅ D1-A6 实测（2026-09-02）：40 并发两轮复现，超限请求被 retry-after=60s 延迟重试背压，llama-server 接收速率压在 30/min 内，无 5xx。依据为 4-agent 峰值估计（平均 0.5 req/s 之上）非精确调优                                                                                                       |
@@ -158,4 +160,5 @@ upstream: null
 | 2026-09-03 | D6 验收修复批回填：wrapper 四项修复实机复验（P1a sanitized scrubber A8b 零明文 / P1b 任务卡正文传输 469 字符到达 / P2-1 queue\_s=2 run\_s=31 / P2-2 退出码 5 + PS5.1 NativeCommandError 根因）；A14 证据修正（自证通过注记，规格符合性待重跑）                                                                 | D6 验收"有条件通过"→"通过"（2026-09-03 16:30）；CHECKLIST §2.7/§7.2/§9 全回填                 |
 | 2026-09-04 | §1.2 gpt-oss 增 KV 量化行（q8\_0 A/B：KV 4.5→3.5G，decode 持平）；§1.8 增 A 站 gpt-oss 端点迁移行（8080→8087 unsloth，opencode 实测通过；claude 兼容解额定案（modelOverrides 消 unrecognized\_model + 真实 unsloth key 消 401，实测 CLAUDE-STABLE-OK rc=0）；unsloth-a-station.md 增 §8.11 实测 | cache-type-k/v q8\_0 实测 + CLI 端点同步（openode 主通道已通，claude 另案）                    |
 | 2026-09-04 | §1.2 KV 行改两站（A/B 均 unsloth 加载）；§1.8 增 infer-load 默认 unsloth 改造行 + A/B 两站端点统一 :8080 行；手册 v1.7（加载路径表/后端判定表/版本头） | 用户要求"B 站同步设置 + 单模型加载管理默认使用 unsloth"——两站 infer-load/unload/list 改造（默认 unsloth，KV q8_0，systemd 回退保留），opencode/claude 端点统指 :8080，全部实测通过 |
+| 2026-09-04 | **§1.7 网关进程下线**：litellm 已 `pkill`，端口 4000 释放（RSS 0.3GB 收回）；§1.7 加下线状态行，表保留为历史存档 | ADR-0002 方案 C 收尾——三重证据闭环（B 站无 ESTABLISHED 客户端 + B 站无 :4000 引用 + 主控站无 :4000 引用）确认网关为孤儿遗留进程，无消费者，可安全下线 |
 
