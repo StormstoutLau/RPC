@@ -771,6 +771,26 @@ description: Adversarial review of another agent's audited output.
 
 **本节参考**: 本机 `C:\Users\Peng\.hermes\hermes-agent` 源码（delegate_tool.py / subagent_lifecycle.py / async_delegation.py / moa_loop.py / batch_runner.py）· [Hermes Agent 官方文档](https://hermes-agent.nousresearch.com/docs/) · [Hermes Agent GitHub](https://github.com/NousResearch/hermes-agent) · [Hermes multi-agent 愿景 issue #344](https://github.com/NousResearch/hermes-agent/issues/344) · [Agent Orchestration Frameworks Compared (getbeam)](https://getbeam.dev/blog/agent-orchestration-frameworks-compared-2026.html) · [Top 5 Open-Source Agent Orchestration Platforms (orloj)](https://www.orloj.dev/blog/top-5-agent-orchestration-platforms) · multi-agent topology 综述（附录 C 已有链接）
 
+### 9.5 两站安装 Hermes Agent CLI / 开源版 Codex 的性能评估（2026-09-04 结论）
+
+> 背景: 承接 §9.1-9.4（Hermes **编排机制**调研）。本节回答一个正交问题：**把 Hermes Agent CLI 或开源版 Codex 直接装到 A/B 站，能否提高集群编排性能**？判断从「学不学机制」扩展到「装不装工具」。
+
+**结论：两站均可安装，但边际收益低于集成成本，不建议现役替换。**
+
+| 评估维度 | 结论 | 依据 |
+| --- | --- | --- |
+| 平台兼容 | ✅ 均可安装 | Hermes Agent 与开源 Codex 均**原生支持 Linux/Ubuntu**，A/B 站（Ubuntu）满足；无编译/依赖阻断 |
+| 数据面推理吞吐 | ❌ **不受 CLI 工具影响** | 推理吞吐瓶颈在**模型后端**（llama-server/Unsloth 单槽 + 统一内存带宽），CLI 仅是控制面薄壳，更换 CLI 不改变 TTFT/tokens/s |
+| 控制面扇出/恢复 | ⚠ 有条件小幅提升 | Hermes 进程内 `ThreadPoolExecutor` 真并行+async_delegation 落盘恢复，理论上比现役 wrapper 编排略优；但 D6 已用编排层并发 HTTP + 任务卡状态机覆盖同等能力，**提升幅度有限** |
+| 开源 Codex | ⚠ 有兼容风险 | 存在 **Responses API 兼容性风险**（对本地 llama-server/Unsloth 后端协议适配未知）；引入即新增一个待维护 CLI 面 |
+| 集成成本 | ❌ 高于收益 | 换 CLI = 重做 ROUTE 映射 + 重验调用铁律（stdin 管道/`< /dev/null`）+ 重跑 4 CLI 冒烟 + 回归 A1-A16；现役 opencode/claude 已锁版且验收全过，退化风险不值 |
+
+**真正的编排性能杠杆**（与 CLI 工具无关）：
+1. **BS-2 网关限流**——绕网关直连 B/A:8080（ADR-0002 方案 C，已落地）
+2. **跨站扇出**——A+B 各 1 并发，cross_wall 4.8s vs A 串行 6.8s（ratio 0.71，已 L1 验证）
+
+> 结论归属: HERMES-OPTIM-01（落点 OPEN-ISSUES O-10 已覆盖「扇出」，本项为「不引入新 CLI」裁定，不新增未决项）。后续若 lang-ecosystem 评估需换 CLI，先回来修订本行。
+
 ---
 
 # 附录 A: OpenCode CLI 生态调研全文 (subagent 检索原始输出)
