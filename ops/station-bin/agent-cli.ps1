@@ -35,6 +35,9 @@ $Script:PROJECTS = @{ paper = 'D:\Paper' }    # console project root mapping
 $Script:TMP_ROOT = Join-Path $env:TEMP 'agent-cli'
 
 # ---------------- ROUTE_TABLE (BP-2 alias->full-id, T3 task uses; fixed here) ----------------
+# NOTE (ADR-0002, 2026-09-04): 'cluster-litellm/*' provider 已在 B 站 opencode.jsonc 中 baseURL
+# 直连 127.0.0.1:8080（绕开 LiteLLM 网关 :4000，key=sk-unsloth-...），语义不再经网关。id 字符串
+# 保持不变以匹配 opencode 模型 id（provider/model），仅其底层 baseURL 更改为直连。
 $Script:ROUTE_TABLE = @{
     # alias -> @{ id=full-id; station=target }
     'nemotron'   = @{ id = 'cluster-litellm/nemotron';                          station = 'B' }
