@@ -1,6 +1,0 @@
-D6 MVP 验收回填 + ROCm 10/Strix Halo 调研落档 (2026-09-03~04)
-
-- spec/d6-agent-standard/DESIGN.md: 契约补 accept 判据输出字段 (section 6.2)
-- spec/d6-agent-standard/IMPLEMENTATION.md: T5 实测补充 + 验收修复批 (P1a scrubber / P1b 正文传输 / P2-1 时间语义 / P2-2 退出码5 / accept 多命令修复)
-- spec/d6-agent-standard/CHECKLIST.md: A1-A16 验收通过全量回填 + 不变式7/7 + 错误处理 + 修复批 A8b/A15/A16
-- docs/双机推理集群使用手册.md: section 10.1b ROCm 10 社区优化 + Strix Halo 优化案例调研落档
