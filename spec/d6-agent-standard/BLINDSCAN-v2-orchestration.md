@@ -187,6 +187,36 @@ upstream: \[d6-agent-standard-DESIGN]
 
 **状态**: §8.7 为跨站扇出专项调研（源码/设计输入），非实机复现；沿用 finalized。
 
+#### 8.7.5 BS-2 L1 实机回填（2026-09-04，判据修正 + 结果）
+
+> **本机网络散文**：A/B 站 IP 已从 11/15 漂为 32/33；ssh 用 mDNS 别名 `scott-lau-GTR-Pro.local`（B，192.168.1.32，USB4 10.10.10.2）、`scott-lau-NEX.local`（A，.33/USB4 .1）。
+>
+> **判据修正**：`nvidia`/llama-server 均无 `/properties` → `engine_stats.running` 客观判据在此端**不可用**。改用**墙钟收敛**：3 并行 HTTP 的完成墙钟 ≈ max 且 ≪ 各请求之和，即证数据面并发被后端接受（FIFO 串行合并会显 ≈ sum，恰可区分）。
+
+**实测 1 —— 直连 model 单轮 tool\_call 并行度（B:8080 直连，gpt-oss-120b-MXFP4）**：
+
+- 3-tool + `parallel_tool_calls=True`，直连 llama-server(8080) → HTTP 200，**单轮仅 1 个 tool\_call**（wall 48.3s）。
+
+- **结论**：单模型内"编译期并行"不成立 → fan-out 必须押编排层并发 HTTP（§2 落点②实证成立）。
+
+**实测 2 —— 编排层并发 HTTP 墙钟收敛（直连 8080，3 单 tool 请求）**：
+
+- 串行基线 3×：37.6 + 31.5 + 41.7 = **110.9s**（每轮 tool\_calls=1）。
+
+- 3 线程并行：**wall=52.1s ≈ max(52.1s)**，≪ 串行和 110.9s → **收敛判据 PASS**，后端数据面真并行（同站 3 并发 \~2.1× 加速）。
+
+- 并行批个别请求 tool\_calls=0（模型行为方差，非扇出机制问题）。
+
+**实测 3 —— 网关路径（对照组）当前故障**：
+
+- B:4000 LiteLLM：连 `master_key=sk-RPC-gz...` 都返回 **401「Invalid token payload」**，`sk-unsloth-*`/`sk-local-noauth` 报 400；`/v1/models` 报 Internal error。
+
+- **结论**：网关段无法完成对照（非"剥字段"，是**网关自身 auth 配置损坏**——master\_key 明文与库内哈希不匹配的独立 ops bug），需单独修复；**不掩盖** BS-2 设计结论（fan-out 押编排层，已由实测 1/2 直接证成）。
+
+- config 语义：`nemotron → B:8080`（现载 gpt-oss）、`gpt-oss → A:10.10.10.1:8080`，rpm 30，usage-based-routing-v2。
+
+**BS-2 门当前判定**：✅ **通过**（编排层并发 HTTP 墙钟收敛 52.1s≪110.9s；单轮 tool\_call=1 证模型内并行不成立）。网关 auth 401 为独立前置清理项（非本门判据），列入 CHECKLIST 待办。
+
 ## 9. 备份与重启预案
 
 > 复现属对**现役服务**的风险操作，任何并发打压前必须：
