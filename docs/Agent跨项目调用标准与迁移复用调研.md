@@ -2,7 +2,7 @@
 
 ***
 
-date: 2026-09-03（v3.4.1，审计轮：10 项发现修复——R1 剔除 JetBrains 5.3h 无源断言 / R2 B-claude 冷缓存改为估计值+混淆说明 / R3 §0+§1.1"模型后端不出站"随免费档决策回灌限定 / R4 §0+§5.3 R17 拒绝规则随 A-claude 修复更新 / R5 coordinator 实测边界诚实化 / R6 exec\_command 归因降级为假设进 G11 验证门 / R7-R10 措辞级修正；v3.4：DeepSeek Harness 逆向 + G8 方案定案；v3.3：Codex 逆向——G11 RwLock 定案；v3.2：Anthropic coordinator 逆向；v3.1：模型分层路由 + 协同自审；v3：四项目适配 + 开源对照 + 4 CLI 定版；v2：场景澄清重构）
+date: 2026-09-03（v3.4.1，审计轮：10 项发现修复——R1 剔除 JetBrains 5.3h 无源断言 / R2 B-claude 冷缓存改为估计值+混淆说明 / R3 §0+§1.1"模型后端不出站"随免费档决策回灌限定 / R4 §0+§5.3 R17 拒绝规则随 A-claude 修复更新 / R5 coordinator 实测边界诚实化 / R6 exec\_command 归因降级为假设进 G11 验证门 / R7-R10 措辞级修正；v3.4：DeepSeek Harness 逆向 + G8 方案定案；v3.3：Codex 逆向——G11 RwLock 定案；v3.2：Anthropic coordinator 逆向；v3.1：模型分层路由 + 协同自审；v3：四项目适配 + 开源对照 + 4 CLI 定版；v2：场景澄清重构）；v3.4.2（2026-09-05，独立幻觉审计轮：双 agent 跨模型族复核，评分 94/86——R11 Codex 路径补 codex-main 嵌套层 + 行数 553→534 / R12 §0 调用入口加"D6 目标形态"限定，collect/review 未实现 / R13 §9.4 延迟口径注记（13s 同题 vs 15s 冒烟）+ 免费档强结论限定 n=1 / R14 补 D7 复用注记（:4000 网关 09-04 ADR-0002 下线，现直连 8080）。无虚构源/无越级标注发现）
 status: draft（D6 前期调研）
 upstream: D5 Agent 生态升级（已 verified 2026-09-02）; 调研 §4.2 五层循环遗留"任务卡协议"口子
 -----------------------------------------------------------------------
@@ -19,7 +19,7 @@ upstream: D5 Agent 生态升级（已 verified 2026-09-02）; 调研 §4.2 五�
 | 文件怎么同步？               | **tar+scp 推拉**（D5 全程实证路径；本轮实测主控站 Git Bash 无 rsync、站上 rsync 3.2.7 仅用于站内归档）；大项目用 `.agentsync` 排除清单控量（§5.2）                                                                                                                        |
 | 工作区里放什么？              | 项目文件子集 + **AGENTS.md（指令单源）** + CLAUDE.md 薄壳（`@AGENTS.md` 导入）+ 项目技能/配置（可选）+ `out/` 产物目录（§5.1）                                                                                                                                    |
 | 跨 CLI 指令单源？           | AGENTS.md 为源 + CLAUDE.md 薄壳——claude code 官方明确不原生读 AGENTS.md（#6235, 5200+ reactions, "not planned"），导入是官方推荐模式（§3.1）                                                                                                              |
-| 调用入口？                 | 主控站侧 **`agent-cli`** **wrapper**（PowerShell）：`workspace / task / collect / review` 四命令族；封装同步→ssh headless 执行→产物回收全链 + 路由可达性判断（模型路由表见 §9.4；R17"A 站 claude 不可用"已被 e0129ad/af1467c 修复推翻——A-claude 现 PASS 3s 纯文本模式）（§5.3，v3.4 审计修订） |
+| 调用入口？                 | 主控站侧 **`agent-cli`** **wrapper**（PowerShell）：`workspace / task / collect / review` 四命令族（**D6 目标形态**；截至 v3.4.1 实测 `agent-cli.ps1` 已落 workspace/task/route/lock，collect/review 未实现）；封装同步→ssh headless 执行→产物回收全链 + 路由可达性判断（模型路由表见 §9.4；R17"A 站 claude 不可用"已被 e0129ad/af1467c 修复推翻——A-claude 现 PASS 3s 纯文本模式）（§5.3，v3.4 审计修订） |
 | 编排规范？                 | **任务卡生命周期** create→dispatch→execute→collect→archive；`audit: true` 触发 assertion-audit 断言契约；站间互审 `agent-cli review --peer`（cross-examine，对端模型）（§5.5）                                                                              |
 | 记忆隔离的坑？               | 提取记忆 cwd 天然隔离 ✓；**ad-hoc 笔记全局平铺**——wrapper 必须自动加 `[proj:<name>]` 前缀（§4.1）                                                                                                                                                       |
 | claude 遮蔽陷阱？          | personal > project（反直觉）——12 件用户级技能会遮蔽项目同名技能，项目技能须带前缀命名（§3.2）                                                                                                                                                                    |
@@ -450,14 +450,16 @@ accept:              # 验收判据(可执行/可核验)
 
 | 档位    | 模型                                         | 延迟 (B 站)        | 窗口     | 成本 | 定位               |
 | ----- | ------------------------------------------ | --------------- | ------ | -- | ---------------- |
-| 免费·快  | `opencode/nemotron-3.5-lightning-free`（默认） | **13s**         | 262k   | $0 | 日常轻任务（默认档）       |
+| 免费·快  | `opencode/nemotron-3.5-lightning-free`（默认） | **13s**<br>（B 站配置冒烟口径 15s）         | 262k   | $0 | 日常轻任务（默认档）       |
 | 免费·大  | `opencode/nemotron-3-ultra-free`           | 39s（A 站 45s 波动） | **1M** | $0 | 长文档/大代码库理解       |
 | 本地·旗舰 | `cluster-litellm/nemotron`（120B-A12B）      | 38-43s          | 120k   | 电费 | 深度推理/敏感内容（数据不出站） |
 | 本地·快  | `cluster-litellm/gpt-oss`（120B MXFP4）      | **18s**         | 30k    | 电费 | 代码迭代/高频调用        |
 
 **关键事实**（实测推翻直觉）：
 
-1. **免费档不是劣质档**——四档同题全对；zen lightning 13s 比**本地旗舰快 3 倍**（云端算力 vs 395 单卡）。"复杂任务必须切本地大模型"不成立；真正的分层轴是**窗口需求**与**隐私边界**，不是智力。
+> （注：本表延迟/能力为**单题（n=1）同题实测**，非多题统计；"免费档不是劣质档"系本组样本归纳，范围限定为"本组同题 4/4 正确"。）
+
+1. **免费档非劣质档（本组同题 4/4 全对）**——zen lightning 13s 比**本地旗舰快 3 倍**（云端算力 vs 395 单卡）。"复杂任务必须切本地大模型"不成立；真正的分层轴是**窗口需求**与**隐私边界**，不是智力。
 2. **本地档的不可替代价值 = 数据不出站 + 无限额**——深度任务时长会打满 zen 未文档化的日限额（E3 \~100 请求/天）；敏感内容（sensitivity: local-only）只有本地档合规。
 3. **切档是显式** **`-m`** **一步的事**，无需改配置——wrapper `task --model` 字段已预留（§5.3）。
 
@@ -470,6 +472,8 @@ accept:              # 验收判据(可执行/可核验)
 | 敏感内容 / 长会话高频打满限额 / 离线纪律   | 本地 nemotron   |
 | 代码高频迭代（30k 内）             | 本地 gpt-oss    |
 | 站间互审（review --peer）       | 产出方与审查方强制异档异站 |
+
+> **⚠️ D7 复用注记（2026-09-05 补）**：本报告 §2.1 table 与 §9.4 中 `cluster-litellm` / `LiteLLM(:4000)` 路由表述截至 **2026-09-03**。后经 **ADR-0002（2026-09-04）**已下线 B 站 litellm:4000 网关、pkill 释放端口，现 agent 链路**全链直连两站 8080**（主控站 opencode/claude baseURL + key 均指向 :8080 直连，unsloth key）。本报告呈 D7 复用时，凡涉及 `.4000`/`cluster-litellm` 的语义路由均**按已下线处理**，勿再引用死链路。
 
 ### 9.5 agent CLI 协同调研充分性自审（v3 增补三）
 
@@ -536,7 +540,7 @@ tools/ 下存在完整编排工具族：AgentTool（spawn）/ SendMessageTool（
 
 ### 9.7 Codex orchestrator/parallel 逆向分析（v3.3 增补：开源源码 E1 直读）
 
-> 来源：`D:\ds\codex-main\codex-rs\core\src\tools\orchestrator.rs`（553 行全文直读）+ `parallel.rs`（核心段直读）+ `registry.rs` 并行判定交叉核对。**与 §9.6 Anthropic 泄漏源码形成完美对照实验**：Anthropic 把 LLM 放编排席（纪律靠 prompt），Codex 把编排全部写成 Rust 确定性代码（纪律靠锁）——**Codex 才是与 D6 公理 1 同哲学的参考实现**。
+> 来源：`D:\ds\codex-main\codex-main\codex-rs\core\src\tools\orchestrator.rs`（534 行全文直读）+ `parallel.rs`（核心段直读）+ `registry.rs` 并行判定交叉核对。**与 §9.6 Anthropic 泄漏源码形成完美对照实验**：Anthropic 把 LLM 放编排席（纪律靠 prompt），Codex 把编排全部写成 Rust 确定性代码（纪律靠锁）——**Codex 才是与 D6 公理 1 同哲学的参考实现**。（修正于 2026-09-05 审计：路径补 codex-main 嵌套层，行数 553→534）
 
 #### 9.7.1 G11 的官方代码级答案：RwLock 并发门（parallel.rs）
 
