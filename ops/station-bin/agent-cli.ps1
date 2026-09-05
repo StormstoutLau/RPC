@@ -471,19 +471,26 @@ function Invoke-Task {
     #      .attach/ excluded from sync so it stays one-way in; agent reads by relative path in prompt refs)
     $attachNames = @()
     if ($attach.Count -gt 0) {
-        foreach ($a in $attach) {
-            if (-not (Test-Path $a)) { Write-Host "attach missing (skip): $a"; continue }
-            $dest = Join-Path $env:TEMP (Split-Path $a -Leaf)
-            $body = @"
+        # remote .attach/ once; files/dirs scp per attachment below
+        $body = @"
 set -eu
 W="$Script:WORKSPACE_ROOT/$proj"
 mkdir -p "`$W/.attach"
 "@
-            Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-attach-mkdir.sh"
-            scp -q -o ConnectTimeout=10 $a "${hostName}:$Script:WORKSPACE_ROOT/$proj/.attach/" 2>$null
+        Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-attach-mkdir.sh"
+        foreach ($a in $attach) {
+            if (-not (Test-Path $a)) { Write-Host "attach missing (skip): $a"; continue }
+            $isDir = Test-Path $a -PathType Container   # dir -> scp -r recursion (O-01 dfile)
+            $name = Split-Path $a -Leaf
+            if ($isDir) {
+                scp -q -r -o ConnectTimeout=10 $a "${hostName}:$Script:WORKSPACE_ROOT/$proj/.attach/" 2>$null
+            }
+            else {
+                scp -q -o ConnectTimeout=10 $a "${hostName}:$Script:WORKSPACE_ROOT/$proj/.attach/" 2>$null
+            }
             if ($LASTEXITCODE -ne 0) { Write-Host "NETFAIL: attach scp failed: $a"; return 5 }
-            $attachNames += (Split-Path $a -Leaf)
-            Write-Host "ATTACH_OK: $a -> workspace $proj/.attach/$(Split-Path $a -Leaf)"
+            $attachNames += $name
+            Write-Host "ATTACH_OK: $a -> workspace $proj/.attach/$name"
         }
     }
 
