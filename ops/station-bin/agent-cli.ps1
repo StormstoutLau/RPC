@@ -483,6 +483,13 @@ mkdir -p "`$W/.attach"
             $isDir = Test-Path $a -PathType Container   # dir -> scp -r recursion (O-01 dfile)
             $name = Split-Path $a -Leaf
             if ($isDir) {
+                # scp -r 不复制空目录 -> 预建远端同名目录兜底 (O-01 edge)
+                $bodyDir = @"
+set -eu
+W="$Script:WORKSPACE_ROOT/$proj"
+mkdir -p "`$W/.attach/$name"
+"@
+                Invoke-RemoteScript -HostName $hostName -ScriptBody $bodyDir -LocalName "agent-cli-attach-mkdir-dir.sh"
                 scp -q -r -o ConnectTimeout=10 $a "${hostName}:$Script:WORKSPACE_ROOT/$proj/.attach/" 2>$null
             }
             else {
