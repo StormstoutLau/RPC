@@ -134,6 +134,45 @@ function Invoke-RemoteScript {
     return $code
 }
 
+function Invoke-StationReady {
+    # O-19 (2026-09-05): station env-ready gate BEFORE dispatch.
+    # Root cause was port-topology drift: 8080 = unsloth studio (mgmt, auth) while the
+    # llama-server OpenAI engine lands on a RANDOM per-load port. opencode baseURL=8080
+    # hit mgmt -> "Cannot connect to API".
+    # Fix: run _station_ready.sh on target station -> discover engine port -> verify
+    # /v1/models+chat -> idempotently inject cluster-litellm baseURL to that port.
+    # (source kept ASCII-only for PS5.1 BOM safety)
+    [CmdletBinding()]
+    param(
+        [string]$HostName,
+        [string]$Alias
+    )
+    if (-not (Test-RemoteReach $HostName)) { throw "NETFAIL: station unreachable: $HostName" }
+    $local = 'D:\RPC\ops\station-bin\_station_ready.sh'
+    $tmp = Join-Path $Script:TMP_ROOT '_station_ready.sh'
+    New-Item -ItemType Directory -Path $Script:TMP_ROOT -Force | Out-Null
+    Copy-Item $local $tmp -Force
+    scp -q -o ConnectTimeout=10 $tmp "${HostName}:/tmp/_station_ready.sh"
+    if ($LASTEXITCODE -ne 0) { throw "NETFAIL: scp _station_ready.sh failed" }
+    $arg = if ($Alias) { " '$Alias'" } else { '' }
+    try {
+        $out = ssh -o ConnectTimeout=10 $HostName "bash /tmp/_station_ready.sh$arg" 2>&1
+        $code = $LASTEXITCODE
+    }
+    catch {
+        $out = @("$($_.Exception.Message)")
+        $code = 255
+    }
+    foreach ($ln in $out) { Write-Host $ln }
+    $joined = $out -join "`n"
+    if ($code -ne 0) {
+        if ($joined -match 'ERR_NO_ENGINE') { throw "STATION_NOT_READY: engine not loaded ($HostName) - run load-mem-gate + infer-load first" }
+        throw "STATION_NOT_READY: inject failed rc=$code ($HostName)"
+    }
+    if ($joined -notmatch 'INJECT_OK' -or $joined -notmatch 'STATION_READY port=') { throw "STATION_NOT_READY: injection not confirmed ($HostName)" }
+    return $true
+}
+
 # ---------------- Invoke-Workspace (M1) ----------------
 
 function Get-AgentsyncExcludes([string]$proj, [string]$type) {
@@ -159,10 +198,13 @@ function Convert-ToExcludeArgs([string[]]$patterns) {
 }
 
 function Invoke-Workspace {
-    param([string]$proj, [string]$act, [string]$type)
+    param([string]$proj, [string]$act, [string]$type, [string]$Station = '')
     $projRoot = $Script:PROJECTS[$proj]
     if (-not $projRoot -or -not (Test-Path $projRoot)) { throw "unknown/missing project: $proj (registered: $($Script:PROJECTS.Keys -join ','))" }
-    $station = if ($HostName -in @('A','B')) { $HostName } else { 'B' }
+    # station resolution: explicit Station parameter wins; else bind caller's script-level $HostName ('A'/'B');
+    # else default B. Never trust a bare $HostName here: through PowerShell dynamic scope it may be an
+    # Invoke-Task $hostName SSH string (e.g. scott-lau-NEX.local) that is not 'A'/'B' -> silent B-target bug.
+    $station = if ($Station) { $Station } elseif ($HostName -in @('A','B')) { $HostName } else { 'B' }
     $hostName = Get-TargetHost $station
 
     if ($act -eq 'create') {
@@ -458,9 +500,14 @@ function Invoke-Task {
     if ($sens -eq 'local-only' -and $id -match '^opencode/') { Write-Host "REJECT local-only+remote ($id) exit 4 - no override channel"; return 4 }
     if (-not $hostName) { $hostName = Get-TargetHost $station }
 
+    # O-19: station env-ready gate (discover engine port + inject cluster-litellm baseURL BEFORE dispatch)
+    $baseAlias = ($m -split '/')[-1]
+    try { Invoke-StationReady -HostName $hostName -Alias $baseAlias | Out-Null }
+    catch { Write-Host "STATION_NOT_READY: $($_.Exception.Message)"; return 10 }
+
     # 3) sync source subset (never overwrite out/); target station is B (memory master) ws root
     Write-Host "TASK sync source -> $proj (model=$id station=$station sens=$sens readonly=$readonly)"
-    try { Invoke-Workspace -proj $proj -act 'sync' -type $type | Out-Null }
+    try { Invoke-Workspace -proj $proj -act 'sync' -type $type -Station $station | Out-Null }
     catch {
         $msg = $_.Exception.Message
         if ($msg -like 'NETFAIL*') { Write-Host "sync network failure: $msg"; return 5 }   # P2-2: DESIGN §8
@@ -662,7 +709,7 @@ try {
     if ($Command -eq 'workspace') {
         $act = if ($Create) { 'create' } elseif ($Sync) { 'sync' } elseif ($Archive) { 'archive' } else { 'create' }
         if (-not $Proj) { $Proj = $env:AGENT_CLI_PROJ }
-        Invoke-Workspace -proj $Proj -act $act -type $Type
+        Invoke-Workspace -proj $Proj -act $act -type $Type -Station $HostName
         exit 0
     }
     elseif ($Command -eq 'route') {
