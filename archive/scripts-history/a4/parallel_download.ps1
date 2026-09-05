@@ -1,4 +1,4 @@
-# a4/parallel_download.ps1 — Range 分段并行下载 (绕过单连接限速)
+﻿# a4/parallel_download.ps1 — Range 分段并行下载 (绕过单连接限速)
 # 用法: powershell -File parallel_download.ps1 <url> <out> <chunks>
 param(
     [Parameter(Mandatory=$true)][string]$Url,

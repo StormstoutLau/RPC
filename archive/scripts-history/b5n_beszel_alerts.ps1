@@ -1,4 +1,4 @@
-# B5n: Beszel 告警配置 (POST /api/beszel/user-alerts)
+﻿# B5n: Beszel 告警配置 (POST /api/beszel/user-alerts)
 # 官方 API: name/value/min/systems; Temperature 取全传感器 max (无传感器级区分)
 # 告警集: Temperature 85C (5min 窗口防瞬时峰值) / Status 掉线 / Disk 90%
 $ErrorActionPreference = 'Stop'
