@@ -62,6 +62,13 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 - **方案**: 纪律——wrapper 从非沙箱宿主运行；或台账移 d:\RPC 可写区
 - **关闭判据**: 台账行数与 run.json 计数一致（无静默丢失）
 
+### O-00：演进四方向调研（2026-09-05 闭环登记）
+- **来源**: 用户指令"二期/V2/D7+ 演进项 先调研"
+- **交付**: 调研底稿 §9.9（v3.5）——四个演进方向（--attach / claude路径+--continue / 跨站扇出L2-L3 / review--peer）的现状、方案与关闭判据已收敛，全据库内已审计事实
+- **结论摘要**: 四方向全部建立在已固化三铁律 + schema 之上，无一条需改架构边界或并发模型；改动集中在 agent-cli.ps1 Invoke-Task 远端执行体 + param 块
+- **建议串行**: --attach（最小实现）→ claude路径+--continue（复用附件通道）→ 跨站扇出L2（V2骨架）→ review--peer（D7 立项）
+- **关联**: O-01/O-15/O-10/O-11/O-16 各方案与关闭判据已在 §9.9 内逐项给出；立项时从本表摘取为任务
+
 ### O-05：sync 性能微超 + 口径重叠
 - **证据**: CHECKLIST §5——sync 62.3s（预算 <60s，超 4%）；IMPL §5 sync(<60s)/task(<30s 含 sync) 口径互斥
 - **方案**: .meta 侧免 du；预算表改"已同步增量口径"
