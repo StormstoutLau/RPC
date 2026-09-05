@@ -124,8 +124,8 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 - **当前状态**: D6 链路已绕网关直连 B/A:8080（ADR-0002 方案 C），故 O-14 属运维遗留不阻塞 D6
 
 ### O-15：claude 路径 + --continue
-- **证据**: DESIGN §5.1 二期命令面 + §9.6-2 Continue-vs-Spawn 决策表
-- **方案**: G1 二期；ROUTE_TABLE 已含 cli 列；铁律 4（`< /dev/null`）已固化
+- **证据**: DESIGN §5.1 二期命令面 + 调研 §9.6-2 Continue-vs-Spawn 决策表
+- **方案**: G1 二期；ROUTE_TABLE 需补 cli 键 + claude 模型条目（现仅 id/station）；铁律 4（`< /dev/null`）已固化
 - **关闭判据**: `agent-cli task --cli claude` + `--continue <session>` 可用
 
 ### O-16：review --peer / trae 派发

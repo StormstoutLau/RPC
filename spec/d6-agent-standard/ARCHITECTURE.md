@@ -113,7 +113,7 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0002]
 **后端并发实况（2026-09-04 L1 实测，架构级输入）**：
 - 两站 llama-server slots=1（is_processing 互斥）→ 同站多请求在后端排队
 - **同站内 2 并发被统一内存带宽顶起**（单请求 1.7→4.8s，~2.8× 恶化，BS-2 L1）
-- **跨站扇出真并行**（A+B 各 1 并发：A 串行 4 次 6.8s → cross_wall 4.8s，ratio 0.71）
+- **跨站扇出真并行**（A+B 各 2 并发：A 串行 4 次 6.8s → cross_wall 4.8s，ratio 0.71；L1 实测源 `_bs2_cross.py` targets=[A,B,A,B]）
 - **落地铁律：fan-out 优先跨站各 1 并发，勿同站叠并发**；跨站接入用 B 站 `ssh -NL 18081:127.0.0.1:8080` 无侵入隧道
 
 ## 5. 控制流（异常路径与退出码）
@@ -156,8 +156,8 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0002]
 
 | 方向               | 预留接缝                                                            | 现在状态     |
 | ---------------- | --------------------------------------------------------------- | -------- |
-| claude 路径        | 铁律 4 已固化 `< /dev/null`；ROUTE_TABLE 已含 cli 列                     | 二期 (G1)   |
-| --continue        | Continue-vs-Spawn 决策表（DESIGN §9.6-2）为路由规则                         | 二期 (G1)   |
+| claude 路径        | 铁律 4 已固化 `< /dev/null`；ROUTE_TABLE 需在 G1 补 cli 键 + claude 模型条目                     | 二期 (G1)   |
+| --continue        | Continue-vs-Spawn 决策表（调研 §9.6-2）为路由规则                         | 二期 (G1)   |
 | readonly 层2锁     | §4 层 2 schema 字段在                                              | V2        |
 | 跨站扇出           | B:18081→A:8080 隧道已验证；路由表可按需加跨站模型名                            | V2 输入已就绪  |
 | 后端并发探测         | 触发条件=queue_s 排队成常态；调 /slots + 槽位占则拒/等                        | 升级项 (F1)  |
