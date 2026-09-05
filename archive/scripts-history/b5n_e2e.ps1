@@ -1,4 +1,4 @@
-# B5n: 主控站端到端验证 — 带 key 调用 litellm 网关
+﻿# B5n: 主控站端到端验证 — 带 key 调用 litellm 网关
 $ErrorActionPreference = 'Stop'
 $key = (Get-Content d:\RPC\secrets\litellm_master.key -Raw).Trim()
 try {
