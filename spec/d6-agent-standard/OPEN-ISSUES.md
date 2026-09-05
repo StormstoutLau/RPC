@@ -173,6 +173,8 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 
   - **实机闭环**：specaudit 卡重跑（task 202609060017545026，A 站 gpt-oss）`RUN_S=502`（<900）、`TASK_RC=0`、`ACCEPT_OK=1`、产物 3577B、stdout=`DOGFOOD_TASK4_OK`，agent 读完 12+ `paper_cli` 文件+2 规格文档，**`grep -c 65536 .agent-output.txt = 0`**——首次真实 rc=0 且读码超 64k 不报错。
 
+  - **铁证闭环（"错误消失"对照，2026-09-06）**: 防「604s rc0 假阳性」前科，补**决定性对照**——直接向新引擎 POST 一个明确 >64k 的请求，读取服务端 `usage.prompt_tokens`：换行文本 **`prompt_tokens=72068`（>65536）→ HTTP 200**。同负载在旧引擎（`-c 65536`）必 400 `exceeds 65536`。判据从「run 巧合通过」升级为「**错误确实消失**」。回归探针留存 `ops/station-bin/_ctx_overflow_probe.py`。
+
   - **教训（标黑）**: ① `exceeds the available context size` 报错时**先查服务端端点 ctx**，别先怀疑客户端；② `/v1/models` 的 `n_ctx`/`n_ctx_train` 是训练上下文，运行时上下文必须查 `/props`，探针字段选错会得出"引擎 131072、opencode 却 65536"的假矛盾；③ 服务端硬上限面前，客户端所有超参都是无效杠杆——**环境修复 > 配置修复**。④ `infer-load.new --ctx` 支持直接定上下文，conf 生成/重载均生效。
 
 ### 附：agent-cli.ps1 PS5.1 编码隐患（2026-09-05 触发并修复）
