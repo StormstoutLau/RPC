@@ -21,7 +21,7 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 
 | ID | 类别 | 严重度 | 简述 | 状态 | 归属批次 |
 |----|------|--------|------|------|---------|
-| O-01 | 功能缺口 | P3 | --attach 传输未实现（IMPL M4/S8 声明；param 块无 Attach，attach 恒 []） | 🔴 open | 二期(G1) 或最小实现 |
+| O-01 | 功能缺口 | P3 | --attach 传输未实现（IMPL M4/S8 声明；param 块无 Attach，attach 恒 []） | ✅ closed | 2026-09-05 最小实现已落地+端到端验证 |
 | O-02 | 功能缺口 | P3 | workspace --archive 占位 echo 未演进（T1 stub） | 🔴 open | 二期 |
 | O-03 | 纪律 | P3 | A11/A12 probe 产物未持久化（证据腐化，仅文字实录在盘） | ⚪ 已登记·后续遵守 | 纪律项 |
 | O-04 | 纪律 | P3 | ledger 追加非沙箱安全：沙箱会话运行 wrapper 时 Add-Content agent-runs.log 被拒（14:50 丢台账行） | ⚪ 已登记 | 纪律项 |
@@ -46,6 +46,13 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 - **证据**: CHECKLIST §6 S8——param 块无 --Attach 参数，attach 恒 []；IMPL M4 声明未交付；schema 字段在、传输通道不在
 - **方案**: 随 claude 路径二期同批（G1），或最小实现独立 tar+scp `.attach/`
 - **关闭判据**: `task --attach <f>...` 后远端工作区含附件 + .agent-run.json attach 非空 + 产物回收
+- **✅ 关闭（2026-09-05）**: 最小实现已落地 agent-cli.ps1（param `[string[]]$Attach` L27；scp 至工作区 .attach/ + prompt 注入附件引用 + .agent-run.json attach 回填）。端到端实测通过：`.attach/inbox.txt` 远端着陆、attach=「inbox.txt」非空、agent 读取回显 `ATTACH_VERIFY_LINE_42` 入 agent-output.txt（run 202609051648102241）。遗留：NAS 未测、多文件/目录形态未测（→ O-15 关联）
+
+### 附：agent-cli.ps1 PS5.1 编码隐患（2026-09-05 触发并修复）
+- **症状**: 脚本加载即抛 ROUTE_TABLE `Unexpected token '}'`/`assignment expression is not valid`（L42-52），端到端跑不通
+- **根因**: 文件无 BOM 且含 UTF-8 中文注释（L39-41），PowerShell 5.1 按 ANSI/CP936 误读，吞掉注释行致 hashtable 错乱（运行时行号偏移 2 佐证）
+- **修复**: 文件前插入 UTF-8 BOM（字节级 `0xEF 0xBB 0xBF` 前置，内容/LF 不变），ParseFile 归零 + 运行时恢复正常
+- **教训**: `.ps1` 涉非 ASCII 一律保证 UTF-8 BOM；编辑后先 ParseFile 网关再跑
 
 ### O-02：workspace --archive 占位
 - **证据**: CHECKLIST §7.2 P3（L214-216 echo stub）；R7 语义（archive 前不动站上记忆）已保守满足

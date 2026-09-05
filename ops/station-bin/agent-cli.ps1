@@ -1,4 +1,4 @@
-# ============================================================================
+﻿# ============================================================================
 # agent-cli.ps1 - D6 agent-cli wrapper (Microsoft PowerShell 5.1)
 # Main console -> two-node agent CLI cross-project invocation.
 # T1 scope (D6 IMPL v1.2): skeleton + ROUTE_TABLE + Invoke-RemoteScript + workspace cmd
@@ -23,7 +23,8 @@ param(
     [string]$Act = '',           # lock cmd: acquire|release|status
     [int]$Hold = 0,              # lock cmd: seconds to hold after acquire (A9 test)
     [string]$RemoteHost = '',    # lock cmd: actual remote host; default B
-    [string]$Card = ''           # task cmd: path to task card md
+    [string]$Card = '',          # task cmd: path to task card md
+    [string[]]$Attach = @()      # task cmd: attachment files/dirs -> workspace .attach/ (O-01)
 )
 
 # ---------------- constants / env ----------------
@@ -433,12 +434,14 @@ function Invoke-Task {
         [string]$model,      # alias/full-id override
         [string]$sensitive,  # sensitivity override
         [string]$type,       # .agentsync type for sync step
-        [string]$hostName
+        [string]$hostName,
+        [string[]]$attach    # O-01: attachments -> workspace .attach/
     )
     if (-not $card) { Write-Host 'task requires --card <task.md>'; return 2 }
     if (-not (Test-Path $card)) { throw "card not found: $card" }
     $projRoot = $Script:PROJECTS[$proj]
     if (-not $projRoot -or -not (Test-Path $projRoot)) { throw "unknown/missing project: $proj (registered: $($Script:PROJECTS.Keys -join ','))" }
+    if (-not $attach) { $attach = @() }
 
     # 1) card front-matter
     $fm = Get-FrontMatter $card
@@ -464,11 +467,35 @@ function Invoke-Task {
         Write-Host "sync failed: $msg"; return 6
     }
 
+    # 3b) attachments (O-01): scp each attachment -> workspace .attach/ (only-if-local isolates console reads;
+    #      .attach/ excluded from sync so it stays one-way in; agent reads by relative path in prompt refs)
+    $attachNames = @()
+    if ($attach.Count -gt 0) {
+        foreach ($a in $attach) {
+            if (-not (Test-Path $a)) { Write-Host "attach missing (skip): $a"; continue }
+            $dest = Join-Path $env:TEMP (Split-Path $a -Leaf)
+            $body = @"
+set -eu
+W="$Script:WORKSPACE_ROOT/$proj"
+mkdir -p "`$W/.attach"
+"@
+            Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-attach-mkdir.sh"
+            scp -q -o ConnectTimeout=10 $a "${hostName}:$Script:WORKSPACE_ROOT/$proj/.attach/" 2>$null
+            if ($LASTEXITCODE -ne 0) { Write-Host "NETFAIL: attach scp failed: $a"; return 5 }
+            $attachNames += (Split-Path $a -Leaf)
+            Write-Host "ATTACH_OK: $a -> workspace $proj/.attach/$(Split-Path $a -Leaf)"
+        }
+    }
+
     # 4) prompt + M1 hash (inv 5: Model-visible means logged)
     #    P1b: card BODY (clean-room spec) is transmitted with the task line.
     #    P1a: sanitized gate scrubs on console BEFORE hashing/encoding (inv 2).
     $promptFull = "[proj:$proj]`n$($fm['task'])"
     if ($fm['body']) { $promptFull += "`n`n" + $fm['body'] }
+    if ($attachNames.Count -gt 0) {
+        $promptFull += "`n`n[attachments in workspace .attach/]: " + ($attachNames -join ', ')
+        $promptFull += "`n(" + ((Split-Path $attachNames[0] -Leaf)) + " 等附件已在工作区 .attach/ 目录，按需读取)"
+    }
     if ($sens -eq 'sanitized') {
         Write-Host 'SANITIZED gate: scrubbing prompt before it leaves console (P1a)'
         $promptFull = Invoke-Scrubber $promptFull
@@ -597,7 +624,7 @@ exit `$RC
         timestamp_start = ''
         timestamp_end = ''
         prompt_sha256 = "sha256:$promptSha"
-        attach = @()
+        attach = $attachNames
         accept = [ordered]@{ cmd = $accept; passed = $acceptPassed }
     }
     $run | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $runDir '.agent-run.json') -Encoding utf8
@@ -639,7 +666,7 @@ try {
     }
     elseif ($Command -eq 'task') {
         # M2 full chain. usage: agent-cli task <proj> --card <task.md> [--model <m>] [--sensitivity <x>]
-        $code = Invoke-Task -proj $Proj -card $Card -model $Model -sensitive $Sensitivity -type $Type -hostName $RemoteHost
+        $code = Invoke-Task -proj $Proj -card $Card -model $Model -sensitive $Sensitivity -type $Type -hostName $RemoteHost -attach $Attach
         exit $code
     }
     else {
