@@ -656,9 +656,9 @@ DeepSeek 官方开源 agent harness（MIT，TypeScript/pnpm/Cordis 框架，deve
 | 依据                    | 事实                                                                                                   |
 | --------------------- | ---------------------------------------------------------------------------------------------------- |
 | 调用铁律已固化               | 铁律 4 `< /dev/null` 已固化；`--output-format json` 含 `session_id`（§3.4）——正是 --continue 需要的句柄              |
-| 语义路由模型已有              | Continue-vs-Spawn 决策表（DESIGN §9.6-2）已定路由规则：verifying-code → Spawn fresh；wrong-approach → Spawn fresh |
+| 语义路由模型已有              | Continue-vs-Spawn 决策表（本文件 §9.6-2）已定路由规则：verifying-code → Spawn fresh；wrong-approach → Spawn fresh |
 | 遮蔽坑已知                 | claude personal > project 技能遮蔽（§3.2）；`--bare` 跳过上下文（§3.4）——路径必须带项目上下文，禁用 `--bare`                    |
-| ROUTE\_TABLE 已含 cli 列 | agent-cli.ps1 ROUTE\_TABLE 已按模型 id → station 映射，claude 走本地模型语义（直连 8080，ADR-0002）                     |
+| ROUTE_TABLE 需补 cli 列 | agent-cli.ps1 ROUTE_TABLE 现仅含 id/station（opencode 模型条目）；claude 路径在 G1 需在 ROUTE_TABLE 新增 cli 键 + claude 模型条目，且遵循 ADR-0002 直连 8080 |                   |
 | 恢复对齐                  | §9.6-2-7 dsh/Anthropic 会话模式持久化——`--continue <session_id>` 恢复时对齐模型/模式（G12 参考）                         |
 
 **方案（收敛）**：`task --cli claude` → 远端执行体从 `opencode run -m <id> < .prompt` 切换为 `claude -p --output-format json < /tmp/prompt`（非 `--bare`，保留 CLAUDE.md 项目上下文）；`.agent-run.json` 的 `cli` 字段已有，`session_id` 回填；`--continue <session_id>` 时远端改为 `claude -p --continue <id> < .prompt`，并按决策表判定——**缺省语义：同话题续接才 --continue；默认 Spawn fresh**。
