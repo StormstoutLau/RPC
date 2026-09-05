@@ -48,6 +48,7 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 - **关闭判据**: `task --attach <f>...` 后远端工作区含附件 + .agent-run.json attach 非空 + 产物回收
 - **✅ 关闭（2026-09-05）**: 最小实现已落地 agent-cli.ps1（param `[string[]]$Attach` L27；scp 至工作区 .attach/ + prompt 注入附件引用 + .agent-run.json attach 回填）。端到端实测通过：`.attach/inbox.txt` 远端着陆、attach=「inbox.txt」非空、agent 读取回显 `ATTACH_VERIFY_LINE_42` 入 agent-output.txt（run 202609051648102241）。
 - **✅ 多文件/目录形态（2026-09-05 补测并补码）**: attach 段补目录支持（`Test-Path -PathType Container` → `scp -r` 递归；多文件走数组循环）。实测 run 202609051732525894：`fileA.md`+`fileB.txt`+`docs/`（子目录 inner.txt）三附件远端着陆、attach=`fileA.md,fileB.txt,docs`、三 marker 全被 agent 读取回显（含目录内 inner.txt）。新增 test-card `attach-dir.md` + fixture `ops/station-bin/attach-test/`。
+- **✅ 空目录兜底（2026-09-05）**: `scp -r` 不复制空目录 → 目录分支 scp 前远端预建同名目录。实测 run 202609051829425046：空 `emptydir/` 附件远端着陆、attach=`emptydir`、agent `find` 列出 `.attach/emptydir`。新增 test-card `attach-empty.md`。
 - **✅ 大文件（2026-09-05，NAS=本地盘大件澄清）**: 93.2MB `小贷风控.pdf` 走 attach 同款 scp 链路传至 `.attach/`，远端 md5 `6381662...` 与本地逐位一致、scp_rc=0，97,702,929 字节无损。结论：E:/F:/D:\Paper 本地盘大文件形态当前阶段已验证可解；真·局域网 NAS（UNC/挂载）经查主控站当前无 NAS 连接，属环境阻塞项留二期 G1。
 
 ### 附：agent-cli.ps1 PS5.1 编码隐患（2026-09-05 触发并修复）
