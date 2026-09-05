@@ -2,7 +2,7 @@
 
 ***
 
-date: 2026-09-03（v3.4.1，审计轮：10 项发现修复——R1 剔除 JetBrains 5.3h 无源断言 / R2 B-claude 冷缓存改为估计值+混淆说明 / R3 §0+§1.1"模型后端不出站"随免费档决策回灌限定 / R4 §0+§5.3 R17 拒绝规则随 A-claude 修复更新 / R5 coordinator 实测边界诚实化 / R6 exec\_command 归因降级为假设进 G11 验证门 / R7-R10 措辞级修正；v3.4：DeepSeek Harness 逆向 + G8 方案定案；v3.3：Codex 逆向——G11 RwLock 定案；v3.2：Anthropic coordinator 逆向；v3.1：模型分层路由 + 协同自审；v3：四项目适配 + 开源对照 + 4 CLI 定版；v2：场景澄清重构）；v3.4.2（2026-09-05，独立幻觉审计轮：双 agent 跨模型族复核，评分 94/86——R11 Codex 路径补 codex-main 嵌套层 + 行数 553→534 / R12 §0 调用入口加"D6 目标形态"限定，collect/review 未实现 / R13 §9.4 延迟口径注记（13s 同题 vs 15s 冒烟）+ 免费档强结论限定 n=1 / R14 补 D7 复用注记（:4000 网关 09-04 ADR-0002 下线，现直连 8080）。无虚构源/无越级标注发现）
+date: 2026-09-03（v3.4.1，审计轮：10 项发现修复——R1 剔除 JetBrains 5.3h 无源断言 / R2 B-claude 冷缓存改为估计值+混淆说明 / R3 §0+§1.1"模型后端不出站"随免费档决策回灌限定 / R4 §0+§5.3 R17 拒绝规则随 A-claude 修复更新 / R5 coordinator 实测边界诚实化 / R6 exec\_command 归因降级为假设进 G11 验证门 / R7-R10 措辞级修正；v3.4：DeepSeek Harness 逆向 + G8 方案定案；v3.3：Codex 逆向——G11 RwLock 定案；v3.2：Anthropic coordinator 逆向；v3.1：模型分层路由 + 协同自审；v3：四项目适配 + 开源对照 + 4 CLI 定版；v2：场景澄清重构）；v3.4.2（2026-09-05，独立幻觉审计轮：双 agent 跨模型族复核，评分 94/86——R11 Codex 路径补 codex-main 嵌套层 + 行数 553→534 / R12 §0 调用入口加"D6 目标形态"限定，collect/review 未实现 / R13 §9.4 延迟口径注记（13s 同题 vs 15s 冒烟）+ 免费档强结论限定 n=1 / R14 补 D7 复用注记（:4000 网关 09-04 ADR-0002 下线，现直连 8080）。无虚构源/无越级标注发现）；v3.5（2026-09-05，D6 演进调研增补 §9.9：二期/V2/D7+ 四方向——--attach / claude 路径+--continue / 跨站扇出 L2-L3 / review--peer，全据库内已审计事实收敛，无新增外部源）
 status: draft（D6 前期调研）
 upstream: D5 Agent 生态升级（已 verified 2026-09-02）; 调研 §4.2 五层循环遗留"任务卡协议"口子
 -----------------------------------------------------------------------
@@ -629,6 +629,78 @@ DeepSeek 官方开源 agent harness（MIT，TypeScript/pnpm/Cordis 框架，deve
 - **数值一致性风险与流程**：baseline .inc 由主控站 R 4.6.1 + 特定包版本生成，容差 1e-10——站上包版本差异可能漂移超容差。**对齐流程定案：站上装完后跑** **`sessionInfo()`** **输出包版本清单，与主控站生成 baseline 时的版本对照；不一致的包按主控站版本钉（`remotes::install_version()`）；首个试点以主控站 baseline 为金标准比对站上复算值**
 
 - 执行列 D6 实施阶段 T0 预置（重资产预置通道，与 G9 同批）
+
+## 9.9 D6 演进四方向调研（v3.5 增补，2026-09-05）
+
+> 范围：D6 MVP 之后的二期(G1)/V2/D7+ 四个演进方向的收敛调研——`--attach`（O-01）、claude 路径 + `--continue`（O-15，二期 G1）、跨站扇出 L2/L3（O-10/O-11，V2）、`review --peer`（O-16，D7+）。**方法**：全据本文件库内已审计事实（§9.6 claude 逆向 / §9.7 Codex 逆向 / §9.8 dsh 逆向 / §3.4 headless 调用面 / O-10·O-18 实测）收敛，无新增外部网络源；对应 OPEN-ISSUES 项状态变更回填 D6 台账，此处只给结论与依据。
+
+### 9.9.1 --attach（O-01，二期 G1 或最小实现）
+
+**调研结论**：传输通道已具备，落地仅需补 `param` 参数 + 现有 tar+scp 通道扩一段 `.attach/` 集，设计上无新接缝。
+
+| 依据         | 事实                                                                                                                |
+| ---------- | ----------------------------------------------------------------------------------------------------------------- |
+| schema 字段在 | `.agent-run.json` 已含 `attach` 字段（现恒 `[]`）；`out/` schema 三字段含 attach（ARCHITECTURE §6）                              |
+| 调用面已实证     | opencode 原生 `-f <file>` 附件（A2 已实证，§3.4）；wrapper 走 `run -m ... < .prompt`，本地附件需先进工作区                               |
+| 传输通道现成     | `workspace sync` 已用 tar+GNU tar `--force-local` + scp 锁链；附件可并入同链或独立 `.attach/` 子包                                 |
+| 排除清单已预置    | 四型 `.agentsync` 模板均已含 `.attach/` 排除项（agent-cli.ps1 `AGENTSYNC_TEMPLATES`）——即 `.attach/` 作为"只进不出"的附件输入区，不随 sync 回带 |
+
+**方案（收敛）**：`task --attach <f>...` → 主控站收集附件 → 随 task 远端脚本同批 tar+scp 至工作区 `.attach/` → prompt 引用相对路径 → 远端脚本拼接。读取以工作区内 `.attach/<name>` 为基准，agent 不经网络读主控站。
+
+**关闭判据**（登记 O-01）：`task --attach <f>...` 后远端工作区含附件 + `.agent-run.json attach` 非空 + 产物回收。
+
+### 9.9.2 claude 路径 + --continue（O-15，二期 G1）
+
+**调研结论**：claude headless 调用面已完全实证（§3.4/§9.1），与 opencode 完全同构，落地是"替换远端执行体 + 补 --continue 路由"，无阻塞风险。
+
+| 依据                    | 事实                                                                                                   |
+| --------------------- | ---------------------------------------------------------------------------------------------------- |
+| 调用铁律已固化               | 铁律 4 `< /dev/null` 已固化；`--output-format json` 含 `session_id`（§3.4）——正是 --continue 需要的句柄              |
+| 语义路由模型已有              | Continue-vs-Spawn 决策表（DESIGN §9.6-2）已定路由规则：verifying-code → Spawn fresh；wrong-approach → Spawn fresh |
+| 遮蔽坑已知                 | claude personal > project 技能遮蔽（§3.2）；`--bare` 跳过上下文（§3.4）——路径必须带项目上下文，禁用 `--bare`                    |
+| ROUTE\_TABLE 已含 cli 列 | agent-cli.ps1 ROUTE\_TABLE 已按模型 id → station 映射，claude 走本地模型语义（直连 8080，ADR-0002）                     |
+| 恢复对齐                  | §9.6-2-7 dsh/Anthropic 会话模式持久化——`--continue <session_id>` 恢复时对齐模型/模式（G12 参考）                         |
+
+**方案（收敛）**：`task --cli claude` → 远端执行体从 `opencode run -m <id> < .prompt` 切换为 `claude -p --output-format json < /tmp/prompt`（非 `--bare`，保留 CLAUDE.md 项目上下文）；`.agent-run.json` 的 `cli` 字段已有，`session_id` 回填；`--continue <session_id>` 时远端改为 `claude -p --continue <id> < .prompt`，并按决策表判定——**缺省语义：同话题续接才 --continue；默认 Spawn fresh**。
+
+**关闭判据**（登记 O-15）：`agent-cli task --cli claude` + `--continue <session>` 可用，`.agent-run.json cli=claude + session_id` 非空。
+
+### 9.9.3 跨站扇出 L2/L3（O-10/O-11，V2）
+
+**调研结论**：L1 并行判据已过（O-10/O-18），L2 端到端 + L3 回归的**前置已全部解锁**——隧道方案已验证（B ssh -NL 18081→A 8080），隔离 db 机制已明确（XDG\_DATA\_HOME），唯一新增事实是扇出调度器的读写锁语义直接照 §9.7 Codex 并行判据。
+
+| 依据   | 事实（O-10 实测）                                                                    |
+| ---- | ------------------------------------------------------------------------------ |
+| 并行判据 | BS-2 直连 3 线程 52.1s ≪ 串行和 110.9s；跨站 A串行 6.8s → A+B 各2 并发 4.8s（ratio 0.71 ≤ 1.6） |
+| 铁律   | O-18：同站叠并发被统一内存带宽顶起（\~2.8×），**扇出优先跨站各 1 并发**                                   |
+| 隔离机制 | SQLite 写锁序列化成立（O-09）；并行写任务各自 `XDG_DATA_HOME` 隔离 db                             |
+| 调度语义 | 照 §9.7 Codex RwLock：`readonly=true` 卡 → 读锁并行；write 卡 → 写锁串行同文件集                |
+
+**L2/L3 范围（登记 O-10 剩余/O-11）**：L2=真实 readonly 任务卡跨站分发端到端（A+B 各 1）；L3=回归（agent-cli-smoke + A 抽检）。
+
+**方案（收敛）**：编排层并发 HTTP fan-out（主控站起 multi-thread），扇出目标按模型 station 映射分摊 A/B；readonly 卡跨站并行；碰撞时 flock 层 2（O-17 readonly 字段）细化共享/排它。
+
+### 9.9.4 review --peer（O-16，D7+）
+
+**调研结论**：互审协议已在本文件 §9.6-2-3/§9.7/§9.8 多处被官方与开源实现"第三方独立表述"，D7 只需把这些收敛为 wrapper 的 `review` 子命令，无新机制发明。
+
+| 依据            | 事实                                                                                                                                                                               |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| fresh-eyes 原理 | §9.6-2-3 Codex/Anthropic 官方决策表："verifying code a different worker wrote → **Spawn fresh**, verifier sees with fresh eyes, not carry implementation assumptions" = 站间互审异构复审的第三方表述 |
+| 反懒惰铁律         | §9.6-2-4 "never write 'based on your findings'" = 审计者不采信引文/双盲重推导（§8.5 执行锚定公理），与 D6 "产出方与审查方强制异档异站"同构                                                                             |
+| 两阶段 QA        | §9.6-2-5 worker 自验(层1) + 独立验证 worker(层2)，"proving code works, not confirming it exists" = accept 之外的独立验证层                                                                        |
+| 任务卡即接口        | §4.2/ARCHITECTURE §8 trae 派发以任务卡 schema 冻结为接口；review 复用同一卡（`audit: true` 触发）                                                                                                     |
+| 跨模型族          | 项目铁律：跨模型审查须异构模型族（nemotron↔gpt-oss）——站间互审天然满足 A/B 异构                                                                                                                              |
+
+**方案（收敛）**：`agent-cli review --peer <card>` → 产出方任务卡完成后，审查方以**异站 + 异模型族**重跑（`--cli/--model` 强制不同）；审查基于是代码/产物实体而非产出方结论（双盲重推导）；accept 判据换为审查方独立 golden 测试（O-12 strong accept 关联）。站间互审为 D7+，本调研只固化协议语义，不实现。
+
+### 9.9.5 四方向共性与演进最小改动力度
+
+- **共性**：四方向全部建立在**已固化的 wrapper 三铁律**（R14 脚本落盘 / tar+scp / ROUTE\_TABLE 编译期固化）与**已审计 schema**（.agent-run.json）之上，无一条需要改架构边界或并发模型。
+
+- **改动集中点**：全部是 `agent-cli.ps1` 内部 `Invoke-Task` 的远端执行体 + `param` 块 + 命令面扩展，符合 IMPLEMENTATION §3"单文件演进"定位。
+
+- **建议串行**：--attach（最小实现，独立）→ claude 路径+--continue（复用 --attach 的附件通道）→ 跨站扇出 L2（需 V2 并发骨架）→ review --peer（依赖 claude/review 命令面，D7 立项内）。
 
 ## 参考源
 
