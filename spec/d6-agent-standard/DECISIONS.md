@@ -4,8 +4,8 @@
 
 id: d6-agent-standard-DECISIONS
 type: decisions
-version: 1.0
-status: approved（与 DESIGN v1.4 / CHECKLIST 验收实况对齐，2026-09-04）
+version: 1.1
+status: approved（与 DESIGN v1.4 / CHECKLIST 验收实况对齐，2026-09-04；v1.1 补 D-16 复杂度路由 + D-17 wrapper 稳定性，2026-09-07）
 date: 2026-09-04
 depends: \[d6-agent-standard-DESIGN v1.4, d6-agent-standard-CHECKLIST v1.0]
 upstream: \[d6-agent-standard-DESIGN, ADR-0001, ADR-0002]
@@ -36,6 +36,8 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0001, ADR-0002]
 | D-13 | 任务卡正文传输 | Get-FrontMatter 补 body 捕获，prompt=[proj:]+task行+正文全文 | 仅传 front-matter 一行 | P1b 修复：正文静默丢弃致模型自设计 | A8b/A14 | CHECKLIST §7.2 P1b |
 | D-14 | 网关链路 | D6 链路绕 LiteLLM 网关，直连 B/A:8080 + ssh 隧道跨站 | 经网关 fan-out | ADR-0002 方案 C：消除配置漂移故障 | BS-2/跨站 L1 | ADR-0002 |
 | D-15 | 跨站扇出 | fan-out 优先跨站各 1 并发；隧道 B:18081→A:8080 | 同站叠并发 | 同站被统一内存带宽顶起（1.7→4.8s） | 跨站 L1 | BLINDSCAN §8.7.6 |
+| D-16 | 复杂度路由 | 按 复杂度/题型 分层映射推理参数（code/reason/short/long/doc，L0-L3） | 一律最高思考+满ctx | qwen3.8-27B 横测：代码题思考 94.9x cost、a1 空输出、deepseek 剥不动 qwen 标签 | 11/11 单测 + 吃狗粮 code/doc 两档 | DESIGN §6.4 |
+| D-17 | wrapper 稳定性 | task 前置 fail-fast（PROFILE 干跑 + agent-out 可写探针 exit 12）+ ledger 先行 + collectOk 保护 | 任由 collect 崩溃吞落档 | run1 权限崩吞 ledger / run2 脱管静默退 | PREFLIGHT 早于 STATION_READY + collect=ok 落账 | DESIGN §11.3 |
 
 ## 2. 方案取舍详情（DESIGN §7，四案）
 
@@ -66,6 +68,19 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0001, ADR-0002]
 ### BP-1/BP-2（对齐审计回灌，2026-09-03）
 - **BP-1**: .agent-run.json 契约补 `readonly` 字段（MVP 仅记录，V2 激活语义）
 - **BP-2**: 别名→完整 ID 映射表（nemotron/gpt-oss/lightning/ultra/free-1m）统一双表示，M3 路由按完整 ID 判定
+
+### D-16：复杂度路由（2026-09-06/07，DESIGN §6.4）
+- **原案**: 一律最高思考 + 满 ctx（曾作为追求质量的默认）
+- **定案**: 按任务**复杂度（auto/short/standard/long）**与**题型（code/reason/concept/numeric/doc）**分层映射推理参数档 `{context,max_output,thinking,template,reasoning_format,flavor}`；优先级 `taskType > complexity > default`；`context=0` 哨兵上抛模型上限；`type∈{code,doc}` 强制 thinking OFF
+- **实证**: qwen3.8-27B 横测——代码题思考开启 cost 94.9x、a1 空输出、`--reasoning-format deepseek` 剥不动 qwen thinking/response 标签（llama.cpp #24671）；默认 ctx8192+c2 禁思考 5/5
+- **执行分层**: L1 实例层（llama-server preset 三风味 nothink/think/long，MVP 主路径）→ L2 opencode provider 层 → L3 prompt 变形 → L0 per-request（待 vLLM）
+- **验收**: `_complexity_route_test.ps1` 11/11；吃狗粮 code 档（pathguard）+ doc 档（specaudit）均落 profile 正确
+
+### D-17：wrapper 稳定性 fail-fast 加固（2026-09-07）
+- **原案**: collect 阶段直接写 agent-out，失败即整个 wrapper 崩（EAP=Stop）
+- **定案**: 三段加固——① task 前置 `Assert-AgentOutWritable` 探针（PROFILE 干跑后、station-ready/sync 前，失败 ABORT exit 12 + 提示进 Settings UI）；② ledger 写盘提前到 collect 之前（LEDGER_WARN try/catch）；③ agent-out 建目录+写盘包 collectOk try/catch（COLLECT_FAIL + `.agent-run.json` 落 `collect=ok/failed`，TASK_DONE 仍输出）
+- **实证**: run1 权限崩吞 ledger、run2 脱管静默退（均失联无落档）；加固后 PREFLIGHT 早于 STATION_READY、`collect=ok` 落账、exit=0
+- **遗留**: 新会话撤白名单自测 exit 12 判定为「搁置」（失败分支极薄、正常路径已覆盖，跨会话成本≫价值）
 
 ## 4. ADR 关联
 

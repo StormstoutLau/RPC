@@ -4,8 +4,8 @@
 
 id: d6-agent-standard-ARCHITECTURE
 type: architecture
-version: 1.0
-status: approved（与 DESIGN v1.4 / IMPLEMENTATION v1.2 实况对齐，2026-09-04）
+version: 1.1
+status: approved（与 DESIGN v1.4 / IMPLEMENTATION v1.2 实况对齐，2026-09-04；v1.1 补复杂度路由 M3/契约字段 + wrapper 稳定性 preflight/exit12，2026-09-07）
 date: 2026-09-04
 depends: \[d6-agent-standard-DESIGN v1.4 (approved), d6-agent-standard-IMPLEMENTATION v1.2, d6-agent-standard-CHECKLIST v1.0 (验收通过)]
 upstream: \[d6-agent-standard-DESIGN, ADR-0002]
@@ -62,22 +62,26 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0002]
 | ----- | ----------------------------------- | ------------------------ | ------------------------------ | --------- |
 | M1 workspace | 建区/同步/归档（tar+scp 推拉 + .agentsync 过滤） | proj 名, .agentsync       | 站上工作区目录                        | scp/ssh   |
 | M2 task | 全链编排：sync→lock→run→collect→unlock      | 任务卡/命令行参数                | .agent-run.json + out/ 产物        | M1,M3,M4,M5 |
-| M3 router | 模型→站映射 + 三档敏感路由 + 拒绝规则 + sanitized scrubber | model, sensitivity, cli  | 目标站+调用参数（已消毒文本）              | ROUTE_TABLE(编译进代码) |
+| M3 router | 模型→站映射 + 三档敏感路由 + 拒绝规则 + sanitized scrubber + **复杂度路由（Resolve-Profile）** | model, sensitivity, cli, complexity, taskType | 目标站+调用参数 + 推理参数档（context/max_output/thinking/flavor） | ROUTE_TABLE(编译进代码) |
 | M4 lock/state | flock 获取/释放 + 状态机（孤儿检测）             | 工作区路径                    | 锁句柄 / .agent-state.json          | ssh        |
-| M5 collect | out/ 整包回收 + git diff 拉回                 | 工作区路径                    | 主控站 <proj>/agent-out/<ts>/       | tar+scp    |
+| M5 preflight+collect | **Preflight**（Assert-AgentOutWritable 探针，失败 exit 12）+ **collect**（out/ 整包回收 + git diff 拉回 + ledger 先行 + collectOk 保护） | 工作区路径 + projRoot | 主控站 <proj>/agent-out/<ts>/ + agent-runs.log 一行 | tar+scp    |
 | 契约层    | .agent-run.json 归一（哈希三字段 + 观测字段）      | 执行结果 + 时间戳               | run.json                          | Write-RunJson |
 
 **代码结构**（单文件幂等锚点，实施以 IMPLEMENTATION §3 为准，此处仅列边界）：
 - `Invoke-RemoteScript`：唯一 ssh 出口，本地生成 `/tmp/agent-cli-run-<ts>.sh` → scp → `ssh bash`，杜绝 PowerShell 引号展开
 - `Invoke-Workspace` / `Invoke-LockState` / `Invoke-Task` / `Invoke-Collect`
 - `Invoke-Router`：拒绝规则 → sensitivity 检查 → scrubber → 调用参数
+- `Resolve-Profile`（M3 内）：复杂度/题型 → 推理参数档（§6.4）
+- `Assert-AgentOutWritable`（M5 前置）：agent-out 写探针，失败 return false
 - `Write-RunJson`：契约归一
-- exit code 分派：2/3/4/5/6/7（§4）
+- exit code 分派：2/3/4/5/6/7/12（§5）
 
 ## 3. 数据流（task 单次执行）
 
 ```
 任务卡解析 → M3 路由（sensitivity 检查 → model→站映射 → 消毒 → 参数拼装）
+  → 复杂度路由 Resolve-Profile（PROFILE 干跑输出；L1-HINT 提示实例风味匹配，不改引擎）
+  → M5 preflight（Assert-AgentOutWritable 探针；失败 → ABORT exit 12，提示 Settings UI）
   → M1 sync（tar 排除 .agentsync → scp → 解包; 首跑 --create 建区）
   → M4 取锁（flock -n; 失败 → 报占用者 PID 退出 3）
   → M4 写状态 running{pid, ts, task_id}
@@ -85,9 +89,9 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0002]
      opencode: echo "<prompt>" | opencode run -m <model> --format json
      [prompt 注入: [proj:<name>] 前缀 + 任务卡正文全文 + audit 契约(audit:true)]
   → 契约归一 .agent-run.json 落 out/（§6.2 schema）
-  → M5 collect（out/ tar+scp 拉回主控站 <proj>/agent-out/<ts>/）
+  → ledger 先行（写 agent-runs.log，LEDGER_WARN try/catch）
+  → M5 collect（out/ tar+scp 拉回主控站 <proj>/agent-out/<ts>/；collectOk 保护，失败打 COLLECT_FAIL + run.json.collect=failed）
   → M4 写状态 done + 释放锁
-  → 本地台账 agent-runs.log 追加一行（G13 观测累计）
 ```
 
 **关键不变式沿链**：
@@ -128,6 +132,7 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0002]
 | zen 限额（429/quota）            | 不重试远端 → 提示切本地模型命令（降级路径）         | 7     | 定义置位，未真实触发      |
 | 孤儿（running+死 PID）            | 归档 out/ → orphaned → 允许重取锁          | 0+警告 | A10             |
 | accept 判据                    | agent 完成但任一条判据失败 → 整任务 failed     | 9     | A14（ACCEPT_OK 回收） |
+| agent-out 不可写                | 前置探针失败 → ABORT，提示 Settings UI        | 12    | D-17（PREFLIGHT-FAIL，实测） |
 
 **重试语义**（F7 适配注记）：仅网络类失败自动重试 1 次（≤2 总尝试）；模型/文件系统失败直接转人工。Codex 原"沙箱拒绝→升级重试"被重释为"网络失败重试"——本系统无沙箱概念，语义等价（都不无限重试）。
 
@@ -135,8 +140,8 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0002]
 
 | 类型       | 位置/文件                           | 关键字段                                                    |
 | -------- | ------------------------------ | ------------------------------------------------------ |
-| 任务卡     | <proj>/task-*.md（随 sync 进工作区）     | proj/task/model/sensitivity/readonly/timeout_s/accept     |
-| 契约归一    | <proj>/agent-out/<ts>/.agent-run.json | 哈希三字段(prompt_sha256/content_digest/attach) + queue_s/run_s + readonly + accept.passed |
+| 任务卡     | <proj>/task-*.md（随 sync 进工作区）     | proj/task/model/sensitivity/readonly/timeout_s/accept + complexity/task-type（§6.4） |
+| 契约归一    | <proj>/agent-out/<ts>/.agent-run.json | 哈希三字段(prompt_sha256/content_digest/attach) + queue_s/run_s + readonly + profile(§6.4) + collect(ok/failed) + accept.passed |
 | 状态机     | <proj>/.agent-state.json           | state{ running/done/failed/orphaned } + pid + ts_start       |
 | 台账      | 主控站 <proj>/agent-runs.log          | 观测累计（G13），一行/run                                      |
 
@@ -163,7 +168,10 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0002]
 | 后端并发探测         | 触发条件=queue_s 排队成常态；调 /slots + 槽位占则拒/等                        | 升级项 (F1)  |
 | review --peer     | 站间互审协议                                                         | D7+       |
 | trae 派发          | 任务卡 schema 冻结即接口                                                 | D7        |
+| 复杂度路由 L0       | per-request 推理参数（enable_thinking/max_tokens），需 vLLM 引擎              | 待 vLLM    |
+| 复杂度路由 L1/L2/L3 | 实例风味 preset（nothink/think/long）+ opencode provider limit + prompt 尾注 | **已落地（D-16）** |
+| wrapper 稳定性      | Preflight + ledger 先行 + collectOk（D-17）                              | **已落地** |
 
 ***
 
-**架构文档签字**: 与 IMPLEMENTATION 实况对齐（2026-09-04）。后续 DESIGN/IMPLEMENTATION 变更命中本架构任一边界/数据流/并发语义时，维护者必须同步更新本文件。
+**架构文档签字**: 与 IMPLEMENTATION 实况对齐（2026-09-04；v1.1 复核复杂度路由 + wrapper 稳定性 2026-09-07）。后续 DESIGN/IMPLEMENTATION 变更命中本架构任一边界/数据流/并发语义时，维护者必须同步更新本文件。

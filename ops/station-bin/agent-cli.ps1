@@ -24,7 +24,9 @@ param(
     [int]$Hold = 0,              # lock cmd: seconds to hold after acquire (A9 test)
     [string]$RemoteHost = '',    # lock cmd: actual remote host; default B
     [string]$Card = '',          # task cmd: path to task card md
-    [string[]]$Attach = @()      # task cmd: attachment files/dirs -> workspace .attach/ (O-01)
+    [string[]]$Attach = @(),     # task cmd: attachment files/dirs -> workspace .attach/ (O-01)
+    [string]$Complexity = '',    # task cmd: auto|short|standard|long -> 6.4 complexity profile
+    [string]$TaskType = ''       # task cmd: code|reason|concept|numeric|doc -> 6.4 thinking/template
 )
 
 # ---------------- constants / env ----------------
@@ -328,6 +330,49 @@ function Invoke-Router {
     return 0
 }
 
+# ---------------- 6.4 complexity routing ----------------
+
+function Resolve-Profile {
+    # 6.4: {model-alias, complexity, taskType} -> resolved inference-param profile.
+    # profile = {profile, context, max_output, thinking(ON/OFF), template, reasoning_format, flavor, source}
+    # priority: taskType > complexity > default(reason). code/doc force thinking OFF (实测: 满ctx+最高思考横测
+    # 代码题思考开启对质量负收益 - cost 94.9x; 见 model-eval/results-ledger 配置变体对照 2026-09-06).
+    # reasoning_format fixed = qwen: `--reasoning-format deepseek` 剥不动 qwen 的 thinking/response 标签
+    # (llama.cpp #24671, 本集群实证 reasoning_content=0).
+    param([string]$model, [string]$complexity, [string]$taskType)
+    $typeProfiles = @{
+        code    = @{ name='code';    context=8192;  max_output=8192;  thinking='OFF'; template='froggeric'; reasoning_format='qwen'; flavor='nothink' }
+        reason  = @{ name='reason';  context=32768; max_output=8192;  thinking='ON';  template='froggeric'; reasoning_format='qwen'; flavor='think' }
+        concept = @{ name='reason';  context=32768; max_output=8192;  thinking='ON';  template='froggeric'; reasoning_format='qwen'; flavor='think' }
+        numeric = @{ name='short';   context=8192;  max_output=2048;  thinking='ON';  template='froggeric'; reasoning_format='qwen'; flavor='think' }
+        doc     = @{ name='doc';     context=0;     max_output=8192;  thinking='OFF'; template='froggeric'; reasoning_format='qwen'; flavor='nothink' }
+    }
+    $compProfiles = @{
+        short    = @{ name='short';  context=8192;  max_output=2048;  thinking='ON';  template='froggeric'; reasoning_format='qwen'; flavor='think' }
+        standard = @{ name='reason'; context=32768; max_output=8192;  thinking='ON';  template='froggeric'; reasoning_format='qwen'; flavor='think' }
+        long     = @{ name='long';   context=0;     max_output=16384; thinking='ON';  template='froggeric'; reasoning_format='qwen'; flavor='long' }
+        auto     = @{ name='reason'; context=32768; max_output=8192;  thinking='ON';  template='froggeric'; reasoning_format='qwen'; flavor='think' }
+    }
+    $ctxMax = @{ 'nemotron'=131072; 'gpt-oss'=131072; 'lightning'=262144; 'ultra'=1000000; 'free-1m'=1000000 }
+    $modelCtx = 262144
+    if ($model -and $ctxMax.ContainsKey($model)) { $modelCtx = $ctxMax[$model] }
+    $pro = $null; $src = ''
+    if ($taskType -and $typeProfiles.ContainsKey($taskType)) { $pro = $typeProfiles[$taskType].Clone(); $src = "type=$taskType" }
+    elseif ($complexity) {
+        $cl = if ($compProfiles.ContainsKey($complexity)) { $complexity } else { 'auto' }
+        $pro = $compProfiles[$cl].Clone(); $src = "complexity=$complexity"
+    }
+    else { $pro = $compProfiles['auto'].Clone(); $src = 'default' }
+    # context=0 sentinel -> model context max (long/doc)
+    if ($pro['context'] -le 0) { $pro['context'] = $modelCtx }
+    # conflict: type=code/doc + complexity=long -> keep thinking OFF, bump context to large
+    if ($taskType -and $complexity -eq 'long' -and $pro['name'] -in @('code','doc')) { $pro['context'] = $modelCtx }
+    if ($pro['name'] -in @('code','doc')) { $pro['thinking'] = 'OFF' }
+    return [pscustomobject]@{ profile=$pro['name']; context=$pro['context']; max_output=$pro['max_output'];
+                             thinking=$pro['thinking']; template=$pro['template']; reasoning_format=$pro['reasoning_format'];
+                             flavor=$pro['flavor']; source=$src }
+}
+
 # ---------------- M4 lock/state ----------------
 
 function Invoke-LockState {
@@ -395,6 +440,28 @@ esac
 
 # ---------------- M2 task full-chain ----------------
 
+function Assert-AgentOutWritable {
+    # TODO-2 pre-flight (2026-09-07): BEFORE any remote sync/run, verify the console agent-out
+    # root is writable from the injected sandbox whitelist. A fresh host session may NOT include
+    # D:\Paper\agent-out (Settings UI only; global.json does not apply) -> collect would crash
+    # AFTER a long run. Probe early and fail fast instead of wasting a run.
+    param([string]$projRoot)
+    $outRoot = Join-Path $projRoot 'agent-out'
+    $probe = Join-Path $outRoot "_preflight_$([DateTime]::Now.ToString('HHmmss')).probe"
+    try {
+        if (-not (Test-Path $outRoot)) { New-Item -ItemType Directory -Path $outRoot -Force | Out-Null }
+        Set-Content -Path $probe -Value 'ok' -ErrorAction Stop
+        Remove-Item $probe -Force -ErrorAction SilentlyContinue
+        Write-Host "PREFLIGHT agent-out=WRITABLE ($outRoot)"
+        return $true
+    }
+    catch {
+        Write-Host "PREFLIGHT-FAIL: agent-out NOT writable ($outRoot): $($_.Exception.Message)"
+        Write-Host "  -> Settings > Permission & Approval > Custom Configuration: ensure this dir is writable (global.json does NOT apply)."
+        return $false
+    }
+}
+
 function Get-FrontMatter {
     # minimal front-matter parser from a task card md.
     # P1b (D6 audit 2026-09-03): the card BODY is the clean-room task spec (DESIGN §6.1
@@ -402,13 +469,13 @@ function Get-FrontMatter {
     # front-matter task: was sent and the whole body was silently dropped (A14 finding:
     # model self-designed the deliverable + self-authored its tests => self-certifying accept).
     param([string]$Path)
-    $h = @{ model=''; sensitivity=''; readonly=$false; timeout_s=900; task=''; cli='opencode'; accept=@(); body='' }
+    $h = @{ model=''; sensitivity=''; readonly=$false; timeout_s=900; task=''; cli='opencode'; accept=@(); body=''; complexity=''; 'task-type'='' }
     $inFreq = $false; $bodyRead = $false; $curKey = ''
     $bodyLines = @()
     $lines = [System.IO.File]::ReadAllLines($Path, [System.Text.UTF8Encoding]::new($false))
     foreach ($l in $lines) {
         if ($l.Trim() -eq '---') { if (-not $inFreq) { $inFreq = $true; continue } else { $inFreq = $false; $bodyRead = $true; continue } }
-        if ($inFreq -and $l -match '^\s*([A-Za-z_]+)\s*:\s*(.*)$') {
+        if ($inFreq -and $l -match '^\s*([A-Za-z_\-]+)\s*:\s*(.*)$') {
             $k = $matches[1].ToLower(); $v = $matches[2].Trim()
             $curKey = ''
             if ($h.ContainsKey($k)) {
@@ -477,7 +544,9 @@ function Invoke-Task {
         [string]$sensitive,  # sensitivity override
         [string]$type,       # .agentsync type for sync step
         [string]$hostName,
-        [string[]]$attach    # O-01: attachments -> workspace .attach/
+        [string[]]$attach,   # O-01: attachments -> workspace .attach/
+        [string]$complexity, # 6.4: auto|short|standard|long
+        [string]$taskType    # 6.4: code|reason|concept|numeric|doc
     )
     if (-not $card) { Write-Host 'task requires --card <task.md>'; return 2 }
     if (-not (Test-Path $card)) { throw "card not found: $card" }
@@ -499,6 +568,22 @@ function Invoke-Task {
     $id = $r['id']; $station = $r['station']
     if ($sens -eq 'local-only' -and $id -match '^opencode/') { Write-Host "REJECT local-only+remote ($id) exit 4 - no override channel"; return 4 }
     if (-not $hostName) { $hostName = Get-TargetHost $station }
+
+    # 6.4 complexity routing: CLI --complexity/--task-type > card front-matter > default(reason)
+    $cx = if ($complexity) { $complexity } else { if ($fm['complexity']) { $fm['complexity'] } else { 'auto' } }
+    $tt = if ($taskType) { $taskType } else { if ($fm['task-type']) { $fm['task-type'] } else { '' } }
+    $prof = Resolve-Profile -model $m -complexity $cx -taskType $tt
+    $profTxt = "profile=$($prof.profile) ctx=$($prof.context) max_out=$($prof.max_output) thinking=$($prof.thinking) template=$($prof.template) reasoning=$($prof.reasoning_format) flavor=$($prof.flavor) ($($prof.source))"
+    Write-Host "PROFILE: $profTxt"
+    # L1 hint (only log, NEVER auto-unload/reload - GTT mutually exclusive, avoid disrupting loaded instance):
+    if ($prof.flavor -eq 'nothink' -or $prof.flavor -eq 'long') { Write-Host "PROFILE-L1-HINT: flavor=$($prof.flavor) - requires instance with matching CTX/template; verify loaded instance or reload manually" }
+
+    # TODO-2 pre-flight (2026-09-07): fail fast on unwritable agent-out BEFORE station-ready/sync/run.
+    # Route+profile dry-run above already printed; now verify the local collect destination.
+    if (-not (Assert-AgentOutWritable -projRoot $projRoot)) {
+        Write-Host "ABORT: agent-out not writable (exit 12) - fix Settings > Permission & Approval > Custom Configuration"
+        return 12
+    }
 
     # O-19: station env-ready gate (discover engine port + inject cluster-litellm baseURL BEFORE dispatch)
     $baseAlias = ($m -split '/')[-1]
@@ -556,6 +641,11 @@ mkdir -p "`$W/.attach/$name"
     if ($attachNames.Count -gt 0) {
         $promptFull += "`n`n[attachments in workspace .attach/]: " + ($attachNames -join ', ')
         $promptFull += "`n(" + ((Split-Path $attachNames[0] -Leaf)) + " 等附件已在工作区 .attach/ 目录，按需读取)"
+    }
+    # L3 prompt deformation (6.4): reasoning/short profiles add "think terse" tail so agent
+    # does not blow the thinking budget (实测: 思考无限在短题负收益 / 空响应 - see ledger 2026-09-06).
+    if ($prof.thinking -eq 'ON' -and $prof.profile -in @('short','reason')) {
+        $promptFull += "`n`n(高效应答: 请尽量精简思考, 直接给出关键步骤与最终结论)"
     }
     if ($sens -eq 'sanitized') {
         Write-Host 'SANITIZED gate: scrubbing prompt before it leaves console (P1a)'
@@ -663,11 +753,29 @@ exit `$RC
     $codeReal = $code
     if ($code -eq 9) { $code = 1 }  # map accept-gate failure to generic failed for shell return
 
+    # 8) ledger line FIRST (G13) -- fixed to sandbox-writable d:\RPC zone (O-04: projRoot not
+    #     sandbox-safe). Run ledger before any agent-out write so a collect crash (startup-
+    #     injected sandbox whitelist w/o D:\Paper\agent-out) never loses the run record.
+    $ledger = 'd:\RPC\ops\station-bin\agent-runs.log'
+    $line = "$ts,$proj,$id,$sens,$code,0,0"
+    try { Add-Content -Path $ledger -Value $line -Encoding utf8; $ledgerOk = $true }
+    catch { $ledgerOk = $false; Write-Host "LEDGER_WARN: $($_.Exception.Message)" }
+
     # 7) .agent-run.json under <proj>/agent-out/<ts>/ (DESIGN §6.2)
-    $projOutRoot = Join-Path $projRoot 'agent-out'
-    if (-not (Test-Path $projOutRoot)) { New-Item -ItemType Directory -Path $projOutRoot -Force | Out-Null }
-    $runDir = Join-Path $projOutRoot $ts
-    New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+    #    Hardened in try/catch: if agent-out is not sandbox-writable (new host session), we
+    #    still surface TASK_DONE + a COLLECT_FAIL marker and keep the exit code semantics.
+    $collectOk = $true
+    try {
+        $projOutRoot = Join-Path $projRoot 'agent-out'
+        if (-not (Test-Path $projOutRoot)) { New-Item -ItemType Directory -Path $projOutRoot -Force | Out-Null }
+        $runDir = Join-Path $projOutRoot $ts
+        New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+    }
+    catch {
+        $collectOk = $false
+        $runDir = "$projRoot\agent-out\<$ts>"
+        Write-Host "COLLECT_FAIL: cannot create agent-out dir: $($_.Exception.Message)"
+    }
     $run = [ordered]@{
         proj = $proj
         task_id = "task-$ts"
@@ -686,19 +794,27 @@ exit `$RC
         timestamp_end = ''
         prompt_sha256 = "sha256:$promptSha"
         attach = $attachNames
+        profile = [ordered]@{ name=$prof.profile; context=$prof.context; max_output=$prof.max_output;
+                              thinking=$prof.thinking; template=$prof.template; reasoning_format=$prof.reasoning_format;
+                              flavor=$prof.flavor; source=$prof.source }
         accept = [ordered]@{ cmd = $accept; passed = $acceptPassed }
+        collect = if ($collectOk) { 'ok' } else { 'failed' }
     }
-    $run | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $runDir '.agent-run.json') -Encoding utf8
-    # move pulled output into runDir
-    if (Test-Path $outTxt) { Move-Item $outTxt (Join-Path $runDir 'agent-output.txt') -Force }
-    if (Test-Path $accTxt) { Move-Item $accTxt (Join-Path $runDir 'accept-output.txt') -Force }
-    Remove-Item (Join-Path $projRoot 'agent-out\.agent-run.json') -ErrorAction SilentlyContinue
+    if ($collectOk) {
+        try {
+            $run | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $runDir '.agent-run.json') -Encoding utf8
+            # move pulled output into runDir
+            if (Test-Path $outTxt) { Move-Item $outTxt (Join-Path $runDir 'agent-output.txt') -Force }
+            if (Test-Path $accTxt) { Move-Item $accTxt (Join-Path $runDir 'accept-output.txt') -Force }
+            Remove-Item (Join-Path $projRoot 'agent-out\.agent-run.json') -ErrorAction SilentlyContinue
+        }
+        catch {
+            $collectOk = $false
+            Write-Host "COLLECT_FAIL: agent-out write failed: $($_.Exception.Message)"
+        }
+    }
 
-    # 8) ledger line (G13)
-    $ledger = Join-Path $projRoot 'agent-runs.log'
-    $line = "$ts,$proj,$id,$sens,$code,0,0"
-    Add-Content -Path $ledger -Value $line -Encoding utf8
-
+    # (ledger already written above, before collect - G13/O-04)
     Write-Host "TASK_DONE dir=$runDir exit=$code prompt_sha256=sha256:$promptSha content_digest=sha256:$contentSha"
     Write-Host "ledger+=$line"
     return $code
@@ -714,8 +830,13 @@ try {
     }
     elseif ($Command -eq 'route') {
         # M3 router diagnostic (A8). usage: agent-cli route --model <name> [--sensitivity <x>]
-        if (-not $Model) { Write-Host 'usage: agent-cli route --model <alias|full-id> [--sensitivity public|sanitized|local-only]'; exit 2 }
+        #   [--complexity <auto|short|standard|long> --task-type <code|reason|concept|numeric|doc>]  # 6.4 profile dry-run
+        if (-not $Model) { Write-Host 'usage: agent-cli route --model <alias|full-id> [--sensitivity public|sanitized|local-only] [--complexity <auto|short|standard|long>] [--task-type <code|reason|concept|numeric|doc>]'; exit 2 }
         $code = Invoke-Router -model $Model -sensitivity $Sensitivity
+        if ($code -eq 0 -and ($Complexity -or $TaskType)) {
+            $prof = Resolve-Profile -model $Model -complexity $Complexity -taskType $TaskType
+            Write-Host "PROFILE: profile=$($prof.profile) ctx=$($prof.context) max_out=$($prof.max_output) thinking=$($prof.thinking) template=$($prof.template) reasoning=$($prof.reasoning_format) flavor=$($prof.flavor) ($($prof.source))"
+        }
         exit $code
     }
     elseif ($Command -eq 'lock') {
@@ -726,8 +847,8 @@ try {
         exit $code
     }
     elseif ($Command -eq 'task') {
-        # M2 full chain. usage: agent-cli task <proj> --card <task.md> [--model <m>] [--sensitivity <x>]
-        $code = Invoke-Task -proj $Proj -card $Card -model $Model -sensitive $Sensitivity -type $Type -hostName $RemoteHost -attach $Attach
+        # M2 full chain. usage: agent-cli task <proj> --card <task.md> [--model <m>] [--sensitivity <x>] [--complexity <auto|short|standard|long>] [--task-type <code|reason|concept|numeric|doc>]
+        $code = Invoke-Task -proj $Proj -card $Card -model $Model -sensitive $Sensitivity -type $Type -hostName $RemoteHost -attach $Attach -complexity $Complexity -taskType $TaskType
         exit $code
     }
     else {
