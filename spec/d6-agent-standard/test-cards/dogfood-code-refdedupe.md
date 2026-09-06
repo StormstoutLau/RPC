@@ -1,11 +1,11 @@
 ---
 proj: paper
 task: 新增 paper_cli/ref_dedupe.py 功能模块 + 配套单测 test_ref_dedupe.py，pytest 全绿；不修改任何既有文件
-model: nemotron
+model: qwen
 cli: opencode
 sensitivity: local-only
 readonly: false
-timeout_s: 900
+timeout_s: 3600
 accept:
   - cd /home/scott-lau/agent-workspaces/paper && ./.venv/bin/python -m pytest paper_cli/tests/test_ref_dedupe.py -q
 ---

@@ -42,6 +42,7 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | O-19 | 环境    | —    | 两站模型全卸载 → agent 层 opencode 连 8080 但 `/v1/models` 空无法推理；跨界代码任务另暴露 A 站工作区无 `.venv`（accept pytest rc=127）。4-agent 吃狗粮因此中止                                                                                                                                                                                                                                                                                                                                          | 🔴 open                      | 修环境 + O-13 预置联动          | <br /> | <br /> |
 | O-20 | 功能缺陷  | P1   | Invoke-Workspace 同步目标站判定被 PowerShell 动态作用域污染：从 Invoke-Task 调用时 `$HostName` 解析为 SSH 主机串（非 'A'/'B'）→ `$station` 恒回退 'B' → **跨站任务源码流恒错推到 B，A 站任务在空壳工作区跑**（specaudit 卡虚构产物根因）                                                                                                                                                                                                                                                                                       | ✅ 已修复+实机验证                   | 2026-09-05               | <br /> | <br /> |
 | O-21 | 性能/超时 | P1   | specaudit 卡 900s 硬超时/`exit1`——**三重返证后真根因尘埃落定**：①外层层 `timeout 900` 强杀正常推进 agent；②曾误判 opencode 对本地 passthrough 模型 64k 硬默认（根因实错）；③**决定性返证**：`/props` 运行时 `n_ctx=65536` 而 `/v1/models` 仅通告 `n_ctx_train=131072` → **服务端 llama-server 实以** **`-c 65536`** **加载**，那条 `exceeds the available context size` 是**服务端 400**，opencode 任何配置都无法抬升。修复=conf `CTX 65536→131072` 重载 A 站 gpt-oss；实机复验 `n_ctx=131072`、specaudit 卡重跑 `RUN_S=502/TASK_RC=0/ACCEPT=1` **全程无 65536 错误** | ✅ 已闭环（服务端 ctx 修复 2026-09-06） | 服务端 `-c 131072` 重载       | <br /> | <br /> |
+| O-22 | 运维缺陷 | P1   | `.meta` 残留误导：只在 run 结束写、无 task_id → 二次 run 时读到上次终态（RUN_S=900/RC=124 误判"又超时"，实为残留） | 🔴 修复中（G-1 已在 agent-cli L726 加 TASK_ID + collect 侧 stale guard，待回归） | 契约修复 + 观测判据订正 | 2026-09-07 |
 
 ## 2. 各未决项详情
 
@@ -176,6 +177,14 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
   - **铁证闭环（"错误消失"对照，2026-09-06）**: 防「604s rc0 假阳性」前科，补**决定性对照**——直接向新引擎 POST 一个明确 >64k 的请求，读取服务端 `usage.prompt_tokens`：换行文本 **`prompt_tokens=72068`（>65536）→ HTTP 200**。同负载在旧引擎（`-c 65536`）必 400 `exceeds 65536`。判据从「run 巧合通过」升级为「**错误确实消失**」。回归探针留存 `ops/station-bin/_ctx_overflow_probe.py`。
 
   - **教训（标黑）**: ① `exceeds the available context size` 报错时**先查服务端端点 ctx**，别先怀疑客户端；② `/v1/models` 的 `n_ctx`/`n_ctx_train` 是训练上下文，运行时上下文必须查 `/props`，探针字段选错会得出"引擎 131072、opencode 却 65536"的假矛盾；③ 服务端硬上限面前，客户端所有超参都是无效杠杆——**环境修复 > 配置修复**。④ `infer-load.new --ctx` 支持直接定上下文，conf 生成/重载均生效。
+
+### O-22：`<ws>/out/.meta` 残留误导监控
+- **症状**: 二次 run 时读远端 `.meta` 得到上一 run 终态（RUN_S=900/TASK_RC=124），被误判为"当前 run 又超时"，实际是旧残留
+- **根因**: `.meta` 只在 run 结束写（QUEUE_S/RUN_S/TASK_RC/ACCEPT_OK），无 task_id 绑定当前 run；读方无法区分"当前 run"与"残留终态"
+- **证据**: 本会话 2026-09-07 refdedupe 调试——当前 run（timeout 3600, 02:38 起）推进正常（output 增长），但 `.meta` 停留在 02:31 上一 run 的 `RUN_S=900/RC=124`
+- **观测判据订正**: `.meta` 是 run 结束快照，非活动信号；活动 run 推进以 `out/.agent-output.txt` 字节活性 + 主 wrapper 日志 `TASK_DONE` 为准
+- **修复（G-1，2026-09-07）**: ① agent-cli.ps1 远端 `.meta` 写入段加 `TASK_ID=$ts`；② collect 侧解析 `TASK_ID`，与当前 run `$ts` 不符则 `Write-Host META_STALE` + `queue_s/run_s` 置 0（不作为当前 run 观测采信）。待回归验证
+- **G-3 监控方式**: 长任务依赖后台 job 完成通知（订阅），不手动 sleep 轮询；真要看中间进度用一次定时快照，不循环
 
 ### 附：agent-cli.ps1 PS5.1 编码隐患（2026-09-05 触发并修复）
 

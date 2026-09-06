@@ -44,12 +44,14 @@ $Script:TMP_ROOT = Join-Path $env:TEMP 'agent-cli'
 $Script:ROUTE_TABLE = @{
     # alias -> @{ id=full-id; station=target }
     'nemotron'   = @{ id = 'cluster-litellm/nemotron';                          station = 'B' }
+    'qwen'       = @{ id = 'cluster-litellm/qwen';                              station = 'B' }
     'gpt-oss'    = @{ id = 'cluster-litellm/gpt-oss';                           station = 'A' }
     'lightning'  = @{ id = 'opencode/nemotron-3.5-lightning-free';              station = 'B' }
     'ultra'      = @{ id = 'opencode/nemotron-3-ultra-free';                    station = 'B' }
     'free-1m'    = @{ id = 'opencode/nemotron-3-ultra-free';                    station = 'B' }  # alias of ultra
     # full id directly (M3 dual representation)
     'cluster-litellm/nemotron'              = @{ id = 'cluster-litellm/nemotron';              station = 'B' }
+    'cluster-litellm/qwen'                  = @{ id = 'cluster-litellm/qwen';                  station = 'B' }
     'cluster-litellm/gpt-oss'               = @{ id = 'cluster-litellm/gpt-oss';               station = 'A' }
     'opencode/nemotron-3.5-lightning-free'  = @{ id = 'opencode/nemotron-3.5-lightning-free';  station = 'B' }
     'opencode/nemotron-3-ultra-free'        = @{ id = 'opencode/nemotron-3-ultra-free';        station = 'B' }
@@ -353,7 +355,7 @@ function Resolve-Profile {
         long     = @{ name='long';   context=0;     max_output=16384; thinking='ON';  template='froggeric'; reasoning_format='qwen'; flavor='long' }
         auto     = @{ name='reason'; context=32768; max_output=8192;  thinking='ON';  template='froggeric'; reasoning_format='qwen'; flavor='think' }
     }
-    $ctxMax = @{ 'nemotron'=131072; 'gpt-oss'=131072; 'lightning'=262144; 'ultra'=1000000; 'free-1m'=1000000 }
+    $ctxMax = @{ 'nemotron'=131072; 'qwen'=131072; 'gpt-oss'=131072; 'lightning'=262144; 'ultra'=1000000; 'free-1m'=1000000 }
     $modelCtx = 262144
     if ($model -and $ctxMax.ContainsKey($model)) { $modelCtx = $ctxMax[$model] }
     $pro = $null; $src = ''
@@ -721,7 +723,7 @@ echo "RUN_S=`$RUNS"
 echo "TASK_RC=`$RC"
 echo "ACCEPT_OK=`$ACCEPT_OK"
 echo "OUT_BYTES=`$(wc -c < "`$W/out/.agent-output.txt" 2>/dev/null)"
-printf 'QUEUE_S=%s\nRUN_S=%s\nTASK_RC=%s\nACCEPT_OK=%s\n' "`$QUEUE" "`$RUNS" "`$RC" "`$ACCEPT_OK" > "`$W/out/.meta"
+printf 'TASK_ID=%s\nQUEUE_S=%s\nRUN_S=%s\nTASK_RC=%s\nACCEPT_OK=%s\n' "$ts" "`$QUEUE" "`$RUNS" "`$RC" "`$ACCEPT_OK" > "`$W/out/.meta"
 # task succeeds only if agent ok AND (no accept criteria OR accept all pass)
 if [ -n "`$ACCEPT_B64" ] && [ "`$ACCEPT_OK" -ne 1 ]; then exit 9; fi
 exit `$RC
@@ -739,11 +741,19 @@ exit `$RC
     scp -q -o ConnectTimeout=10 "${hostName}:$W/out/.meta" "$metaTxt" 2>$null
     if ($accept.Count -gt 0) { scp -q -o ConnectTimeout=10 "${hostName}:$W/out/.accept-output.txt" "$accTxt" 2>$null }
     $queue_s = 0; $run_s = 0; $accept_ok = $null
+    $metaTaskId = ''
     if (Test-Path $metaTxt) {
         $m = Get-Content $metaTxt | Out-String
+        if ($m -match 'TASK_ID=(\S+)') { $metaTaskId = $matches[1] }
         if ($m -match 'QUEUE_S=(\d+)') { $queue_s = [int]$matches[1] }
         if ($m -match 'RUN_S=(\d+)')   { $run_s = [int]$matches[1] }      # P2-1: run_s now measured (R1-R0)
         if ($m -match 'ACCEPT_OK=(\d+)') { $accept_ok = [int]$matches[1] }
+    }
+    # meta stale guard (O-22): .meta is run-end snapshot; if meta TASK_ID != this run's ts
+    # it is a previous run leftover -> annotate (queue/run numbers untrusted), never claimed as live.
+    if ($metaTaskId -and $metaTaskId -ne "$ts") {
+        Write-Host "META_STALE: meta TASK_ID=$metaTaskId != this run ts=$ts (previous-run residual; queue/run omitted)"
+        $queue_s = 0; $run_s = 0
     }
     $contentSha = ''
     if (Test-Path $outTxt) { $contentSha = Get-Sha256Text ([IO.File]::ReadAllText($outTxt)) }
