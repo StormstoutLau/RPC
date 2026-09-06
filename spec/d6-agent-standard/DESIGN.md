@@ -172,7 +172,9 @@ upstream: \[D5 Agent 生态升级 (verified 2026-09-02), ADR-0001]
 agent-cli workspace <proj> [--create | --sync | --archive]   # M1
 agent-cli task <proj> [--card <task.md>] [--model <m>] [--cli auto|opencode]
     [--sensitivity public|sanitized|local-only] [--timeout <s>] [--attach <f>...]
+    [--complexity auto|short|standard|long] [--type code|reason|concept|numeric|doc]
     # = sync→lock→run→collect 单命令（M2 全链）
+    # --complexity/--type → §6.4 复杂度路由，翻译为 {ctx,thinking,max_output,template,reasoning_format} 推理参数档
 
 # 二期（本文档定义，不在 MVP 实施）
 # agent-cli collect <proj> [--out-only]
@@ -204,6 +206,8 @@ proj: paper
 task: 一句话目标
 model: nemotron | gpt-oss | lightning | ultra | free-1m   # 必填（M3 拒绝规则）
 cli: opencode | auto                                     # MVP 仅 opencode 路径
+complexity: auto | short | standard | long                # §6.4 复杂度档
+type: code | reason | concept | numeric | doc             # §6.4 题型（决定 thinking/template）
 sensitivity: public | sanitized | local-only              # 默认 public
 audit: true | false                                       # true 时 prompt 尾注 assertion-audit 契约
 readonly: true | false                                    # MVP 仅记录（4.1 层2）
@@ -217,13 +221,13 @@ accept:                                                   # 验收判据（可�
 
 **model 别名 → 完整 ID 映射**（对齐审计 BP-2 补，2026-09-03；别名与完整 ID 两套表示在此统一，M3 路由与拒绝规则按完整 ID 判定）：
 
-| 别名（任务卡/命令行友好形式） | 完整 ID（opencode -m 实参） | 站/网关 | 依据 |
-| --- | --- | --- | --- |
-| `nemotron` | `cluster-litellm/nemotron` | B 站 LiteLLM | 调研 §9.4 |
-| `gpt-oss` | `cluster-litellm/gpt-oss`（B 网关）或 `cluster-local/gpt-oss`（A 本地）——默认前者 | A/B | 调研 §9.4 |
-| `lightning` | `opencode/nemotron-3.5-lightning-free` | Zen 免费网关 | 调研 §2.1/§9.4 |
-| `ultra` | `opencode/nemotron-3-ultra-free` | Zen 免费网关 | 调研 §9.4 |
-| `free-1m` | `opencode/nemotron-3-ultra-free`（1M ctx 同款）——`ultra` 语义别名，保留枚举完整性 | Zen 免费网关 | 调研 §9.4 |
+| 别名（任务卡/命令行友好形式） | 完整 ID（opencode -m 实参）                                                | 站/网关        | 依据           |
+| --------------- | -------------------------------------------------------------------- | ----------- | ------------ |
+| `nemotron`      | `cluster-litellm/nemotron`                                           | B 站 LiteLLM | 调研 §9.4      |
+| `gpt-oss`       | `cluster-litellm/gpt-oss`（B 网关）或 `cluster-local/gpt-oss`（A 本地）——默认前者 | A/B         | 调研 §9.4      |
+| `lightning`     | `opencode/nemotron-3.5-lightning-free`                               | Zen 免费网关    | 调研 §2.1/§9.4 |
+| `ultra`         | `opencode/nemotron-3-ultra-free`                                     | Zen 免费网关    | 调研 §9.4      |
+| `free-1m`       | `opencode/nemotron-3-ultra-free`（1M ctx 同款）——`ultra` 语义别名，保留枚举完整性    | Zen 免费网关    | 调研 §9.4      |
 
 M3 接受两种表示：完整 ID 直接查路由表；别名先经本表解析再查。解析失败（未知别名/未知 ID）→ 退出码 2。
 
@@ -247,7 +251,7 @@ M3 接受两种表示：完整 ID 直接查路由表；别名先经本表解析�
 
 > readonly 字段（对齐审计 BP-1 补，2026-09-03）：任务卡 §6.1 的 readonly 解析后写入本契约——MVP 仅记录（全部按排它处理，4.1 层 2 语义），V2 激活共享/排它语义时无需改 schema。
 
-> **accept 判据输出字段（T5 落地 2026-09-03）**：当任务卡 §6.1 含 `accept` 列表时，本契约补 `"accept": {"cmd": [...], "passed": bool}`（脚本实现各判据并在工作区执行，逐条记 `ACCEPT_RC`；产出一并回收为 `accept-output.txt`）。MVP 中 accept 门控独立于 agent 退出状态：agent 完成（RC=0）但 accept 有任一条失败即整任务 status=failed，即使 agent 因超时被杀（RC=124→6）accept 判据仍照常执行并以 ACCEPT_OK 如实回收判语——反证可观测设计（§9.8.1），与 A14 实测一致。
+> **accept 判据输出字段（T5 落地 2026-09-03）**：当任务卡 §6.1 含 `accept` 列表时，本契约补 `"accept": {"cmd": [...], "passed": bool}`（脚本实现各判据并在工作区执行，逐条记 `ACCEPT_RC`；产出一并回收为 `accept-output.txt`）。MVP 中 accept 门控独立于 agent 退出状态：agent 完成（RC=0）但 accept 有任一条失败即整任务 status=failed，即使 agent 因超时被杀（RC=124→6）accept 判据仍照常执行并以 ACCEPT\_OK 如实回收判语——反证可观测设计（§9.8.1），与 A14 实测一致。
 
 ### 6.3 .agent-state.json（状态机，dsh 孤儿锁语义 §9.8.1）
 
@@ -256,6 +260,38 @@ M3 接受两种表示：完整 ID 直接查路由表；别名先经本表解析�
  "pid": 12345, "ts_start": "...", "task_id": "...",
  "host": "主控站名"}   // done 最后写；崩溃残留 running + 死 PID = 机械可检孤儿
 ```
+
+### 6.4 复杂度 → 推理参数路由（R 复杂度档设计，2026-09-06）
+
+**动机**：现有 task 链路只按 `model` 选"哪个模型"，推理参数（ctx/thinking/template/max\_output/reasoning\_format）全部是**按模型静态固定**于实例 env + opencode provider limits。qwen3.8-27B 全 ctx+最高思考横测（2026-09-06，见 model-eval/results-ledger "配置变体对照"）实证：这些参数是质量上真实可调的杠杆，且**按题型取值有明确对错**——代码题开启思考使 cost 退化为最优的 94.9x（决策 6 反证）；概念/数值题禁思考则空响应或泛化不足；满 ctx 262144 对短题（\~150 tokens 题面）无增益。本节把该"评测经验"反哺为执行层的参数路由。
+
+**推理参数档（profile）**：`{context, max_output, thinking, template, reasoning_format}`。
+
+| profile  | 触发                                         | context      | max\_output | thinking  | template / reasoning\_format | 依据（实测）                                              |
+| -------- | ------------------------------------------ | ------------ | ----------- | --------- | ---------------------------- | --------------------------------------------------- |
+| `code`   | `type=code`                                | 8192         | 8192        | **OFF**   | froggeric / qwen             | 决策 6 + v1.1：代码题禁思考 92s 出完整码；全思考 c2 cost 94.9x       |
+| `reason` | `type∈{reason,concept,numeric}` 且 standard | 32k          | 8192        | **ON**    | froggeric / qwen             | concept/numeric 思考开；max\_tokens≥8192 + 尾注精简（94s 正常） |
+| `short`  | `complexity=short`（数值短题）                   | 8192         | 2048        | ON        | froggeric / qwen             | 数值短题 2048 够（60s 内）                                  |
+| `long`   | `complexity=long`（大文档/大代码库）                | 262144 或模型上限 | 16384       | ON（压缩思考）  | froggeric / qwen             | 满 ctx 仅在真长上下文有必要                                    |
+| `doc`    | `type=doc`                                 | 模型上限         | 16384       | OFF（直接产出） | froggeric / qwen             | 文档/提取类不承载深度推理                                       |
+
+决定性约束：**`reasoning_format=deepseek`** **剥不动 qwen 的** **` thinking/response`**    **标签**（llama.cpp #24671 + 本集群 `reasoning_content=0` 实证）——凡走 froggeric/qwen 模板必须 `qwen` 解析器，否则思考污染 content。
+
+**优先级**：card `type` 命中 → 用它；否则 `complexity` 命中 → 映射；`auto`/缺失 → 按 prompt 长度 + task 关键字推定，兜底 `standard`=`reason`。冲突对（如 `type=code` + `complexity=long`）：thinking 恒 OFF、context 取大。
+
+**执行分层（按可用引擎能力降级）**：
+
+- **L0 per-request（最优，仅 vLLM）**：引擎 honor `chat_template_kwargs.enable_thinking` + 运行时 `max_tokens`/`reasoning_effort`，不动实例。llama-server OpenAI 端点不 honor → 本层仅在 vLLM 路径启用。
+
+- **L1 实例层（llama-server 主路径，MVP 默认）**：同一模型按口味预置多份 env（如 `qwen-nothink`/`qwen-think`/`qwen-long`，差异仅 `CTX`/`EXTRA_FLAGS` 模板与 `--reasoning-format qwen`），`infer-load <flavor>` 加载对应档。profile → 决定加载哪份；GTT 互斥下一次仅一份，选错需先 `infer-unload` 再换（互斥调度 §决策 11）。
+
+- **L2 opencode provider 层**：profile 翻译为该 provider model 的 `limit.{context,output}` + 默认 `context`（当前全局静态 120000）；解除"一档打天下"。
+
+- **L3 prompt 变形**：`reason`/`short` 档在 prompt 尾注"高效作答，思考尽量精简"；`code`/`doc` 档不发思考强制。
+
+**路由器职责（agent-cli 内新增，T 命名** **`Resolve-Profile`）**：输入 `{model, complexity, type}` → 输出 profile + 目标实例别名 + opencode provider 覆盖。失败/冲突 → 支持二选一：返回可操作提示（如"请先 `infer-unload` 换载 qwen-think"）或转 L2 静态档兜底。profile 连同 `model` 一并写入 `.agent-run.json`（§6.2 扩展字段 `profile`），保证同口径可追溯。
+
+**与 M3 的边界**：不改 M3 拒绝规则——`type/complexity` 不替代 `model` 必填；复杂度路由只在已确定的 `model` 上选参数档，不跨 `sensitivity` 门。
 
 ## 7. 替代方案
 
@@ -366,11 +402,17 @@ M3 接受两种表示：完整 ID 直接查路由表；别名先经本表解析�
 
 - G8 环境预置（T0 独立批次）：R/CRAN noble-cran40 + sympy；wrapper 不感知，仅登记
 
-- **.agentsync 四型模板（Review F3 移交）**：§3.1 决策引用 §7.5 已定"分四型"（Python/C++/文档/Lean4），四个模板的具体排除清单为 IMPLEMENTATION 阶段产出（M1 workspace 落地时随建）。**实测补充（2026-09-03）**：四型模板是默认起点，大源码项目须配置项目级 `D:\<proj>\.agentsync`（存在则 `Get-AgentsyncExcludes` 优先读，模板 fallback）。D:\Paper 5.6GB 实测：排除顶层资料库（paper_origin/ 2.9GB + Paper_Organized_v2/ 2.6GB）+ 全局大文件类型（*.pdf 4960 个等）+ 编译缓存 → 降至 7.0MB，B 站工作区源码齐全 + 0 PDF，sync 不再超 200MB cap（G4）。**朝向**：cpp/.lean4 大依赖项目沿此模式，用 README/config 定义对待（见 IMPLEMENTATION T1 补充）。
+- **.agentsync 四型模板（Review F3 移交）**：§3.1 决策引用 §7.5 已定"分四型"（Python/C++/文档/Lean4），四个模板的具体排除清单为 IMPLEMENTATION 阶段产出（M1 workspace 落地时随建）。**实测补充（2026-09-03）**：四型模板是默认起点，大源码项目须配置项目级 `D:\<proj>\.agentsync`（存在则 `Get-AgentsyncExcludes` 优先读，模板 fallback）。D:\Paper 5.6GB 实测：排除顶层资料库（paper\_origin/ 2.9GB + Paper\_Organized\_v2/ 2.6GB）+ 全局大文件类型（\*.pdf 4960 个等）+ 编译缓存 → 降至 7.0MB，B 站工作区源码齐全 + 0 PDF，sync 不再超 200MB cap（G4）。**朝向**：cpp/.lean4 大依赖项目沿此模式，用 README/config 定义对待（见 IMPLEMENTATION T1 补充）。
 
 - **后端并发探测（F1 升级项，登记待排期）**：MVP 观测先行（queue\_s 被动记录）；探测模块（调 /slots + 槽位占用则拒/等）**单独立项，随 V2/并发 fan-out 阶段实施**（触发条件：queue\_s 数据显示排队成为常态时）
 
 - G14 升级回归三件套：agent-cli-smoke.sh + 插件加载 + 记忆读写（并入既有升级窗口流程）
+
+- **复杂度路由（§6.4，2026-09-06，已实施）**：`Resolve-Profile` + 任务卡 `complexity/type` 字段 + 实例风味（nothink/think/long env）+ opencode provider `limit` 覆盖 + `.agent-run.json` `profile` 落账。按 L0→L1→L2→L3 分层推进；MVP 默认走 L1 实例层（llama-server 主路径，不动 opencode），L0 per-request 待 vLLM 路径就绪后启用。**wrapper fail-fast 加固（2026-09-07）**：task 链路在 `PROFILE` 干跑后、station-ready/sync 前新增 `Assert-AgentOutWritable` pre-flight（agent-out 可写探针，失败 ABORT exit 12 提示进 Settings UI）+ ledger 写盘提前到 collect 之前（LEDGER_WARN）+ agent-out 写盘 try/catch（COLLECT_FAIL + `.agent-run.json` 落 `collect=ok/failed`）。实测 pathguard `PREFLIGHT agent-out=WRITABLE` 早于 `STATION_READY`，`collect=ok` 落账，双待办闭环。
+
+  - **L2 路由实现（agent-cli.ps1，2026-09-06 完成）**：新增 `-Complexity/-TaskType` 参数（CLI 或任务卡 front-matter 注入）+ `Resolve-Profile`（优先级 taskType>complexity>default；context=0 哨兵上抛模型上限；type∈{code,doc} 强制 thinking OFF）+ task 链路注入 L3 精简尾注 + `.agent-run.json` `profile` 落账 + `route` 干跑诊断。`_complexity_route_test.ps1` **11/11 断言通过**（含 gpt-oss→131072、lightning→262144 非硬编码哨兵验证）。注意：usage 文本用 `--`（POSIX 约定），实际绑定须单横线 `-Complexity/-TaskType`；`-task-type` 含连字符不是合法参数名。
+
+  - **L1 实例层落档（2026-09-06）**：三份风味 preset 落地 console 真值——`qwen-flavor-nothink.env`（ctx8192，无 jinja 推理强制=实测 5/5 最优，供 code/doc）、`qwen-flavor-think.env`（ctx32768+froggeric jinja，**明确不含 --reasoning-format deepseek** 规避已知 bug，供 reason/short）、`qwen-flavor-long.env`（ctx262144+froggeric，供长文档）。切换工具 `_switch_qwen_flavor.{sh,ps1}`（停→备份→wait-gtt-release→load-mem-gate→起→health→/props 校验）；ps1 内建守卫自部署（每 switch 前确保 /home/scott-lau/{wait-gtt-release,load-mem-gate} 存在）。**当前实机状态：qwen 已切 nothink（/props n\_ctx=8192 VERIFY\_OK）**。`wait-gtt-release` 必须停引擎后调（AV≥100G 才返回），引擎加载中调用必 180s 超时（实测 AV=89G）。
 
 ***
 
