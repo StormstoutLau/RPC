@@ -7,7 +7,7 @@ sensitivity: local-only
 readonly: true
 timeout_s: 900
 accept:
-  - cd /home/scott-lau/agent-workspaces/paper && test -f out/.dogfood_module_map.md && grep -q '## 模块清单' out/.dogfood_module_map.md && grep -q '## 职责' out/.dogfood_module_map.md && grep -q '## 数据流' out/.dogfood_module_map.md && grep -q '## 缺口' out/.dogfood_module_map.md
+  - cd /home/scott-lau/agent-workspaces/paper && test -f out/.dogfood_module_map.md && grep -q '## 模块清单' out/.dogfood_module_map.md && grep -q '## 职责' out/.dogfood_module_map.md && grep -q '## 数据流' out/.dogfood_module_map.md && grep -q '## 边界' out/.dogfood_module_map.md && grep -q '## 缺口' out/.dogfood_module_map.md
 ---
 ## 任务描述
 
