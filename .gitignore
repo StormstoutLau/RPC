@@ -24,3 +24,10 @@ Desktop.ini
 # D2 运行时生成物
 ops/cluster_status.html
 ops/__pycache__/
+
+# agent-cli / 评测 运行日志与结果快照 (不入库)
+ops/station-bin/*.log
+ops/station-bin/*.log.err
+ops/station-bin/agent-runs.log
+ops/station-bin/result_*.jsonl
+ops/station-bin/b6_smoke_*.result.jsonl
