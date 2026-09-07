@@ -26,7 +26,8 @@ param(
     [string]$Card = '',          # task cmd: path to task card md
     [string[]]$Attach = @(),     # task cmd: attachment files/dirs -> workspace .attach/ (O-01)
     [string]$Complexity = '',    # task cmd: auto|short|standard|long -> 6.4 complexity profile
-    [string]$TaskType = ''       # task cmd: code|reason|concept|numeric|doc -> 6.4 thinking/template
+    [string]$TaskType = '',      # task cmd: code|reason|concept|numeric|doc -> 6.4 thinking/template
+    [int]$EngineCtxHint = 0      # route cmd (test): simulate engine n_ctx to exercise clamp (radical fix B); 0=off
 )
 
 # ---------------- constants / env ----------------
@@ -174,7 +175,10 @@ function Invoke-StationReady {
         throw "STATION_NOT_READY: inject failed rc=$code ($HostName)"
     }
     if ($joined -notmatch 'INJECT_OK' -or $joined -notmatch 'STATION_READY port=') { throw "STATION_NOT_READY: injection not confirmed ($HostName)" }
-    return $true
+    # radical fix B: surface real engine n_ctx (if present) so caller clamps profile.context
+    $ctx = 0
+    if ($joined -match 'ENGINE_CTX=(\d+)') { $ctx = [int]$Matches[1] }
+    return @{ ok=$true; engine_ctx=$ctx; raw=$joined }
 }
 
 # ---------------- Invoke-Workspace (M1) ----------------
@@ -341,7 +345,10 @@ function Resolve-Profile {
     # 代码题思考开启对质量负收益 - cost 94.9x; 见 model-eval/results-ledger 配置变体对照 2026-09-06).
     # reasoning_format fixed = qwen: `--reasoning-format deepseek` 剥不动 qwen 的 thinking/response 标签
     # (llama.cpp #24671, 本集群实证 reasoning_content=0).
-    param([string]$model, [string]$complexity, [string]$taskType)
+    param([string]$model, [string]$complexity, [string]$taskType, [int]$EngineCtx = 0)
+    # EngineCtx > 0 = real n_ctx detected from target engine (radical fix B). When present,
+    # it becomes the ONLY source of truth: profile.context is clamped to min(intent, EngineCtx),
+    # eliminating the engine-ctx < request 400 deadlock (refdedupe 12536 vs nothink -c 8192).
     $typeProfiles = @{
         code    = @{ name='code';    context=8192;  max_output=8192;  thinking='OFF'; template='froggeric'; reasoning_format='qwen'; flavor='nothink' }
         reason  = @{ name='reason';  context=32768; max_output=8192;  thinking='ON';  template='froggeric'; reasoning_format='qwen'; flavor='think' }
@@ -358,6 +365,9 @@ function Resolve-Profile {
     $ctxMax = @{ 'nemotron'=131072; 'qwen'=131072; 'gpt-oss'=131072; 'lightning'=262144; 'ultra'=1000000; 'free-1m'=1000000 }
     $modelCtx = 262144
     if ($model -and $ctxMax.ContainsKey($model)) { $modelCtx = $ctxMax[$model] }
+    # radical fix B: engine real n_ctx overrides the static ctxMax table entirely when known.
+    # (engine ctx = ONLY truth; static table is fallback for engines lacking /props)
+    if ($EngineCtx -gt 0) { $modelCtx = $EngineCtx }
     $pro = $null; $src = ''
     if ($taskType -and $typeProfiles.ContainsKey($taskType)) { $pro = $typeProfiles[$taskType].Clone(); $src = "type=$taskType" }
     elseif ($complexity) {
@@ -370,6 +380,12 @@ function Resolve-Profile {
     # conflict: type=code/doc + complexity=long -> keep thinking OFF, bump context to large
     if ($taskType -and $complexity -eq 'long' -and $pro['name'] -in @('code','doc')) { $pro['context'] = $modelCtx }
     if ($pro['name'] -in @('code','doc')) { $pro['thinking'] = 'OFF' }
+    # radical fix B: engine ctx clamp. Engine ctx = ONLY truth; intent>engine -> clamp +
+    # WARN so the 400-deadlock is impossible and the mismatch is visible in meta.
+    if ($EngineCtx -gt 0 -and $pro['context'] -gt $EngineCtx) {
+        $pro['context'] = [int]$EngineCtx
+        $src = "$src;ctx-clamped-to-engine=$EngineCtx"
+    }
     return [pscustomobject]@{ profile=$pro['name']; context=$pro['context']; max_output=$pro['max_output'];
                              thinking=$pro['thinking']; template=$pro['template']; reasoning_format=$pro['reasoning_format'];
                              flavor=$pro['flavor']; source=$src }
@@ -574,9 +590,20 @@ function Invoke-Task {
     # 6.4 complexity routing: CLI --complexity/--task-type > card front-matter > default(reason)
     $cx = if ($complexity) { $complexity } else { if ($fm['complexity']) { $fm['complexity'] } else { 'auto' } }
     $tt = if ($taskType) { $taskType } else { if ($fm['task-type']) { $fm['task-type'] } else { '' } }
-    $prof = Resolve-Profile -model $m -complexity $cx -taskType $tt
+
+    # radical fix B (order): station-ready MUST run before profile resolve so the real
+    # engine n_ctx is known -> profile.context clamped to min(intent, engine ctx).
+    # This kills the engine-ctx < request 400 deadlock at its source.
+    $baseAliasE = ($m -split '/')[-1]
+    $readyInfo = $null
+    try { $readyInfo = Invoke-StationReady -HostName $hostName -Alias $baseAliasE }
+    catch { Write-Host "STATION_NOT_READY: $($_.Exception.Message)"; return 10 }
+    $engineCtx = if ($readyInfo -and $readyInfo['engine_ctx']) { [int]$readyInfo['engine_ctx'] } else { 0 }
+
+    $prof = Resolve-Profile -model $m -complexity $cx -taskType $tt -EngineCtx $engineCtx
     $profTxt = "profile=$($prof.profile) ctx=$($prof.context) max_out=$($prof.max_output) thinking=$($prof.thinking) template=$($prof.template) reasoning=$($prof.reasoning_format) flavor=$($prof.flavor) ($($prof.source))"
     Write-Host "PROFILE: $profTxt"
+    if ($engineCtx -gt 0) { Write-Host "ENGINE_CTX=$engineCtx (ctx clamped to engine truth)" }
     # L1 hint (only log, NEVER auto-unload/reload - GTT mutually exclusive, avoid disrupting loaded instance):
     if ($prof.flavor -eq 'nothink' -or $prof.flavor -eq 'long') { Write-Host "PROFILE-L1-HINT: flavor=$($prof.flavor) - requires instance with matching CTX/template; verify loaded instance or reload manually" }
 
@@ -588,9 +615,7 @@ function Invoke-Task {
     }
 
     # O-19: station env-ready gate (discover engine port + inject cluster-litellm baseURL BEFORE dispatch)
-    $baseAlias = ($m -split '/')[-1]
-    try { Invoke-StationReady -HostName $hostName -Alias $baseAlias | Out-Null }
-    catch { Write-Host "STATION_NOT_READY: $($_.Exception.Message)"; return 10 }
+    # (already run above as part of radical fix B - engine ctx discovery)
 
     # 3) sync source subset (never overwrite out/); target station is B (memory master) ws root
     Write-Host "TASK sync source -> $proj (model=$id station=$station sens=$sens readonly=$readonly)"
@@ -844,7 +869,8 @@ try {
         if (-not $Model) { Write-Host 'usage: agent-cli route --model <alias|full-id> [--sensitivity public|sanitized|local-only] [--complexity <auto|short|standard|long>] [--task-type <code|reason|concept|numeric|doc>]'; exit 2 }
         $code = Invoke-Router -model $Model -sensitivity $Sensitivity
         if ($code -eq 0 -and ($Complexity -or $TaskType)) {
-            $prof = Resolve-Profile -model $Model -complexity $Complexity -taskType $TaskType
+            $prof = Resolve-Profile -model $Model -complexity $Complexity -taskType $TaskType -EngineCtx $EngineCtxHint
+        if ($EngineCtxHint -gt 0) { Write-Host "ENGINE_CTX_HINT=$EngineCtxHint (test clamp)" }
             Write-Host "PROFILE: profile=$($prof.profile) ctx=$($prof.context) max_out=$($prof.max_output) thinking=$($prof.thinking) template=$($prof.template) reasoning=$($prof.reasoning_format) flavor=$($prof.flavor) ($($prof.source))"
         }
         exit $code

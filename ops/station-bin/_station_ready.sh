@@ -13,8 +13,10 @@ ALIAS="${1:-}"
 CFG="$HOME/.config/opencode/opencode.jsonc"
 
 # ---- [1] 发现引擎端口（仅 llama-server，非 unsloth studio）----
+# 兼容三种 ss 输出绑定形态：127.0.0.1:PORT / 0.0.0.0:PORT / [::]:PORT（A 站 gpt-oss 用
+# 127.0.0.1, B 站 qwen --host 0.0.0.0）；取端口数字段。
 PORT=""; MODEL_ID=""
-for p in $(ss -tlnp 2>/dev/null | grep 'llama-server' | grep -oE '127\.0\.0\.1:[0-9]+' | cut -d: -f2 | sort -un); do
+for p in $(ss -tlnp 2>/dev/null | grep 'llama-server' | grep -oE '(127\.0\.0\.1|0\.0\.0\.0|\[::\]):[0-9]+' | grep -oE '[0-9]+$' | sort -un); do
   M=$(curl -s -m4 "http://127.0.0.1:$p/v1/models" 2>/dev/null | grep -oE '"id":"[^"]+"' | head -1 | cut -d'"' -f4)
   if [ -n "$M" ]; then PORT="$p"; MODEL_ID="$M"; break; fi
 done
@@ -27,6 +29,19 @@ fi
 echo "STATION_READY port=$PORT model=$MODEL_ID"
 if [ -n "$ALIAS" ]; then
   if echo "$MODEL_ID" | grep -qi "$ALIAS"; then echo "MODEL_MATCH alias=$ALIAS ok"; else echo "WARN_MODEL_MISMATCH: 期望 $ALIAS, 实际 $MODEL_ID (利用现状继续)"; fi
+fi
+
+# ---- [2c] 引擎 ctx 探测 (radical fix B: engine ctx = source of truth) ----
+# Extreme: read n_ctx from /props (llama-server); empty on non-llama engines -> leave unset.
+ENGINE_CTX=""
+for ep in /props /slots; do
+  V=$(curl -s -m4 "http://127.0.0.1:$PORT$ep" 2>/dev/null | grep -oE '"n_ctx":\s*[0-9]+' | grep -oE '[0-9]+$' | head -1)
+  if [ -n "$V" ]; then ENGINE_CTX="$V"; break; fi
+done
+if [ -n "$ENGINE_CTX" ]; then
+  echo "ENGINE_CTX=$ENGINE_CTX"
+else
+  echo "WARN_ENGINE_CTX_NA"   # 非 llama-server 引擎或无 n_ctx，走 classic 逻辑(不 clamp)
 fi
 
 # ---- [2b] chat 往返校验 ----
