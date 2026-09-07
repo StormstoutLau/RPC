@@ -36,7 +36,18 @@ $cases = @(
     # complexity=auto -> reason
     @{ alias='nemotron'; cx='auto';    type='';      exp=@{profile='reason'; ctx=32768; mo=8192; th='ON'; fl='think'; src='complexity=auto'} },
     # long complexity alone -> long profile, ctx=model cap, thinking ON, 16384 out
-    @{ alias='nemotron'; cx='long';    type='';      exp=@{profile='long'; ctx=131072; mo=16384; th='ON'; fl='long'; src='complexity=long'} }
+    @{ alias='nemotron'; cx='long';    type='';      exp=@{profile='long'; ctx=131072; mo=16384; th='ON'; fl='long'; src='complexity=long'} },
+    # radical fix B: engine-ctx clamp (engine ctx = source of truth)
+    # reason intent 32768 on engine ctx 8192 -> clamped to 8192 (kills 400 deadlock)
+    @{ alias='nemotron'; cx='standard'; type=''; env=8192; exp=@{profile='reason'; ctx=8192; mo=8192; th='ON'; fl='think'; src='complexity=standard;ctx-clamped-to-engine=8192'} },
+    # code intent 8192 on engine ctx 8192 -> no clamp (intent <= engine)
+    @{ alias='nemotron'; cx=''; type='code'; env=8192; exp=@{profile='code'; ctx=8192; mo=8192; th='OFF'; fl='nothink'; src='type=code'} },
+    # reason intent 32768 on engine ctx 262144 -> no clamp
+    @{ alias='nemotron'; cx='standard'; type=''; env=262144; exp=@{profile='reason'; ctx=32768; mo=8192; th='ON'; fl='think'; src='complexity=standard'} },
+    # long intent(0->engine) on engine ctx 262144 -> model cap = engine 262144 (long uses full engine)
+    @{ alias='nemotron'; cx='long'; type=''; env=262144; exp=@{profile='long'; ctx=262144; mo=16384; th='ON'; fl='long'; src='complexity=long'} },
+    # doc intent(0->engine) on engine ctx 8192 -> model cap = engine 8192
+    @{ alias='nemotron'; cx=''; type='doc'; env=8192; exp=@{profile='doc'; ctx=8192; mo=8192; th='OFF'; fl='nothink'; src='type=doc'} }
 )
 
 $fail = 0
@@ -47,6 +58,7 @@ foreach ($c in $cases) {
     $args = @('route', '-Model', $c.alias)
     if ($c.cx)   { $args += '-Complexity', $c.cx }
     if ($c.type) { $args += '-TaskType', $c.type }
+    if ($c.env)  { $args += '-EngineCtxHint', $c.env }
     $r = & powershell -NoProfile -ExecutionPolicy Bypass -File $cli @args 2>&1
     $pl = ($r | Where-Object { $_ -match '^PROFILE:' })
     if (-not $pl) {

@@ -42,7 +42,8 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | O-19 | 环境    | —    | 两站模型全卸载 → agent 层 opencode 连 8080 但 `/v1/models` 空无法推理；跨界代码任务另暴露 A 站工作区无 `.venv`（accept pytest rc=127）。4-agent 吃狗粮因此中止                                                                                                                                                                                                                                                                                                                                          | 🔴 open                      | 修环境 + O-13 预置联动          | <br /> | <br /> |
 | O-20 | 功能缺陷  | P1   | Invoke-Workspace 同步目标站判定被 PowerShell 动态作用域污染：从 Invoke-Task 调用时 `$HostName` 解析为 SSH 主机串（非 'A'/'B'）→ `$station` 恒回退 'B' → **跨站任务源码流恒错推到 B，A 站任务在空壳工作区跑**（specaudit 卡虚构产物根因）                                                                                                                                                                                                                                                                                       | ✅ 已修复+实机验证                   | 2026-09-05               | <br /> | <br /> |
 | O-21 | 性能/超时 | P1   | specaudit 卡 900s 硬超时/`exit1`——**三重返证后真根因尘埃落定**：①外层层 `timeout 900` 强杀正常推进 agent；②曾误判 opencode 对本地 passthrough 模型 64k 硬默认（根因实错）；③**决定性返证**：`/props` 运行时 `n_ctx=65536` 而 `/v1/models` 仅通告 `n_ctx_train=131072` → **服务端 llama-server 实以** **`-c 65536`** **加载**，那条 `exceeds the available context size` 是**服务端 400**，opencode 任何配置都无法抬升。修复=conf `CTX 65536→131072` 重载 A 站 gpt-oss；实机复验 `n_ctx=131072`、specaudit 卡重跑 `RUN_S=502/TASK_RC=0/ACCEPT=1` **全程无 65536 错误** | ✅ 已闭环（服务端 ctx 修复 2026-09-06） | 服务端 `-c 131072` 重载       | <br /> | <br /> |
-| O-22 | 运维缺陷 | P1   | `.meta` 残留误导：只在 run 结束写、无 task_id → 二次 run 时读到上次终态（RUN_S=900/RC=124 误判"又超时"，实为残留） | 🔴 修复中（G-1 已在 agent-cli L726 加 TASK_ID + collect 侧 stale guard，待回归） | 契约修复 + 观测判据订正 | 2026-09-07 |
+| O-22 | 运维缺陷 | P1   | `.meta` 残留误导：只在 run 结束写、无 task_id → 二次 run 时读到上次终态（RUN_S=900/RC=124 误判"又超时"，实为残留） | 🔴 修复+回归待收口（G-1 已在 agent-cli L726 加 TASK_ID + collect 侧 stale guard，本会话已实证 .meta 带 TASK_ID 回归见 O-23） | 契约修复 + 观测判据订正 | 2026-09-07 |
+| O-23 | 架构/超时 | P1   | **复杂度路由 ctx 解耦**：profile.context(code=8192/reason=32768/long=262144) 只是元数据、从未传给引擎；opencoe 用 opencode.jsonc 固定 limit.context=131072，引擎 ctx 由手动 flavor 预设决定 → 三者解耦。**凌晨 refdedupe timeout 真根因**=`request exceeds available context size (8192)`：nothink 档引擎 `-c 8192` < refdedupe 请求 12536 tokens → 服务端 400 → agent 永久挂死 → 900s timeout | ✅ 已修复+实机验证（引擎 ctx=唯一真相） | 2026-09-07 radical fix B | <br /> | <br /> |
 
 ## 2. 各未决项详情
 
@@ -185,6 +186,18 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 - **观测判据订正**: `.meta` 是 run 结束快照，非活动信号；活动 run 推进以 `out/.agent-output.txt` 字节活性 + 主 wrapper 日志 `TASK_DONE` 为准
 - **修复（G-1，2026-09-07）**: ① agent-cli.ps1 远端 `.meta` 写入段加 `TASK_ID=$ts`；② collect 侧解析 `TASK_ID`，与当前 run `$ts` 不符则 `Write-Host META_STALE` + `queue_s/run_s` 置 0（不作为当前 run 观测采信）。待回归验证
 - **G-3 监控方式**: 长任务依赖后台 job 完成通知（订阅），不手动 sleep 轮询；真要看中间进度用一次定时快照，不循环
+
+### O-23：复杂度路由 ctx 解耦（引擎 ctx=唯一真相，radical fix B）
+
+- **症状**: 凌晨 refdedupe code 卡 900s/3600s timeout；`.agent-output.txt` 卡死无进展；日志报 `Error: request (12536 tokens) exceeds the available context size (8192 tokens)`
+- **根因**（三层解耦）: ① profile.context(code=8192/reason=32768/long=262144) 仅是写入 meta 的元数据，**从未传给引擎**；② 执行用 `opencode run` + opencode.jsonc 固定 `qwen.limit.context=131072`；③ 引擎 ctx 由手动 `_switch_qwen_flavor` 的 flavor 预设决定（nothink 8192 / think 32768 / long 262144）。三者无一致性保障 → 当引擎 `-c 8192` < 请求 12536 → 服务端 400 → agent 永久挂死。今日 13:17 成功纯属引擎被 long(262144) 重载兜住。
+- **修复（radical fix B，2026-09-07）**: 引擎 ctx = 唯一真相。
+  - `_station_ready.sh` 增 `/props` n_ctx 探测 → 打印 `ENGINE_CTX=<n>`
+  - `agent-cli.ps1 Resolve-Profile` 增 `-EngineCtx`：`context = min(intent, ENGINE_CTX)`（clamp），`ENGINE_CTX>0` 时覆盖静态 ctxMax 表 → long 档用满引擎 ctx
+  - `Invoke-StationReady` 前置到 Resolve-Profile 之前（顺序调整），返回 `@{ok; engine_ctx}`
+  - `route` 增 `--engine-ctx <n>` 测试钩子
+- **验证**: `_complexity_route_test.ps1` 扩 5 项 clamp case（16/16 pass）；实机 B 站 long(262144) 引擎 `ENGINE_CTX=262144` 探测成功；refdedupe 实机回归无 400（见下方闭环证据）
+- **✅ 闭环判据**: `PROFILE ctx` 恒 ≤ 引擎 ctx；`ENGINE_CTX=<n>` 打印；无 `exceeds available context size` 错误
 
 ### 附：agent-cli.ps1 PS5.1 编码隐患（2026-09-05 触发并修复）
 

@@ -5,7 +5,7 @@
 id: d6-agent-standard-DECISIONS
 type: decisions
 version: 1.1
-status: approved（与 DESIGN v1.4 / CHECKLIST 验收实况对齐，2026-09-04；v1.1 补 D-16 复杂度路由 + D-17 wrapper 稳定性，2026-09-07）
+status: approved（与 DESIGN v1.4 / CHECKLIST 验收实况对齐，2026-09-04；v1.1 补 D-16 复杂度路由 + D-17 wrapper 稳定性，2026-09-07；v1.2 补 D-18 ctx 一致性 radical fix B）
 date: 2026-09-04
 depends: \[d6-agent-standard-DESIGN v1.4, d6-agent-standard-CHECKLIST v1.0]
 upstream: \[d6-agent-standard-DESIGN, ADR-0001, ADR-0002]
@@ -38,6 +38,7 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0001, ADR-0002]
 | D-15 | 跨站扇出 | fan-out 优先跨站各 1 并发；隧道 B:18081→A:8080 | 同站叠并发 | 同站被统一内存带宽顶起（1.7→4.8s） | 跨站 L1 | BLINDSCAN §8.7.6 |
 | D-16 | 复杂度路由 | 按 复杂度/题型 分层映射推理参数（code/reason/short/long/doc，L0-L3） | 一律最高思考+满ctx | qwen3.8-27B 横测：代码题思考 94.9x cost、a1 空输出、deepseek 剥不动 qwen 标签 | 11/11 单测 + 吃狗粮 code/doc 两档 | DESIGN §6.4 |
 | D-17 | wrapper 稳定性 | task 前置 fail-fast（PROFILE 干跑 + agent-out 可写探针 exit 12）+ ledger 先行 + collectOk 保护 | 任由 collect 崩溃吞落档 | run1 权限崩吞 ledger / run2 脱管静默退 | PREFLIGHT 早于 STATION_READY + collect=ok 落账 | DESIGN §11.3 |
+| D-18 | ctx 一致性 | **引擎 ctx = 唯一真相**：`_station_ready` 探测引擎真实 n_ctx → `Resolve-Profile` 按 `min(intent, ENGINE_CTX)` clamp；`ENGINE_CTX>0` 覆盖静态 ctxMax 表；station-ready 前置到 profile 前 | 统一大 ctx / 同步 opencode client-limit | O-23 根因=三层 ctx 解耦（profile 元数据 ≠ opencode limit ≠ 引擎 `-c`）→ refdedupe 引擎 8192 < 请求 12536 → 400 挂死 | `_complexity_route_test` 16/16 + refdedupe 实机 RUN_S=111/TASK_RC=0/ACCEPT=1 无 400 | O-23 |
 
 ## 2. 方案取舍详情（DESIGN §7，四案）
 
