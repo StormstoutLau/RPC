@@ -113,15 +113,21 @@
 
 ## 6. Phase C — 事件驱动升级跟踪 (零工作量)
 
+> **⚠️ 2026-09-08 起**: 上游 PR/Issue 实时状态以 [upstream-tracker/TRACKER.md](../upstream-tracker/TRACKER.md) §1 为**单一真源**；本节仅保留触发动作与预期收益（不重复维护状态）。引擎基线更正见 [tracker §2](../upstream-tracker/TRACKER.md)——现役运行是 `~/llama.cpp/build`（ggml 0.13 系），非文档旧载 b10715。
+
 | watch | 触发 | 动作 |
 |-------|------|------|
 | PR #27332 (密度门) | merge | 等包含它的 release → UPGRADE_SOP (RUNPATH patch 流程复用) → 重跑 §7 全矩阵 |
 | PR #26578 (DSV4 融合) | merge | 同上 + 联动 DS4-Flash 双机部署方案 (带 `-dio`) |
 | issue #27553 (mmq 大 tile) | 新 PR 开出 | 评估 → 升级 → pp 复测 |
-| **PR #27752 / #27754 (glm5next)** | merge (任一) | 升级后 GLM-5.3-Flash 才可 infer-load — **滚升 master 不解锁 GLM** (2026-08-31 审计: master llama-arch.cpp 无 glm5next, 已证) |
+| **PR #27752 / #27754 / #27773 / #27917 (glm5next)** | merge (任一) | 升级后 GLM-5.3-Flash 才可 infer-load — **滚升 master 不解锁 GLM** (2026-08-31 审计: master llama-arch.cpp 无 glm5next, 已证；状态实时见 tracker §1.1) |
 | strix-halo-guide #12 | RPC 基准征集更新 | 本集群 -ot 数据可投稿 (见 Phase D) |
 
 **预期收益 (三 PR 齐落地后)**: 单机 decode +20~50% (MoE 并发), prefill +50~76% (dense); 双机 RPC 按 §3 矩阵打折。
+
+> **2026-09-08 引擎基线再复核（实证）**: B 站运行实例 PID 612738 maps 加载 `~/llama.cpp/build/bin/libggml-*.so.0.13.0`（源码 HEAD 0d18aaa）→ **现役 ≠ b10715**；`~/llama.cpp-vulkan-b10715`（unsloth 0.3.0-dev build 10715, vulkan lib 含 lightning 字符串）与 `/opt/llama.cpp`（v0.3.0）均为已构建未启用。**V4-Flash 解锁 = 以 b10715 或 /opt v0.3.0 为源走 UPGRADE_SOP**（P0）。GLM-5.3-Flash 协调调研见 [FRAMEWORK-SURVEY 附录 H.4](../model-eval/FRAMEWORK-SURVEY-2026-09.md)（原《docs/GLM-5.3-Flash-分布式部署调研.md》并入）§5.1 快照 + tracker §1.1。
+
+> **2026-09-06 复查摘要** (快照，实时见 tracker): ① #26578 (DSV4_HC 融合) 仍 Open；② glm5next 4 PR 全 Open；③ 模型文件: A 站 `~/.lmstudio/models/unsloth/GLM-5.3-Flash-GGUF/GLM-5.3-Flash-UD-IQ4_XS.gguf`（IQ4_XS 147G 级）仍在，B 站无文件。
 
 > **2026-08-31 审计修正**: ① 本表不含"滚升 master 解锁 GLM"项 — 该假设已证伪 (master 源码无 glm5next, 须等架构 PR #27752/#27754); ② vLLM 算子优化 (AITER on_gfx9 解锁 / TunableOp / HIPGraph 去 enforce-eager) **不列入 Phase C 硬计划** — 均降级为"待验证社区声称", 须在本地 A4 构建同栈复测后才可能转正 (见 Phase E)。
 
@@ -203,4 +209,4 @@ A1 (服务参数) → A4 (停服) → C1 → C2 → C5 → A2/C3 (单机基线, 
 
 ---
 
-**关联文档**: [算子层调研](../../docs/AMD平台算子层优化与USB4分布式调研.md) · [RPC 协议调研](../../docs/RPC协议瓶颈调研.md) · [40G 链路评估](../rpc-optimization/USB4-40G链路能力评估.md) · [metrics-log (RPC)](../rpc-optimization/metrics-log.md) · [DEV-LOG-010](../../docs/DEV-LOG-010-rpc-optimization.md)
+**关联文档**: [算子层调研](../rpc-optimization/research/AMD平台算子层优化与USB4分布式调研.md) · [RPC 协议调研](../rpc-optimization/research/RPC协议瓶颈调研.md) · [40G 链路评估](../rpc-optimization/USB4-40G链路能力评估.md) · [metrics-log (RPC)](../rpc-optimization/metrics-log.md) · [DEV-LOG-010](../../docs/DEV-LOG-010-rpc-optimization.md) · [research/README.md](research/README.md)（2026-09-09 归并：双机推理服务化 / 模型路径统一A 上游依据）

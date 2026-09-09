@@ -453,7 +453,7 @@ GGUF 推理后端**可在安装时与运行时可切换**：
 
 - **#27754**（open PR，unsloth/danielhanchen）：官方未合并支持；**正确性需** **`NVIDIA_TF32_OVERRIDE=0`** **+** **`-fa off`**（MLA F32→F16 cast）；MTP 支持；B200 有深度吞吐优化。
 
-- 结论：**GLM-5.3-Flash 尚未进主线 llama.cpp**，仅 open PR / unsloth 分支可用；"flash"视觉 mmproj 亦未接。A 站暂不可用/不稳。
+- 结论：**GLM-5.3-Flash 尚未进主线 llama.cpp**，仅 open PR / unsloth 分支可用；"flash"视觉 mmproj 亦未接。A 站暂不可用/不稳。**牵头调研（分布式部署路线 + RPC crash #28047 + 前置卡点）见 [FRAMEWORK-SURVEY 附录 H.4](../model-eval/FRAMEWORK-SURVEY-2026-09.md)（原《docs/GLM-5.3-Flash-分布式部署调研.md》并入）。**
 
 **对 A 站综合结论**：
 
