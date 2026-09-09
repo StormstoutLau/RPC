@@ -229,3 +229,52 @@ make strix-halo -j$(nproc)   # make rocm 别名
 - [Skulk #144](https://github.com/Foxlight-Foundation/Skulk/issues/144)（Vulkan 为 gfx1151 推荐路径）
 - [infoedu ROCm 运维实战](https://infoedu.co.kr/posts/ai/xgen/llama-cpp-server-ops-story-rocm-gpu-troubleshoot-fix/)（ROCm→Vulkan 兜底）
 - [AMD 官方 RPC 集群 playbook](https://developer.amd.com/playbooks/clustering-rpc-server/)（GLM-4.7 双机 RPC）
+
+---
+
+# 附录 H：docs 框架专项调研并入（2026-09-09）
+
+> **整合说明（2026-09-09）**: 本附录吸收 `docs/` 下 5 篇框架专项调研的关键结论与溯源映射，统一收敛到此主文档；原文档在 docs 归档（`.merged.bak.20260909`）供回溯。分类索引见 `model-eval/SOURCING-INDEX.md`。
+
+## H.1 DSpark 与专用加速框架适配（原《DSpark与Flash模型加速框架调研.md》v1.1）
+
+- **DSpark 已入 llama.cpp 主线**（PR #25173 merged 7-28），用法 `--spec-type draft-dspark`；⚠️ 置信度调度剪枝是论文能力，llama.cpp 现状 phase 1（仅 load 不推理）
+- **Vulkan 主线 DSpark 实测无加速**（sypherin 同硬件 8-08：接受率 61.8% 但 tg 9.5→9.5 t/s——草稿 10GiB 前向成本在带宽受限 iGPU 吃掉全部收益）；Unsloth 1.5~1.9x 为 CUDA(B200/DGX) 数据
+- **Vulkan 真实提速杠杆 = #26578 融合算子（1.50x，逐字核验）**；DSV4 同硬件裸 AR 9.5-12 t/s，DSpark/ROCm 定制路线（Lucebox ROCmFPX）32 t/s 是唯一大幅提速实测但定制 fork 冲突版本化 SOP
+- **GLM-5.3-Flash 未合入**（#27754/#27752/#27773 竞争，Vulkan 未验证）
+- 单机内存预算：IQ2_XXS(84.6GiB)+131k 上下文+草稿 ~97G used（需 `GGML_VK_PREFER_HOST_MEMORY=ON`）；Q3+草稿边缘但官方推荐配置
+
+## H.2 llama 后端盘点 + ds4 部署方案（原《llama后端盘点与ds4部署方案_20260908.md》）
+
+- **GLM-5.3-Flash ds4 双机 PP 预期 decode 10-20 t/s**（社区 Strix Halo 上沿 32 t/s 为理想）；**PP 为容量 + 长 prefill 设计，单条生成流无叠加加速**（官方 PERFORMANCE.md 原话）——双机 PP 解决"178G 放不进 128G"容量问题而非 decode 加速
+- 档位：`glm53-q2`（90G）单 128G 机即够无需双机；`glm53-q4`（178G）才需双机 PP
+- 对照：集群 llama.cpp 双机 RPC V4-Flash 9.1-9.2 t/s（2026-09-09 实测）；ds4 内置 MTP（`--mtp`）裸速 11.9-14.9 t/s 以上有提升空间
+- M3 提示（原 MiniMax-M3 调研关联）：llama.cpp PR #26297（M3 prefill CPU-op，merged 7-30）+ PR #24523（minimax-m3 分支，unsloth 指定）；MSA 稀疏 attention 未合（ik_llama.cpp #2046）
+
+## H.3 MiniMax-M3 调研（原《MiniMax-M3调研_20260908.md》）
+
+- MiniMax-M3 新模型调研；**ds4 不支持 M3**（引擎专用 V4 系/GLM 系）
+- 关键 PR：llama.cpp #26297（M3 prefill CPU-op 合并 7-30）、**#24523（minimax-m3 分支，unsloth 官方指定）**、ik_llama.cpp #2046（MSA 稀疏注意未合）
+- 待验证：M3 Q4 三站层分布 prefill/decode（预计 10-20 t/s）；MSA dense 回退长上下文内存曲线；质量门挂 results-ledger 同套件
+
+## H.4 GLM-5.3-Flash 分布式部署（原《GLM-5.3-Flash-分布式部署调研.md》）
+
+- 320-321B hybrid MoE 18B 激活，288 专家 top-8，34 KDA + 11 DSA，MLA/NoPE
+- 官方+社区+本框架资产交叉调研；双机落点（Strix Halo 双机 PP 容量路线）→ 结论同 H.2（decode 10-20 t/s，主收益容量）
+- 引擎支持现状：glm5next 未合入 master（#27754/#27752/#27773 Open，2026-09-08 核对）→ 与 MODEL-SOURCING §6a 一致
+
+## H.5 溯源映射（原 docs → 本附录）
+
+| docs 原档（已归档 .merged.bak.20260909）| 本附录节 | 说明 |
+|---|---|---|
+| DSpark与Flash模型加速框架调研.md | H.1 | DSpark/加速框架适配 |
+| llama后端盘点与ds4部署方案_20260908.md | H.2 | 后端盘点+ds4 部署 |
+| DwarfStar部署深入调研_20260908.md | H.2/H.3 | ds4 详情（主文档 §3 已覆盖核心）|
+| MiniMax-M3调研_20260908.md | H.3 | M3 专项 |
+| GLM-5.3-Flash-分布式部署调研.md | H.4 | GLM 分布式 |
+
+## H.6 待办承接（合并后统一追踪）
+
+- [ ] ds4 构建（工具链前提）+ GLM-5.3-Flash 单站验证（H.2/H.4 落地门）
+- [ ] M3 三站层分布吞吐实测 + MSA 长上下文内存曲线（H.3）
+- [ ] 订阅 glm5next 三 PR（#27754/#27752/#27773）合入后整树同步（延续 MODEL-SOURCING §6a P2）

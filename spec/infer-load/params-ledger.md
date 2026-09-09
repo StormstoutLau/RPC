@@ -75,7 +75,7 @@ upstream: null
 | THREADS     | 16                                                                                                                                                                                                   | 无实测依据       |
 | N\_CPU\_MOE | 8                                                                                                                                                                                                    | 无实测依据       |
 | RPC\_TARGET | 10.10.10.1:50052                                                                                                                                                                                     | 无实测依据       |
-| 已知边界        | 手册 §8: 加载报 `unknown model architecture: glm5next`（架构秒失败，非参数问题）；**上游跟踪 2026-09-03: 三 PR 竞争全 Open（#27752/#27754/#27773）未合入, 且 GLM mHC 继承 DeepSeek-V4 同款 HC——合入后 Vulkan 侧仍会踩 HC 非融合慢路径**（详见手册 §10.0 快照） | E1/E2       |
+| 已知边界        | 手册 §8: 加载报 `unknown model architecture: glm5next`（架构秒失败，非参数问题）；**上游跟踪 2026-09-03: 三 PR 竞争全 Open（#27752/#27754/#27773）未合入, 且 GLM mHC 继承 DeepSeek-V4 同款 HC——合入后 Vulkan 侧仍会踩 HC 非融合慢路径**（详见手册 §10.0 快照）；**牵头调研（官方/社区分布式部署 + RPC crash #28047 风险）见 [FRAMEWORK-SURVEY 附录 H.4](../model-eval/FRAMEWORK-SURVEY-2026-09.md)（原《docs/GLM-5.3-Flash-分布式部署调研.md》并入）** | E1/E2       |
 
 ### 1.5 deepseek-v4-flash-0731（B 站 RPC 类）
 

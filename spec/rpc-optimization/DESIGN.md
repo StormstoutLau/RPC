@@ -7,7 +7,7 @@ type: design
 version: 1.0
 status: draft
 date: 2026-08-28
-depends: [d:\RPC\RPC协议瓶颈调研.md (v1.2), DEV-LOG-009-v020-upgrade.md]
+depends: [research/RPC协议瓶颈调研.md (v1.2), research/RPC串行跨链社区优化调研.md, research/AMD395分布式推理高性能互连方案调研.md, research/AMD平台算子层优化与USB4分布式调研.md, DEV-LOG-009-v020-upgrade.md]
 upstream: null
 
 ---
@@ -16,7 +16,8 @@ upstream: null
 > **创建日期**: 2026-08-28
 > **状态**: 草稿（待 review）
 > **Spec 步骤**: Step 3-4
-> **基于调研**: [RPC协议瓶颈调研.md](../../docs/RPC协议瓶颈调研.md)（下文简称"调研"）
+> **基于调研**: [research/RPC协议瓶颈调研.md](research/RPC协议瓶颈调研.md)（下文简称"调研"）
+> **2026-09-09 归并**: docs 下 4 篇互连/RPC 层调研已移入本域 `research/`（RPC 协议瓶颈 / RPC 串行跨链 / AMD395 互连 / AMD 平台算子层），作为本 DESIGN 的上游依据统一收敛；详见 [research/README.md](research/README.md)
 
 ---
 

@@ -357,3 +357,31 @@
 - DGX Spark 生态：firsh.me、miramar-labs nemoclaw、qiita、ai-girls、dredyson 2-node 1200 测试、NVIDIA forum
 - 社区口碑：r/LocalLLaMA / r/clawdbot / KiloCode / bswen / datacamp / eet-china / 36kr
 - [Azure 三机 RPC 实测（2026-04）](https://level69.net/archives/34269)（单机装得下则 RPC 变慢）
+
+## H. docs 模型专项调研并入（2026-09-09）
+
+> **整合说明**: 本附录吸收 `docs/` 下 3 篇模型专项调研的关键结论（已并入来源 G 增补）；原文档归档 `.merged.bak.20260909` 供回溯。
+
+### H.1 Qwen3.8-Flash-Next 工作站（Strix Halo）单机部署（原《Qwen3.8-Flash-Next_StrixHalo部署调研.md》2026-09-02）
+- 核心对象：`agentionai/Qwen3.8-Flash-Next-ROCmFP4-FAST-imatrix-GGUF`（AMD 优化版）+ 社区 Strix Halo 优化版本盘点
+- 评估（draft 落档时未部署）：ROCmFP4-FAST 为 AMD 专用调优；本集群 Vulkan 路径需回归 UD-GGUF 档（附录 B）
+- 结论衔接：单机 124G 可行性以附录 B/C 为准；此篇补充"AMD 优化版本生态"视角，落地门并入附录 F
+
+### H.2 Qwen3.8-Flash-Next 社区实测核实（原《Qwen3.8-Flash-Next社区实测调研_20260909.md》）
+- **2026-09-09 修正：Flash-Next 与 Qwen3.8-27B 是不同模型**，早版误并 27B 数据已剔除——本表仅供 Flash-Next
+- 架构/量化/部署可行性核实完毕；对应附录 B 档位表与 C.2 性能表（无新增数值，佐证一致性）
+
+### H.3 gpt-oss-120b 后训练生态 + GPT-6 Astra 蒸馏（原《gpt-oss-120b后训练生态与Astra蒸馏调研_20260908.md》）
+- gpt-oss 后训练家族盘点 + GPT-6 Astra 蒸馏发布状态核实（社区调研，2026-09-08）
+- 关联现役资产（gpt-oss-120b 已在 A 站）；本文档正文 §3/§5 已涵盖 gpt-oss 选型结论
+
+### H.4 溯源映射（docs → 本附录）
+| docs 原档（归档 .merged.bak.20260909）| 本附录 | 说明 |
+|---|---|---|
+| Qwen3.8-Flash-Next_StrixHalo部署调研.md | H.1 | AMD 优化版单机评估 |
+| Qwen3.8-Flash-Next社区实测调研_20260909.md | H.2 | Flash-Next 核实（27B 误并剔除）|
+| gpt-oss-120b后训练生态与Astra蒸馏调研_20260908.md | H.3 | gpt-oss 后训练/Astra |
+
+### H.5 待办承接
+- [ ] Qwen3.8-Flash-Next 单站落地时评估 ROCmFP4-FAST 档（若 A 站 ROCm 路径启用）（H.1）
+- [ ] gpt-oss 后训练家族（如有蒸馏变体）纳入实测台账（H.3，P3 级）

@@ -1,7 +1,7 @@
 # DEV-LOG-010: RPC 优化方案五阶段执行（Phase 0-3 落地）
 
 > **日期**: 2026-08-28
-> **Feature**: 基于《RPC协议瓶颈调研.md》v1.1 及 spec/rpc-optimization/DESIGN.md 五阶段方案
+> **Feature**: 基于 spec/rpc-optimization/research/RPC协议瓶颈调研.md v1.1 及 spec/rpc-optimization/DESIGN.md 五阶段方案
 > **结果**: ✅ Phase 0-3 全部落地并验证；吞吐收益≈0（符合预判），延迟尾部 6 倍改善，加载 -43s，崩溃自愈 MTTR ~6min
 
 ---
