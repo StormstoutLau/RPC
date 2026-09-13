@@ -16,6 +16,11 @@ downloads/
 *.bak.*
 *.bak-*
 .tmp*
+# 安全: tmp 下的 git bundle 备份 / 密钥替换规则 / 敏感清单 一律不入库 (防意外推送含历史明文)
+tmp/repo-backup-*.bundle
+tmp/*_secret_keys*/
+tmp/git-filter-repo.py
+tmp/_sanitize_worktree.py
 
 # ── 系统垃圾 ──
 Thumbs.db
