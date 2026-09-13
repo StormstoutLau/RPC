@@ -13,7 +13,7 @@ upstream: null
 
 > **Feature**: 逐模型参数取值与实测依据台账
 > **创建日期**: 2026-09-02（D1.3 交付）
-> **维护约定**: **每次改** **`/etc/llama-instances/*.env`** **调参，必须同步更新本台账**（写入 [双机推理集群使用手册](../../docs/双机推理集群使用手册.md) conf 调参小节的引用）
+> **维护约定**: **每次改** **`/etc/llama-instances/*.env`** **调参，必须同步更新本台账**（写入 [三机推理集群使用手册](../../docs/三机推理集群使用手册.md) conf 调参小节的引用）
 > **数据源**: conf 实测 2026-09-02 E1；性能依据 [results-ledger](../model-eval/results-ledger.md)；**质量表现依据同处 results-ledger 的 domain\_matrix 冒烟轮扫**（2026-08-31\~09-01，同套件 5 题：A3/B2 数值 + A1/G1 概念 rubric + C2 代码，出题实测）
 
 ***

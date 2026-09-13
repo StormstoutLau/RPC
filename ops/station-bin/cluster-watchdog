@@ -24,6 +24,16 @@ ts() { date '+%F %T'; }
 log() { echo "[watchdog] $(ts) $*" | tee -a "$LOG" >&2; }
 load_ctr() { cat "$STATE_DIR/$1" 2>/dev/null || echo 0; }
 save_ctr() { echo "$2" > "$STATE_DIR/$1" 2>/dev/null; }
+# 读取实例健康端口: 从 /etc/llama-instances/<alias>.env 的 PORT 取, 缺省 8080 (兼容旧拓扑)
+inst_port() {
+  local svc="$1" alias e p
+  [ -n "$svc" ] || { echo 8080; return; }
+  alias="${svc#llama-server@}"
+  alias="${alias%.service}"                 # systemctl 单元名带 .service, env 名裸别名
+  e="/etc/llama-instances/${alias}.env"
+  p=$(grep -E '^PORT=[0-9]' "$e" 2>/dev/null | head -1 | cut -d= -f2 | tr -d '"')
+  [ -n "$p" ] && echo "$p" || echo 8080
+}
 
 ACTIVE=$(systemctl list-units 'llama-server@*' --state=active --no-legend 2>/dev/null | awk '{print $1}' | head -1)
 LOADING=$(pgrep -f 'infer-load|infer-unload|load-mem-gate' >/dev/null 2>&1 && echo yes || echo no)
@@ -34,7 +44,8 @@ if [ -z "$ACTIVE" ]; then
 elif [ "$LOADING" = "yes" ]; then
   :                                      # 加载/卸载窗口跳过 (防 Loading 期 503 误报), 计数不动
 else
-  if curl -sf -m 8 http://127.0.0.1:8080/health >/dev/null 2>&1; then
+  HPORT=$(inst_port "$ACTIVE")
+  if curl -sf -m 8 "http://127.0.0.1:${HPORT}/health" >/dev/null 2>&1; then
     save_ctr fail.local 0
   else
     n=$(($(load_ctr fail.local)+1)); save_ctr fail.local "$n"
@@ -59,10 +70,16 @@ fi
 
 # ── 探测 3: 对端三态 (M3/M4 通知, 不处置) ──────────────
 PEER_STATE=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$PEER_USER@$PEER" '
-  A=$(systemctl list-units "llama-server@*" --state=active --no-legend 2>/dev/null | head -1)
-  if [ -z "$A" ]; then echo IDLE
-  elif curl -sf -m 8 http://127.0.0.1:8080/health >/dev/null 2>&1; then echo OK
-  else echo FROZEN; fi' 2>/dev/null)
+  A=$(systemctl list-units "llama-server@*" --state=active --no-legend 2>/dev/null | awk '{print $1}' | head -1)
+  if [ -z "$A" ]; then
+    echo IDLE
+  else
+    AP="${A#llama-server@}"; AP="${AP%.service}"
+    E="/etc/llama-instances/${AP}.env"
+    HP=$(grep -aE "^PORT=[0-9]" "$E" 2>/dev/null | head -1 | cut -d= -f2 | tr -d "\"")
+    HP=${HP:-8080}
+    if curl -sf -m 8 "http://127.0.0.1:${HP}/health" >/dev/null 2>&1; then echo OK; else echo FROZEN; fi
+  fi' 2>/dev/null)
 
 case "$PEER_STATE" in
   OK|IDLE)

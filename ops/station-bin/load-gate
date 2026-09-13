@@ -1,0 +1,52 @@
+#!/bin/bash
+# load-gate 最终版 (部署用) — B/C 站也是同构脚本
+# 用法: load-gate <需要GB> [host...] ; 默认本机
+set +e
+NEED="${1:?用法: load-gate <需要GB> [host ...]}"
+HOSTS=("${@:2}")
+[ ${#HOSTS[@]} -eq 0 ] && HOSTS=("localhost")
+
+gethost_facts() {
+  local h="$1"
+  if [ "$h" = "localhost" ]; then
+    total=$(awk '/MemTotal/{printf "%d", $2/1024}' /proc/meminfo)
+    avail=$(awk '/MemAvailable/{printf "%d", $2/1024}' /proc/meminfo)
+    used=$(( total - avail ))
+    rssm=$(ps -eo rss,comm | grep -E 'llama-server|ggml-rpc-server|llama-cli' | awk '{s+=$1} END{printf "%d", s/1024}')
+    load1=$(cut -d' ' -f1 /proc/loadavg)
+  else
+    total=$(ssh -o ConnectTimeout=5 "$h" "awk '/MemTotal/{printf \"%d\", \$2/1024}' /proc/meminfo" 2>/dev/null)
+    avail=$(ssh -o ConnectTimeout=5 "$h" "awk '/MemAvailable/{printf \"%d\", \$2/1024}' /proc/meminfo" 2>/dev/null)
+    rssm=$(ssh -o ConnectTimeout=5 "$h" "ps -eo rss,comm | grep -E 'llama-server|ggml-rpc-server|llama-cli' | awk '{s+=\$1} END{printf \"%d\", s/1024}'" 2>/dev/null)
+    load1=$(ssh -o ConnectTimeout=5 "$h" "cut -d' ' -f1 /proc/loadavg" 2>/dev/null)
+    used=$(( total - avail ))
+  fi
+  [ -z "$rssm" ] && rssm=0
+  [ -z "$total" ] && { echo "  [ABORT] host $h 不可达" >&2; exit 1; }
+  echo "$total $avail $used $rssm $load1"
+}
+
+need_mb=$(( NEED * 1024 ))
+saf_mb=$(( 12 * 1024 ))
+for h in "${HOSTS[@]}"; do
+  facts=$(gethost_facts "$h") || exit 1
+  read -r total avail used rssm load1 <<< "$facts"
+  echo "--- [$h] need=${NEED}G avail=$((avail/1024))G used=$((used/1024))G existing_rss=$((rssm/1024))G load1=$load1 total=$((total/1024))G"
+  if [ $(( used + need_mb + saf_mb )) -gt "$total" ]; then
+    echo "  [ABORT] 加法超限: used($((used/1024))G)+need(${NEED}G)+12G > total($((total/1024))G)" >&2
+    exit 1
+  fi
+  if [ "$avail" -lt "$(( need_mb + saf_mb ))" ]; then
+    echo "  [ABORT] avail 不足: $((avail/1024))G < ${NEED}G+12G" >&2
+    exit 1
+  fi
+  if [ $(( rssm + need_mb + saf_mb )) -gt "$total" ]; then
+    echo "  [ABORT] 已有 llama RSS $((rssm/1024))G + need ${NEED}G + 12G > total $((total/1024))G — 先卸旧实例" >&2
+    exit 1
+  fi
+  if [ -n "$load1" ] && awk -v l="$load1" 'BEGIN{exit !(l>8)}'; then
+    echo "  [WARN] loadavg1=$load1 > 8"
+  fi
+  echo "  [OK]"
+done
+echo "[load-gate] ALL PASS: ${NEED}G 可加载"

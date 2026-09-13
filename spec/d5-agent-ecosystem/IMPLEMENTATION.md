@@ -198,7 +198,7 @@ claude code 全局骨架 `~/.claude/CLAUDE.md`（两站同文，V2 结论决定�
 - [V2 陷阱成立 → 强制] 长会话/大 codebase 任务用 opencode；claude code 仅短任务，
   每 60-70% 占用手动 /compact（带保留指令），任务切换 /clear
 - [V2 陷阱不成立 → 建议] 定期 /context 查余量，<30% 先压缩
-- 完整规范见主控站《双机推理集群使用手册》与 d:\RPC 仓库 spec/
+- 完整规范见主控站《三机推理集群使用手册》与 d:\RPC 仓库 spec/
 ```
 
 #### 实施要点

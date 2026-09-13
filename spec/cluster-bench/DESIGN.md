@@ -43,7 +43,7 @@
 # /etc/llama-instances/nodes.env  — 集群 RPC 节点声明清单 (B5q)
 # 格式: RPC_NODES 空格分隔 ip:port; C 站加入时追加一行即可
 RPC_NODES="10.10.10.1:50052"
-# RPC_NODES="10.10.10.1:50052 10.10.10.3:50052"   # C 站示例
+# RPC_NODES="10.10.10.1:50052 10.10.11.3:50052"   # C 站示例 (环网 B<->C 独立段 10.10.11.0/24, 2026-09-07 落地)
 ```
 
 ### rpc-nodes helper (B 站 /usr/local/bin/rpc-nodes, 新)

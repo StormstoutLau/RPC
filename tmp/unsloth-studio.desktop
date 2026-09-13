@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Unsloth Studio
+Comment=Launch Unsloth Studio
+Exec="/home/scott-lau/.local/share/unsloth/launch-studio.sh"
+Icon=/home/scott-lau/.local/share/unsloth/unsloth-studio.png
+Terminal=true
+StartupNotify=true
+Categories=Development;Science;

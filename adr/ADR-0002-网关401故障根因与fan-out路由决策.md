@@ -26,7 +26,7 @@ upstream: null
 | 日期   | 2026-09-04                                                                                                                                                                                                                              |
 | 状态   | accepted                                                                                                                                                                                                                                |
 | 决策者  | Scott (鹏) + Trae (GLM-5.3/DeepSeek-V4-Flash)                                                                                                                                                                                            |
-| 相关文档 | [BLINDSCAN-v2-orchestration.md](../spec/d6-agent-standard/BLINDSCAN-v2-orchestration.md)、[CHECKLIST.md](../spec/d6-agent-standard/CHECKLIST.md)、[DESIGN.md](../spec/d6-agent-standard/DESIGN.md)、[双机推理集群使用手册.md](../docs/双机推理集群使用手册.md) |
+| 相关文档 | [BLINDSCAN-v2-orchestration.md](../spec/d6-agent-standard/BLINDSCAN-v2-orchestration.md)、[CHECKLIST.md](../spec/d6-agent-standard/CHECKLIST.md)、[DESIGN.md](../spec/d6-agent-standard/DESIGN.md)、[三机推理集群使用手册.md](../docs/三机推理集群使用手册.md) |
 | 取代   | 无（新增）                                                                                                                                                                                                                                   |
 
 **证据等级约定**（本次会话实测，E1=本会话 SSH/本地实测；E2=前会话实测留档；E3=外部；E4=推断）：

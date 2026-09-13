@@ -1,0 +1,99 @@
+﻿<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>D6 Agent Dashboard</title>
+<style>
+  body{font-family:Consolas,Menlo,monospace;background:#0f1420;color:#d8e0f0;margin:0;padding:18px;}
+  h1{font-size:18px;color:#7fd0ff;margin:0 0 4px 0;}
+  .meta{color:#6a7890;font-size:11px;margin-bottom:14px;}
+  .tabs button{background:#1a2336;color:#9fb0cf;border:1px solid #24304a;padding:6px 14px;margin-right:6px;cursor:pointer;border-radius:4px;}
+  .tabs button.on{background:#24507a;color:#eaf4ff;border-color:#3f7bb0;}
+  table{border-collapse:collapse;width:100%;font-size:12px;margin-top:10px;}
+  th,td{border:1px solid #24304a;padding:4px 8px;text-align:left;white-space:nowrap;}
+  th{background:#1a2336;color:#8fb0d8;}
+  tr:nth-child(even){background:#151c2e;}
+  .ok{color:#6fe08a;}.tw{color:#f0c060;}.no{color:#ff7a7a;}.na{color:#5a6a88;}
+  .panel{display:none;}.panel.on{display:block;}
+  .empty{color:#5a6a88;padding:10px 0;}
+  details{margin:2px 0;}
+  summary{cursor:pointer;color:#7fd0ff;}
+</style>
+</head>
+<body>
+<h1>D6 Agent Dashboard</h1>
+<div class="meta">generated: <span id="gen"></span> &middot; file:// self-contained &middot; refresh = re-run make-dashboard.ps1</div>
+<div class="tabs">
+  <button id="tabC" class="on" onclick="switchTab('C')">已完成总览</button>
+  <button id="tabL" onclick="switchTab('L')">正在跑 / Live</button>
+</div>
+
+<table id="tblC"></table>
+
+<div id="livePanel" class="panel">
+  <table id="tblL"></table>
+</div>
+
+<script>
+var D = {"generated":"2026-09-12 12:18:48","limit":50,"completed":[{"ts":"202609062326426233","label":"2026-09-06 23:26:42","proj":"paper","model":"cluster-litellm/gpt-oss","sens":"local-only","code":0,"queue_s":0,"run_s":0},{"ts":"202609070035340153","label":"2026-09-07 00:35:34","proj":"paper","model":"cluster-litellm/gpt-oss","sens":"local-only","code":0,"queue_s":0,"run_s":0,"detail":{"status":"completed","exit_code":0,"output_bps":0,"output_bytes":0,"slot":null,"profile":{"name":"code","context":8192,"max_output":8192,"flavor":"nothink"},"accept":true}},{"ts":"202609070042009100","label":"2026-09-07 00:42:00","proj":"paper","model":"cluster-litellm/gpt-oss","sens":"local-only","code":0,"queue_s":0,"run_s":0,"detail":{"status":"completed","exit_code":0,"output_bps":0,"output_bytes":0,"slot":null,"profile":{"name":"doc","context":131072,"max_output":8192,"flavor":"nothink"},"accept":true}},{"ts":"202609070101133311","label":"2026-09-07 01:01:13","proj":"paper","model":"cluster-litellm/gpt-oss","sens":"local-only","code":0,"queue_s":0,"run_s":0,"detail":{"status":"completed","exit_code":0,"output_bps":0,"output_bytes":0,"slot":null,"profile":{"name":"code","context":8192,"max_output":8192,"flavor":"nothink"},"accept":true}},{"ts":"202609070148519001","label":"2026-09-07 01:48:51","proj":"paper","model":"cluster-litellm/nemotron","sens":"local-only","code":6,"queue_s":0,"run_s":0,"detail":{"status":"timeout","exit_code":6,"output_bps":0,"output_bytes":0,"slot":null,"profile":{"name":"reason","context":32768,"max_output":8192,"flavor":"think"},"accept":true}},{"ts":"202609070215229619","label":"2026-09-07 02:15:22","proj":"paper","model":"cluster-litellm/qwen","sens":"local-only","code":6,"queue_s":0,"run_s":0,"detail":{"status":"timeout","exit_code":6,"output_bps":0,"output_bytes":0,"slot":null,"profile":{"name":"code","context":8192,"max_output":8192,"flavor":"nothink"},"accept":true}},{"ts":"202609070237087492","label":"2026-09-07 02:37:08","proj":"paper","model":"cluster-litellm/qwen","sens":"local-only","code":6,"queue_s":0,"run_s":0,"detail":{"status":"timeout","exit_code":6,"output_bps":0,"output_bytes":0,"slot":null,"profile":{"name":"code","context":8192,"max_output":8192,"flavor":"nothink"},"accept":true}},{"ts":"202609071313122396","label":"2026-09-07 13:13:12","proj":"paper","model":"cluster-litellm/qwen","sens":"local-only","code":0,"queue_s":0,"run_s":0,"detail":{"status":"completed","exit_code":0,"output_bps":0,"output_bytes":0,"slot":null,"profile":{"name":"code","context":8192,"max_output":8192,"flavor":"nothink"},"accept":true}},{"ts":"202609071736045544","label":"2026-09-07 17:36:04","proj":"paper","model":"cluster-litellm/qwen","sens":"local-only","code":0,"queue_s":0,"run_s":0,"detail":{"status":"completed","exit_code":0,"output_bps":0,"output_bytes":0,"slot":null,"profile":{"name":"reason","context":32768,"max_output":8192,"flavor":"think"},"accept":true}},{"ts":"202609090359252348","label":"2026-09-09 03:59:25","proj":"paper","model":"cluster-litellm/gpt-oss","sens":"local-only","code":0,"queue_s":0,"run_s":0,"detail":{"status":"completed","exit_code":0,"output_bps":0,"output_bytes":0,"slot":null,"profile":{"name":"reason","context":32768,"max_output":8192,"flavor":"think"},"accept":true}},{"ts":"202609090457360888","label":"2026-09-09 04:57:36","proj":"paper","model":"cluster-litellm/gpt-oss","sens":"local-only","code":0,"queue_s":0,"run_s":0,"detail":{"status":"completed","exit_code":0,"output_bps":0,"output_bytes":0,"slot":null,"profile":{"name":"reason","context":32768,"max_output":8192,"flavor":"think"},"accept":true}},{"ts":"202609091833028817","label":"2026-09-09 18:33:02","proj":"paper","model":"cluster-litellm/gpt-oss","sens":"local-only","code":0,"queue_s":0,"run_s":0,"detail":{"status":"completed","exit_code":0,"output_bps":0,"output_bytes":0,"slot":null,"profile":{"name":"reason","context":32768,"max_output":8192,"flavor":"think"},"accept":true}},{"ts":"202609091841153622","label":"2026-09-09 18:41:15","proj":"paper","model":"cluster-litellm/gpt-oss","sens":"local-only","code":0,"queue_s":0,"run_s":0,"detail":{"status":"completed","exit_code":0,"output_bps":0,"output_bytes":0,"slot":null,"profile":{"name":"reason","context":32768,"max_output":8192,"flavor":"think"},"accept":true}},{"ts":"202609091855364954","label":"2026-09-09 18:55:36","proj":"paper","model":"cluster-litellm/gpt-oss","sens":"local-only","code":1,"queue_s":0,"run_s":0,"detail":{"status":"failed","exit_code":1,"output_bps":0,"output_bytes":0,"slot":null,"profile":{"name":"reason","context":32768,"max_output":8192,"flavor":"think"},"accept":true}},{"ts":"202609092106365998","label":"2026-09-09 21:06:36","proj":"paper","model":"cluster-litellm/gpt-oss","sens":"local-only","code":255,"queue_s":0,"run_s":0,"detail":{"status":"failed","exit_code":255,"output_bps":0,"output_bytes":0,"slot":null,"profile":{"name":"reason","context":32768,"max_output":8192,"flavor":"think"},"accept":true}},{"ts":"202609092111029300","label":"2026-09-09 21:11:02","proj":"paper","model":"cluster-litellm/gpt-oss","sens":"local-only","code":0,"queue_s":0,"run_s":0,"detail":{"status":"completed","exit_code":0,"output_bps":0,"output_bytes":0,"slot":null,"profile":{"name":"reason","context":32768,"max_output":8192,"flavor":"think"},"accept":true}},{"ts":"202609092126446663","label":"2026-09-09 21:26:44","proj":"paper","model":"cluster-litellm/gpt-oss","sens":"local-only","code":0,"queue_s":0,"run_s":0,"detail":{"status":"completed","exit_code":0,"output_bps":0,"output_bytes":0,"slot":null,"profile":{"name":"reason","context":32768,"max_output":8192,"flavor":"think"},"accept":true}},{"ts":"202609092152069189","label":"2026-09-09 21:52:06","proj":"paper","model":"cluster-litellm/gpt-oss","sens":"local-only","code":6,"queue_s":0,"run_s":0,"detail":{"status":"timeout","exit_code":6,"output_bps":0,"output_bytes":0,"slot":null,"profile":{"name":"reason","context":32768,"max_output":8192,"flavor":"think"},"accept":true}},{"ts":"202609092204504272","label":"2026-09-09 22:04:50","proj":"paper","model":"cluster-litellm/gpt-oss","sens":"local-only","code":6,"queue_s":0,"run_s":0,"detail":{"status":"timeout","exit_code":6,"output_bps":0,"output_bytes":0,"slot":null,"profile":{"name":"reason","context":32768,"max_output":8192,"flavor":"think"},"accept":true}},{"ts":"202609092210355310","label":"2026-09-09 22:10:35","proj":"paper","model":"cluster-litellm/gpt-oss","sens":"local-only","code":0,"queue_s":0,"run_s":0,"detail":{"status":"completed","exit_code":0,"output_bps":0,"output_bytes":0,"slot":null,"profile":{"name":"reason","context":32768,"max_output":8192,"flavor":"think"},"accept":true}},{"ts":"202609092236252327","label":"2026-09-09 22:36:25","proj":"paper","model":"cluster-litellm/gpt-oss","sens":"local-only","code":1,"queue_s":0,"run_s":0,"detail":{"status":"failed","exit_code":1,"output_bps":0,"output_bytes":0,"slot":null,"profile":{"name":"reason","context":32768,"max_output":8192,"flavor":"think"},"accept":false}}],"live":[{"proj":"paper","bytes":123456,"bytes_s":33}]};
+document.getElementById('gen').textContent = D.generated;
+var PROJ = {};
+
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+function cls(status){
+  if(status=='completed') return 'ok';
+  if(status=='timeout') return 'tw';
+  if(status=='failed') return 'no';
+  return 'na';
+}
+function codeToStatus(c){
+  if(c==0) return 'completed';
+  if(c==6) return 'timeout';
+  if(c==24) return 'slot-rejected';
+  return 'failed';
+}
+
+// —— 已完成总览 ——
+(function(){
+  var h='<tr><th>ts</th><th>proj</th><th>model</th><th>sens</th><th>exit</th><th>status</th><th>run_s</th><th>queue_s</th><th>t/s</th><th>slot</th><th>detail</th></tr>';
+  (D.completed||[]).forEach(function(c){
+    var d=c.detail||{};
+    var st = d.status || codeToStatus(c.code);
+    var bps = d.output_bps||0;
+    var slot = '';
+    if(d.slot && d.slot.gated){ slot = d.slot.action; }
+    else { slot = (d.slot&&d.slot.action)||(c.code==24?'reject':'-'); }
+    var prof = d.profile? ('profile='+esc(d.profile.name)+' ctx='+esc(d.profile.context)+' max_out='+esc(d.profile.max_output)+' flavor='+esc(d.profile.flavor)) : '-';
+    var acc = (d.accept==null) ? '-' : (d.accept?'accept ok':'accept fail');
+    var detail='<details><summary>展开</summary><div>'+prof+'<br>accept: '+acc+
+      (d.slot&&d.slot.gated?('<br>slot: total='+d.slot.total+' busy='+d.slot.busy+' queue='+d.slot.queue):'')+
+      (d.output_bytes?('<br>output bytes: '+d.output_bytes):'')+'</div></details>';
+    h+='<tr><td>'+esc(c.label)+'</td><td>'+esc(c.proj)+'</td><td>'+esc(c.model)+'</td><td>'+esc(c.sens)+
+      '</td><td>'+esc(c.code)+'</td><td class="'+cls(st)+'">'+esc(st)+'</td><td>'+esc(c.run_s)+'</td><td>'+esc(c.queue_s)+
+      '</td><td>'+esc(bps)+'</td><td>'+esc(slot)+'</td><td>'+detail+'</td></tr>';
+  });
+  document.getElementById('tblC').innerHTML = h;
+})();
+
+// —— 正在跑 / Live ——
+(function(){
+  var h='<tr><th>proj</th><th>bytes</th><th>bytes_s (t/s approx)</th><th>ETA note</th></tr>';
+  if(D.live && D.live.length){
+    D.live.forEach(function(p){
+      h+='<tr><td>'+esc(p.proj)+'</td><td>'+esc(p.bytes)+'</td><td>'+esc(p.bytes_s)+
+        '</td><td class="na">need max_output+baseline for t/s ETA</td></tr>';
+    });
+  } else {
+    h='<tr><td colspan="4" class="empty">no-live-data: 站点引擎在线时用 make-dashboard.ps1 -Live -StationHost &lt;host&gt; -LivePort &lt;port&gt; 拉取运行中 .progress</td></tr>';
+  }
+  document.getElementById('tblL').innerHTML = h;
+})();
+
+function switchTab(t){
+  document.getElementById('tabC').className = (t=='C')?'on':'';
+  document.getElementById('tabL').className = (t=='L')?'on':'';
+  document.querySelectorAll('.panel').forEach(function(p){p.className='panel'+(t=='L'?' on':'');});
+}
+</script>
+</body>
+</html>

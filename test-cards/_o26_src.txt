@@ -1,0 +1,5 @@
+O26 split fan-out shared source
+SHARD-ONE this is line 2 summary content for shard 1
+SHARD-TWO this is line 3 summary content for shard 2
+SHARD-THREE this is line 4 summary content for shard 3
+quantum rope tail

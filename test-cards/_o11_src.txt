@@ -1,0 +1,6 @@
+O11 fan-out readonly source.
+This is a shared attached source file for the cross-station readonly L2 test.
+Each station's agent reads this file and writes its own summary to out/.
+Marker contract: every summary MUST contain the line: O11_FANOUT_OK
+Second line: balloon
+Third line: quantum rope

@@ -3,7 +3,7 @@
 > **建立日期**: 2026-09-04
 > **对象**: B 站（scott-lau-GTR-Pro.local）unsloth 实例（gpt-oss-120b，KV q8_0，端口 8080）
 > **目标 bug**: llama.cpp server 在 gfx1151（Strix Halo / Radeon 8060S）上的 **slot-0 多槽并行卡死**（社区 #20906 家族），表现为并发请求一个 slot 挂死、前端超时
-> **关联文档**: 手册「双机推理集群使用手册.md」§10.1b；BLINDSCAN-v2 orchestration §BS-4；spec/d6 fuse 的 unsloth-a-station.md §8
+> **关联文档**: 手册「三机推理集群使用手册.md」§10.1b；BLINDSCAN-v2 orchestration §BS-4；spec/d6 fuse 的 unsloth-a-station.md §8
 
 ***
 

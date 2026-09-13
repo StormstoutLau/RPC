@@ -1,0 +1,125 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 560" width="100%" height="auto" role="img" aria-label="llama.cpp 中 HIP 后端与 Vulkan 后端调用链对比">
+  <title>llama.cpp HIP 后端 vs Vulkan 后端调用链对比</title>
+  <desc>同一份 llama.cpp 源码分别编译为 HIP 与 Vulkan 两种后端，两者都通往同一块 Radeon GPU。左列 = HIP (ROCm) 路径，右列 = Vulkan (Mesa RADV) 路径。</desc>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #F7F7F8;
+      --surface: #F7F7F8;
+      --surface-muted: #EFEFF2;
+      --text: #171717;
+      --text-muted: #52525B;
+      --border: rgba(23, 23, 23, 0.12);
+      --brand: #4B3FE3;
+      --brand-soft: #F2F7FF;
+      --brand-text: #1A1759;
+      --accent: #27D2BF;
+      --accent-soft: #EAFBF8;
+      --accent-text: #0F766E;
+      --font-sans: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --bg: #171717;
+        --surface: #171717;
+        --surface-muted: #262626;
+        --text: #E5E5E5;
+        --text-muted: #A1A1AA;
+        --border: rgba(229, 229, 229, 0.12);
+        --brand: #6054F1;
+        --brand-soft: #1A1759;
+        --brand-text: #CFD8FF;
+        --accent-soft: #123F3C;
+        --accent-text: #CCFBF1;
+      }
+    }
+    text { font-family: var(--font-sans); }
+    .t { fill: var(--text); font-weight: 400; font-size: 14px; }
+    .th { fill: var(--text); font-weight: 500; font-size: 14px; }
+    .ts { fill: var(--text-muted); font-weight: 400; font-size: 12px; }
+    .mono { font-family: var(--font-mono); }
+    .neutral { fill: var(--surface); stroke: var(--border); }
+    .brand { fill: var(--brand-soft); stroke: var(--brand); }
+    .accent { fill: var(--accent-soft); stroke: var(--accent); }
+    .th-brand { fill: var(--brand-text); }
+    .ts-brand { fill: var(--brand); }
+    .th-accent { fill: var(--accent-text); }
+    .ts-accent { fill: var(--accent); }
+    .arr { stroke: var(--text-muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .arr-brand { stroke: var(--brand); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+  </style>
+
+  <!-- 标题 -->
+  <text x="360" y="28" text-anchor="middle" class="th" font-size="15">同一份 llama.cpp 源码，两种编译后端</text>
+
+  <!-- 顶部统一引擎 (pill) -->
+  <g>
+    <rect x="250" y="44" width="220" height="44" rx="22" class="neutral"/>
+    <text x="360" y="63" text-anchor="middle" class="th">llama-server 引擎构建</text>
+    <text x="360" y="80" text-anchor="middle" class="ts">-DGGML_HIP=ON 或 -DGGML_VULKAN=ON</text>
+  </g>
+
+  <!-- 分支箭头 -->
+  <path d="M290 88 C 290 112, 200 112, 200 136" class="arr-brand" marker-end="url(#arf)"/>
+  <path d="M430 88 C 430 112, 520 112, 520 136" class="arr" marker-end="url(#ar)"/>
+
+  <!-- ===== HIP 列 (brand, 焦点) ===== -->
+  <g>
+    <rect x="70" y="140" width="260" height="48" rx="8" class="brand"/>
+    <text x="200" y="161" text-anchor="middle" class="th th-brand" font-size="15">HIP 构建</text>
+    <text x="200" y="179" text-anchor="middle" class="ts ts-brand">libggml-hip.so 内核</text>
+  </g>
+  <path d="M200 188 L200 216" class="arr-brand" marker-end="url(#arf)"/>
+  <g>
+    <rect x="70" y="220" width="260" height="48" rx="8" class="brand"/>
+    <text x="200" y="241" text-anchor="middle" class="th th-brand">HIP Runtime (ROCm)</text>
+    <text x="200" y="259" text-anchor="middle" class="ts ts-brand mono">libamdhip64</text>
+  </g>
+  <path d="M200 268 L200 296" class="arr-brand" marker-end="url(#arf)"/>
+  <g>
+    <rect x="70" y="300" width="260" height="48" rx="8" class="brand"/>
+    <text x="200" y="321" text-anchor="middle" class="th th-brand">内核驱动 KFD</text>
+    <text x="200" y="339" text-anchor="middle" class="ts ts-brand">GPU 计算专用通道</text>
+  </g>
+  <path d="M200 348 L200 376" class="arr-brand" marker-end="url(#arf)"/>
+
+  <!-- ===== Vulkan 列 (neutral, 参照) ===== -->
+  <g>
+    <rect x="390" y="140" width="260" height="48" rx="8" class="neutral"/>
+    <text x="520" y="161" text-anchor="middle" class="th">Vulkan 构建</text>
+    <text x="520" y="179" text-anchor="middle" class="ts">libggml-vulkan.so 内核</text>
+  </g>
+  <path d="M520 188 L520 216" class="arr" marker-end="url(#ar)"/>
+  <g>
+    <rect x="390" y="220" width="260" height="48" rx="8" class="neutral"/>
+    <text x="520" y="241" text-anchor="middle" class="th">Vulkan 驱动 (Mesa)</text>
+    <text x="520" y="259" text-anchor="middle" class="ts">RadV · gfx1151</text>
+  </g>
+  <path d="M520 268 L520 296" class="arr" marker-end="url(#ar)"/>
+  <g>
+    <rect x="390" y="300" width="260" height="48" rx="8" class="neutral"/>
+    <text x="520" y="321" text-anchor="middle" class="th">内核驱动 DRM</text>
+    <text x="520" y="339" text-anchor="middle" class="ts">amdgpu 图形/计算共用</text>
+  </g>
+  <path d="M520 348 L520 376" class="arr" marker-end="url(#ar)"/>
+
+  <!-- 底部汇合 GPU -->
+  <path d="M200 348 C 200 428, 360 420, 360 436" class="arr-brand" marker-end="url(#arf)"/>
+  <path d="M520 348 C 520 428, 360 420, 360 436" class="arr" marker-end="url(#ar)"/>
+  <g>
+    <rect x="230" y="440" width="260" height="52" rx="10" class="neutral"/>
+    <text x="360" y="462" text-anchor="middle" class="th">AMD Radeon 8060S</text>
+    <text x="360" y="480" text-anchor="middle" class="ts">Strix Halo · UMA 128G 统一内存</text>
+  </g>
+
+  <defs>
+    <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" fill="var(--text-muted)"/>
+    </marker>
+    <marker id="arf" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" fill="var(--brand)"/>
+    </marker>
+  </defs>
+</svg>
