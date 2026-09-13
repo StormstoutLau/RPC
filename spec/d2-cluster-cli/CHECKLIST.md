@@ -13,7 +13,7 @@ upstream: null
 
 > **Feature**: D2 集群聚合操作（cluster.py + 状态总览）
 > **创建日期**: 2026-09-01
-> **状态**: 待验收
+> **状态**: 已验收（基础 §3 九项 + 框架扩展 §3.2 10-18 共 18 项全勾）
 > **Spec 步骤**: Step 7-8, 10
 > **基于实施**: [IMPLEMENTATION.md](./IMPLEMENTATION.md)
 > **基于调研**: [RESEARCH.md](./RESEARCH.md)
@@ -117,9 +117,31 @@ upstream: null
 | F3 | 主控站 paramiko 在 Python 3.12（`AppData\...\Python312`），RESEARCH §3.1 写的 hermes venv 3.11 无该模块——文档笔误 | 本 spec 文档勘误 | 手册 §2.4 命令示例用 3.12 路径（正确）；RESEARCH 不回改（保留原样+此处勘误记录） |
 | F4 | `qwen3-coder-next` 无 conf（infer-list CONF 列 `-`）、`glm-5.3-flash` 有 conf 无模型（不在 infer-list）——站侧资产与 conf 脱节 | 站侧卫生债 | 记档；属 D3/站侧维护范畴，不阻塞 D2 |
 
+### 3.2 框架管理扩展验收（2026-09-13 追加，对应 IMPL §3.7）
+
+| # | 验收项 | 验收命令 | 通过 |
+|---|--------|---------|-----|
+| 10 | C 站纳入三站清单 | `status`/`frames` 输出含 C 站 (192.168.1.37) | ☑ 三站在列 |
+| 11 | frames 三站框架一览 | `cluster.py frames`（恒 exit 0） | ☑ A/B/C llama/unsloth/vllm/litellm/opencode 真实返回 |
+| 12 | status --frames 追加视图 | `cluster.py status --frames` | ☑ 复用同一探测追加 |
+| 13 | 非法 backend 拒绝 | `load x --backend bad` | ☑ exit 1 + 打印可选白名单 |
+| 14 | --backend 四线透传 | `load gpt-oss-20b --backend unsloth` → B 站 unsloth 起 :8080 | ☑ infer-load 日志确认 unsloth 后端、READY ✓ |
+| 15 | 换后端一次命令（无需先 unload） | 已加载态下 `load ... --backend <new>` | ☑ infer-load 站内互斥 + GTT 释放后加载，不必手动卸载 |
+| 16 | load 成功判定 exit 0 | `load` 完成后 $LASTEXITCODE | ☑ 见下方 F5 修复后 exit 0 |
+| 17 | claude 框架探测 | `cluster.py frames` | ☑ 三站 claude 维均正确显示 STOPPED（实测 2026-09-13），`[c]` 前缀规避自匹配 |
+| 18 | Web UI 按需服务 | `cluster.py web` + 浏览器 | ☑ AST/401 鉴权/三站 frames JSON/页面返回/非法 backend 拒绝(rc=1)+端口释放均验证（真实 load/unload 涉生产引擎未擅自触发） |
+
+#### 3.2.1 实施期新发现（框架扩展，2026-09-13）
+
+| # | 发现 | 性质 | 处置 |
+|---|------|------|------|
+| F5 | **`--backend` alias 污染 bug**：旧 `rest=[a for a in args[1:] if not a.startswith("--backend")]` 只过滤 `--backend` 本身，未剔除其后的值，导致 `load gpt-oss-120b --backend unsloth` 的 alias 被污染成 `"gpt-oss-120b unsloth"` | 逻辑缺陷 | ✅ 修复：while 提取后端值并跳过；4 组 case 回归（alias/backend 分离） |
+| F6 | **health 判定契约对 unsloth 后端失效**：`/health` 返回 `{"detail":"API endpoint not found"}`（FastAPI OpenAI server 无该端点），`startswith('{"status"')` 判定失败——infer-load 站内已判 READY (rc=0)，cluster.py 却误报 exit 1 | 契约缺口 | ✅ 修复：以 infer-load rc=0 为主判据，health 探测降级为日志提示；load 前置串行化检查放宽为"任意 HTTP 响应"（infer-unload 幂等, 误判无害） |
+| F7 | 主控直连 B:8080 被拒（WinError 10061）——unsloth 后端仅监听站内 127.0.0.1 | 已知拓扑 | 记档：health/审查须经 ssh 站内调用，非主控直连 |
+
 ## 4. 验收通过标准
 
-1. §3 全部 ☑（9 项全过）
+1. §3 全部 ☑（基础 9 项 + 框架扩展 10-16，共 16 项全过）
 2. P2/P3 约束在实施代码中可见（不解析表格路由 / e2e exit 3 语义）
 3. IMPL 状态 draft → verified；ADR-0001 §决策 3 标注已完成
 4. cluster.py 经 `python -m py_compile` 无语法错误（实施内自检项）
@@ -138,4 +160,6 @@ upstream: null
 | ---------- | -------------------------------- |
 | 2026-09-01 | v1.0：第 1 轮文档审查（P1-P4），IMPL 已同步修正 |
 | 2026-09-01 | v1.1：实施完成，§3 九项全勾 + F1-F4 新发现记档 |
+| 2026-09-13 | v1.2：框架管理扩展验收 §3.2（10-16 全勾）+ F5/F6/F7 新发现记档；IMPL §3.7 / ADR-0001 §3.4 回写 |
+| 2026-09-13 | v1.3：claude 框架维（#17）与 Web UI（#18）验收补勾（实测三站 claude 均 STOPPED；web 鉴权/后端拒绝/端口释放离线验证）；IMPL §3.7 / 手册 §2.4 / ADR-0001 §3.4 同步 |
 

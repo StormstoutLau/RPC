@@ -69,7 +69,7 @@
 
 | Issue | 现象 | 对本集群影响 |
 |---|---|---|
-| [#28047](https://github.com/ggml-org/llama.cpp/issues/28047)（08-30 未修） | **DSV4-Pro 3-worker / GLM-5.3 多 worker 确定性 crash**（分片调度器把 FLAG_COMPUTE view 发错 worker）；DSV4-Flash 多 worker **正常**、gpt-oss 正常 | ✅ 我们选 V4-Flash 恰好避开；⚠️ **勿上 GLM-5.x / V4-Pro 分布式** |
+| [#28047](https://github.com/ggml-org/llama.cpp/issues/28047)（**09-10 更新：已 Closed 9/5，由 #26500 修复**，见 §6a 表） | **DSV4-Pro 3-worker / GLM-5.3 多 worker 确定性 crash**（分片调度器把 FLAG_COMPUTE view 发错 worker）；DSV4-Flash 多 worker **正常**、gpt-oss 正常 | ✅ 我们选 V4-Flash 恰好避开；⚠️ 旧引擎下勿上 GLM-5.x / V4-Pro 分布式 — **升级引擎(含 #26500)后前置解除，按实测确认** |
 | [#26152](https://github.com/ggml-org/llama.cpp/issues/26152) | MoE 部分 offload 时 `GGML_SCHED_MAX_SPLIT_INPUTS` 崩溃 | 大 MoE 全量 offload 到两站时用 `-ot`/层分片规避 |
 | Azure 实测（2026-04） | **单机装得下的模型 RPC 反而更慢**（网络开销） | RPC 仅用于超单机模型（V4-Flash）；62G 以下单机直跑 |
 | **V4 Vulkan op 关键前置** | dsv4 系列算子（DSA/lightning indexer/超连接）是近期才合入的 | llama.cpp 须升级到含 [#26565 cont-permute](https://github.com/ggml-org/llama.cpp/pull/26585)+[#26578 HC fused](https://github.com/ggml-org/llama.cpp/pull/26578) 的版本；已验证 gfx1151 双机 50/50 分片跑 Flash UD-Q4_K_XL |
@@ -100,7 +100,7 @@
 4. `DeepSeek-V4-Flash` IQ2_XS-XL（~81G）→ 若想单机跑 1M（不进分布式），IQ2 质量自评后决定
 
 ### 明确不上
-- GLM-5.2/5.3 旗舰、Kimi K2.6、DSV4-Pro：本地装不下，且 GLM-5.3/DSV4-Pro RPC 有未修 crash（#28047）——巡顶需求走外部 API
+- GLM-5.2/5.3 旗舰、Kimi K2.6、DSV4-Pro：本地装不下（**#28047 RPC crash 已 9/5 修复，升级引擎后可重评估分布式**，见 §4.2/§6a）——巡顶需求走外部 API
 - 单机能装的模型不上 RPC（实测变慢）
 
 ---
@@ -140,12 +140,12 @@
 |---|---|---|
 | **v0.3.0**（8/25） | DS4 tensor-split（`-sm tensor`）、多序列 rollback 修复；⚠️ **注意未含 Vulkan Lightning Indexer**（8/27 才合入，晚于 v0.3.0） | ✅ release |
 | [#26585](https://github.com/ggml-org/llama.cpp/pull/26585) | vulkan tiled transpose 0↔2（V4 lightning indexer 瓶颈，~43% prefill → 修复） | ✅ **Merged 8/19** |
-| [#26578](https://github.com/ggml-org/llama.cpp/pull/26578) | vulkan DSV4_HC_COMB/PRE/POST 融合算子（原 #26548 closed 后重开） | ⚠️ **Open**（5/18 起）——**非 merged**，勿当已合入 |
+| [#26578](https://github.com/ggml-org/llama.cpp/pull/26578) | vulkan DSV4_HC_COMB/PRE/POST 融合算子（原 #26548 closed 后重开） | ✅ **Merged 9/7**（2026-09-10 复核）→ decode 1.50×/prefill 1.12×；现役 /opt(8/31) 缺，升级即得。**状态见 TRACKER §1.2** |
 | [#27453](https://github.com/ggml-org/llama.cpp/pull/27453) | **vulkan LIGHTNING_INDEXER**（f32/f16/bf16/q8/q5/q4/iq4_nl；16931/16931 全量通过；live Flash avg_err 3e-10） | ✅ **Merged 8/27** |
 | [#28133](https://github.com/ggml-org/llama.cpp/pull/28133) | mtmd 支持 DeepSeek-V4-Flash-Vision-Exp（视觉） | ✅ **Merged 9/2**（文本模型需先 reconvert #28154） |
-| [#28047](https://github.com/ggml-org/llama.cpp/issues/28047) | V4-Pro/GLM-5.3 多 worker RPC crash | ⚠️ **Open 未修**（8/30 开出，Flash 无碍；Pro 有用户侧 workaround：3 处 `llama_dsv4_comp_state` offload=false） |
+| [#28047](https://github.com/ggml-org/llama.cpp/issues/28047) | V4-Pro/GLM-5.3 多 worker RPC crash | ✅ **Closed 9/5 — 由 [#26500](https://github.com/ggml-org/llama.cpp/pull/26500)（8/30 merged）修复**（2026-09-10 复核）；Pro/GLM-5.3 分布式禁用前置已解除，升级引擎(含 #26500)后实测确认。**状态见 TRACKER §1.2** |
 
-**关键结论（引擎升级解锁）**：上游 master 已**基本齐备** V4-Flash 的 Vulkan 算子（indexer ✅ / transpose ✅ / 视觉 ✅；仅 HC 融合算子 #26578 仍 Open，未合入时走 unfused 路径性能打折）。**本集群引擎 `0d18aaa`（git show 实测 2026-05-26）缺全部上述算子**，`DeepSeek-V4-Flash-0731-MXFP4.gguf`（146G，已入库）目前**实际无法加载**。**升级需指向 master（≥9/2）而非 v0.3.0 单一 tag**——这是当前**最高优先级前置动作**，优先于任何新模型下载。
+**关键结论（引擎升级解锁）**：✅ **2026-09-10 已升级完成**（master-91f6a6cf v0.4.0-dev，含 #26578 DSV4_HC + sparse-fa），V4-Flash A/B 两机层分布 decode **9.56→14.02 t/s（+46.7%）实测闭环**（metrics-log Phase 6）。升级走 UPGRADE_SOP 三站原子切换，`check_llama_version.py --deep` 全绿。旧 0d18aaa 引擎缺全部算子；现役 /opt 已是 ≥9/7 master → **V4-Flash 可正常加载高速运行**。
 
 ---
 
@@ -296,6 +296,52 @@
 | M2.7 推理过长 | 200K 内 + DCP |
 | 双模型并存 | load-gate 禁同站叠加，错峰 A/C |
 
+### D.5 C 站双后端实测 + 社区证据（2026-09-10）
+
+> 用户 C 站 LM Studio 加载 Qwen3.8-Flash-Next **UD-IQ4_XS**（已下载 93.7G 三片）实测两后端，一可用一异常，社区均有对应 issue。**结论先行：LM Studio 内置引擎下 Vulkan 为 C 站 Q3.8F 主力后端，其 ROCm 后端不可用（gfx1151 MoE 数值损坏）；思考冗长 = 默认 `reasoning_effort=xhigh` 所致，须显式调 medium/low。⚠️ 本结论限 LM Studio 内置引擎——切换到 unsloth b10715 HIP 后 Q3.8F 实测正常，见 D.6（引擎级对照）。**
+
+**现象 1：Vulkan 可用，tg 18.85 t/s，但思考冗长**
+- 实测：加载成功（`n_ctx_slot=217856`），decode 18.85 t/s 可用；但"解释 frechet 可微"思考接近 **6 分钟**（远慢于生成速度）
+- 根因（社区实证）：Qwen3.8 全系**默认 `reasoning_effort=xhigh`**（GGUF chat_template 内建），xhigh 疯狂过度思考：
+  - [QwenLM/Qwen3.8#216](https://github.com/QwenLM/Qwen3.8/issues/216)：xhigh 默认下 **~19.4% 空回答**（烧几千-2.6万 reasoning token 后 `finish_reason=stop` 无 content）；`reasoning_effort=medium/low` 零失败
+  - [insiderllm 实测](https://insiderllm.com/pdfs/qwen-3-8-27b-reasoning-token-cost.pdf)：HumanEval#108 烧 **3.2 万 token / 14.2 分钟** 未作答（decode 正常 37.2 t/s，是"生成过多"非慢）
+  - Simon Willison 实测：画 SVG 用 21 分钟 / 2.2 万推理 token；**建议 initial 用 low 或关推理**
+  - **⚠️ LM Studio 坑（#216 明确）**：LM Studio **静默丢弃 `reasoning_effort` 参数** → 界面设了也无效，仍发 xhigh
+- **对策**：C 站 LM Studio 需在模型配置/引擎参数层固定 `reasoning_effort=medium` + `--reasoning-budget`（如 4000）+ `--reasoning-preserve`（ryan4yin gist 实测：medium+budget 4000 是 Q3.8-Flash-Next 最优，xhigh 质量还退化自疑循环）；llama.cpp 命令行加 `--chat-template-kwargs '{"reasoning_effort":"medium"}'`
+
+**现象 2：切换 ROCm 后端输出全"？？？？？"但 tg 略快**
+- 实测：ROCm/HIP 后端 tg 显示略快但输出全问号（乱码/数值损坏）
+- 根因（社区实证，gfx1151 HIP MoE 数值 bug 家族）：
+  - [llama.cpp#28113](https://github.com/ggml-org/llama.cpp/issues/28113)（8/31）：**MoE 模型在 gfx1151 HIP 输出重复标点垃圾**（`///////…`），tg 正常 41 t/s 但采样全垃圾 —— 与"tg 略快但输出乱码"完全同型；由 #27621（`ggml_cuda_should_fuse_mul_mat_vec_q` 条件改）引入，`mul_mat_vec_q_moe` 多 token 融合路径数值错误
+  - [llama.cpp#27579](https://github.com/ggml-org/llama.cpp/issues/27579)（8/22）：gfx1151 HIP 稠密架构退化 word salad（Vulkan 同参全对）
+  - [llama.cpp#28211](https://github.com/ggml-org/llama.cpp/issues/28211)（9/1）：HIP gfx1151 长 prompt > n_ubatch 错误 logits（无报错）
+  - [llama.cpp#17797](https://github.com/ggml-org/llama.cpp/issues/17797)：ROCm gfx1151 输出 gibberish，Vulkan 正常（历史）
+  - **关键**：Qwen3.8-Flash-Next 是 512-expert MoE（qwen4exp）→ 命中 #28113 的 MoE HIP 数值路径；**C 站 LM Studio 自带 ROCm 引擎可能含 #27621 回归或独立 HIP bug**
+- **对策**：C 站 Q3.8F **用 Vulkan 后端**（18.85 t/s 可用且输出正确）；HIP 仅作对照，等 #28113 修复（gfx1151 MoE HIP 数值）再评估；本集群 /opt 引擎为 Vulkan（C 站 9/8 实测 HIP 仅 gpt-oss 正常，MoE 系有风险）
+- **注意**：C 站 gpt-oss-120b HIP 正常（48.8 t/s, 9/8）说明 HIP 非全坏——**问题限定在 MoE 大模型数值路径（qwen4exp/新架构）**，与 #28113 结论（MoE 家族）一致
+
+**对 E.1 表格的校准**：Q3.8F UD-IQ4_XS 单站首测实际 **18.85 t/s（Vulkan, 4 slot/217K ctx）**——在 E.1 预估 12-43 t/s 区间；思考冗长治理后才是可用主力（否则 xhigh 烧 ctx）。
+
+### D.6 C 站 unsloth（HIP）双模型实测（2026-09-10，与 D.5 形成引擎级对照）
+
+> 引擎：C 站 `~/.unsloth/llama.cpp` **b10715**（commit 92cedc867，Clang 23，**HIP/ROCm 后端，无 Vulkan**），设备 `ROCm0: 125000 MiB`；libllama 架构探测 `dsv4/glm5next/minimax/qwen4exp` 全支持。模型均为 `~/.lmstudio/models/lmstudio-community/` 下的 unsloth UD-IQ4_XS 档。
+> **内存账本（load-gate 硬规则）**：M2.7 文件 108.4G → need=107 通过（2+107+12=121 ≤ 121 恰好）；Q3.8F 93.7G → need=94 通过。实测加载后 avail 均有富余（M2.7 后 15G / Q3.8F 后 57G）。**结论：两模型 unsloth HIP 单站加载无 OOM 风险，属 load-gate 允许边界内。**
+
+**测试 1：MiniMax-M2.7 UD-IQ4_XS（108.4G，4 分片）— ✅ 完全可用，24.4 t/s**
+- 启动参数：`-c 16384 --flash-attn on --no-context-shift --device ROCm0 -ngl 999 -sm none --kv-unified -np 1 --cache-type-k q8_0 --cache-type-v q8_0 -b 1024 -ub 1024 --cache-ram 0 --temp 1.0 --top-k 40 --top-p 0.95`
+- 结果：40s 加载，health OK；中文/英文输出**质量正常无乱码**；tg **24.4-24.8 t/s**（优于 LM Studio 的 ~20 t/s）
+- **⚠️ M2.7 是 CoT 模型**：回复先在 `reasoning_content` 思考、再输出 `content`。默认 `max_tokens` 预算若小于思考长度，会 `finish_reason=length` 且 content 为空（非 bug）。实测 `max_tokens=800` 中文长文完整输出（reasoning 2275 tok + content 800 tok）
+- 采样参数用 MiniMax 官方推荐：`temp 1.0 / top_p 0.95 / top_k 40`
+
+**测试 2：Qwen3.8-Flash-Next UD-IQ4_XS（93.7G，3 分片）— ✅ 可用，稳态 22.8 t/s，无乱码（与 D.5 修正关键）**
+- 启动参数：同 M2.7 + `--reasoning-effort medium --reasoning-budget 2000 --reasoning-preserve`
+- 结果：25s 加载；**英文/中文/多轮（3 segment）输出全部正常**（Paris ✓ / Frechet 中文 ✓ / "Your name is Bob" ✓）；稳态 tg **22.6-23.2 t/s**，中文 22.2 t/s，多轮 16.2 t/s；长 prompt（1610 tok）prefill 快（6s 含首 token）
+- **⚡ D.5 修正**：D.5 现象 2 判定"HIP/ROCm 暂不可用"基于 **LM Studio 内置 ROCm 引擎**（疑似含 #27621 回归）；**unsloth b10715 HIP 实测无此问题（gfx1151 MoE 数值路径正常）** → C 站 Q3.8F 的 HIP 路径**并非全坏，unsloth b10715 引擎即回避方案**。两证据同机同参不同引擎，归因差异 = 引擎版本（b10715 未踩 #28113 回归）
+- **思考冗长治理生效**：`--reasoning-effort medium --reasoning-budget 2000` 下 reasoning 仅 20-245 token（对比 LM Studio 默认 xhigh 的 6 分钟/2 万 token）；b10715 原生支持这两参数（D.5 提到 LM Studio 会静默丢弃，unsloth CLI 不丢）
+- 长 ctx（262K）验证待后续：本次 -c 16384 仅为 OOM 冒烟，未覆盖长上下文内存曲线
+
+**结论（D.6）**：C 站单站可用形态 = **unsloth b10715 HIP 双载 M2.7 / Q3.8F 均验证通过**，无需依赖 Vulkan（C 站 unsloth 无 Vulkan 后端，LM Studio 才有多后端）。参数配方以此节为准；M2.7 跑长任务需给足 max_tokens，Q3.8F 必须显式降 reasoning_effort。
+
 ## E. 单站/双站模型池（原 SINGLE-DUAL-STATION-POOL）
 
 ### E.1 单站（≤124G）候选
@@ -385,3 +431,54 @@
 ### H.5 待办承接
 - [ ] Qwen3.8-Flash-Next 单站落地时评估 ROCmFP4-FAST 档（若 A 站 ROCm 路径启用）（H.1）
 - [ ] gpt-oss 后训练家族（如有蒸馏变体）纳入实测台账（H.3，P3 级）
+
+## I. domain_matrix 五模型实测判分对照（2026-09-11，Nemotron-120B 并入）
+
+> 测试集: `spec/model-eval/questions/domain_matrix.md`（20 题，概念/证明/计算/诊断/代码，rubric 判分：锚点+疑似幻觉标志）。结果目录 `tmp/res_*`。Q3.8F/M2.7 首轮空答由 `--reasoning-preserve` 使思考计入预算导致，均关闭 preserve + 收紧 `max_tokens`(Q3.8F=12000, M2.7=20000) 后补跑，全部产出完整答案。
+
+### I.1 判分总览
+
+| 模型 | 站/量化 | 优秀 | 良好 | 不合格 | 幻觉标志触发 | 备注 |
+|---|---|---|---|---|---|---|
+| **MiniMax-M2.7** | C / UD-IQ4_XS (229B MoE, CoT) | 15 | 1 | 0 | **0** | B1 答案截断 |
+| **Qwen3.8-Flash-Next** | B / UD-IQ4_XS (CoT) | **19** | 1 | 0 | **0** | B1 草稿化截断；优秀率最高 |
+| **gpt-oss-120b** | A / MXFP4 (60G) | 19 | 1 | 0 | 0 | A3 λ_U 数值错 |
+| **gpt-oss-120b-Fable-5-Distilled** | A / Q5_0 (76G) | 18 | 2 | 0 | 0 | A3 数值错 + E1 时序列缺陷 |
+| **Nemotron-3-Super-120B-A12B** | B / Q4_K_M (81G, 12B激活) | 18 | 2 | 0 | **0** | A3 λ_U≈0.44(+11%) + A2 L2 控制收敛表述不足 |
+
+### I.2 A3 λ_U 数值跨模型核验（关键分歧点）
+
+正确值 λ_U=2·t₅(−√(5·(1−ρ)/(1+ρ)))，ρ=sin(π/4)≈0.7071 → **0.397**。
+
+| 模型 | λ_U 答案 | 判定 |
+|---|---|---|
+| M2.7 | 0.402 | ✅ 容差内正确 |
+| **Q3.8F** | **0.40** | ✅ 正确 |
+| gpt-oss (MXFP4) | 0.165 | ❌ 错（df 用 ν 而非 ν+1，−58%） |
+| fable (Q5_0) | 0.1854 | ❌ 错（t₅ CDF 估错约一半，−53%） |
+| **Nemotron-120B** | ~0.44 | ❌ 错（t₅ CDF 用 Φ_t 琐错，+11%，超±5%） |
+
+> 结论：**长链 CoT 模型（M2.7/Q3.8F）在纯计算代入类题上精确（0.40），非 CoT 高吞吐模型（gpt-oss/fable/Nemotron）系统性在 λ_U 数值坑失手**；但 Nemotron(+11%, 12B激活) 误差远小于 gpt-oss 家族(−53~58%, 5B激活)，**紧凑 MoE 架构数值精度明显优于 5B 激活超大宽模型**。
+
+### I.3 逐题对照（优秀/良好）
+
+| 题 | M2.7 | Q3.8F | gpt-oss | fable | Nemotron-120B |
+|---|---|---|---|---|---|
+| A1 | 优 | 优 | 优 | 优 | 优 |
+| **A2** | 优 | 优 | 优 | 优 | ⚠️良好（L2 控制收敛表述不足）|
+| **A3** | 优 | 优 | ⚠️良好 | ⚠️良好 | ⚠️良好（λ_U +11% 超±5%）|
+| B1 | ⚠️良好 | ⚠️良好 | 优 | 优 | 优 |
+| B2,C1,C2,D1,D2,E2,F1,G1,G2,H1,H2,I1,I2,J1,J2 | 优 | 优 | 优 | 优 | 优 |
+| E1 | 优 | 优 | 优 | ⚠️良好 | 优 |
+
+### I.4 落地研判
+
+- **Q3.8F 为当前机群数理主力最优候选**：19/20 优秀（五者最高），且每题 300-635s 快于 M2.7(250-1100s)；与 M2.7 在 A3 双双重数值正确。
+- **Nemotron-120B（12B 激活紧凑 MoE）为第二梯队最优通用底座**：18/20 优秀，A3 λ_U +11% 误差远小于 gpt-oss 家族(−53~58%, 5B激活)，印证**紧凑 MoE 数值精度 > 超大宽 MoE**；A2 L2 控制收敛表述不足为唯一额外良好。
+- **gpt-oss / fable 定位**：概念/证明/诊断全对，唯纯计算代入类题（A3）翻车，适合作快速工具/执行层，不作深度数理主判。fable(Q5_0) 未优于原版 MXFP4。
+- 五模型均 0 幻觉标志触发（A3 椭圆 τ 不变性、E2 最优权重、J2 敏感度等反直觉陷阱全部正确绕开）。
+
+### I.5 附带任务收尾
+
+- **Hermes Agent 升级**：A 站 v0.14.0(5月) → **v0.21.1(2026.9.7)**，`uv run` 路径 + shim 指向 `.venv`；备份 `hermes-agent.bak_pre_upgrade_20260910_200935`。经验：A 站直连 GitHub git 协议不稳，主控站(魔法)下载 tarball + scp 内网传输最稳。
+- **V4.1 Flash 量化评估**：原生 511GB（含 196B Engram 表 189GiB），显存底线 614GB(8×H200/GB200)；llama.cpp 未支持 + Engram 跨机通信爆炸 + Q2 崩 → **三站不可行**；走外部 API 巡顶（便宜77%、快427-507t/s）。机群归属仍为 V4-Flash-0731（现役 MXFP4 146G）。

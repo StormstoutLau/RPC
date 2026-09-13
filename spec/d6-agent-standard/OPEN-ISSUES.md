@@ -26,24 +26,27 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | O-03 | 纪律    | P3   | A11/A12 probe 产物未持久化（证据腐化，仅文字实录在盘）                                                                                                                                                                                                                                                                                                                                                                                                                              | ⚪ 已登记·后续遵守                   | 纪律项                      | <br /> | <br /> |
 | O-04 | 纪律    | P3   | ledger 追加非沙箱安全：沙箱会话运行 wrapper 时 Add-Content agent-runs.log 被拒（14:50 丢台账行）                                                                                                                                                                                                                                                                                                                                                                                       | ⚪ 已登记                        | 纪律项                      | <br /> | <br /> |
 | O-05 | 性能    | P3   | sync 62.3s 微超 60s 预算 4%；IMPL §5 sync/task 口径重叠                                                                                                                                                                                                                                                                                                                                                                                                                  | ⚪ 已登记                        | 二期/口径修正                  | <br /> | <br /> |
-| O-06 | 兼容性   | ⚠ 部分 | S6 中文**路径/文件名**未测（内容级已测，路径级可选未执行）                                                                                                                                                                                                                                                                                                                                                                                                                               | ⚠ 待验证                        | Cpp\_Hub 前               | <br /> | <br /> |
+| O-06 | 兼容性   | ⚠ 部分 | S6 中文**路径/文件名**未测（内容级已测，路径级可选未执行）                                                                                                                                                                                                                                                                                                                                                                                                                              | ✅ 已闭环（2026-09-12，Cpp_Hub-001 试点）           | 试点已跑通               | <br /> | <br /> |
 | O-07 | 验证    | P2   | zen 限额（429/quota）真实触发未发生（退出码 7 定义置位）                                                                                                                                                                                                                                                                                                                                                                                                                            | ⏳ 待真实触发                      | 事件驱动                     | <br /> | <br /> |
-| O-08 | 升级    | P3   | F1 后端并发探测未实现（降级为 queue\_s 观测先行）                                                                                                                                                                                                                                                                                                                                                                                                                                 | ⏳ 挂起                         | V2/并发 fan-out            | <br /> | <br /> |
-| O-09 | 验证    | —    | BS-1 跨工作区并行 isolate\_db（SQLite 写锁序列化）                                                                                                                                                                                                                                                                                                                                                                                                                           | 🔴 open                      | V2 fan-out 前置            | <br /> | <br /> |
-| O-10 | 验证    | —    | BS-2/跨站 编排层并发 HTTP fan-out 落地（L1 已验证，L2/L3 未做）                                                                                                                                                                                                                                                                                                                                                                                                                  | ✅ L1 pass                    | V2                       | <br /> | <br /> |
-| O-11 | 验证    | —    | 跨站扇出 L2 端到端（真实 readonly 卡）+ L3 回归（agent-cli-smoke + A 抽检）                                                                                                                                                                                                                                                                                                                                                                                                       | 🔴 open                      | V2                       | <br /> | <br /> |
-| O-12 | 功能    | P3   | strong accept：附主控站侧 golden 测试（防模型自写测试自证通过，P1b 遗留）                                                                                                                                                                                                                                                                                                                                                                                                               | 🔴 open                      | 下一任务卡设计时                 | <br /> | <br /> |
-| O-13 | 预置    | —    | G8 预置批次：R/sympy/重资产（Cpp\_Hub 前）                                                                                                                                                                                                                                                                                                                                                                                                                                 | ⏳ 挂起                         | Cpp\_Hub 试点前             | <br /> | <br /> |
-| O-14 | 依赖    | —    | 网关 auth 遗留：B:4000 LiteLLM 401 根因已改定（后端换载 key 不同步，非 master\_key 哈希）                                                                                                                                                                                                                                                                                                                                                                                              | 🔴 open                      | 运维修复                     | <br /> | <br /> |
-| O-15 | 演进    | —    | claude 路径 + --continue（G1 二期，Continue-vs-Spawn 决策表）                                                                                                                                                                                                                                                                                                                                                                                                             | 🔴 open                      | 二期                       | <br /> | <br /> |
-| O-16 | 演进    | —    | review --peer 站间互审 / trae 派发（任务卡=接口）                                                                                                                                                                                                                                                                                                                                                                                                                            | 🔴 open                      | D7+                      | <br /> | <br /> |
-| O-17 | 演进    | —    | readonly 层 2 锁激活（V2 按任务卡字段细化）                                                                                                                                                                                                                                                                                                                                                                                                                                   | 🔴 open                      | V2                       | <br /> | <br /> |
+| O-08 | 升级    | P3   | F1 后端并发探测未实现（降级为 queue\_s 观测先行）                                                                                                                                                                                                                                                                                                                                                                                                                                 | ✅ F1 已落地（2026-09-12，并入 O-25 P1） | V2/并发 fan-out            | <br /> | <br /> |
+| O-09 | 验证    | —    | BS-1 跨工作区并行 isolate\_db（SQLite 写锁序列化）                                                                                                                                                                                                                                                                                                                                                                                                                           | ✅ **已闭环（2026-09-12）**                      | V2 fan-out 前置            | <br /> | <br /> |
+| O-10 | 验证    | —    | BS-2/跨站 编排层并发 HTTP fan-out 落地（L1 已验证，L2/L3 未做）                                                                                                                                                                                                                                                                                                                                                                                                                  | ✅ **并入 O-11 闭环（2026-09-12）**                    | V2                       | <br /> | <br /> |
+| O-11 | 验证    | —    | 跨站扇出 L2 端到端（真实 readonly 卡）+ L3 回归（agent-cli-smoke + A 抽检）                                                                                                                                                                                                                                                                                                                                                                                                       | ✅ **已闭环（2026-09-12）**                      | V2                       | <br /> | <br /> |
+| O-12 | 功能    | P3   | strong accept：附主控站侧 golden 测试（防模型自写测试自证通过，P1b 遗留）                                                                                                                                                                                                                                                                                                                                                                                                               | ✅ 已闭环（2026-09-12，Cpp_Hub-001 golden 落地）     | 下一任务卡（已落地）                 | <br /> | <br /> |
+| O-13 | 预置    | —    | G8 预置批次：R/sympy/重资产（Cpp\_Hub 前）                                                                                                                                                                                                                                                                                                                                                                                                                                 | ⚠ 半收口（2026-09-12，编译链就绪但 golden 未走真编译，R/sympy 单列）             | Cpp\_Hub 试点后             | <br /> | <br /> |
+| O-14 | 依赖    | —    | 网关 auth 遗留：B:4000 LiteLLM 401 根因已改定（后端换载 key 不同步，非 master\_key 哈希）                                                                                                                                                                                                                                                                                                                                                                                              | ✅ 已闭环（绕网关直连，ADR-0002 C+_station_ready 每派发注入） | 运维修复（网关保留备用）                     | <br /> | <br /> |
+| O-15 | 演进    | —    | claude 路径 + --continue（G1 二期，Continue-vs-Spawn 决策表）                                                                                                                                                                                                                                                                                                                                                                                                             | ✅ **已落地（2026-09-12）**                      | 二期                       | <br /> | <br /> |
+| O-16 | 演进    | —    | review --peer 站间互审 / trae 派发（任务卡=接口）                                                                                                                                                                                                                                                                                                                                                                                                                            | ✅ closed（2026-09-12 评审环落地；--peer 站间互审留 D7） | D7+                      | <br /> | <br /> |
+| O-17 | 演进    | —    | readonly 层 2 锁激活（V2 按任务卡字段细化）                                                                                                                                                                                                                                                                                                                                                                                                                                   | ✅ **已闭环（2026-09-12）**                      | V2                       | <br /> | <br /> |
 | O-18 | 约束    | P1   | 同站内多并发被统一内存带宽顶起（\~2.8× 恶化）；落地铁律=扇出优先跨站各 1 并发                                                                                                                                                                                                                                                                                                                                                                                                                    | ✅ 已定案                        | 架构导入                     | <br /> | <br /> |
-| O-19 | 环境    | —    | 两站模型全卸载 → agent 层 opencode 连 8080 但 `/v1/models` 空无法推理；跨界代码任务另暴露 A 站工作区无 `.venv`（accept pytest rc=127）。4-agent 吃狗粮因此中止                                                                                                                                                                                                                                                                                                                                          | 🔴 open                      | 修环境 + O-13 预置联动          | <br /> | <br /> |
+| O-19 | 环境    | —    | 两站模型全卸载 → agent 层 opencode 连 8080 但 `/v1/models` 空无法推理；跨界代码任务另暴露 A 站工作区无 `.venv`（accept pytest rc=127）。4-agent 吃狗粮因此中止                                                                                                                                                                                                          | ✅ **closed（2026-09-09 4/4 闭环）** | 见 §O-19 关闭记录 | <br /> | <br /> |
 | O-20 | 功能缺陷  | P1   | Invoke-Workspace 同步目标站判定被 PowerShell 动态作用域污染：从 Invoke-Task 调用时 `$HostName` 解析为 SSH 主机串（非 'A'/'B'）→ `$station` 恒回退 'B' → **跨站任务源码流恒错推到 B，A 站任务在空壳工作区跑**（specaudit 卡虚构产物根因）                                                                                                                                                                                                                                                                                       | ✅ 已修复+实机验证                   | 2026-09-05               | <br /> | <br /> |
 | O-21 | 性能/超时 | P1   | specaudit 卡 900s 硬超时/`exit1`——**三重返证后真根因尘埃落定**：①外层层 `timeout 900` 强杀正常推进 agent；②曾误判 opencode 对本地 passthrough 模型 64k 硬默认（根因实错）；③**决定性返证**：`/props` 运行时 `n_ctx=65536` 而 `/v1/models` 仅通告 `n_ctx_train=131072` → **服务端 llama-server 实以** **`-c 65536`** **加载**，那条 `exceeds the available context size` 是**服务端 400**，opencode 任何配置都无法抬升。修复=conf `CTX 65536→131072` 重载 A 站 gpt-oss；实机复验 `n_ctx=131072`、specaudit 卡重跑 `RUN_S=502/TASK_RC=0/ACCEPT=1` **全程无 65536 错误** | ✅ 已闭环（服务端 ctx 修复 2026-09-06） | 服务端 `-c 131072` 重载       | <br /> | <br /> |
-| O-22 | 运维缺陷 | P1   | `.meta` 残留误导：只在 run 结束写、无 task_id → 二次 run 时读到上次终态（RUN_S=900/RC=124 误判"又超时"，实为残留） | 🔴 修复+回归待收口（G-1 已在 agent-cli L726 加 TASK_ID + collect 侧 stale guard，本会话已实证 .meta 带 TASK_ID 回归见 O-23） | 契约修复 + 观测判据订正 | 2026-09-07 |
+| O-22 | 运维缺陷 | P1   | `.meta` 残留误导：只在 run 结束写、无 task_id → 二次 run 时读到上次终态（RUN_S=900/RC=124 误判"又超时"，实为残留） | ✅ 已收口（2026-09-12） | 契约修复 + 观测判据订正 | 2026-09-07 |
 | O-23 | 架构/超时 | P1   | **复杂度路由 ctx 解耦**：profile.context(code=8192/reason=32768/long=262144) 只是元数据、从未传给引擎；opencoe 用 opencode.jsonc 固定 limit.context=131072，引擎 ctx 由手动 flavor 预设决定 → 三者解耦。**凌晨 refdedupe timeout 真根因**=`request exceeds available context size (8192)`：nothink 档引擎 `-c 8192` < refdedupe 请求 12536 tokens → 服务端 400 → agent 永久挂死 → 900s timeout | ✅ 已修复+实机验证（引擎 ctx=唯一真相） | 2026-09-07 radical fix B | <br /> | <br /> |
+| O-24 | 架构/闭环 | P1   | **单机 agent CLI 工作流闭环断点（分析定案）**：单机形态（无第二站分摊/换站/互审）存在 4 类断点——①review --peer 缺（产出→ledger 后无机器复核门）②超时续接 --continue 缺（长卡单机唯一韧性出路）③claude 备通道缺（单引擎死锁=停摆）④单机排队/上下文治理缺。P0=review 单机版 + continue 续接 | ⏳ **P0-① 已落地实证**（续跑循环入 $body，RESUME 出线+超时卡全链+零回归）；P0-② ✅（被 O-16 覆盖闭环） | O-24 实施记录 | <br /> | <br /> |
+| O-25 | 演进/可观测 | P2   | **agent 任务执行进度可观测性（派发前预估 + 派发中节拍）**：派发后黑盒——ledger/.meta/.agent-run 均为 run-end 快照，无运行中采样 → 长卡状态不可观测、无吞吐、无 ETA；预算估算用单一 wall-clock 而非分相 | 🔵 P0 完成 + 判据③已落地：①吞吐基准表✓（THROUGHPUT-BASELINE.md+metrics-log Phase 6.2）；②`.progress` 打点✓（远端5s采样+teardown终值+collect拉取+parse回填）；③派发前预估✓（Get-ThroughputEstimate 分相估算，HIT才给/MISS不打荒，TIMEOUT-WARN预警；实证 gpt-oss 682s、回归9/9）；**P1槽位门✓（并入O-08/F1：`_slot_gate.sh`+`Invoke-SlotGate`+task接入，busy默认reject exit 24，`--slot-allow-busy`放行，slot记入run.json）**；**P2看板✓（2026-09-12 落地，L3 单文件 HTML：`make-dashboard.ps1` 生成器→内联 ledger+run.json→self-contained `dashboard.html`，file:// 直开零网络请求；已完成总览 22 行+run 详情展开；正在跑/Live tab 由 `-Live` 拉远端 .progress，无则 no-live-data；见 O-25 详情节）** | 🔵 **O-25 已全收口（①-④+P1/P2 全落地 + 2026-09-12 实机在线实测全通，见详情节）** | 一期 | <br /> | <br /> |
+| O-26 | 演进/编排 | P2   | **单任务分解派发并行（Split-Dispatcher）**：现派发=单卡→单站；一张可切分 readonly 大任务卡在单节点（物理上界 3：A/B/C 各1 并发，O-18）无法利用多站。缺口=任务卡无 `decompose` 声明、编排层无拆/并、无 Merge | ✅ **已闭环（2026-09-12）**：decompose 拆 2 分片 A/B 双站并行，全子卡 accept，Merge 正确，并行 465.1s ≪ 串行 720.8s（ratio 0.645）；落地修复 2 bug | V2 fan-out L2.5（schema 冻结前加 decompose 键） | <br /> | <br /> |
 
 ## 2. 各未决项详情
 
@@ -88,6 +91,12 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
   3. **关键排障**: opencode 1.18.25 位置参数 prompt 形式会**静默挂死**（240s 零输出，rc=124）——必须用 stdin 管道形式；agent-cli [L558](d:/RPC/ops/station-bin/agent-cli.ps1) 本就是 `< file` 形式，正确。手动 smoke 曾误用位置参数致误判。
   4. **E2E 验证**: `agent-cli task paper --card echo.md --model nemotron`（B）全链通过：STATION\_READY 50765→sync 212M→`TASK_RC=0 ACCEPT_OK=1`→TASK\_DONE exit=0；A 站 `cluster-litellm/gpt-oss` smoke `> build · gpt-oss / OK`。两站 opencode 均可命中实时引擎端点。
   5. **遗留**: 2 编程卡（pathguard/refdedupe）accept 的 pytest 依赖工作区真实 venv（A 裸 symlink 无依赖/B 无 .venv）→ 需 G8/O-13 预置后过；调研卡（modulemap/specaudit）应为纯产物卡无 pytest。吃狗粮 4 卡全量通过后再关 O-19。
+
+- **✅ 关闭记录（2026-09-09 4/4 闭环）**:
+
+  - **pathguard（代码卡, gpt-oss→A, 本次重跑）**: A 站起 gpt-oss 引擎（`-c 131072`，45s 加载）→ `_station_ready.sh` INJECT_OK → wrapper task `RUN_S=129/TASK_RC=0/ACCEPT_OK=1`；accept-output 实锤 `pytest test_path_guard.py → 10 passed in 0.01s, ACCEPT_RC[1]=0`（真实判据非空转）。产物 `D:\Paper\agent-out\202609090457360888`。**注意 sync 340M（工作区含产物/大文件）**
+  - **B 站 .venv 修正**: 实测系统 python3 含 pytest → `.venv/bin/python -m pytest` 可用（29 passed 验证），O-13 的"裸 symlink 无依赖"在 B 站已自然解决；代码卡 accept 条件满足
+  - **4 卡终态**: modulemap ✅（9/5）/ specaudit ✅（9/6 O-21 重跑）/ refdedupe ✅（9/5）/ pathguard ✅（9/9 重跑）
 
 ### O-20：Invoke-Workspace 同步目标站判定被动态作用域污染（跨站任务空壳根因）
 
@@ -184,7 +193,7 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 - **根因**: `.meta` 只在 run 结束写（QUEUE_S/RUN_S/TASK_RC/ACCEPT_OK），无 task_id 绑定当前 run；读方无法区分"当前 run"与"残留终态"
 - **证据**: 本会话 2026-09-07 refdedupe 调试——当前 run（timeout 3600, 02:38 起）推进正常（output 增长），但 `.meta` 停留在 02:31 上一 run 的 `RUN_S=900/RC=124`
 - **观测判据订正**: `.meta` 是 run 结束快照，非活动信号；活动 run 推进以 `out/.agent-output.txt` 字节活性 + 主 wrapper 日志 `TASK_DONE` 为准
-- **修复（G-1，2026-09-07）**: ① agent-cli.ps1 远端 `.meta` 写入段加 `TASK_ID=$ts`；② collect 侧解析 `TASK_ID`，与当前 run `$ts` 不符则 `Write-Host META_STALE` + `queue_s/run_s` 置 0（不作为当前 run 观测采信）。待回归验证
+- **修复（G-1，2026-09-07）**: ① agent-cli.ps1 远端 `.meta` 写入段加 `TASK_ID=$ts`；② collect 侧解析 `TASK_ID`，与当前 run `$ts` 不符则 `Write-Host META_STALE` + `queue_s/run_s` 置 0（不作为当前 run 观测采信）。**✅ 收口（2026-09-12）**：G-1 代码验证 in-place——远端 `.meta` 写 `TASK_ID=$ts`（agent-cli L1021）+ collect stale guard（L1061-1069：meta TASK_ID≠ts → `META_STALE` + queue/run 置 0 + accept/golden verdict 置 null fail-safe 不信旧值）；`_fm_golden_test` **pass=9/fail=0** 回归。实机 META_STALE 触发并入引擎在线实测待办（与 O-25 同）。
 - **G-3 监控方式**: 长任务依赖后台 job 完成通知（订阅），不手动 sleep 轮询；真要看中间进度用一次定时快照，不循环
 
 ### O-23：复杂度路由 ctx 解耦（引擎 ctx=唯一真相，radical fix B）
@@ -198,6 +207,41 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
   - `route` 增 `--engine-ctx <n>` 测试钩子
 - **验证**: `_complexity_route_test.ps1` 扩 5 项 clamp case（16/16 pass）；实机 B 站 long(262144) 引擎 `ENGINE_CTX=262144` 探测成功；refdedupe 实机回归无 400（见下方闭环证据）
 - **✅ 闭环判据**: `PROFILE ctx` 恒 ≤ 引擎 ctx；`ENGINE_CTX=<n>` 打印；无 `exceeds available context size` 错误
+
+#### 🔬 深潜实测合并记录（2026-09-07 晚，三组实验 + 二进制反编译）——修正「OPENTEXT」/「oc limit」层的理解
+
+**背景**: radical fix B 只修了 agent-cli 记录层（profile.context clamp → meta），未触及 opencode 实际发送预算。为验证「opencode 发送预算是否跟随引擎 ctx / 改 jsonc 是否生效」做三组实机实验（B 站切 think 档 `n_ctx=32768`，50k-token 大 prompt）。
+
+**实验 1 — T-DISPATCH（判断验证，链路证实）**: opencode run 提交 50289-token prompt（`32768 < 50289 < 131072` 区间）:
+```
+ContextOverflowError: request (62079 tokens) exceeds the available context size (32768 tokens)
+→ 自动 compaction 重试 (opencode.log: agent=compaction) → 压到 40713 → 仍超 → 任务失败 rc=1
+```
+对照：引擎直连 50301 tokens → 确定性 400。**证实**: ① `limit.context=131072` 静态不随 flavor；② 超引擎请求被 opencode 直发（62079 < 131072-20000 不触发预压缩）；③ 400 后 opencode **有** ProviderOverflow 恢复（compaction 重试一次），但压缩目标基于 131072 判断 → 压到 40k 仍超引擎 32768 → 失败。**修正凌晨「永久挂死」表述**: 实为快速失败 rc=1（900s 挂死来自 agent-cli 对 rc 处理或旧版本差异）。
+
+**实验 2 — 改 jsonc 无效（关键负结果）**: 多次临时 patch B 站 opencode.jsonc 的 qwen：
+- `limit.context` 131072→32768 → `opencode models --verbose` 视图**仍 131072**；run 仍直发 52795 400
+- 再改 200000 / 全删 limit 块（`context:999999`）→ 视图**恒 131072**
+- 对照组：改 `name` → 视图**实时生效**（MARKER-XYZ 出现）
+
+**结论**: `opencode models` 对 name 实时读 jsonc，但 **limit.context 字段对 config 完全免疫** → 发送预算来自别处（非 jsonc）。
+
+**实验 3 — 排除 + 反编译定位**:
+- `~/.local/share/opencode/opencode.db`（161MB）：schema 仅会话/消息/事件，无 model 注册表 → 排除
+- `~/.cache/opencode/models.json`（models.dev catalog）：**全库 context_length==131072 的 entry 数量 = 0** → 排除
+- binary（`~/.opencode/bin/opencode`，184MB bun 打包）grep 反编译出构造逻辑:
+```js
+// merge#1 (models 视图): J = catalog entry, Y = config 模型
+limit: { context: J.context_length ?? Y?.limit.context ?? 0,
+         input: Y?.limit.input,
+         output: J.max_output_length ?? Y?.limit.output ?? 0 }
+// merge#2 (请求构造): limits: { context: l.limit.context, output: l.limit.output }
+```
+`J.context_length`（catalog）**优先于** `Y.limit.context`（config）。但 catalog cache 无数 131072 → J 命中的是 **binary 内置 catalog**（发行版内嵌 models.dev 数据，`limit:{context:131072,output:8192}` 出现 75 处属 deepseek/gemma 等真实 entry）。`api.id="qwen"` 的 catalog 匹配落到 context_length=131072 的某内置 entry（具体 entry 未最终锁定，但值确凿）。
+
+**⛔ 架构结论（修正原 O-23 假设）**: 「通过改 opencode.jsonc 的 `limit.context` 让 opencode 对齐引擎 ctx」**此路不通**——opencode 1.18.25 对自定义 provider 模型的发送预算由**内置 catalog context_length** 决定，`limit.context` 字段不参与。防线只能建在**可控层**：agent-cli 档位=引擎档位（O-23 radical fix B 已覆盖 `ENGINE_CTX` 探测 + profile clamp），opencode 客户端预算不可信（bug 级行为）不作为依赖。
+
+**💡 未尽确认（开放）**: binary 内置 catalog 中 `qwen` 命中的确切 entry 与值来源（131072）；若需根治 opencode 层，候选方向为改 `api.modelID` 为 catalog 不存在的 id 触发 `?? Y.limit.context` 回退路径（实验 2 中未测此项，因风险高未动 modelID）。
 
 ### 附：agent-cli.ps1 PS5.1 编码隐患（2026-09-05 触发并修复）
 
@@ -261,6 +305,8 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 
 - **关闭判据**: 含中文路径的任务卡端到端跑通
 
+- **✅ 已闭环（2026-09-12，Cpp_Hub-001 试点）**: 工作区刻意含中文源文件名（`src/因子计算_核心.cpp` / `src/因子计算_run.cpp`），经 `agent-cli workspace --sync`（GNU tar 强制 UTF-8）跨站传输 B 站无乱码，模型按原中文名直接编辑（未新建 ASCII 替代），golden 静态断言明证「中文文件到位 + 未被重命名」（`assert (src/"因子计算_核心.cpp").is_file()` + 反替代检查 `core.cpp`）。端到端 run `status=completed / exit 0 / ACCEPT_GOLDEN_OK=1` → 关闭判据达成。关联: Cpp_Hub-001、O-12。
+
 ### O-07：zen 限额真实触发
 
 - **证据**: CHECKLIST §4——退出码 7 定义置位，未真实触发（不可预约）
@@ -279,6 +325,8 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 
 - **前置已解除**: P2-1 已修，queue\_s/run\_s 已可观测
 
+- **状态**: ✅ **F1 已落地（2026-09-12，随 O-25 P1 槽位门实现）**：`Invoke-SlotGate` 派发前查目标站 `/slots`（`_slot_gate.sh` → SLOT_BUSY/QUEUE），busy 默认 **exit 24 reject**（杜绝静默排队），`--slot-allow-busy` 放行，slot 记入 run.json；仅 local in-cluster 引擎（`cluster-litellm/*`）走门，egress 跳过。细节见 O-25 详情节。
+
 ### O-09：BS-1 isolate\_db
 
 - **证据**: CHECKLIST BS 门；SQLite 写锁序列化问题成立（并发5.2ms vs 串行3.0ms，busy\_timeout=5000ms 排队非死锁）
@@ -287,7 +335,14 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 
 - **方案**: 并行写任务各自 `XDG_DATA_HOME` 隔离 db
 
-- **关闭判据**: L1 判据通过 → V2 fan-out 前置解除
+- **当前状态**: **✅ 已闭环（2026-09-12）**——
+  - **L1 判据 PASS（实机 B 站 `_bs1_iso.py`）**: 共享 db 并发 2 写 batch_wall=62.7ms（≈2.3×单写=串行化）→ 独立 db 并发 2 写 batch_wall=30.9ms（≈1.15×单写=真并行），墙钟比 B/A=0.49<1.0，独立 db busy_hits=0 → 隔离消除写锁串行化
+  - **机制落地**: task 卡 front-matter `isolate-xdg: true` opt-in → 远程 `$body` 设 per-task `XDG_DATA_HOME=$W/.xdg`（opencode.db 独立，消除同站并发写锁）；仅隔离 data 目录（`~/.config/opencode` 含 provider baseURL 仍共享）；`memory.db`（跨任务记忆）symlink 保留；`--continue` 同 $W 同 XDG 下续接不受影响
+  - **auth 风险已排除**: 探测 B 站 opencode.db 的 `credential/account/account_state` 表全为 0 行 → 本地直连 cluster-litellm 无外挂鉴权资产在 db 中，XDG 隔离不会切断鉴权
+  - **归属性澄清**: 生产 fan-out 走跨站各1（O-18 铁律），db 隔离在跨站下**结构性成立**（各宿主机独立 $XDG）；`isolate-xdg` 为**同站并行兜底**的可选闸，默认关闭，不干扰主链路
+  - 注: 补回 agent-cli.ps1 UTF-8 BOM（本次 Edit 曾脱 BOM 致 PS5.1 CP936 级连误判，已备份+恢复）
+
+- **关闭判据**: L1 判据通过 → V2 fan-out 前置解除。**L1 已 PASS → 前置解除**
 
 ### O-10：BS-2/跨站 编排层并发 HTTP
 
@@ -309,13 +364,27 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 
 - **前置**: O-10 L1 已过，隧道方案已验证
 
+- **L2 结果（2026-09-12）**: **✅ 通过**——`test-cards/o11-fanout-readonly.md`（`readonly:true` + `--attach _o11_src.txt`）同一秒并发派发 A（scott-lau-NEX.local, port 42387）+ B（scott-lau-GTR-Pro.local, port 39701），两站独立 task 均 `state=done / TASK_RC=0 / ACCEPT_OK=1 / ACCEPT_GOLDEN_OK=1 / REVIEW_NEEDED=0`，consume 各自生成 `out/summary.txt` 含 `O11_FANOUT_OK` 且 accept（`test -s out/summary.txt && grep -q 'O11_FANOUT_OK'`）rc=0，RUN_S 57/66s，`TASK remote excode=0` 落 ledger。实机证明：同模型跨站并行派发、附件注入、终端产物+accept+collect 全链可行（**同时暴露 task 命令 `--HostName` 字母对路由无效 → 必须用 `--RemoteHost <ssh主机>`** 的路由缺口，代码 L1803 只认 `$RemoteHost`）。
+
+- **落地修复 3 项目（L2 实测发现）**:
+  1. **PS5.1 解析（UTF-8 无 BOM）**: agent-cli.ps1 扩展后裸 `powershell -File` 按 CP936 解码失败（L1720 `@('...UNPARSEABLE')`），重存为 **UTF-8 BOM** 后 PARSE_OK（PS5.1 对无 BOM UTF-8 中文按 ANSI 解码会错位）
+  2. **Date 绑定错**: `$body` 长度行 `SB0=$(( $(date +%s%N) / 1000000 ))` 内层 `$(date` 未转义 → 双引号 here-string 插值触发 `date`→`Get-Date` 绑定 `-Date` 报错；L984/L989 内层 `$(` 补反引号修复（Q0/R0/R1 单层全转义无此问题）
+  3. **O-25 P0-② sampler 卡死**: `sample_progress &` 在子 shell（fork 副本 `$SAMPLE=t`），主脚本 `SAMPLE=f` 改不到子 shell → sampler 永续 → `wait $SPID` 永久阻塞（实机 30min 卡住、无 opencode、仅 sampler 存活）。修复：teardown 改为 `kill $SPID; wait $SPID`（**任何带 sampler 的任务上线前都会卡死**，此为必修复项）
+- **前置路由缺口**: `task --HostName A/B` 不生效（只有 `--RemoteHost` 生效）；`route_station` 打印的是模型 ROUTE_TABLE 默认站并非目标站，跨站务必显式 `--RemoteHost`
+
 ### O-12：strong accept（golden 测试）
 
 - **证据**: CHECKLIST §7.2 P1b 遗留——accept 用模型自写测试属自证通过；强验收应附主控站侧 golden 测试
 
 - **方案**: 任务卡 accept 之外，主控站侧预置独立 golden 判据（实现与测试分离）
 
+- **实现状态（2026-09-09 Step 9）**: **已落地**——`agent-cli.ps1` M1-M4 全链实施（front-matter 解析 / .golden/ 洁净注入 / 权威 checksum 防篡改 / `.meta`+run.json 契约）；V0 素材就绪：`spec/d6-agent-standard/strong-accept/golden/path_guard_golden.py` + `test-cards/dogfood-strong-accept.md`；离线单测 9/9 绿、PS/bash 语法校验过、REPO_ROOT= d:\RPC 解析正确
+
 - **关闭判据**: 下一任务卡设计时落地 golden 测试
+
+- **V0 验证门结果（2026-09-09 run 183302, gpt-oss exit 0）**: **通过**——`ACCEPT_GOLDEN_OK=1`、run.json `accept_golden.passed=true/source=golden/hidden_from_model=true`、status=completed；哨兵可见性 **NOT_OBSERVED**（模型输出 204B 无哨兵/`.golden/` 引用）；**TAMPERED 安全侧失败已实证**（run 182435：注入后改文件 → GOLDEN_TAMPERED + exit 9 + passed=false）。**落地修复 2 项**（V0 实测发现）：①远端解压 `tar -xzf` → `-xf`（plain tar 与现役 sync 链一致，`-xzf` 报 "not in gzip"）；②collect 拉 `.accept-golden-output.txt` 加 try/catch 静默（TAMPERED 时文件不产生，EAP=Stop 下 scp NativeCommandError 会污染退出）
+
+- **✅ 已闭环（2026-09-12，Cpp_Hub-001）**: 关闭判据「下一任务卡设计时落地 golden 测试」达成——`test-cards/cpphub-001.md` 挂 `accept-golden: source=ops/station-bin/golden/cpphub_golden.py / cmd=python3 .golden/cpphub_golden.py`，主控独立断言（实现与测试分离，纯源码静态级，Win10 主控无编译链亦可用）；端到端两次 run 均 `exit 0 / accept_golden.passed=true / GOLDEN_PASS`（最近 202609122223140613）。golden 即被既判据覆盖三项试点目标：中文路径（O-06）、函数实现（`inline double 向量均值` 空返回 0.0）、`--mean` 分支。关联: Cpp_Hub-001、O-06。
 
 ### O-13：G8 环境预置
 
@@ -325,13 +394,15 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 
 - **关闭判据**: Cpp\_Hub 工作区可编译（依赖就绪）
 
+- **⚠ 半收口（2026-09-12，Cpp_Hub-001 试点）**: B 站已预置真实编译链（`g++`/`cmake`）+ pytest（系统 python3 自带，`_cpp_venv_provision.sh` 落盘 B 站），满足「工作区可编译」的物质前提；但 Cpp_Hub-001 的 golden 实际走**纯源码静态断言**（主控站为 Win10 无编译链，故意避开 g++ 依赖），未强制走`cmake` 真编译 → 编译链就绪但未在 golden 判据中用。**R/sympy 重资产单列为独立批次**，不随 Cpp_Hub 试点收口。剩余: ①真编译路径是否并入后续 C++ 任务卡 golden（决策点）②R/sympy 批次待开。
+
 ### O-14：LiteLLM 网关 401 运维遗留
 
 - **证据**: project\_memory 2026-09-04 根因改定——B:4000 401 真凶为**后端换载后 key 不同步**（8080 unsloth 9/4 重载自带 sk-unsloth-\*，litellm 仍 9/3 旧进程写死占位 sk-local-noauth），非最初所记 master\_key 哈希
 
 - **方案**: ①config 改真实 key + 重启 litellm；②拉起 A:8080；或绕网关走直连
 
-- **当前状态**: D6 链路已绕网关直连 B/A:8080（ADR-0002 方案 C），故 O-14 属运维遗留不阻塞 D6
+- **当前状态**: **✅ 已闭环（2026-09-12，经绕网关方案）**——D6 agent 主链路彻底绕开网关 4000：①ADR-0002 决策 C（绕网关直连）已裁决并落地（agent-cli ROUTE_TABLE 备注 L48-50，`cluster-litellm/*` id 不变仅底层 baseURL 改直连引擎端口）；②`_station_ready.sh` 在**每次 task 派发前**发现 llama-server 引擎端口（绕开 8080 unsloth studio mgmt 端）并**幂等注入** opencode.jsonc `cluster-litellm` `baseURL=http://127.0.0.1:<engine_port>/v1`（L73 + 注入复核 L81），全程不引用网关 4000 → 网关 401 不再可能成为 agent 主链路故障源。网关 4000 保留为显式备用（其 config 旧占位 key 的 401 为 ADR 已知备用态，启用前需按 ADR 同步真实 key，非主链路必需）。实机任务跑通并入引擎在线实测待办（与 O-22/O-25 同）。
 
 ### O-15：claude 路径 + --continue
 
@@ -339,13 +410,33 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 
 - **方案**: G1 二期；ROUTE\_TABLE 需补 cli 键 + claude 模型条目（现仅 id/station）；铁律 4（`< /dev/null`）已固化
 
-- **关闭判据**: `agent-cli task --cli claude` + `--continue <session>` 可用
+- **当前状态**: **✅ 已落地（2026-09-12，claude 控制台本地备通道）**——
+  - ROUTE\_TABLE 补 `cli` 键 + claude 模型条目（`claude`→`claude-sonnet-4-5`、`claude-opus`→`claude-opus-4-1`，均 `station=''`=控制台本地，不入 ssh 站内工作区）
+  - `Get-FrontMatter` 原预留 `cli` 字段 → `Invoke-Task` 计算有效执行器 = `--cli` > route.cli > card.cli > `opencode`；`claude` 分支转 `Invoke-Task-Claude`
+  - `Invoke-Task-Claude`（本地 headless）：stdin 喂 prompt → `claude -p "" --model <id>`（首跑），失败 ≤2 次 `claude --continue -p "" --model <id>`（续接，独立 `continue-timeout-s` 预算）；镜像 opencode 全生命周期 golden→accept→状态机→ledger+`.agent-run.json`（DESIGN §6.2 契约一致，run.json 记 `cli='claude'`）
+  - `--cli` 透传到 task 命令面；未知 cli 拒绝 exit 2；claude 未安装拒绝 exit 13
+  - 前提：控制台 `npm i -g @anthropic-ai/claude-code` + `claude auth login`（author 走 claude 自身）
 
-### O-16：review --peer / trae 派发
+- **关闭判据（②验收）**: `agent-cli task <proj> --card <task.md> --cli claude` 可用，超时后自动 `--continue` 续接（claude local 分支，需在 UTF-8 运行时+已装 claude 的控制台实测）
 
-- **证据**: DESIGN §5.1 二期命令面；review --peer 站间互审协议；trae 派发以任务卡 schema 为接口
+### O-16：review --peer 评审环（2026-09-11 定案）
 
-- **方案**: D7+（站间互审）/ D7（trae 五层循环对接）
+- **证据**: O-24 断点①；CLOSED-LOOP-ANALYSIS §3.2；用户方案：主控站评审（trae/商业）+ ultra free + DS V4 三站 RPC + M2.7 四源路由，主控优先；主控站 opencode CLI 作备选源
+- **架构调整（方案）**:
+  1. **五源评审路由（主控默认优先，⑤ 备选）**：
+     - ① **主控站评审（trae 执行 / 商业 API，默认）**：高并发/时间敏感/不占站算力/判分异源最彻底；`trae` = 主控 IDE 助手对已回收产物做机器评审（承接 golden 强隔离机制）
+     - ② **ultra free（B 站 opencode，Zen 网关美国托管出站，1M ctx，免费）**：超大产物全局评审/长上下文一致性；任务卡 `review-model: ultra`；**实测可达（2026-09-11）**：`opencode run -m opencode/nemotron-3-ultra-free` 输出 `5`/`{"result":"pass"}`，$0.00；⚠️ 用完整 provider 前缀（短名 `free/.` 解析歧义→ProviderModelNotFound）；**限非敏感**（出站）
+     - ③ **DS V4 Flash RPC（三站分布式，显式指定）**：长上下文/本地合规/非时间敏感；任务卡 `review-model: rpc-v4flash`
+     - ④ **M2.7 C站单机（显式指定）**：深度 CoT 评审/非时间敏感；任务卡 `review-model: m27`
+     - ⑤ **主控站 opencode CLI（备选）**：主控侧 npm `opencode-ai` 直连 ultra/本地模型，与 ①trae 同源、闭环全在主控；仅当 ① 不可用/需执行者隔离时启用
+  2. **负载纪律（复用现有硬规则）**:
+     - 本地/网关评审仅显式指定触发，绝不自动拉起（防无预警占用三站算力）
+     - 本地评审（V4 RPC/M2.7）拉起前必须过 `load-gate` 检查（need+12G≤avail，无已有 RSS 叠加，RPC 三站总预算合规），对齐 2026-09-08 事故铁律
+     - ultra free 出站不占站内存，但仅限非敏感任务
+  3. **输出契约**: `review.json`（run.json 平行键）结构化四级输出：`task/run_id → {score(优秀/良好/合格/不合格), pass, evidence: [锚点命中判定+推理链], flags_hit: [幻觉标志], conclusion}`，metadata: `judge_model, temperature:0, prompt_hash`
+  4. **前置缺口（主控站侧）**: 主控站当前**无商业 API 端点/key 封装**，商业 API 子路待注入；trae 执行 + ultra free + 本地路由（RPC/M2.7）均已有可达路径，可先行落地。
+- **关闭判据**: `agent-cli review --card <task> --run-id <ts>` 命令端到端落地（trae/ultra/本地任一源可跑通）；输出 JSON 结构化落盘 → O-16 主体关闭。**✅ closed (2026-09-12)**: `agent-cli review` 已端到端落地——五源路由(JUDGE_TABLE)+核心函数+review 分发分支+rubric/judge-prompt 资源全部落盘；实测 judge=ultra(egress B) 真实生成 `review.json`（四级 score/pass/evidence[]/flags_hit[]/conclusion + metadata(temperature:0/seed/prompt_hash/elapsed_s/review_gate/retries)）；JSON 解析失败自动重试 1 次成功(retries=1)；advisory 语义 score=不合格 仍 exit 0；幂等（无 overwrite 复用）+ `--overwrite` 强制重审均验证；local-only+egress → exit 4 敏感门；既有 route 命令零倒退。详见 [review-ring-refinement-O16.md](file:///d:/RPC/.trae/documents/review-ring-refinement-O16.md)。
+- **归属**: D6 一期评审闭环。
 
 ### O-17：readonly 层 2 锁激活
 
@@ -355,6 +446,20 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 
 - **前置**: O-09/O-10（并发能力）解锁后才有并行场景
 
+- **状态**: ✅ **已闭环（2026-09-12）**。层2锁激活：task $body 锁段由硬编码排它改为按 readonly 选 flock 模式——`readonly:true → flock -s`（共享读锁）/ `readonly:false → flock -n`（排它锁），对齐 Codex RwLock（DESIGN §4.1，读锁并行 / 写锁独占）。**锁与调度解耦**：锁只保证写安全，真并发度仍由 slot-gate（O-25）+ O-18 跨站各1纪律约束（单引擎 slot=1 仍 1 并发，多引擎/跨站 readonly 自动并行，零 O-18 退化回归）。
+
+- **实现**（agent-cli.ps1, task $body）：
+  - L944: `$flockShared = if ($readonly) { '1' } else { '0' }`（PS 侧插值进远端脚本）
+  - 锁段: `LOCK_SHARED=$flockShared; LOCK_FLAGS=""; [ "$LOCK_SHARED" = 1 ] && LOCK_FLAGS="-s"; if ! flock $LOCK_FLAGS -n 9 ...`，`LOCK_ACQUIRED/HELD` 行带 `mode=shared|exclusive`（可观测）
+  - 新增 os 注释全 ASCII（PS5.1 CP936 纪律）；AST 0 错误
+
+- **关闭判据验证（三断言内核实证 + 双路e2e）**：
+  - **互斥探针**（`_o17_rwlock_probe.sh`，独立锁文件不占引擎，A站）: RR 双 `OK`（共享读并行）/ RW `R_OK+W_HELD` / WW `W1_OK+W2_HELD` → flock 即 RwLock 语义成立
+  - **readonly e2e**（`test-cards/_o17_readonly.md`→A，run 202609121935547170）: `LOCK_ACQUIRED mode=shared`，TASK_RC=0/ACCEPT_OK=1/exit=0
+  - **write e2e**（`test-cards/_o17_write.md`→A，run 202609121941585236）: `LOCK_ACQUIRED mode=exclusive`，exit=0（排它回归零倒退）
+
+- **验收卡**: `test-cards/_o17_readonly.md`（readonly→shared）+ `test-cards/_o17_write.md`（write→exclusive）
+
 ### O-18：同站并发带宽约束（已定案）
 
 - **证据**: BLINDSCAN §8.7.6 + CHECKLIST——同站内 2 并发 1.7→4.8s（\~2.8× 恶化），收益纯来自跨站分摊
@@ -362,6 +467,88 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 - **结论（铁律）**: 扇出优先跨站各 1 并发，勿同站叠并发
 
 - **状态**: ✅ 已定案并导入 ARCHITECTURE §4
+
+### O-24：单机 agent CLI 工作流闭环断点（分析定案 2026-09-09）
+
+- **背景**: D6 主干（任务卡→派发→执行→验收→回收→回填）在**跨站形态**已全闭环；但**单机形态**（本机或单站独立运行，无第二站可分摊/换站/互审）存在 4 类闭环缺环。本项为分析定案，P0/P1 落地随各批次摘取（保持台账铁律：不口头关闭）。
+
+- **四类断点**:
+
+  | # | 断点 | 现状 | 单机影响 | 对应既有 |
+  |---|------|------|---------|---------|
+  | ① | **review --peer 缺** | D7+ 站间互审协议未做；"复审"靠人工切会话（spec_workflow 的异基座复审不落 CLI）| 任务完成≠质量闭环；单机无第二站互审 → 产出→ledger 后无机器复核门 | O-16（降级先行）|
+  | ② | **超时续接（--continue）缺** | O-21 清单③ 未落地；远端 `--session <id> --continue` 循环方案已定策未实现 | 长读码卡（specaudit 型）单机无站可换 → 续接是唯一韧性出路 | O-21 ③ / O-15 |
+  | ③ | **claude 备通道缺** | O-15 G1 二期；单 CLI（opencode）无 fallback | 单引擎死锁（#17307 超时等）= 工作流停摆 | O-15 G1 |
+  | ④ | **单机排队/上下文治理缺** | O-18 铁律只约束跨站；单机同站并发仍会退化（1.7→4.8s）| 多任务单机串行无分流；context 预算无单机专用调卡纪律 | O-18 延伸 / O-17 |
+
+- **关键研判**:
+
+  1. **单机 = 跨站退化子集但没有负反馈环**：跨站靠就绪门注入引擎端口（O-19）、换站规避 context 墙（O-21）；单机无对应物（端口即本机引擎、无第二站），断点②对单机价值最高。
+  2. **O-21 教训（"环境修复 > 配置修复"）单机代价更高**：跨站可换站、单机只能换引擎或调卡；golden（O-12）刚闭环，其"评审后置门"在单机上缺失（无 peer 复核误拒/放水）。
+  3. **断点①是"闭环"最真实的缺环**——产物落库即止，无机器评审回写环，与 spec_workflow 的"复审→修订→再审"循环断层。
+
+- **建议优先级（按单机场景价值）**:
+
+  | 优先 | 动作 | 对应 | 单机收益 |
+  |------|------|------|---------|
+  | P0 | **review --peer 单机版**（`agent-cli review --card X --model Y`：产物+golden+模型差异对照，AI 评审回写 ledger；站间互审降级为本地二次评审优先落地）| O-16 降级 | 补全闭环缺环（最大）|
+  | P0 | **--continue 续接落地**（远端 session 续跑循环）| O-21 ③ / O-15 | 长卡韧性（单机唯一出路）|
+  | P1 | claude CLI 路径最小化 | O-15 G1 | 备通道防死锁 |
+  | P1 | 单机排队策略（同站并发约束写入手册）| O-18 延伸 | 调卡纪律 |
+  | P2 | readonly 层 2 锁激活 | O-17 | 人机共用安全 |
+
+- **关闭判据**: ① review 命令落地（本地/站间任一形态）并回写 ledger + spec 流程复用；② 超时卡经 `--continue` 续跑闭环（非重启重读）；③ claude 路径最小可跑；④ 单机并发纪律入册。四项 P0/P1 中①+② 落地即视为本项主体闭环，③④随 G1/V2 摘取。
+
+- **状态**: ⏳ P0-① **已落地并实证**（2026-09-09）：续跑循环已并入 agent-cli.ps1 $body（`--continue` retry≤2，RESUME[1]/[2] 出线实证 + 超时卡全链验证 + echo 回归零倒退——证据见下）；P0-② review 待摘取。**本项主体闭环判据①已满足，②编跑通**（超时卡经 continue 续跑闭环）。**④ 单机并发纪律入册（2026-09-12）**：O-18 铁律补单机语境——手册 §2 agent-cli「并发纪律」+ ARCHITECTURE §4「单机形态同样适用」（扇出优先跨站各 1，单机勿就地叠并发，同一带宽顶起 ~2.8×）。
+
+- **P0-① 实施记录（2026-09-09）**:
+  - 改动①: agent-cli.ps1 $body opencode run 段——首跑 + 失败（RC≠0）`--continue` 续跑 ≤2 轮；续跑提示 base64 字面量（ASCII 纪律）
+  - 改动②（独立预算）: 新增 front-matter 键 `continue-timeout-s`——续跑在**自身独立 `timeout` 预算**下运行（缺省/0=沿用 `timeout_s`），首跑 900s 被消费后续跑仍拿全新完整预算；解析层归一化 + $body 续跑行 `timeout $continueTimeout` + BUDGET 日志行（`BUDGET: first=900 resume=900`）
+  - 关键实证（驱动设计）: ① opencode 无头 run **不打印** `ses_`（stdout 探针实证）→ 弃 session-id 解析；② session 按 workspace path 隔离（opencode.db 探针）+ `cd $W` 后 `--continue` 精确续本次会话（A 站双 run 同 session 实证）；③ 模型名须 route 全限定（`-m gpt-oss` 报 server error）
+  - 全链验证: 超时卡（timeout_s=4, gpt-oss→A）远端 .agent-output.txt `RESUME[1]/[2] prev_rc=124 → rc=124`（循环触发+cap=2 正确）+ `TASK_RC=124→excode=6`（timeout 语义保持）；echo 回归 exit=0 零倒退
+  - **G1 C4 守卫补充（2026-09-12, G1-continue-spawn-decision.md）**: resume 耗尽仍失败时，final `.agent-state.json` 不再静默 `done`（`RC≠0`→`ST=failed`）+ `.meta` 新增 `REVIEW_NEEDED`（RN）——失败任务供主控感知"失败未复核"，补断点①失败路径的机器复核门。纯 RC 驱动无 context 信号依赖；BOM 补回 + AST=0 + `_fm_golden_test.ps1` pass=9 fail=0 零倒退
+  - **真实恢复场景实测（v3, 900s 级）**: `dogfood-resume-recovery.md` v3（timeout_s=900 + continue-timeout-s=900，任务=8000 行整数文件自生成+批量校验）——**首跑被 900s timeout 杀 → 续跑用足独立预算继续生成（实测 RUN_S=1285s = 900+385, 续跑完成 TASK_RC=0）**；accept 判据未达（ACCEPT_OK=0 → excode=9）：机制本体（首跑被杀→续跑拿到独立预算并继续）已验证，判据失败属任务产出度量问题（精确行数等值判据在续跑恢复场景过严，应改"产出存在且 ≥ 阈值"）。结果与证据见手册 §2a.5（2026-09-09）
+  - 验证卡: `test-cards/dogfood-resume-timeout.md`（机制 4s 级，可重跑）+ `test-cards/dogfood-resume-recovery.md`（真实恢复 900s 级）
+  - 修复过程回归: 编辑引入 PIPE_STDIN_OK 裸词 bug → 修复 + 语法/BOM 复验通过
+
+### O-25：agent 任务执行进度可观测性（派发前预估 + 派发中节拍）
+
+- **问题**: 任务派发给 agent-cli 后到回收结束之间为**黑盒**——ledger / `.meta` / `.agent-run.json` 均为 **run-end 快照**，无运行中采样 → 长卡（specaudit 型 900s 级）状态不可观测、无吞吐（`OUT_BYTES` 无法换算 token/s）、无 ETA；预算估算用单一 wall-clock（timeout_s），不区分 prefill/decode 相
+- **根因**: 主控只 collect 终态产物；远端 $body 无中间节拍落盘（运行中 .progress 不存在）；派发前无"该卡能跑多快"的模型吞吐基准表
+- **与既有项关系**: 观测判据订正见 O-22（`.meta` 是 run 结束快照非活动信号）；单机续接韧性见 O-24 P0-①；跨站并发见 O-18/O-08；`/slots` 槽位探测属 O-08（F1 后端并发探测，降级为 queue_s 观测先行）
+- **方案（分层，最小到最大）**:
+  - **L0 派发前预估**: 建**模型吞吐基准表**（复用 BLINDSCAN 实测：gpt-oss-120b prefill 112-138 / decode 49-53 t/s 等缺失档需实测补齐）；派发时按任务卡 `complexity`+`max_output` 反推 ≈token/t/s → 预估秒数；预算拆 prefill+decode 两相，而非单 wall-clock
+  - **L1 派发中观测**: $body 在每次 tool-call 输出后落 `.progress`（token 增量/墙钟增量 → 实时 t/s + 已跑/预算 → 剩余预算预警）；主控复用现有 collect 的 scp 通道轮询正在跑任务的 `.progress` 即可"实时"
+  - **L2 槽位调度**: 派发前查目标站 `/slots`，满则跨站/拒绝而非静默排队（并入 O-08/F1）
+  - **L3 可视化**: 主控端**单文件 HTML 看板**渲染 ledger+run.json（成本最低先行）；远期可选推 Beszel/Grafana（Beszel 无自定义指标插件，社区明确——推理指标需 Grafana textfile 旁支，非刚需）
+- **信号可行性硬约束**: C1-C3 context 占率路由与 ETA 需 context usage，但现役 opencode 无头 run 不打印 usage（CLOSED-LOOP §3.1 实证）→ 吞吐 t/s 与剩余预算从 wrapper 内部可测，**不依赖外部信号**，正是 P0 可即刻落地的理由
+- **社区方案映射（2026-09-12 调研）**: 社区观测栈分三层——引擎层（llama.cpp `/slots` n_past/is_processing/queue + 响应 timings prompt_n/predicted_n→t/s，主线**无原生 /metrics 端点**）/ 代理网关层（llama-swap、LiteLLM）/ 任务编排层（Langfuse/Phoenix/LangSmith）。**D6 需的是任务编排层**，但社区该层是 trace/span 栈（需 DB+推理层），对单机 agent wrapper 功能过剩 ✅不引。社区任务进度标准 = **run 状态机 + step 追加日志**，等价不依赖 trace 框架的原生轻量打点（正是 L1）。看板无现成应用层匹配（Langfuse 重、OpenWebUI 是对话、Beszel 无自定义指标、Cockpit 是机器）→ L3 自定义是必然。引擎层信号现成可采（本集群引擎正用）→ 支撑 L0/L2
+- **关闭判据**: ① 吞吐基准表入库（至少覆盖现役各模型档）；② $body `.progress` 中间打点落地且主控能轮询到运行中任务节拍；③ 派发前按基准表给预估预算（非线性逼近 timeout_s）；④ L3 看板能渲染"正在跑+已完成"总览。①+② 落地视为主体闭环，③④随演进摘取
+
+- **状态**: 🔵 **判据①②③④全落地（2026-09-12）**。**P1 槽位门 ✓（2026-09-12，并入 O-08/F1）**：新增 `ops/station-bin/_slot_gate.sh`（远端探测 llama-server `/slots` → `SLOT_TOTAL/BUSY/QUEUE`，无 `/slots` 输出 `SLOT_NA`，ASCII 纪律）+ `agent-cli.ps1` `Invoke-SlotGate`（ssh-capture 模式，解析 SLOT_*，na 降级放行）；`Invoke-Task` station-ready 之后接入：**仅 `cluster-litellm/*` 本地引擎走门**（egress `opencode/*` skip），busy≥total 或 queue>0 → 默认 **exit 24 SLOT_BUSY reject**，`--slot-allow-busy` 放行（action=allow-busy），idle/na 放行；`slot=[ordered]@{gated;total;busy;queue;action}` 记入 run.json。**P2 看板 ✓（2026-09-12，判据④ L3 单文件 HTML）**：新增 `ops/station-bin/make-dashboard.ps1` 生成器——读 `agent-runs.log`（`^\d{14,},` 过滤，30 行跳过标题）+ `D:\Paper\agent-out\*\ .agent-run.json` 索引 → 数据内联为 `<script>var D={...}</script>` 字面量 → 写 self-contained `dashboard.html`（file:// 直开、零网络请求）；「已完成总览」表（ts/model/sens/exit/status/run_s/queue_s/bps/slot/详情展开）+ 状态着色 + `switchTab`；「正在跑/Live」tab 由 `-Live -StationHost <host> -LivePort <port>` 调用 `__probe_live.sh` scp 拉远端 `.progress`，失败/未指定显示 `no-live-data`。**P2 验证**：生成器 AST_OK + BOM 补回 + `_fm_golden_test` pass=9/fail=0；Python 解析内联 `var D` → **completed=21 / live=None / withDetail=20**（旧 run 缺 slot/output_bps，JS `d.slot&&…||'-'` 容错）；file:// 直开由用户侧实测。**共同经验**：Edit 工具每次剥离 BOM → 任何 .ps1 编辑后必须 `[System.IO.File]::WriteAllBytes` 补 EF BB BF（本次 P2 生成器两度被 BOM 坑）；PS 变量**大小写不敏感**，payload 键 `$live` 与 `[switch]$Live` 同名被当 switch 序列化成 `{"IsPresent":false}` → 改 `$liveData` 规避；ledger ts 实为 **18 位**（{14,17} 匹配失败），用 `{14,}`。
+
+  **P0 判据明细**：**判据① `THROUGHPUT-BASELINE.md` ✓**：现役各档入库（gpt-oss 49-53 / nemotron 20.5-23.2 / M2.7 21.5-22.1 单机实证 / V4-flash 7.9 RPC / Qwen3.8 19-20），metrics-log Phase 6.2 记录 M2.7 双机 RPC 删除与 gpt-oss Vulkan 误归因修正。**判据② `.progress` 打点 ✓**（agent-cli.ps1：远端 $body 每 5s 采样 `.agent-output.txt` 字节增长+墙钟 → `.progress`，teardown 写 `t=end` 终值；主控 collect 复用 scp 拉取 → parse 回填 `outputBytes/outputBps`）。**判据③ 派发前预估预算 ✓**（agent-cli.ps1 `Get-ThroughputEstimate`：route id→$TpBench 基准表，prefill=context/prefill_tps + decode=max_output/decode_tps，×fudge 1.6 分相估算；**HIT 才打印 ESTIMATE，MISS 不打荒数字**；est_total 超 timeout_s 打 `TIMEOUT-WARN` 预警；离线函数验证 HIT gpt-oss=682s(262+164)、MISS ultra=no-bench；route 冒烟 exit 0 + `_fm_golden_test` pass=9/fail=0 + BOM 补回 EF BB BF）。**判据④ L3 看板 ✓（见上 P2）**。**①+②+③+④ = O-25 全判据闭环**。遗留待补：busy/idle 真 /slots 占用与正在跑 `-Live` 需站点引擎在线时实测（当前无引擎）。**收口决定（2026-09-12）**：P3（ETA 精度/自动刷新）**明确不实施，O-25 收口**。依据——①Live 链路缺口调研澄清：`__probe_live.sh` 由生成器 here-string 动态生成（非独立文件，`make-dashboard.ps1` L76-87 Set-Content 后 scp），遍历 `$HOME/agent-workspaces/*/out` 与 agent-cli `$WORKSPACE_ROOT`（/home/scott-lau/agent-workspaces）一致，`-Live` 正则解析匹配，**链路设计完好无需补**；②ETA 精度受"字节→token 换算误差"信号天花板限制（opencode 无头不打印 usage，wrapper 只能测字节；中文≈1.5-2 B/t 与英文≈4 B/t 引入不可信因子，与 no-bench 不打荒数字纪律冲突，干净途仅打点侧记 token 而 wrapper 拿不到），收益有限；③自动刷新（主控定时重生器+浏览器 reload）打破 file:// 快照边界（L1：快照非实时/不做 SSE），且当前无常驻引擎无法验证效果。**O-25 判据①-④ 全闭环 + P2 验证完成 + P3 收口 = O-25 正式收口**。**实机在线实测（2026-09-12，全通）**：
+- **前置：A/B 两站载入 gpt-oss-120b（ROCm0，unsloth）**。首次加载两站同败——根因 `invalid device: Vulkan0`（unsloth 内嵌 llama.cpp 已从 Vulkan 切 ROCm 后端，`--list-devices` 实测 = `ROCm0`），但 `infer-load` [6a] 硬编码 `--device Vulkan0` → 必然失败。**顺带修复①**：`infer-load` 改 `--device "${INFER_DEVICE:-ROCm0}"`（env 可覆盖）；A/B 两站重启后 `READY ✓ :8080 (unsloth gpt-oss-120b)`，A=42387/B=39701 底层 llama-server 端口。B 站额外遇 `gpt-oss-120b` 与 `gpt-oss-120b-fable-5-distilled` 前缀歧义（infer-load 用 `^${PREFIX}` grep）→ 临时 rename fable 目录规避后还原。
+- **`/slots` busy/idle 实测 ✓（判据④ L2 真机验证）**：**idle**（无请求）= `SLOT_TOTAL=4 SLOT_BUSY=0 SLOT_QUEUE=0`；**busy**（发起 4000-token 长生成，站内 1s 起轮询 12s）= `SLOT_TOTAL=4 SLOT_BUSY=1 SLOT_QUEUE=0` 稳态。A/B 两站一致。**注意**：8080 是 unsloth studio API 网关（`/v1/models` 需 key；`/slots` 返回 `API endpoint not found`），真 `/slots` 在底层 llama-server 随机端口（A=42387/B=39701，仅绑 127.0.0.1）——**`_slot_gate.sh` 现硬编码只连一个端口，遇 unsloth 后端需先 ssh 解析 llama-server 端口**，此已在 agent-cli `Invoke-SlotGate` 对接时处理（station-ready 已注入直连端口）。
+- **`-Live` 正在跑数据实测 ✓**：A 站 `~/agent-workspaces/paper/out` 造真实格式 `.progress`（`t=.. bytes=123456 bytes_s=33`）→ 主控 `make-dashboard.ps1 -Live -StationHost scott-lau-NEX.local -LivePort 42387` → `LIVE: 1 running task(s)`，dashboard.html 内联 `"live":[{"proj":"paper","bytes":123456,"bytes_s":33}]`。首次运行暴露 **CRLF bug**：`__probe_live.sh` 由 `Set-Content -Encoding ASCII` 生成 = CRLF 行尾，scp 远端 bash 解析 `done\r` 报"未预期的文件结束符 EOF" → `LIVE: probe skipped`。**顺带修复②**：Set-Content 后 `ReadAllText` + `-replace "`r`n","`n"` + `WriteAllText`（UTF8 no BOM）规范为 LF → 恢复。修复后 Edit 剥离 BOM → **顺带修复③**：补回 EF BB BF（memory 纪律）。
+- **结论**：O-25 唯二剩余待办（busy/idle `/slots` + `-Live`）已实机全通 → **O-25 完全收口，无任何遗留待办**。
+
+### O-26：单任务分解派发并行（Split-Dispatcher）
+
+- **问题**: 现派发模型=单任务卡→单 agent→单站（`Parse-Route` 后一个 `$HostName`）；跨站并发只覆盖"多张独立卡"，**没有"一张可切分大任务拆子卡并行"**。一张 readonly 大任务卡（如横扫 N 文件各自审计）卡在单节点，无法利用 A/B/C 三站
+- **物理上界 3**: O-18 铁律（同站叠并发被统一内存带宽顶起 ~2.8× 恶化）→ 只能**跨站各 1**（A/B/C 各 1，最多 3 路并行）；且单站塞 120B 模型后 available≈0（unsloth §8.10 实测）→ 同站并行 decode 无空间。3 = 并行上界，物理边界非设计缺陷
+- **什么值得拆（判定，先问三问）**: ①可切分=子任务间**无数据依赖**（readonly 型）；②单站卡死（O-24 P0 续接已耗尽仍不够）；③上下文墙（G1 C1-C3）。**只拆"可切分 readonly 大任务"**——写型/强依赖任务拆了因结果 Merge 成本 > 并行收益，负优化
+- **方案（复用非新建）**: 主控编排层加三动作——**Split-Dispatcher**（按任务卡 `decompose` 声明拆 N 子卡 → 每子卡=现有 `task cmd` 全链路（.attach 注入分片源/Complexity 路由/accept/collect）→ 跨站各 1 派发）+ **子卡产物回收**（复用 collect）+ **结果 Merge**（readonly 轻量归并/写型不拆）。不动 agent-cli.ps1 派发内核
+- **缺口清单**: ①任务卡 schema 无 `decompose` 声明（拆键随 schema 冻结前加）；②编排层 Split-Dispatcher（现仅 Parse-Route 单发）；③结果 Merge（同源子卡产物冲突）；④**O-25 P0 打点先行**（无 .progress 则并行子卡亦黑盒）；⑤每子卡派发前查 `/slots`（O-08/F1+O-19 已定案）
+- **前置依赖**: **O-25 P0 是硬前提**——分解派发若无 .progress 可观测，等于"一个大黑盒拆成三个小黑盒"，并行价值归零。故两者捆绑推进
+- **关闭判据**: ①一张可切分 readonly 测试卡经 decompose 拆 + 跨站各 1 并行（A/B/C），全子卡过 accept 且 .progress 全程可观测；②结果 Merge 产出正确；③并行墙钟 ≪ 串行（对齐 BS-2: 3 线程 52.1s ≪ 110.9s ratio 阈值）
+
+- **状态**: ✅ **已闭环（2026-09-12）**。拆+/跨站各1/Split-Dispatcher/Merge 四步全部落地。**实机验证（A/B 双站 2 分片）**：
+  - 测试主卡 `test-cards/o26-split-fanout.md`（`decompose: [只读分片1, 只读分片2]`）+ 共享附件 `_o26_src.txt`，`split paper --card ... --attach ...` 拆 2 子卡 → round-robin 派 A（scott-lau-NEX.local）/B（scott-lau-GTR-Pro.local）各 1 并发。
+  - **产物正确**: shard1(A)=`O26_SHARD1_OK|SHARD-ONE this is line 2...`，shard2(B)=`O26_SHARD2_OK|this is line 3...`；两站 `accept.passed:true`/`collect:ok`；merged-output.txt 按序归并 `rc=0`，`SPLIT_EXIT=0`。
+  - **墙钟**: 并行 465.1s ≪ 串行 720.8s（shard1→A 377.5s + shard2→B 343.3s）→ **ratio 0.645（并行快 35%）**，对齐 BS-2。
+  - **落地修复 2 bug**: ①`Start-Process -PassThru` 读 `.ExitCode` 偶发 `$null` 误判失败 → 补 `Refresh()` + 解析子日志 `TASK remote excode=` 兜底；②函数体内 `$MyInvocation.MyCommand.Path` 为 null 致子进程派发到无 BOM 原始文件（PS5.1 CP936 解析失败秒退）→ per-run 显式生成 BOM 副本 `$ChildScript` 再派发（同 O-11 L2 temp-BOM 机制）。
+  - **执行细节**: `task` 子命令经 `--RemoteHost` 显式路由（`--HostName` 无效缺口，见 §8）；C 站 unsloth Vulkan0 设备失效暂用 A/B（运维项）。
 
 ## 3. 风险台账（继承 DESIGN §11.2，实况更新）
 
@@ -385,3 +572,20 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 ***
 
 **开放日志签字**: 2026-09-04 立案，随 D6 演进维护。
+
+***
+
+## 5. 剩余 open 全景快照（分析落档 2026-09-12）
+
+**判定**: 单机闭环完整（O-16/O-20/O-21/O-23/O-25 全落地），**无 P1 阻塞级 open issue**；剩余 open 集中于运维收尾 + 二期/V2 演进，不构成闭环缺口。
+
+| 类别 | 项 | 说明 |
+| --- | --- | --- |
+| 运维收尾（已全清） | O-22 ✅（.meta 残留已收口）、O-14 ✅（网关已绕开闭环）、O-25 ✅（**2026-09-12 实机在线实测全通**: busy/idle `/slots` + `-Live` 均验证，无任何遗留待办） | **A 类 3 项全部清零（2026-09-12）** |
+| 二期 G1（单机闭环韧性） | O-24 P0-② ✅（被 O-16 覆盖闭环）、O-15 ✅（**2026-09-12 已落地**：claude 控制台本地备通道 `--cli claude` + `--continue`，见 O-15）。剩余仅 O-16 子项（`--peer` 站间互审，留 D7） | 长卡续接 + 单引擎死锁备路 |
+| V2 fan-out（分布式强化） | O-26 ✅（**2026-09-12 闭环**: Split-Dispatcher，decompose 拆2分片跨站并行，ratio 0.645）、O-09 ✅（**2026-09-12 闭环**: L1 PASS + `isolate-xdg` 闸落地）、O-11 ✅（**2026-09-12 L2 闭环**: 跨站并发端到端 PASS，A/B 双站 done+accept+ledger；sampler 卡死等 3 bug 落地修复）、O-17 ✅（**2026-09-12 闭环**: 层2锁激活——readonly→`flock -s` 共享 / write→`flock -n` 排它，三断言互斥探针 + readonly/write 双路 e2e 全 PASS） | 跨站编排并行 |
+| 低优先/垫脚 | O-02（--archive）、O-12（strong accept golden）、O-03/O-04（纪律）、O-05、O-06、O-07、O-13 | 事件驱动/批次前 |
+
+**台账同步（2026-09-12）**: O-08 / O-16 / O-25 三行总览状态从表格滞后同步至详情节——O-08 ⏳→✅ F1 落地、O-16 🔴→✅ closed（评审环落地）、O-25 归属列→🔵 已收口。
+
+**建议推进序**: A 类（O-22/O-14/O-25）**已全部清零**【2026-09-12：O-25 实机在线实测全通（/slots busyidle + -Live）】→ **下一步 O-26 Split-Dispatcher**（A 类清毕，前置 O-25 P0 已满足、价值最高）。

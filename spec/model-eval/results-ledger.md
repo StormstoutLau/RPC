@@ -355,6 +355,76 @@
 
 ### 结论: nemotron-3 = 双机长期部署首选 (综合判定)
 
+***
+
+## 冒烟: qwen3.8-27B (Jackrong Q8_0 w/ MTP+MLLM, 2026-09-06 晚, 单机 B 站 :18080)
+
+**模型**: qwen3.8-27B-MTP (Jackrong/Qwen3.8-27B-MTP-GGUF Q8_0, llama-single B 站 Vulkan0/GFX1151, ctx 8192, draft-mtp n_max=5 投机解码, 内存 ~36G)
+**套件**: domain\_matrix 冒烟 5 题 (同套件同参数; C2 按 DESIGN 决策 6 禁思考 `enable_thinking:false`)
+**输出形态**: reasoning\_content 分离 ✓ 且 `enable_thinking` 生效 ✓ (C2 nothink reasoning_len=0)
+
+| 题号     | 型      | 结果                                                                    | 评级     | 证据要点                                                                                                                                        |
+| ------ | ------ | --------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| dmx-a3 | 数值     | GAUSS\_RHO=0.70710678, T\_RHO=0.70710678, RELATION=same (47.4s)      | **优秀** | 数值精确 + RELATION=same 陷阱通过 (椭圆族 τ 不变性)                                                                                                           |
+| dmx-b2 | 数值     | SLOPE=-0.1575, SIGN\_DRIVER=rho (16.4s)                              | **通过** | ρσ/4 公式正确应用                                                                                                                                  |
+| dmx-a1 | rubric | Φ=ρ (单层单位支付, p(ρ)=ρ), ρ\*=1/M → S=M 可任意大 (79.5s)                    | **良好** | 三锚点全中 (小分母机制 + 深虚值/高起付具体例 + 局部导数 O(1)); 构造与 qwen3.8-flash 同型 (ε+ρ) 变体                              |
+| dmx-g1 | rubric | SDF 拆 β(C,C)^{-1/ψ} 增长项 + γ 波动项; ψ=1/γ 退化 CRRA (85.2s)                  | **良好** | 两锚点全中 + **恢复 qwen3.8-flash 的 SDF 分解路由 (base↔γ 分离)** — 深度优于 gpt-oss/fable-5/nemotron (均无分解式); "ψ=1/γ"退化与 qwen-flash 等价 |
+| dmx-c2 | 代码     | DP/Riccati 递推 (P\_i→k\_i 反馈) + 沙箱全过 (113.1s)                          | **优秀** | len=100 / v≥0 全成立 / **sum(v·dt)=100.0 精确清仓 / x\_N=0.0 / numpy-only**; **cost=10336.15 = 最优锚点 10326.15 的 1.0009x (+0.097%)** — 无量纲瑕疵 (优于 qwen3.8-flash 的及格) |
+
+**冒烟判定: 通过 (5/5, 无幻觉标志命中, 全题 finish=stop)**
+
+### 与 qwen3.8-flash-next 基座对比 (同基座不同量化/部署, 体系区分度偏置)
+
+| 维度           | qwen3.8-flash-next (2026-08-31)     | **qwen3.8-27B (本轮)**       |
+| ------------ | --------------------------------- | ------------------------- |
+| 冒烟判定         | 通过 5/5                            | 通过 5/5                     |
+| a3           | 优秀 (60.5s)                        | 优秀 (47.4s)                 |
+| g1 深度        | **良好+ (SDF 分解式)**                  | **良好 (SDF 分解式)** — 深度同级   |
+| **c2 质量**     | **及格 (量纲瑕疵: sum(v)=10000≠X0)**     | **优秀 (精确清仓 + cost 近最优)**   |
+| c2 耗时        | 91.6s (nothink)                    | 113.1s (nothink)           |
+| 总耗时          | ~5min                              | ~341s (16.4-113.1s/题)      |
+| 部署           | 双机 RPC 103G (Q4\_K\_XL)             | **单机 27G 级 (Q8\_0, ~36G)**  |
+
+**定位结论**: qwen3.8-27B (Jackrong Q8\_0) = **27B 级最优冒烟表现** — 全 5 题通过 + C2 精确清仓 (从基座的"及格量纲瑕疵"升到"优秀近最优", 说明 27B 指令密度在代码约束上反而更稳); **吞吐与质量对基座双机 RPC 无退化** (总耗 341s vs ~300s), 且**单机仅 27G 级占用** = 极高性价比。G1 保留 SDF 分解深度 (与 120B 系对比的独特优势维度)。
+
+### 基础设施追加发现
+
+1. **C2 数值锚点五路收敛**: 本轮 DP/Riccati cost=10336.15 与 gpt-oss/fable-5/nemotron/dsv 的 10326.15 仅差 +0.097% — 锚点 #12/#19 (min\_v≈98.35, cost≈10326.15) 可靠性进一步巩固
+2. **watchdog 端口派生 bug 修复 (关联 O 系)**: 部署版 watchdog 硬编码探 8080 + `inst_port` 未去 `.service` 后缀 → 路由到不存在的 `.service.env` 回退 8080 → 每 ~6min 误判 18080 实例无响应并强制重启, 中断首跑 (A3 后连接拒绝)。修复: ① 仓库 `cluster-watchdog` 增 `inst_port()` 读实例 env PORT + **`${alias%.service}`** 剥后缀; ② 对端 M3/M4 探测同修; ③ 部署验证 fail.local 稳定 0、无 WARN。**教训: systemctl 单元名 `llama-server@qwen3.8-27b-mtp.service` vs env 裸别名 `qwen3.8-27b-mtp` 的后缀剥除缺漏**
+3. qwen3.8-27B 认 `enable_thinking` (与 qwen/deepseek 同) — 分型规则四分支确认: qwen族/deepseek 可禁思考, gpt-oss 忽略 (harmony 自终止)
+
+### 原始数据
+
+- B 站 /tmp/b6\_smoke\_qwen38\_27b.jsonl (5 题, 含 usage/finish/elapsed)
+
+- 沙箱: /tmp/\_c2\_verify.py (rc=0 clean; len=100 / sum(v·dt)=100.0 / x\_end=0.0 / cost 10336.15)
+
+- 判分脚本: d:\RPC\ops\station-bin\b6\_smoke\_qwen38\_27b.py / \_c2\_verify.py (本地留档)
+
+### 配置变体对照: 满上下文+最高强度思考+froggeric 模板 (2026-09-06, 同模型横向)
+
+**配置**: ctx **262144** (原生满档) + `--jinja --chat-template-file froggeric\_qwen.jinja` + `--reasoning-format deepseek` + 全题思考开 (Froggeric 默认 `enable_thinking=true` 不对 C2 关思考)
+**对照**: 上行默认 = ctx 8192 + C2 禁思考 (`enable_thinking:false`)
+**验证**: /props `n_ctx=262144` ✓ / chat\_template 显示 froggeric 全文 ✓ / ps 实锤 `--reasoning-format deepseek` ✓ / journal "thinking = 0"(模板校验) ✓
+
+| 题号     | 型      | 满ctx+最高思考结果                                                       | 对照默认(8192) | 评级     | 关键结论                                                                          |
+| ------ | ------ | ------------------------------------------------------------------ | ---------- | ------ | ------------------------------------------------------------------------------ |
+| dmx-a3 | 数值     | GAUSS\_RHO=0.7071, T\_RHO=0.7071, RELATION=same (36.3s, content 1567 字) | 0.70710678/same (47.4s) | **通过** | 答案对, 但思考文本**混入 content** (reasoning\_content 空)                                            |
+| dmx-b2 | 数值     | SLOPE=-0.1575, SIGN\_DRIVER=rho (1.9s)                              | 同 (16.4s)  | **通过** | 极快且正确                                                               |
+| dmx-a1 | rubric | **空输出 (content=0, 1 token, finish=stop, 0.9s)**                         | 良好 (三锚点全中) | **失败** | 思考强制开启后模型仅出 opener(forced `thinking`)即 eos — 与"高效精简"类 prompt 冲突的退化 |
+| dmx-g1 | rubric | 两锚点全中 (11.6s, 简洁)                                                | 良好 (85.2s) | **通过** | 正确, 思考更收敛                                                            |
+| dmx-c2 | 代码     | **cost=980208.22 = 最优锚点 10326.15 的 94.9x; v max=9900 堆尾清仓**        | 优秀 (cost 10336, +0.097%) | **失败** | 思考开启劣化: 约束全过/rc=0, 但策略退化为"前冲一次后堆到终点清仓" — **F-D 静默次优 强化版** |
+
+**配置变体判定: 负收益 (≈2/5 vs 默认 5/5)** — 满 ctx + 最高强度思考 + froggeric 模板**不提升** B6 冒烟表现, 反而引入三处退化:
+
+1. **思考分离失效**: `--reasoning-format deepseek` 与 froggeric qwen 模板的 ` thinking/response` 标记**不匹配** → 全部混入 content (reasoning\_content=0 全场); 需改用 `--reasoning-format qwen` 或弃 reasoning-format 靠模板自带分离
+2. **a1 空输出退化 (新失败模式形态)**: 强制 ` thinking` opener + "分步作答/精简" prompt → 1 token 即 eos (F-C 思考即终点变体 upstream 触发在 opener 处)
+3. **C2 思考开启 = 策略劣化铁证**: 默认 c2 禁思考 → 光滑 DP/Riccati (cost 10336 近最优); 本变体全题思考 → 堆尾清仓次优 (cost 94.9x)。**再次确认 DESIGN 决策 6: 代码题必须禁思考** (本变体因"最高强度"违反而得此反证)
+
+**基础结论不变**: 上行默认 (ctx 8192 + c2 nothink) 仍是该模型最优冒烟配置; ctx 262144 满档对短 smoke 无增益 (题目 prompt ~100-200 tokens), 长上下文本才会体现。froggeric 模板加载正常, 但思考分离取决于 reasoning-format 选型。
+
+**原始数据**: d:\RPC\ops\station-bin\result\_fullctx\_maxthink.jsonl / result\_default\_ctx8192.jsonl (本地留档); B 站 /tmp/b6\_smoke\_qwen38\_27b\_fullctx\_mxthink.jsonl; \_c2\_verify.py 支持 argv 指定源 jsonl
+
 维度对比 (RPC 级现存 4 模型): 质量 nemotron 5/5+解析解 ≈ deepseek 5/5 > qwen3.8-flash 5/5 (深度略优) > fable-5; 上下文 **nemotron 1M 原生+实测 96.5k 全中 (唯一)** vs 其余 32k conf; 速度 nemotron prefill 158 t/s + decode 17.5 (deepseek decode 6.3 级, qwen3.8-flash 15.7); 内存 80G 留 25G+ 余量 (deepseek 145G 顶格); 预算管理 nemotron 最优级 (reasoning 0.5-2k 字)。短板: decode 比 m27 慢 13% (17.5 vs 20.6), rpccache 不命中 (分片模型, 每次加载全量推权重 \~3min), 无 vLLM 路径备份。
 
 ### 原始数据

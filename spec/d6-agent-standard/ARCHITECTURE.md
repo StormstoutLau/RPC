@@ -15,6 +15,7 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0002]
 > **状态**: approved（以已验收实现为准，非纸面设计）
 > **真值源**: 与 IMPLEMENTATION §3 代码结构逐模块对齐；并发模型/退出码/契约 schema 以 DESIGN §4/§6/§8 与 CHECKLIST A1-A16 实测为准
 > **本文件定位**: 单一入口描述系统「是什么」「怎么动」「边界在哪」，供维护者/后续 D7 开发者快速建立心智模型，不复述 DESIGN 的论证过程
+> **跨项目标准引用**: D6 为多任务项目统一 agent-cli 调用标准（DESIGN 顶层目标），跨项目工作规范（立项→设计→派发→跨站执行→验收→入档五层）见 [CROSS-PROJECT-WORK-STANDARD.md](./CROSS-PROJECT-WORK-STANDARD.md)；三站执行规范调研输入见 [RESEARCH_2026-09-12_Cpp_Hub_3station.md](./RESEARCH_2026-09-12_Cpp_Hub_3station.md)。
 
 ***
 
@@ -108,10 +109,13 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0002]
   互斥面: wrapper-vs-wrapper（已验证 V0-6）
   ⚠ 已知边界: 不互斥 wrapper-vs-手动TUI（纪律告知缓解, F4 登记为 MVP 风险）
 
-层 2（细，V2 才激活）: 任务卡 readonly 声明
+层 2（细，V2 才激活）: 任务卡 readonly 声明 【**2026-09-12 激活，DESIGN §4.1 / O-17 已闭环**】
   readonly: true  → 共享语义（research/分析可并行 fan-out）
   readonly: false → 排它语义（implementation 独占）
-  MVP 仅记录不生效（全部按排它处理）; schema 字段在, 语义 V2 启用
+  实现: task $body 锁段按 readonly 选 flock 模式——readonly→`flock -s`（共享）/ 写→`flock -n`（排它），
+  Codex RwLock 语义（读锁并行/写锁独占）；`LOCK_ACQUIRED/HELD` 行带 mode=shared|exclusive 可观测。
+  锁与调度解耦: 真并发度由 slot-gate(O-25)+O-18 纪律约束，锁仅保证写安全。
+  验证: 三断言互斥探针(RR/RW/WW)+ readonly/write 双路 e2e（run 2026091219355/2026091219415）全 PASS
 ```
 
 **后端并发实况（2026-09-04 L1 实测，架构级输入）**：
@@ -119,6 +123,7 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0002]
 - **同站内 2 并发被统一内存带宽顶起**（单请求 1.7→4.8s，~2.8× 恶化，BS-2 L1）
 - **跨站扇出真并行**（A+B 各 2 并发：A 串行 4 次 6.8s → cross_wall 4.8s，ratio 0.71；L1 实测源 `_bs2_cross.py` targets=[A,B,A,B]）
 - **落地铁律：fan-out 优先跨站各 1 并发，勿同站叠并发**；跨站接入用 B 站 `ssh -NL 18081:127.0.0.1:8080` 无侵入隧道
+- **单机形态同样适用（O-24 ④ 入册）**：单机独立跑多任务时也勿就地叠并发（同一带宽顶起 ~2.8×），应串行派发/手动限流；O-18 铁律无跨站豁免。并发纪律见手册 §2 agent-cli「并发纪律」。
 
 ## 5. 控制流（异常路径与退出码）
 
@@ -171,6 +176,74 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0002]
 | 复杂度路由 L0       | per-request 推理参数（enable_thinking/max_tokens），需 vLLM 引擎              | 待 vLLM    |
 | 复杂度路由 L1/L2/L3 | 实例风味 preset（nothink/think/long）+ opencode provider limit + prompt 尾注 | **已落地（D-16）** |
 | wrapper 稳定性      | Preflight + ledger 先行 + collectOk（D-17）                              | **已落地** |
+
+***
+
+## 9. 记忆层评估：opencode-codex-memory 与本地模型上下文（2026-09-09 源码审计）
+
+> **背景**: C 站插件复刻（B→C）后，评估 codex-memory@0.6.5 是否能解决「本地模型上下文窗口有限条件下处理长任务」。以下基于插件源码逐行审计（`~/.cache/opencode/packages/opencode-codex-memory@0.6.5/dist/src/*.js`），非二手转述。
+
+### 9.1 机制本质（codex 两阶段记忆移植）
+
+| 组件 | 机制 | 源码证据 |
+|---|---|---|
+| 记忆注入 | 每会话把 `memory_summary.md` **截断至 2500 token** 后注入 system prompt（`experimental.chat.system.transform` hook）| source.js: `MEMORY_SUMMARY_TOKEN_LIMIT = 2500` + `truncateToTokens`；index.js: `output.system.push(memoryPrompt)` |
+| 按需检索 | dedicated_tools 下模型**主动调 memory_read/search/list 工具**读 MEMORY.md / rollout_summaries/（支持 line_offset/max_lines 行窗口）| tools/memory.js `memory_read` |
+| 记忆生成 | 会话结束/空闲时 `memorize-extract`（提取 transcript→JSON）+ `memorize`（整合 diff→MEMORY.md/summary/skills）两个 **subagent** | opencode.json agent 契约（permission 全 deny，仅 memory 工作区可写） |
+
+### 9.2 能力边界判定（对 D6 本地模型）
+
+| 档位 | 结论 | 依据 |
+|---|---|---|
+| **✅ 跨会话持久化** | 真实解决「会话边界」——上一会话结论/决策/代码结构沉淀 MEMORY.md，下会话经 2500-token 摘要 + 按需检索取回 | 突破的是会话边界，非上下文窗口；分次会话带关键结论是有效用法 |
+| **⚠️ 单会话长任务** | 部分缓解——摘要注入为常数开销（不随任务增长），按需检索不占满上下文；但摘要=压缩损失，且 subagent 整合质量受**同一本地模型**能力上限约束 | 正确架构但对本地模型有质量天花板 |
+| **❌ 上下文物理扩大** | 不解决——若任务本身需 100k token 代码驻留，插件只在**会话间隙**生效；单次 `opencode run` 仍撞服务端 ctx 硬上限（O-21 教训） | 注入不影响引擎 `-c` |
+
+### 9.3 对 D6 的落地定位（互补而非替代）
+
+- **记忆插件 = 任务卡之上的一层**：任务卡保证每次 run 在窗口内（O-21 调卡纪律），记忆插件保证多次 run 之间不丢上下文。**两者互补，缺一不可**。
+- **适用场景**：跨会话研究/写作（Paper 试点、调研多轮）✅；单会话超长读码/重构（specaudit 类）❌ 须走 O-21 四方向；关键任务（数值/金融正确性）⚠️ 本地记忆整合可能污染，须 accept golden 测试（O-12）兜底。
+- **风险登记**：本地模型提取/整合的记忆可能引入错误结论 → 后续会话带错误记忆；subagent 整合为额外算力成本。
+
+### 9.4 DCP（Dynamic Context Pruning）落地：单会话内动态压缩（2026-09-09 社区调研 + C 站冒烟）
+
+> **背景**: 评估 codex-memory 后，调研 opencode 生态"动态压缩"插件（社区反馈良好者），选定 DCP 落地。以下机制基于官方 README + 社区 issue 实测（#552 本地模型对照 / #573 token 燃烧 / #551 stale 边界）。
+
+#### 9.4.1 生态选型（社区实测）
+
+| 插件 | Star | 机制 | 本地模型反馈 |
+|---|---|---|---|
+| **DCP**（`@tarquinen/opencode-dcp`）| 3000+ | 模型自主调 compress 工具 + 自动去重 + 清除错误输出；只改请求副本不碰会话历史 | ✅ **本地模型实证可用**（qwen3.5-35b 实测正常）；⚠️ 有 bug：compress 反馈循环烧 738K tokens（#573）、stale 边界 ID（#551）|
+| **Magic Context**（`@cortexkit/opencode-magic-context`）| 2000+ | 后台 historian 压缩 + 向量 DB + 跨会话记忆 + 衰减渲染 | ⚠️ **本地模型高风险**：qwen 实测首次压缩"脑叶切除"（写意大利语/只回数字 3 和 33）→ 被迫禁用回 DCP（#552）；3 bug 未修（#212）|
+| lossless-opencode (LCM) | 小 | SQLite + FTS5/BM25 + 摘要 DAG | 新项目，反馈少 |
+| ACM / context-guard / context-manager | — | 活跃上下文边界 / AGENTS.md 运行时注入 / 静态预索引 | 补充角色 |
+
+**选定 DCP 理由**：本地模型实证可用 + 纯动态压缩（不引入跨会话复杂度，codex-memory 已负责记忆）+ 机制保守（只折叠 read/grep/glob/bash 成功输出，不碰用户消息/推理/错误）+ 与 codex-memory 互补（DCP 管会话内、codex-memory 管会话间）。
+
+#### 9.4.2 三站安装与冒烟（2026-09-09）✅
+
+| 站 | 安装 | 验证 |
+|---|---|---|
+| **C** | `opencode plugin @tarquinen/opencode-dcp@latest --global` → **3.1.15** | 工具注入 `compress` ✅ / 加载无错误 / nemotron 正常返回 |
+| **B** | 同命令 → plugin 段追加成功 | 缓存就位 ✅ / dcp.jsonc 生成 ✅ / --print-logs 无错误 |
+| **A** | 同命令，但**写入分裂**（新建 opencode.json 而非并入 .jsonc）→ 手动合并 plugin 段 + 删分裂 .json | 缓存就位 ✅ / dcp.jsonc 生成 ✅ / JSON VALID |
+
+- 注册：opencode.jsonc plugin 段（与 codex-memory 并列）+ tui.json ✅（三站同构）
+- `dcp.jsonc` 首次 run 自动生成（默认仅 schema）
+- ⚠️ A 站坑：`opencode plugin --global` 在已有 .jsonc 主配置时**新建 .json** 而非并入 → 需手动合并（codex-memory 后追加 DCP）并删分裂文件
+- 引擎级 run 冒烟在 A/B 站未做（两站无 llama 引擎运行）；安装/配置/加载层已验证完整
+
+#### 9.4.3 职责边界（DCP vs codex-memory vs 内置 compaction）
+
+- **DCP**：单会话内**动态压缩**——模型在 context 接近阈值时自主调 compress 折叠旧工具输出；去重 + 清错误自动跑
+- **codex-memory**：跨会话**持久记忆**——2500-token 摘要注入 + 检索工具
+- **内置 compaction**：opencode 原生压缩（O-21 治理的 64k 引擎 ctx 问题不受插件影响——**服务端 ctx 仍是唯一硬上限**，插件只在客户端请求副本层面工作）
+
+#### 9.4.4 遗留/风险
+
+- **冒烟仅验证工具注入 + 加载**——真正的动态压缩需长会话触发（模型自主调 compress），待真实长任务（specaudit 类）观察压缩质量（是否"脑叶切除"）
+- **DCP 已知 bug**（#573 token 燃烧 / #551 stale 边界）——本地模型场景监控 compress 循环
+- dcp.jsonc 当前为默认配置，可按引擎 ctx（131072）调 `compress.maxContextLimit`
 
 ***
 

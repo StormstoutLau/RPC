@@ -114,11 +114,15 @@ fi
 if [ "$BACKEND" = "unsloth" ]; then
   log "unsloth 后端: 起 unsloth studio gpt-oss(${ALIAS}) port ${PORT_NUM} ctx ${CTX:-32768}..."
   export LLAMA_SERVER_PATH="${LLAMA_SERVER_PATH:-/home/scott-lau/llama.cpp-vulkan-b10715/llama-server}"
+  # O-25 在线实测顺带修复(2026-09-12): unsloth llama.cpp 已从 Vulkan 切 ROCm 后端,
+  # 设备名 Vulkan0 -> ROCm0 (6 台 AMD 8060S 均实测 `--list-devices` = ROCm0)。硬编码 Vulkan0 会导致必然加载失败。
+  # 允许 env INFER_DEVICE 覆盖(如未来回退 vllm/其它设备名)。
+  DEVICE="${INFER_DEVICE:-ROCm0}"
   cd /home/scott-lau
   UN_LOG="/home/scott-lau/.unsloth/run-${ALIAS}.log"
   nohup "$HOME/.local/bin/unsloth" studio run --model "$MODEL_PATH" \
     --port "${PORT_NUM}" --api-only \
-    --flash-attn on --no-context-shift -c "${CTX:-32768}" --device Vulkan0 --kv-unified \
+    --flash-attn on --no-context-shift -c "${CTX:-32768}" --device "$DEVICE" --kv-unified \
     --cache-type-k q8_0 --cache-type-v q8_0 \
     > "$UN_LOG" 2>&1 &
   log "unsloth launched pid=$! log=$UN_LOG"

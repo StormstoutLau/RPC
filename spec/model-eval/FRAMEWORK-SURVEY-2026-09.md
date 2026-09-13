@@ -116,7 +116,7 @@ make strix-halo -j$(nproc)   # make rocm 别名
 | 路径 | 说明 | 风险 |
 |---|---|---|
 | **A. 等 PR 合入 main** | 事件驱动（unsloth #27754 首选）→ 合入后重建 A/B/C 引擎 → Vulkan RPC 层分布 | 无（等合入） |
-| **B. 用 PR 分支自建** | `git clone -b glm5next/upstream unslothai/llama.cpp` + `-DGGML_VULKAN=ON -DGGML_RPC=ON` | ⚠️ ①#27754 仅 CUDA 验证（B200），**Vulkan 未验证**（GLM mHC 继承 DSV4 超连接 → Vulkan 可能踩 HC 非融合慢路径）；②RPC 分布式未验证（[#28047](https://github.com/ggml-org/llama.cpp/issues/28047) RPC 大 MoE 有崩溃风险） |
+| **B. 用 PR 分支自建** | `git clone -b glm5next/upstream unslothai/llama.cpp` + `-DGGML_VULKAN=ON -DGGML_RPC=ON` | ⚠️ ①#27754 仅 CUDA 验证（B200），**Vulkan 未验证**（GLM mHC 继承 DSV4 超连接 → Vulkan 可能踩 HC 非融合慢路径；⚠️ 2026-09-10 更新：HC 融合 #26578 已 9/7 merged，此风险在 ≥9/7 master 上已缩小）；②RPC 分布式未验证（[#28047](https://github.com/ggml-org/llama.cpp/issues/28047) **已于 9/5 由 #26500 修复**，状态见 [TRACKER §1.2](../upstream-tracker/TRACKER.md)） |
 
 **预期档位**（合入后）：UD-Q4_K_XL 199.7G（三站）/ UD-IQ4_XS 156.8G（双站）/ UD-Q2_K_XL 108.7G（单机）
 

@@ -476,6 +476,24 @@
 - **分布式**: infer-load 生成 conf (RPC_TARGET=auto 哨兵展开, N_CPU_MOE=8, -fa on), A 站 rpc-server@qwen3.8-flash-next + B 站 llama-server@... 均 active; READY ✓ 2min
 - **冒烟**: 生成正常 (自报通义千问)，prompt 38.7 t/s / tg 15.3 t/s (首测, 冷 prompt cache)
 
+## 6. Phase 6 — #26578 DSV4_HC 融合算子 A/B 两机实测对照（2026-09-10）
+
+**目的**: 实测 llama.cpp #26578（vulkan DSV4_HC_COMB/PRE/POST 融合，9/7 merged）对 V4-Flash 的 decode 收益；引擎升级走 UPGRADE_SOP 三站原子切换。
+
+**口径**（同 before/after，固定不变）：A/B 两机 RPC 层分布（B head llama-server + A worker ggml-rpc-server，10.10.10.1:50052 USB4 直连），V4-Flash-0731-MXFP4 单文件 156G，`-sm layer` **无 -ngl 99**，`-c 8192 -t 16`，`/v1/chat/completions` max_tokens=512 三次取中值（timings.predicted_per_second）。
+
+| 引擎 | commit | decode 中值 (t/s) | prompt (t/s) | HC 融合日志信号 |
+|---|---|---|---|---|
+| **BEFORE**（旧） | master-d2e206c4（8/31，无 #26578） | **9.56**（9.55/9.58/9.56） | 11.2–22.8 | `resolve_fused_ops: fused DeepSeek V4 HC pre/comb/post not supported, set to disabled`（6 条, 均命 RPC 慢路径） |
+| **AFTER**（新） | master-91f6a6cf（9/10 构建, 含 #26578 + #27970 sparse-fa） | **14.02**（13.99/14.16/14.02） | 24.7–31.2 | **零 resolve_fused_ops 警告**（HC 融合在 Vulkan0 本地生效） |
+| **Δ** | — | **+46.7%** | +▶ | 与 #26578 声称 decode 1.50× 高度吻合 |
+
+- 三站引擎同构升级：B 单点构建（worktree 隔离 0d18aaa 源码树）→ MANIFEST(79 条) → tar 分发 A/C → patchelf `$ORIGIN`（新 cmake 产物 RUNPATH 硬编码 B 站 build 路径，修正后 A/C 可跑）→ 原子切换 symlink → `check_llama_version.py --deep` 三站指纹+79 文件 md5 全等 ✅
+- 引擎版本: v0.4.0-dev (build 1533, commit 91f6a6cf), rpc_protocol v6.0.0
+- 布防/清理: A(原 gpt-oss)/C(原 nemotron) 先行卸载, load-gate 语义由 wait-gtt-release 确认 avail≥90G; 实测后 head/worker 清理 + GTT 回收
+- 证据: B 站 `/tmp/v4f_before_20260910013818/` `/tmp/v4f_after_20260910021831/` + 主控 `spec/rpc-optimization/v4f-26578-evidence-20260910/`
+- **结论**: #26578 在本集群（Vulkan, gfx1151, 两机层分布）**实测 decode +46.7%（9.56→14.02 t/s）**，与上游声明一致 → **升级闭环**；V4-Flash 现役慢评（tg 6.6 记录）同步更新为 ≥14 t/s 级。
+
 ### 5.5 qwen3.8-flash-next YaRN → 1M 实测 (2026-08-31 晚, 结论: 当前引擎不支持超 256K)
 
 验证路径 (手册 §3.4 指令):
@@ -490,3 +508,20 @@
 **1M 可达的唯一路径**: vLLM (Qwen3.8-Flash-Next-FP8 recipe `--rope-scaling '{"factor":4.0,...}' --max-model-len 1000000`), 需 day-0 镜像; 或等 llama.cpp 为 qwen4exp 接入 IMRoPE yarn 扩展 + memory_hybrid 稀疏后才可复测.
 
 **收尾**: conf 已回退默认 (CTX=32768, EXTRA_FLAGS="-fa on "), health 200 恢复.
+
+## Phase 6.2: 吞吐基准表建立与修正 (O-25 P0-①) — 2026-09-12
+
+依据: D6 可观测性 O-25 关闭判据①「吞吐基准表至少覆盖现役各模型档」。制品: `spec/d6-agent-standard/THROUGHPUT-BASELINE.md`（基线版）。
+
+### 三处数据修正（回溯自用户+实测采证）
+
+| # | 项 | 修正处理 | 依据 / 来源层级 |
+|---|---|---|---|
+| 1 | MiniMax-M2.7 **双机 RPC (Q4_K_S, tg128 18.2-20)** | 整行删除 | RPC 量化档已删除，非现役；历史实录不回滚 |
+| 2 | MiniMax-M2.7 **单机 decode** | 落定 **21.5 (decode) / 22.1 (含 prompt)** | 实测（用户测试题 16 题批量，`tmp/res_m27`，117936 tok / 5490s，UD-IQ4_XS / C 站 / q4_0 KV，短题峰值 23-25、长 CoT 压 20-21） |
+| 3 | gpt-oss-120b **Vulkan ~23** | 整行删除（误归因） | ~23 实为 **nemotron-120B**(hiplz) 的 Vulkan decode，被误借推断 gpt-oss；gpt-oss 单站锚点以 HIP 直测 49-53 为准（A 站 49-53 / C 站 48.8，接近 50） |
+
+### 结论
+- gpt-oss-120b 单站 decode ≈ 49-53（用户确认"接近 50"达成一致）。
+- MiniMax-M2.7 现役单机锚 = 22.1（agent 长 CoT 口径，非纯 tg128；短题可比出 24-25）。
+- 教训（复用手册§1 防编造纪律）: 复制数据入表必须带「实测日期+方法+日志路径」三要素，只信 source 列非空的行；跨模型借数字推断（如 nemotron → gpt-oss）属归因漂移，禁止入锚。
