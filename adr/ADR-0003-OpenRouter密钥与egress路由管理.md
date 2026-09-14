@@ -114,3 +114,15 @@ upstream: \[ADR-0002]
 - [OPEN-ISSUES.md](../spec/d6-agent-standard/OPEN-ISSUES.md) O-16：商业 API 子路（本 ADR 填 source ①）
 - [2026-09-13_密钥轮换清单.md](../docs/security/2026-09-13_密钥轮换清单.md)：密钥存储规范
 - `ops/station-bin/agent-cli.ps1`：JUDGE_TABLE（L1657）+ Invoke-JudgeHttp（L1761）
+
+---
+
+## 实测补充（2026-09-14，E1）
+
+完整调研见 [2026-09-14_OpenRouter接入与agentic-harness门禁调研.md](../docs/research/2026-09-14_OpenRouter接入与agentic-harness门禁调研.md)。三项关键发现**修正/细化了本 ADR 的原始假设**：
+
+1. **密钥合法**（`/api/v1/key` 200，usage=0，无 limit，非 free tier）。
+2. **`:free` 档受 agentic-harness 门禁**：裸 API 调 `thinkingmachines/inkling:free` → 403「only available on agentic harnesses」。故 **D3 用途三线的「裸 API judge」路线对 `:free` 模型不成立**——`:free` 只能经 harness（claude code/opencode 等）。改用付费档或非门禁模型方可走 `Invoke-JudgeHttp`。
+3. **主控站 IPv6 到 openrouter.ai 黑洞**：`.NET Invoke-RestMethod`（`Invoke-JudgeHttp` 所用）优先 IPv6 → 超时；curl -4 / claude code 走 IPv4 → 200。**D3① 路线存在 IPv6 阻塞，须先修**（改走 `curl.exe -4` / hosts 强制 IPv4 / B 站中转）。
+
+**新增实证（支持 D3③ harness 路线）**：claude code（v2.1.207）+ `ANTHROPIC_BASE_URL=https://openrouter.ai/api` + `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_API_KEY=`（置空），`claude -p ... --model thinkingmachines/inkling:free` → **实测返回 OK**，门禁解除。故 **harness 类接入（claude code / opencode / hermes）是 `:free` 模型的正确落点**，本 ADR 的 egress 定位由「judge 裸 API」扩展为「**judge（非门禁模型）+ harness（门禁免费模型）双轨**」。
