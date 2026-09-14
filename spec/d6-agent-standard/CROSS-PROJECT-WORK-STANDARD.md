@@ -68,6 +68,8 @@ D6 `DESIGN.md` 顶层目标已声明：为 RPC / Paper / Auto_Prover / Cpp_Hub �
 - **台账单一真值**: 任一项目状态变更同时回写总览 + 详情节，禁止一处改一处留。
 - **决策登记**: 关键决策记入各方 `DECISIONS.md`；演进史记 `DEVELOPMENT-LOG.md`。
 - **Sprint 收口**: 验收完成须回填验收证据 + 更新 CHANGELOG/ROADMAP（Auto_Prover §3.7 模板）。
+- **验收产物持久化（O-03）**: 所有 probe/check/probe 类验证产物——不只文字实录——统一落 `D:\<proj>\agent-out`（或对应项目产物目录），禁止仅口头/日志记录，防空跑后证据腐化。
+- **台账写安全（O-04）**: `agent-cli` wrapper 一律从非沙箱宿主运行；台账（`agent-runs.log`）若在沙箱内被拒写，须将日志落点移到可写区（`d:\RPC` 内），确保台账行数与 run.json 计数一致、无静默丢行。
 
 ## 7. 变更与演进
 
