@@ -39,6 +39,7 @@ $ErrorActionPreference = 'Stop'
 $Script:GNU_TAR = 'C:\Program Files\Git\usr\bin\tar.exe'   # S1: not Win10 bsdtar
 $Script:REMOTE_USER = 'scott-lau'
 $Script:WORKSPACE_ROOT = '/home/scott-lau/agent-workspaces'
+$Script:WORKSPACE_ARCHIVE_ROOT = '/home/scott-lau/agent-workspaces-archive'   # O-02 (2026-09-14): archive snapshot root
 $Script:PROJECTS = @{ paper = 'D:\Paper'; Cpp_Hub = 'D:\RPC\spec\d6-agent-standard\Cpp_Hub'; Auto_Prover = 'F:\Auto_Prover' }    # console project root mapping (2026-09-13 Auto_Prover 接入 D6)
 $Script:TMP_ROOT = Join-Path $env:TEMP 'agent-cli'
 # O-12 REPO_ROOT: repo root for golden source resolution (this file is d:\RPC\ops\station-bin\ ->
@@ -348,7 +349,23 @@ echo "sync OK: `$(du -sh "`$W" | cut -f1)"
         Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-ws-sync.sh"
     }
     elseif ($act -eq 'archive') {
-        Write-Host "archive (T1 placeholder): archive $Script:WORKSPACE_ROOT/$proj to timestamp snapshot; memory stays on node"
+        # O-02 (2026-09-14): formal archive - timestamp snapshot tar of remote workdir,
+        #   kept in ~/agent-workspaces-archive/<proj>/. Preserves live workdir + station memory (R7).
+        # Single-quoted here-string: all $ literal (PS keeps $.Replace injects paths reliably vs $Script: interpolation ambiguity).
+        $body = @'
+set -eu
+W=__PLACEHOLDER_W__
+AR=__PLACEHOLDER_AR__
+STAMP=$(date +%Y%m%d-%H%M%S)
+mkdir -p "$AR"
+if [ ! -d "$W" ]; then echo "ARCHIVE_SKIP nodir $W"; exit 0; fi
+tar -C "$(dirname "$W")" -cf "$AR/__PLACEHOLDER_P__-$STAMP.tar" "$(basename "$W")"
+SIZE=$(du -h "$AR/__PLACEHOLDER_P__-$STAMP.tar" | cut -f1)
+echo "ARCHIVED $AR/__PLACEHOLDER_P__-$STAMP.tar ($SIZE) live workdir preserved (R7)"
+ls -1 "$AR" | sort
+'@
+        $body = $body.Replace('__PLACEHOLDER_W__', "$Script:WORKSPACE_ROOT/$proj").Replace('__PLACEHOLDER_AR__', "$Script:WORKSPACE_ARCHIVE_ROOT/$proj").Replace('__PLACEHOLDER_P__', $proj)
+        Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-ws-archive.sh"
     }
     else { throw "unknown workspace action: $act (create|sync|archive)" }
 }

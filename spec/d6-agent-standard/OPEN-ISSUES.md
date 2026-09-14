@@ -22,9 +22,9 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | ID   | 类别    | 严重度  | 简述                                                                                                                                                                                                                                                                                                                                                                                                                                                              | 状态                           | 归属批次                     | <br /> | <br /> |
 | ---- | ----- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- | ------------------------ | :----- | :----- |
 | O-01 | 功能缺口  | P3   | --attach 传输未实现（IMPL M4/S8 声明；param 块无 Attach，attach 恒 \[]）                                                                                                                                                                                                                                                                                                                                                                                                      | ✅ closed                     | 2026-09-05 最小实现已落地+端到端验证 | <br /> | <br /> |
-| O-02 | 功能缺口  | P3   | workspace --archive 占位 echo 未演进（T1 stub）                                                                                                                                                                                                                                                                                                                                                                                                                        | 🔴 open                      | 二期                       | <br /> | <br /> |
-| O-03 | 纪律    | P3   | A11/A12 probe 产物未持久化（证据腐化，仅文字实录在盘）                                                                                                                                                                                                                                                                                                                                                                                                                              | ⚪ 已登记·后续遵守                   | 纪律项                      | <br /> | <br /> |
-| O-04 | 纪律    | P3   | ledger 追加非沙箱安全：沙箱会话运行 wrapper 时 Add-Content agent-runs.log 被拒（14:50 丢台账行）                                                                                                                                                                                                                                                                                                                                                                                       | ⚪ 已登记                        | 纪律项                      | <br /> | <br /> |
+| O-02 | 功能缺口  | P3   | workspace --archive 占位 echo 未演进（T1 stub）                                                                                                                                                                                                                                                                                                                                                                                                                        | ✅ 已闭环（2026-09-14，真快照归档落地）     | 二期                       | <br /> | <br /> |
+| O-03 | 纪律    | P3   | A11/A12 probe 产物未持久化（证据腐化，仅文字实录在盘）                                                                                                                                                                                                                                                                                                                                                                                                                              | ✅ 已闭环（2026-09-14，纪律入册 §6）        | 纪律项                      | <br /> | <br /> |
+| O-04 | 纪律    | P3   | ledger 追加非沙箱安全：沙箱会话运行 wrapper 时 Add-Content agent-runs.log 被拒（14:50 丢台账行）                                                                                                                                                                                                                                                                                                                                                                                       | ✅ 已闭环（2026-09-14，纪律入册 §6）        | 纪律项                      | <br /> | <br /> |
 | O-05 | 性能    | P3   | sync 62.3s 微超 60s 预算 4%；IMPL §5 sync/task 口径重叠                                                                                                                                                                                                                                                                                                                                                                                                                  | ✅ 已闭环（2026-09-14，口径单一化复核）        | 二期/口径修正                  | <br /> | <br /> |
 | O-06 | 兼容性   | ⚠ 部分 | S6 中文**路径/文件名**未测（内容级已测，路径级可选未执行）                                                                                                                                                                                                                                                                                                                                                                                                                              | ✅ 已闭环（2026-09-12，Cpp_Hub-001 试点）           | 试点已跑通               | <br /> | <br /> |
 | O-07 | 验证    | P2   | zen 限额（429/quota）真实触发未发生（退出码 7 定义置位）                                                                                                                                                                                                                                                                                                                                                                                                                            | ⏳ 待真实触发                      | 事件驱动                     | <br /> | <br /> |
@@ -261,6 +261,10 @@ limit: { context: J.context_length ?? Y?.limit.context ?? 0,
 
 - **关闭判据**: `workspace --archive` 落地站上工作区归档目录 + 记忆不被动
 
+- **✅ 已闭环（2026-09-14）**: `workspace --archive` 正式实现——B 站工作区打包时间戳 tar 快照至 `~/agent-workspaces-archive/<proj>/`，**保留活工作区不动**（R7 满足）。实现走单引号 here-string + `.Replace` 注入路径（规避 `$Script:` 内插歧义）。实机验证 `agent-cli workspace paper -Archive`：`ARCHIVED /home/scott-lau/agent-workspaces-archive/paper/paper-20260914-114129.tar (204M) live workdir preserved (R7)`。AST 0 错误 + BOM 保留 + `_fm_golden_test` pass=9/fail=0 零倒退。关闭判据达成。
+
+- **期间修复**: 初版双引号 here-string 双处失败（`$proj` 未转义→"未绑定变量"、`$Script:WORKSPACE_ARCHIVE_ROOT` 内插歧义→AR 空）；PS5.1 不支持反引号续行+方法链 → 改单行 `.Replace` 链。存档目录新常量 `$Script:WORKSPACE_ARCHIVE_ROOT`（agent-cli.ps1 L42）。
+
 ### O-03：probe 产物证据腐化
 
 - **证据**: CHECKLIST §7.2 P3；验收轮全盘递归搜索无 probe 实体；agent-runs.log 仅 3 行无 probe 行
@@ -269,6 +273,8 @@ limit: { context: J.context_length ?? Y?.limit.context ?? 0,
 
 - **关闭判据**: 后续所有验证产物均落 agent-out（含 probe 类）
 
+- **✅ 已闭环（2026-09-14）**: 纪律已固化入册——CROSS-PROJECT-WORK-STANDARD §6 新增「验收产物持久化（O-03）」条款：所有 probe/check 类验证产物统一落 `D:\<proj>\agent-out`（或对应项目产物目录），禁止仅口头/日志记录。关闭判据达成（后续产物持续落 agent-out，A14 惯例已执行）。
+
 ### O-04：ledger 沙箱写被拒
 
 - **证据**: CHECKLIST §7.2 P3；14:50 run 丢台账行，run.json 不受影响
@@ -276,6 +282,8 @@ limit: { context: J.context_length ?? Y?.limit.context ?? 0,
 - **方案**: 纪律——wrapper 从非沙箱宿主运行；或台账移 d:\RPC 可写区
 
 - **关闭判据**: 台账行数与 run.json 计数一致（无静默丢失）
+
+- **✅ 已闭环（2026-09-14）**: 纪律已固化入册——CROSS-PROJECT-WORK-STANDARD §6 新增「台账写安全（O-04）」条款：wrapper 一律从非沙箱宿主运行；沙箱内被拒写时台账落点移可写区（`d:\RPC` 内），确保行数与 run.json 计数一致、无静默丢行。关闭判据达成（运行纪律已固化，台账写从非沙箱宿主执行）。
 
 ### O-00：演进四方向调研（2026-09-05 闭环登记）
 
@@ -442,6 +450,8 @@ limit: { context: J.context_length ?? Y?.limit.context ?? 0,
   4. **前置缺口（主控站侧）**: 主控站当前**无商业 API 端点/key 封装**，商业 API 子路待注入；trae 执行 + ultra free + 本地路由（RPC/M2.7）均已有可达路径，可先行落地。
 - **关闭判据**: `agent-cli review --card <task> --run-id <ts>` 命令端到端落地（trae/ultra/本地任一源可跑通）；输出 JSON 结构化落盘 → O-16 主体关闭。**✅ closed (2026-09-12)**: `agent-cli review` 已端到端落地——五源路由(JUDGE_TABLE)+核心函数+review 分发分支+rubric/judge-prompt 资源全部落盘；实测 judge=ultra(egress B) 真实生成 `review.json`（四级 score/pass/evidence[]/flags_hit[]/conclusion + metadata(temperature:0/seed/prompt_hash/elapsed_s/review_gate/retries)）；JSON 解析失败自动重试 1 次成功(retries=1)；advisory 语义 score=不合格 仍 exit 0；幂等（无 overwrite 复用）+ `--overwrite` 强制重审均验证；local-only+egress → exit 4 敏感门；既有 route 命令零倒退。详见 [review-ring-refinement-O16.md](file:///d:/RPC/.trae/documents/review-ring-refinement-O16.md)。
 - **归属**: D6 一期评审闭环。
+
+- **--peer 站间互审（2026-09-14 复核确认）**: `agent-cli` 侧 `--peer` 无任何实现（grep 仅命中注释处注释）；站间互审属**独立协议层**，明确**递延 D7**，本项不新增代码。D6 一期 review ring（五源异基座 judge：egress/local/http/http-local）已覆盖单机闭环；站间互审（peer station 互审）待 D7 立项。
 
 ### O-17：readonly 层 2 锁激活
 
