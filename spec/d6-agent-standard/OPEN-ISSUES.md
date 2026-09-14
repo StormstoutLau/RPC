@@ -394,6 +394,8 @@ limit: { context: J.context_length ?? Y?.limit.context ?? 0,
 
 - **V0 验证门结果（2026-09-09 run 183302, gpt-oss exit 0）**: **通过**——`ACCEPT_GOLDEN_OK=1`、run.json `accept_golden.passed=true/source=golden/hidden_from_model=true`、status=completed；哨兵可见性 **NOT_OBSERVED**（模型输出 204B 无哨兵/`.golden/` 引用）；**TAMPERED 安全侧失败已实证**（run 182435：注入后改文件 → GOLDEN_TAMPERED + exit 9 + passed=false）。**落地修复 2 项**（V0 实测发现）：①远端解压 `tar -xzf` → `-xf`（plain tar 与现役 sync 链一致，`-xzf` 报 "not in gzip"）；②collect 拉 `.accept-golden-output.txt` 加 try/catch 静默（TAMPERED 时文件不产生，EAP=Stop 下 scp NativeCommandError 会污染退出）
 
+- **真编译 golden（D-19 A1 首个落地，2026-09-14 Cpp_Hub-beta 卡）**: 新增 `cpphub_beta_golden.sh`（bash golden）——真 g++ 编译独立测试源（include math.hpp 调 `beta`）+ 数值断言。实机 `cpphub-beta` 卡派发 B 站 gpt-oss-20b：`ACCEPT_GOLDEN_OK=1 / TASK_RC=0 / excode=0 / RUN_S=504`，golden 输出 `GOLDEN_PASS BETA_ASSERT_OK beta(2,2)=1/6 beta(1,3)=1/3`，产物 `F:\Cpp_Hub\agent-out\202609141312071820`。**首个真编译 golden 全链实证**（sync 88M 真源→opencode 改写 math.hpp→远端 g++ 编译+断言）。**落地修复**: 初版整库 `cmake configure` 被 `benchmarks/` 子目录依赖卡死（L75 add_subdirectory，与 beta 无关）→ 改聚焦独立测试源真编译；golden 脚本去整库 cmake，仅真编译新代码 + 数值断言。
+
 - **✅ 已闭环（2026-09-12，Cpp_Hub-001）**: 关闭判据「下一任务卡设计时落地 golden 测试」达成——`test-cards/cpphub-001.md` 挂 `accept-golden: source=ops/station-bin/golden/cpphub_golden.py / cmd=python3 .golden/cpphub_golden.py`，主控独立断言（实现与测试分离，纯源码静态级，Win10 主控无编译链亦可用）；端到端两次 run 均 `exit 0 / accept_golden.passed=true / GOLDEN_PASS`（最近 202609122223140613）。golden 即被既判据覆盖三项试点目标：中文路径（O-06）、函数实现（`inline double 向量均值` 空返回 0.0）、`--mean` 分支。关联: Cpp_Hub-001、O-06。
 
 ### O-13：G8 环境预置
