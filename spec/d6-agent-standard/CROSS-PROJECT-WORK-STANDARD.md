@@ -84,3 +84,7 @@ D6 `DESIGN.md` 顶层目标已声明：为 RPC / Paper / Auto_Prover / Cpp_Hub �
 | `proof_pipeline/docs/SPEC_DEV_PROCESS.md` | 层 1 流程的权威真值 |
 
 > 首版由 2026-09-12 三项目规范回溯 + Cpp_Hub 三站调研缝合而成；后续随新项目注册持续补行。
+
+## 9. 演进记录
+
+- **2026-09-13 · Auto_Prover 接入 D6（台账↔实现脱节修复）**: D6 审计发现规范 §5 声称 Auto_Prover 由 D6 派发执行，但 `agent-cli.ps1 $PROJECTS` 仅注册 paper/Cpp_Hub，执行 `agent-cli task auto_prover ...` 会抛 `unknown/missing project`。本轮将 `Auto_Prover='F:\Auto_Prover'` 注册进 `$Script:PROJECTS`（agent-cli.ps1 L42），并创建 `F:\Auto_Prover\.agentsync` 专属排除规则（27 条，剔除 `.venv-embed/`、`.hf-embed-cache/`、`download/`、`.trae/` 等本地大目录，规避 G4 200MB 同步上限）。已通过 AST 解析 0 错误 + `_fm_golden_test.ps1` 离线回归全 PASS + `Get-AgentsyncExcludes` 规则读取验证。注：Agent 工具受限无法直接写 `F:\`（沙箱仅限工作目录），.agentsync 经 Shell 落盘。

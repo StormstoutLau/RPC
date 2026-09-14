@@ -39,6 +39,7 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0001, ADR-0002]
 | D-16 | 复杂度路由 | 按 复杂度/题型 分层映射推理参数（code/reason/short/long/doc，L0-L3） | 一律最高思考+满ctx | qwen3.8-27B 横测：代码题思考 94.9x cost、a1 空输出、deepseek 剥不动 qwen 标签 | 11/11 单测 + 吃狗粮 code/doc 两档 | DESIGN §6.4 |
 | D-17 | wrapper 稳定性 | task 前置 fail-fast（PROFILE 干跑 + agent-out 可写探针 exit 12）+ ledger 先行 + collectOk 保护 | 任由 collect 崩溃吞落档 | run1 权限崩吞 ledger / run2 脱管静默退 | PREFLIGHT 早于 STATION_READY + collect=ok 落账 | DESIGN §11.3 |
 | D-18 | ctx 一致性 | **引擎 ctx = 唯一真相**：`_station_ready` 探测引擎真实 n_ctx → `Resolve-Profile` 按 `min(intent, ENGINE_CTX)` clamp；`ENGINE_CTX>0` 覆盖静态 ctxMax 表；station-ready 前置到 profile 前 | 统一大 ctx / 同步 opencode client-limit | O-23 根因=三层 ctx 解耦（profile 元数据 ≠ opencode limit ≠ 引擎 `-c`）→ refdedupe 引擎 8192 < 请求 12536 → 400 挂死 | `_complexity_route_test` 16/16 + refdedupe 实机 RUN_S=111/TASK_RC=0/ACCEPT=1 无 400 | O-23 |
+| D-19 | C++ golden 验收形态 | **后续 C++ 任务卡 golden 走真 `cmake` 编译**（非纯源码静态断言） | 维持静态断言（更快/主控免编译链） | O-13 半收口判据：`cmake` 真编译方满足 bit-exact 领域范式（CROSS-PROJECT §2 最高约束）与 golden 强验收初衷（防模型自写测试自证）；Cpp_Hub-001 静态断言仅为试点过渡 | 待首个真编译型 C++ 卡落地回填（golden cmd 调 `cmake` + 断言，本地 fallback 静态断言） | O-13 / O-12 |
 
 ## 2. 方案取舍详情（DESIGN §7，四案）
 

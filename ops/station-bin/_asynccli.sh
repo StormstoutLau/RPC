@@ -1,4 +1,5 @@
 #!/bin/bash
+# [DEPRECATED 2026-09-13] 密钥脱敏废弃：内部替换值被改坏为占位符，重跑把配置 key 洗成 ***REMOVED***，勿执行
 # 同步 A 站 CLI 端点到当前 unsloth gpt-oss 实例 (q8_0 KV, port 8087, key sk-unsloth-581f...)
 set -e
 OC=/home/scott-lau/.config/opencode/opencode.jsonc

@@ -1,4 +1,5 @@
 #!/bin/bash
+# [DEPRECATED 2026-09-13] 密钥脱敏废弃：更新 key 逻辑失效且写配置，勿执行
 set -e
 OC=/home/scott-lau/.config/opencode/opencode.jsonc
 CL=/home/scott-lau/.claude/settings.json

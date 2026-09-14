@@ -1,4 +1,5 @@
 #!/bin/bash
+# [DEPRECATED 2026-09-13] 密钥脱敏废弃：生成 opencode 配置块含占位符，重跑污染生产，勿执行
 set -e
 OC=/home/scott-lau/.config/opencode/opencode.jsonc
 cp "$OC" "$OC.bak-20260904"
