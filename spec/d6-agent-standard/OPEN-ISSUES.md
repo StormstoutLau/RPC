@@ -455,6 +455,8 @@ limit: { context: J.context_length ?? Y?.limit.context ?? 0,
 
 - **--peer 站间互审（2026-09-14 复核确认）**: `agent-cli` 侧 `--peer` 无任何实现（grep 仅命中注释处注释）；站间互审属**独立协议层**，明确**递延 D7**，本项不新增代码。D6 一期 review ring（五源异基座 judge：egress/local/http/http-local）已覆盖单机闭环；站间互审（peer station 互审）待 D7 立项。
 
+- **商业 API 子路接入（source ①，2026-09-14）**: 「主控站侧无商业 API 端点/key 封装」前置缺口由 [ADR-0003](../../adr/ADR-0003-OpenRouter密钥与egress路由管理.md) 落地——OpenRouter 作为 egress 商业源，`secrets/openrouter.key` 存 key，`ops/station-bin/_env_openrouter.ps1` dot-source 注入 `REVIEW_COMMERCIAL_BASE/KEY/MODEL`（`Invoke-JudgeHttp` 直连 `https://openrouter.ai/api/v1`，无需改 agent-cli 代码）。**Phase 1（console-side）就位，待用户填入真实 key 后实测 `review --model commercial` 端到端以回填关闭证据。**
+
 ### O-17：readonly 层 2 锁激活
 
 - **证据**: DESIGN §4.1 层 2；schema 字段在，MVP 仅记录（全部按排它）
