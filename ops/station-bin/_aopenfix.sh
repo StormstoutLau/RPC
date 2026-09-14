@@ -1,4 +1,5 @@
 #!/bin/bash
+# [DEPRECATED 2026-09-13] 密钥脱敏废弃：含写 opencode 配置逻辑，重跑会把 ***REMOVED*** 注入生产，勿执行
 KEY=***REMOVED***
 echo "== 1) 确认 Anthropic /v1/messages (curl) =="
 timeout 120 curl -s http://127.0.0.1:8080/v1/messages -H "x-api-key: $KEY" -H "anthropic-version: 2023-06-01" -H "Content-Type: application/json" \

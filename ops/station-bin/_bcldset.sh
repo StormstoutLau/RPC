@@ -1,4 +1,5 @@
 #!/bin/bash
+# [DEPRECATED 2026-09-13] 密钥脱敏废弃：写 claude settings 配置，重跑污染生产，勿执行
 set -e
 CL=/home/scott-lau/.claude/settings.json
 cp "$CL" "$CL.bak-20260904"

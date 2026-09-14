@@ -39,7 +39,7 @@ $ErrorActionPreference = 'Stop'
 $Script:GNU_TAR = 'C:\Program Files\Git\usr\bin\tar.exe'   # S1: not Win10 bsdtar
 $Script:REMOTE_USER = 'scott-lau'
 $Script:WORKSPACE_ROOT = '/home/scott-lau/agent-workspaces'
-$Script:PROJECTS = @{ paper = 'D:\Paper'; Cpp_Hub = 'D:\RPC\spec\d6-agent-standard\Cpp_Hub' }    # console project root mapping
+$Script:PROJECTS = @{ paper = 'D:\Paper'; Cpp_Hub = 'D:\RPC\spec\d6-agent-standard\Cpp_Hub'; Auto_Prover = 'F:\Auto_Prover' }    # console project root mapping (2026-09-13 Auto_Prover 接入 D6)
 $Script:TMP_ROOT = Join-Path $env:TEMP 'agent-cli'
 # O-12 REPO_ROOT: repo root for golden source resolution (this file is d:\RPC\ops\station-bin\ ->
 # two parents up = d:\RPC). NEW script var (IMPLEMENTATION §3.2 P1-1: not inherited/现役).
@@ -58,6 +58,7 @@ $Script:ROUTE_TABLE = @{
     'nemotron'   = @{ id = 'cluster-litellm/nemotron';                          station = 'B' }
     'qwen'       = @{ id = 'cluster-litellm/qwen';                              station = 'B' }
     'gpt-oss'    = @{ id = 'cluster-litellm/gpt-oss';                           station = 'A' }
+    'gpt-oss-20b'= @{ id = 'cluster-litellm/gpt-oss-20b';                       station = 'B' }   # O-13 sympy 收口卡 (B 站 20b, 2026-09-14)
     'lightning'  = @{ id = 'opencode/nemotron-3.5-lightning-free';              station = 'B' }
     'ultra'      = @{ id = 'opencode/nemotron-3-ultra-free';                    station = 'B' }
     'free-1m'    = @{ id = 'opencode/nemotron-3-ultra-free';                    station = 'B' }  # alias of ultra
