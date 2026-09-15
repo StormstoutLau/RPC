@@ -1121,17 +1121,391 @@ def check_stations(ctx):
     return "PASS", note, []
 
 
+# ── 断言 A8..A11: 健康引擎 (P2-2) ─────────────────────────────────
+# 目的: 把 rpc_check.py 从"提交门禁"扩成"集群健康引擎"—— 学 Ollama Herd 的
+# "成体系的自检项 + 红黄绿 + 修复建议"形态 (方案 §A.2.2), 补齐方案 §5.3 P2-2 列的
+# 维度里**尚未覆盖**的四块:
+#   usb4   链路层: 三段地址/MTU/接口状态/六向直连/主备回程路由   (此前完全没覆盖)
+#   gates  内存门禁: load-gate 可用性 + 当前余量 + loadavg       (此前完全没覆盖)
+#   engine 引擎态: 就绪 + **残留检测**(内存被占着但没有服务)      (此前只看 conf/ROUTE)
+#   models 模型库完整性: 孤儿/断链                                (此前只在 CLI, 未进门禁)
+# (端口/凭据/配置一致性/插件同构已由 ports + stations 的 (a)(d)(f)(g)(h) 覆盖)
+#
+# ssh 往返控制: usb4/gates/engine 三项共用**一次**合并采集(每站), 并按站缓存 ——
+# 否则 3 项 × 3 站 = 9 次往返, 门禁会慢到没人愿意跑。缓存只活在本进程内,
+# 故 `--only` 单跑某项时同样只需 1 次/站。
+INVENTORY_NET = INVENTORY_DIR / "net.yaml"
+# 三段全部端点地址: 采集侧盲发 ping, 由门禁侧判定"哪些必须通"
+NET_ENDS = ("10.10.10.1", "10.10.10.2", "10.10.11.1",
+            "10.10.11.3", "10.10.12.1", "10.10.12.3")
+ENGINE_PORTS = ("8080", "8081", "18080", "18081", "50052")
+# 残留阈值: 进程 RSS 超过它却没有引擎在服务 → 视为残留(占着内存不干活)。
+# 取 2G: 正常单机 llama-server 的 RSS 是几十 G 量级, 而 ggml-rpc-server 空转也有 ~0.3G,
+# 故 2G 能把"真占住了"和"进程刚起/空跑"分开 (本会话真的踩到过 62.6G 残留污染判定)。
+RESIDUAL_RSS_MB = 2048
+
+_HEALTH_CMD = (
+    "echo '===ADDR==='; ip -o -4 addr show 2>/dev/null "
+    "| awk '$4 ~ /^10\\.10\\./ {print $2, $4}'; "
+    "echo '===LINK==='; for i in $(ls /sys/class/net 2>/dev/null | grep '^thunderbolt'); do "
+    "echo \"$i $(cat /sys/class/net/$i/mtu 2>/dev/null) $(cat /sys/class/net/$i/operstate 2>/dev/null)\"; done; "
+    "echo '===ROUTE==='; ip route show 2>/dev/null | while read -r dst rest; do "
+    "case \"$dst\" in 10.10.*) via=$(echo \"$rest\" | sed -n 's/.*via \\([0-9.]*\\).*/\\1/p'); "
+    "met=$(echo \"$rest\" | sed -n 's/.*metric \\([0-9]*\\).*/\\1/p'); "
+    "echo \"$dst ${via:-direct} ${met:-0}\";; esac; done; "
+    "echo '===PING==='; for t in " + " ".join(NET_ENDS) + "; do "
+    "printf '%s ' \"$t\"; ping -c1 -W1 -q \"$t\" >/dev/null 2>&1 && echo OK || echo FAIL; done; "
+    "echo '===PROC==='; ps -eo rss,comm 2>/dev/null "
+    "| grep -E 'llama-server|ggml-rpc-server|llama-cli' | grep -v grep "
+    "| awk '{s+=$1} END {printf \"rss_mb=%d\\n\", s/1024}'; "
+    "echo '===LISTEN==='; ss -ltn 2>/dev/null | awk 'NR>1{print $4}' | sed 's/.*://' "
+    "| grep -E '^(" + "|".join(ENGINE_PORTS) + ")$' | sort -u | tr '\\n' ','; echo; "
+    "echo '===MEM==='; awk '/MemTotal/{printf \"total_mb=%d \", $2/1024} "
+    "/MemAvailable/{printf \"avail_mb=%d\", $2/1024}' /proc/meminfo; "
+    "printf ' load1=%s' \"$(cut -d' ' -f1 /proc/loadavg)\"; "
+    "printf ' loadgate=%s\\n' \"$(command -v load-gate >/dev/null 2>&1 && echo yes || echo no)\""
+)
+
+_HEALTH_CACHE = {}
+
+
+def _health_probe(st: str) -> dict:
+    """单站合并采集 (链路/路由/连通/引擎/内存)。返回 {reachable, addr, link, route, ping, ...}。
+
+    解析失败**显式标 reachable=False**, 绝不返回半份数据让下游误判
+    (与 P1-4 的"解析失败不能表现成业务全错"同一原则)。
+    """
+    if st in _HEALTH_CACHE:
+        return _HEALTH_CACHE[st]
+    d = {"station": st, "reachable": False, "addr": {}, "link": {}, "route": {},
+         "ping": {}, "rss_mb": None, "listen": [], "mem": {}, "raw": ""}
+    sys.path.insert(0, str(ROOT / "ops"))
+    try:
+        import cluster
+    except Exception as e:
+        d["error"] = f"无法导入 cluster.py ({type(e).__name__}) — 该组需 paramiko"
+        _HEALTH_CACHE[st] = d
+        return d
+    ok, out = cluster.ssh_run(st, _HEALTH_CMD, timeout=120)
+    d["raw"] = out or ""
+    if not ok:
+        d["error"] = out
+        _HEALTH_CACHE[st] = d
+        return d
+    d["reachable"] = True
+    sec = _parse_health_sections(out)
+    for line in sec.get("ADDR", []):
+        p = line.split()
+        if len(p) >= 2 and "/" in p[1]:
+            d["addr"][p[0]] = p[1].split("/")[0]
+    for line in sec.get("LINK", []):
+        p = line.split()
+        if len(p) >= 3:
+            d["link"][p[0]] = {"mtu": p[1], "state": p[2]}
+    for line in sec.get("ROUTE", []):
+        p = line.split()
+        if len(p) >= 3:
+            # ⚠ 同一目的地的**主备两条**路由必须并存 —— 早版按 dst 存单个 dict,
+            # 后一条把前一条覆盖掉了, 于是"主备齐备"这件事根本查不出来
+            # (2026-09-15 实测: A 站 10.10.11.0/24 的两条被压成一条, 误报主路由缺失)。
+            d["route"].setdefault(p[0], []).append({"via": p[1], "metric": p[2]})
+    for line in sec.get("PING", []):
+        p = line.split()
+        if len(p) >= 2:
+            d["ping"][p[0]] = p[1]
+    for line in sec.get("PROC", []):
+        if line.startswith("rss_mb="):
+            try:
+                d["rss_mb"] = int(line.split("=", 1)[1])
+            except ValueError:
+                pass
+    d["listen"] = [x for x in ",".join(sec.get("LISTEN", [])).split(",") if x]
+    mem_line = " ".join(sec.get("MEM", []))
+    for tok in mem_line.split():
+        if "=" in tok:
+            k, _, v = tok.partition("=")
+            d["mem"][k] = v
+    _HEALTH_CACHE[st] = d
+    return d
+
+
+def _parse_health_sections(out):
+    sec, cur = {}, None
+    for line in out.splitlines():
+        s = line.strip()
+        if s.startswith("===") and s.endswith("==="):
+            cur = s.strip("=")
+            sec[cur] = []
+        elif cur:
+            sec[cur].append(line)
+    return {k: [x for x in v if x.strip()] for k, v in sec.items()}
+
+
+def _net_doc():
+    """读 inventory/net.yaml。缺失返回 {}; **解析失败抛异常**。"""
+    if not INVENTORY_NET.is_file():
+        return {}
+    import yaml
+    return yaml.safe_load(INVENTORY_NET.read_text(encoding="utf-8")) or {}
+
+
+def check_usb4(ctx):
+    """USB4 三角环链路: 地址/MTU/接口状态 + 六向直连 + 主备回程路由 + 跨段生效性。"""
+    if not INVENTORY_NET.is_file():
+        return "WARN", "inventory/net.yaml 缺失 (链路真值未建)", []
+    try:
+        doc = _net_doc()
+    except Exception as e:
+        return "FAIL", f"net.yaml 解析失败: {type(e).__name__}: {str(e)[:180]}", []
+
+    detail, warn, info = [], [], []
+    live = {st: _health_probe(st) for st in ("A", "B", "C")}
+    reach = [st for st in ("A", "B", "C") if live[st]["reachable"]]
+    for st in ("A", "B", "C"):
+        if not live[st]["reachable"]:
+            detail.append(f"{st} 站不可达/采集失败: {live[st].get('error') or live[st].get('raw', '')[:120]}")
+
+    n_addr = n_ping = n_route = 0
+    for seg in doc.get("segments") or []:
+        if not isinstance(seg, dict):
+            continue
+        name, want_mtu = seg.get("name", "?"), str(seg.get("mtu") or "")
+        for end in seg.get("ends") or []:
+            st = str((end or {}).get("station"))
+            iface, ip = str((end or {}).get("iface") or ""), str((end or {}).get("ip") or "")
+            if not st or not iface or not ip:
+                detail.append(f"net.yaml 段 {name} 的端点字段不全: {end}")
+                continue
+            if st not in reach:
+                continue
+            n_addr += 1
+            got = live[st]["addr"].get(iface)
+            if got != ip:
+                detail.append(f"{st} 站 {iface} 地址 = {got or '(无)'}, 真值 {ip} —— "
+                              f"{name} 段地址不符(改过 netplan? 或接口错位)")
+            lk = live[st]["link"].get(iface) or {}
+            if not lk:
+                detail.append(f"{st} 站 {iface} 不存在 —— {name} 段链路可能未枚举")
+            else:
+                if want_mtu and lk.get("mtu") != want_mtu:
+                    detail.append(f"{st} 站 {iface} MTU = {lk.get('mtu')}, 真值 {want_mtu}")
+                if lk.get("state") != "up":
+                    detail.append(f"{st} 站 {iface} 状态 = {lk.get('state')} (应为 up)")
+
+    # 六向直连: 每站 ping 它两个直连对端 (对端地址从线段两端推导)
+    for seg in doc.get("segments") or []:
+        if not isinstance(seg, dict):
+            continue
+        ends = [e for e in (seg.get("ends") or []) if isinstance(e, dict)]
+        if len(ends) != 2:
+            continue
+        for i in (0, 1):
+            me, peer = ends[i], ends[1 - i]
+            st, tip = str(me.get("station")), str(peer.get("ip") or "")
+            if st not in reach or not tip:
+                continue
+            n_ping += 1
+            if live[st]["ping"].get(tip) != "OK":
+                detail.append(f"{st} → {tip} ({seg.get('name')} 段直连对端) ping 不通 —— "
+                              f"链路级问题, 先查 thunderbolt 枚举(见归档 §6.5)")
+
+    # 主备回程路由: 主备**两条都要**(缺主路由实测降级 268×, 缺回程路由 100% 丢包)
+    for r in doc.get("routes") or []:
+        if not isinstance(r, dict):
+            continue
+        st, dst = str(r.get("station")), str(r.get("dst") or "")
+        if st not in reach or not dst:
+            continue
+        got = live[st]["route"].get(dst) or []
+        have = ", ".join(f"via {g['via']} m{g['metric']}" for g in got) or "无"
+        for kind in ("primary", "backup"):
+            spec = r.get(kind) or {}
+            n_route += 1
+            via, met = str(spec.get("via") or ""), str(spec.get("metric") or "")
+            match = [g for g in got if g.get("via") == via]
+            if not match:
+                detail.append(f"{st} 站缺到 {dst} 的**{kind}**路由 (应 via {via} metric {met}); "
+                              f"实有: {have} —— 见 inventory/net.yaml 的 routes 段 / 归档 §6.6")
+            elif met and all(g.get("metric") != met for g in match):
+                # metric 不符按 **FAIL** 判: 主备的 metric 决定优先级, 颠倒后跨段流量会走
+                # 备路由(经第三方中转) —— 实测 9.46Gb/s → 35Mb/s (268×), 属功能回退而非风味问题。
+                detail.append(f"{st} 站到 {dst} 的 {kind} 路由 (via {via}) metric="
+                              f"{match[0].get('metric')}, 真值 {met} —— metric 决定主备优先级, "
+                              f"不符会让跨段流量走错路径(实测降级 268×)")
+    for st in reach:
+        if st in {str(r.get("station")) for r in (doc.get("routes") or [])
+                  if isinstance(r, dict)}:
+            info.append(f"{st} 站到非直连段的路由: " +
+                        "; ".join(f"{k} → " + ", ".join(f"via {g['via']} m{g['metric']}"
+                                                        for g in v)
+                                  for k, v in sorted(live[st]["route"].items())))
+
+    # 跨段主路由生效性
+    for cx in doc.get("cross_checks") or []:
+        if not isinstance(cx, dict):
+            continue
+        st, tip = str(cx.get("from")), str(cx.get("to") or "")
+        if st not in reach or not tip:
+            continue
+        n_ping += 1
+        if live[st]["ping"].get(tip) != "OK":
+            detail.append(f"{st} → {tip} 不通 ({cx.get('why')}) —— 跨段主路由未生效")
+
+    note = (f"链路: 可达 {len(reach)}/3 站 · 地址 {n_addr} 端 · 连通 {n_ping} 向 · "
+            f"路由 {n_route} 条(主备) · 段 {len(doc.get('segments') or [])}")
+    if detail:
+        return "FAIL", note, info + detail + [f"(WARN) {w}" for w in warn]
+    if warn:
+        return "WARN", note, info + warn
+    return "PASS", note, info
+
+
+def check_gates(ctx):
+    """内存门禁: load-gate 可用性 + 当前余量 + loadavg。"""
+    detail, warn, info = [], [], []
+    live = {st: _health_probe(st) for st in ("A", "B", "C")}
+    reach = [st for st in ("A", "B", "C") if live[st]["reachable"]]
+    for st in ("A", "B", "C"):
+        if not live[st]["reachable"]:
+            detail.append(f"{st} 站不可达/采集失败: {live[st].get('error')}")
+
+    for st in reach:
+        mem = live[st]["mem"]
+        try:
+            total, avail = int(mem["total_mb"]), int(mem["avail_mb"])
+        except (KeyError, ValueError):
+            detail.append(f"{st} 站内存读数异常: {mem}")
+            continue
+        used = total - avail                      # 与站上 load-gate 同口径(used = total - avail)
+        headroom = avail // 1024 - 12             # 12G 安全垫(load-gate 的 saf_mb)
+        info.append(f"{st} 站 total {total // 1024}G / used {used // 1024}G / "
+                    f"avail {avail // 1024}G → 单模型可加载上限约 {headroom}G")
+        try:
+            if float(mem.get("load1", 0)) > 8:
+                warn.append(f"{st} 站 loadavg1={mem.get('load1')} > 8 —— 与 load-gate 同阈值, "
+                            f"此时加载会明显变慢")
+        except ValueError:
+            pass
+        if mem.get("loadgate") != "yes":
+            detail.append(f"{st} 站 load-gate 不可用 (command -v 取不到) —— 站上加载门禁失效")
+        if headroom <= 0:
+            detail.append(f"{st} 站余量 {headroom}G ≤ 0 —— 当前**任何**模型都过不了门禁, "
+                          f"需先卸载或清理残留")
+
+    note = (f"内存门禁: 可达 {len(reach)}/3 站 · "
+            f"最小余量 {min([int(live[s]['mem'].get('avail_mb', 0)) // 1024 - 12 for s in reach] or [0])}G")
+    if detail:
+        return "FAIL", note, info + detail + [f"(WARN) {w}" for w in warn]
+    if warn:
+        return "WARN", note, info + warn
+    return "PASS", note, info
+
+
+def check_engine(ctx):
+    """引擎态: 就绪 + **残留检测**(内存被占着但没有服务)。
+
+    全站停机**不是失败** —— 本项目是"零自加载"方针, 引擎按需启停。
+    真正要抓的是"占着内存却没有服务": 本会话实测踩到过一次 A 站 62.6G 的测试残留,
+    它污染了后续所有内存判定 (预估被误报 NO_FIT)。
+    """
+    detail, warn, info = [], [], []
+    live = {st: _health_probe(st) for st in ("A", "B", "C")}
+    reach = [st for st in ("A", "B", "C") if live[st]["reachable"]]
+    running = 0
+    for st in ("A", "B", "C"):
+        if not live[st]["reachable"]:
+            detail.append(f"{st} 站不可达/采集失败: {live[st].get('error')}")
+    for st in reach:
+        rss = live[st]["rss_mb"] or 0
+        ports = live[st]["listen"]
+        if ports:
+            running += 1
+            info.append(f"{st} 站引擎在服务: 端口 {','.join(ports)} · 进程 RSS {rss // 1024}G")
+            if rss < 1024:
+                warn.append(f"{st} 站有引擎端口在听但 RSS 仅 {rss}M —— 疑似异常进程/端口被占")
+        elif rss >= RESIDUAL_RSS_MB:
+            detail.append(f"{st} 站**残留**: 无任何引擎端口在听, 但 llama/rpc 进程仍占 "
+                          f"{rss // 1024}G RSS —— 内存被占着没干活, 会污染加载预估 "
+                          f"(先 infer-unload / 清残留再加载)")
+        else:
+            info.append(f"{st} 站引擎未运行 (RSS {rss}M) —— 零自加载方针下属正常")
+
+    note = (f"引擎: 可达 {len(reach)}/3 站 · 在服务 {running} 站 · "
+            f"总占用 {sum((live[s]['rss_mb'] or 0) for s in reach) // 1024}G")
+    if detail:
+        return "FAIL", note, info + detail + [f"(WARN) {w}" for w in warn]
+    if warn:
+        return "WARN", note, info + warn
+    return "PASS", note, info
+
+
+def check_models(ctx):
+    """模型库完整性: 孤儿(物理库有/聚合视图无) + 断链(软链目标不存在)。"""
+    sys.path.insert(0, str(ROOT / "ops"))
+    try:
+        import cluster
+    except Exception as e:
+        return ("WARN", f"无法导入 cluster.py ({type(e).__name__}) — 该项需 paramiko", [])
+
+    detail, info = [], []
+    reach = 0
+    tot_o = tot_b = 0
+    for st in ("A", "B", "C"):
+        m = cluster._scan_models(st)
+        if not m:
+            detail.append(f"{st} 站模型库扫描失败 (站不可达?)")
+            continue
+        reach += 1
+        orp, brk = m["orphans"], m["broken"]
+        tot_o += len(orp)
+        tot_b += len(brk)
+        info.append(f"{st} 站: 物理库 {len(m['phy'])} / 聚合视图 {len(m['agg'])} / "
+                    f"孤儿 {len(orp)} / 断链 {len(brk)}")
+        for x in orp:
+            detail.append(f"{st} 站孤儿 {x} —— 物理库有、聚合视图无: **权重在但清单看不到、"
+                          f"也加载不了**; 修: `cluster.py models link --go`")
+        for x in brk:
+            detail.append(f"{st} 站断链 {x} —— 聚合视图软链目标不存在; "
+                          f"修: `cluster.py models prune --go`")
+
+    note = f"模型库: 可达 {reach}/3 站 · 孤儿 {tot_o} · 断链 {tot_b}"
+    if detail:
+        return "FAIL", note, info + detail
+    return "PASS", note, info
+
+
 # ── 断言清单 (加校验 = 在此加一条 + 写一个函数) ─────────────────────
+# fix 字段 = 该项失败/警告时的**处置建议** (健康引擎要求"红灯必须给出下一步", 而不是
+# 只报"哪里不对")。main() 在结论区按严重度打印。
 CHECKS = [
-    {"id": "secrets", "title": "明文扫描", "fn": check_secrets, "quick": True},
-    {"id": "syntax", "title": "语法检查", "fn": check_syntax, "quick": True},
-    {"id": "inventory", "title": "真值登记", "fn": check_inventory, "quick": True},
-    {"id": "ports", "title": "端口分配表自洽", "fn": check_ports, "quick": True},
-    {"id": "plugins", "title": "插件同构基线", "fn": check_plugins, "quick": True},
-    {"id": "impact", "title": "影响面反查", "fn": check_impact, "quick": True},
-    {"id": "aliases", "title": "别名解析契约", "fn": check_aliases, "quick": True},
-    {"id": "stations", "title": "三站实况对账", "fn": check_stations, "quick": False},
+    {"id": "secrets", "title": "明文扫描", "fn": check_secrets, "quick": True,
+     "fix": "删除明文密钥, 或加入 SECRET_ALLOW 并写明原因(不允许静默放行)"},
+    {"id": "syntax", "title": "语法检查", "fn": check_syntax, "quick": True,
+     "fix": "按明细里的行号修语法; 扩展名与内容不符的应解包或改名"},
+    {"id": "inventory", "title": "真值登记", "fn": check_inventory, "quick": True,
+     "fix": "端口/模型标识有变更时同步 inventory/*.yaml 真值表"},
+    {"id": "ports", "title": "端口分配表自洽", "fn": check_ports, "quick": True,
+     "fix": "按明细修 inventory/ports.yaml (缺字段/同组重复/跨组重叠/枚举拼错)"},
+    {"id": "plugins", "title": "插件同构基线", "fn": check_plugins, "quick": True,
+     "fix": "改插件/技能后同步 inventory/plugins.yaml; 无法立即修的真实差异登记 known_drift"},
+    {"id": "impact", "title": "影响面反查", "fn": check_impact, "quick": True,
+     "fix": "impact.yaml 登记的 consumer 路径不存在 —— 修正路径或删掉该条"},
+    {"id": "aliases", "title": "别名解析契约", "fn": check_aliases, "quick": True,
+     "fix": "以站上 conf 为准改 cluster.py 的 ROUTE/RPC_MODELS/STATION_ROUTES"},
+    {"id": "usb4", "title": "USB4 三角环链路", "fn": check_usb4, "quick": False,
+     "fix": "地址/路由不符 => 对照 inventory/net.yaml 与归档 §6.3/§6.6; "
+            "链路不通 => 先查 BIOS USB4 安全等级与是否冷启动(归档 §6.5)"},
+    {"id": "gates", "title": "内存门禁", "fn": check_gates, "quick": False,
+     "fix": "load-gate 缺失需补部署到 /usr/local/bin; 余量 ≤0 先卸载或清残留; "
+            "loadavg>8 等负载回落再加载"},
+    {"id": "engine", "title": "引擎态与残留", "fn": check_engine, "quick": False,
+     "fix": "残留用 infer-unload 或清 llama/rpc 进程; 端口在听但 RSS 异常需查进程归属"},
+    {"id": "models", "title": "模型库完整性", "fn": check_models, "quick": False,
+     "fix": "孤儿 `cluster.py models link --go`; 断链 `cluster.py models prune --go`"},
+    {"id": "stations", "title": "三站实况对账", "fn": check_stations, "quick": False,
+     "fix": "conf/权重/凭据/端口/插件任一项不符 —— 见明细, 一律以站上实况为准改仓库侧"},
 ]
+MARKS = {"PASS": "✓", "WARN": "▲", "FAIL": "✕"}
 
 
 def main():
@@ -1143,7 +1517,7 @@ def main():
 
     if args.list:
         for c in CHECKS:
-            print(f"  {c['id']:10s} {c['title']:14s} quick={c['quick']}")
+            print(f"  {c['id']:10s} {c['title']:16s} quick={str(c['quick']):5s} {c.get('fix', '')}")
         return 0
 
     selected = CHECKS
@@ -1167,7 +1541,7 @@ def main():
             failures += 1
 
     for cid, title, status, note, _ in results:
-        print(f"  [{status:4s}] {cid:10s} {title:14s} {note}")
+        print(f"  [{status:4s}] {MARKS[status]} {cid:10s} {title:16s} {note}")
 
     skipped = [c["id"] for c in CHECKS if c not in selected]
     if skipped:
@@ -1181,11 +1555,22 @@ def main():
             if len(detail) > 40:
                 print(f"    … 另有 {len(detail) - 40} 条")
 
+    # 处置建议: 红灯必须给出"下一步", 不能只报"哪里不对" (P2-2 健康引擎形态)
+    bad = [r for r in results if r[2] in ("FAIL", "WARN")]
+    if bad:
+        fixes = {c["id"]: c.get("fix", "") for c in CHECKS}
+        print("\n  ── 处置建议 (红灯优先) ──")
+        for cid, _t, status, _n, _d in sorted(bad, key=lambda r: r[2] != "FAIL"):
+            print(f"    {MARKS[status]} {cid:10s} {fixes.get(cid, '')}")
+
+    n_fail = sum(1 for r in results if r[2] == "FAIL")
+    n_warn = sum(1 for r in results if r[2] == "WARN")
+    n_ok = len(results) - n_fail - n_warn
+    tail = f"绿灯 {n_ok} · 黄灯 {n_warn} · 红灯 {n_fail}"
     if failures:
-        print(f"\n  结论: FAIL ({failures} 项失败) → 阻断; 修复后重跑\n")
+        print(f"\n  结论: FAIL ({failures} 项失败) → 阻断; 修复后重跑 · {tail}\n")
         return 1
-    warn = sum(1 for r in results if r[2] == "WARN")
-    print(f"\n  结论: PASS{'' if not warn else f' (含 {warn} 项 WARN)'}\n")
+    print(f"\n  结论: PASS · {tail}\n")
     return 0
 
 
