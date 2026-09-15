@@ -74,7 +74,7 @@ ssh scott-lau@scott-lau-GTR-Pro.local "bash ~/llama-distributed/run_server.sh 80
 curl http://192.168.1.15:8080/v1/chat/completions -H 'Content-Type: application/json' \
   -d '{"model":"m","messages":[{"role":"user","content":"Reply exactly: UPGRADE_PONG"}],"max_tokens":1024}'
 # 同时运行巡检:
-bash D:/RPC/scripts/check_llama_version.sh --deep
+python ops/cluster.py versions      # 三站引擎指纹 + MANIFEST 全量 md5sum -c 完整性 (ADR-0004: 已并入统一入口)
 ```
 
 ### 6. 收尾 / 回滚
@@ -99,9 +99,11 @@ ssh scott-lau@scott-lau-GTR-Pro.local 'sudo ln -sfn llama.cpp-9859 /opt/llama.cp
 ## 日常巡检（升级间隔期）
 
 ```bash
-bash D:/RPC/scripts/check_llama_version.sh          # 指纹级（秒级）
-bash D:/RPC/scripts/check_llama_version.sh --deep   # 全量 MD5（分钟级）
+python ops/cluster.py versions   # 三站指纹(RPC commit/rpc_protocol/单机 commit/LM Studio/opencode) + MANIFEST 全量 md5sum -c
 ```
+> 2026-09-15 更新 (ADR-0004): 原 `check_llama_version.sh [--deep]` 已废弃并删除 —— 其能力
+> (三站指纹比对 + MANIFEST 全量 md5sum -c) 已并入 `cluster.py versions`; 且旧脚本里 C 站 IP
+> 仍是过时的 `192.168.1.24`(现为 192.168.1.37)。下方为历史记档, 保留供溯源。
 
 两站不一致 = 有人单独动过其中一站 → 立即按回滚流程对齐。
 

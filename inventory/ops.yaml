@@ -44,9 +44,6 @@ station_runtime:
 
 # 历史一次性脚本: **只减不增**; 迁进统一入口后请从本表删除 (删减是受欢迎的方向)
 frozen_ops_scripts:
-  - ops/check_llama_version.ps1
-  - ops/check_llama_version.py
-  - ops/check_llama_version.sh
   - ops/llama-serve-instance
   - ops/lm-download/speedtest_asset.sh
   - ops/lm-download/speedtest_codeload.sh
@@ -106,7 +103,6 @@ frozen_ops_scripts:
   - ops/station-bin/_aopen.sh
   - ops/station-bin/_aopen2.sh
   - ops/station-bin/_aopenfix.sh
-  - ops/station-bin/_aportchk.sh
   - ops/station-bin/_apost.sh
   - ops/station-bin/_apre.sh
   - ops/station-bin/_aprobe.sh
@@ -165,7 +161,6 @@ frozen_ops_scripts:
   - ops/station-bin/_bocupdate.sh
   - ops/station-bin/_bocverify.sh
   - ops/station-bin/_bperm.sh
-  - ops/station-bin/_bportchk.sh
   - ops/station-bin/_bprobe.sh
   - ops/station-bin/_brawres.sh
   - ops/station-bin/_brespchk.sh
@@ -267,7 +262,6 @@ frozen_ops_scripts:
   - ops/station-bin/golden/cpphub_beta_golden.sh
   - ops/station-bin/golden/cpphub_golden.py
   - ops/station-bin/golden/o13_sympy_golden.py
-  - ops/station-bin/make-dashboard.ps1
   - ops/station-bin/repro-check.sh
   - ops/station-bin/repro-fire.sh
   - ops/station-bin/repro-health.sh
