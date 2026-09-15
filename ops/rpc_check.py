@@ -326,6 +326,132 @@ def check_inventory(ctx):
     return "PASS", note, []
 
 
+# ── 断言 A6: 端口分配表自洽 (P1-4) ────────────────────────────────
+# 目的: 让 inventory/ports.yaml 从"一份文档"变成"一份可断言的分配表"。
+# 只做**表内自洽** (不碰站上, 故可进 quick 门禁); 站上占用对账在 stations 断言的 (g)。
+#
+# 为什么需要: 2026-09-15 首次做站上对账时暴露三类表本身的问题 ——
+#   · 8090 登记为 "Beszel agent, scope [A, B]", 实际监听方是 B 站 beszel-hub
+#     (A 站的 agent 是**出站**客户端, 不监听) → 分配表的 scope 与 owner 都会写错
+#   · mountd/statd 的端口号被写死 (52591/53517/55723), 一天后全变 → 端口号不是真值
+#   · 137/138/546/5353/3702/6665/724 等长期监听的系统端口从未登记 → 对账必红
+INVENTORY_PORTS = INVENTORY_DIR / "ports.yaml"
+VALID_SCOPE = {"master", "A", "B", "C"}
+VALID_PROTO = {"tcp", "udp", "http", "https", "tcp+udp"}
+VALID_MODE = {"always", "on_demand"}
+# 内核临时端口段下界。三站实测 net.ipv4.ip_local_port_range = "32768 60999"。
+# 该段端口随服务启动重分配 (NFS mountd/statd 即典型), 不能当作真值登记, 故对账豁免。
+EPHEMERAL_MIN = 32768
+ALL_STATIONS = ("A", "B", "C")
+
+
+def _port_entries():
+    """读 inventory/ports.yaml → {group: [entry, ...]}。
+
+    文件不存在返回 {}; **解析失败抛异常** —— 刻意不吞:
+    2026-09-15 实测教训 —— 初版把异常吞成 {} 后, 一个 `note:` 值的 YAML 语法错误
+    让整张表变空, stations 断言随即报了 40+ 条"端口未登记"的**假象**,
+    真正的错因 (第 142 行) 完全看不到。真值表解析失败必须立刻炸出来。
+    """
+    if not INVENTORY_PORTS.is_file():
+        return {}
+    import yaml
+    doc = yaml.safe_load(INVENTORY_PORTS.read_text(encoding="utf-8")) or {}
+    return {g: v for g, v in doc.items() if isinstance(v, list)}
+
+
+def _scopes(e):
+    """条目适用的站列表。**无 scope = 三站通用** (unmanaged 里的系统端口多如此)。"""
+    s = e.get("scope")
+    return [str(x) for x in s] if s else list(ALL_STATIONS)
+
+
+def check_ports(ctx):
+    """纯表内自洽: 结构 / 唯一 / 跨组重叠 / 枚举 / expect_bind 具体性。"""
+    if not INVENTORY_PORTS.is_file():
+        return "WARN", "inventory/ports.yaml 缺失 (端口分配表未建)", []
+    try:
+        entries = _port_entries()
+    except Exception as e:
+        return "FAIL", f"ports.yaml 解析失败: {type(e).__name__}: {str(e)[:180]}", []
+    if not entries.get("managed"):
+        return "FAIL", "ports.yaml 无可解析的 managed 分组", []
+
+    detail = []
+    groups = ("managed", "third_party", "unmanaged", "deprecated")
+
+    # (1) 结构完整性: managed 要求 purpose/scope/bind/owner 四件套
+    #     (scope 是"按站对账"的前提, bind 是"暴露面"的前提; 缺任一项该行就不可断言)
+    for g, req in (("managed", ("purpose", "scope", "bind", "owner")),
+                   ("third_party", ("purpose", "owner", "scope"))):
+        for e in entries.get(g) or []:
+            if not isinstance(e, dict):
+                continue
+            miss = [k for k in req if not e.get(k)]
+            if miss:
+                detail.append(f"{g} :{e.get('port', '?')} 缺字段 {', '.join(miss)}")
+
+    # (2) 同一端口不得在同一分组内出现两次 (后者覆盖前者 = 静默丢条目)
+    for g in groups:
+        seen = {}
+        for e in entries.get(g) or []:
+            if not isinstance(e, dict) or not isinstance(e.get("port"), int):
+                continue
+            seen.setdefault(e["port"], []).append(e)
+        for p, lst in sorted(seen.items()):
+            if len(lst) > 1:
+                detail.append(f"{g} 内端口 {p} 重复 {len(lst)} 次 —— 后者会覆盖前者")
+
+    # (3) 跨分组不得重叠 —— 这是"分配表"的核心约束: 一个端口同一时刻只属于一类。
+    #     deprecated 也纳入: 已退役端口若又出现在在用分组, 说明退役不彻底/登记过期。
+    owner_of = {}
+    for g in groups:
+        for e in entries.get(g) or []:
+            if isinstance(e, dict) and isinstance(e.get("port"), int):
+                owner_of.setdefault(e["port"], []).append(g)
+    for p, gs in sorted(owner_of.items()):
+        if len(set(gs)) > 1:
+            detail.append(f"端口 {p} 同时登记在 {', '.join(sorted(set(gs)))} 两个分组 —— "
+                          f"应只在其中一处 (在用的进 managed/third_party/unmanaged, "
+                          f"退役的只留 deprecated)")
+
+    # (4) 枚举合法性 —— 拼错 scope/proto/mode 会让对账**静默失效**
+    #     (如 scope 写成 "a" 则不匹配任何站; mode 写成 "ondemand" 则豁免规则不生效)
+    for g in ("managed", "third_party", "unmanaged"):
+        for e in entries.get(g) or []:
+            if not isinstance(e, dict):
+                continue
+            p = e.get("port", "?")
+            for s in (e.get("scope") or []):
+                if str(s) not in VALID_SCOPE:
+                    detail.append(f"{g} :{p} 的 scope 含非法值 {s!r} (合法: "
+                                  f"{'/'.join(sorted(VALID_SCOPE))})")
+            if e.get("proto") and str(e["proto"]).lower() not in VALID_PROTO:
+                detail.append(f"{g} :{p} 的 proto 非法 {e['proto']!r} "
+                              f"(合法: {'/'.join(sorted(VALID_PROTO))})")
+            if e.get("mode") and str(e["mode"]) not in VALID_MODE:
+                detail.append(f"{g} :{p} 的 mode 非法 {e['mode']!r} "
+                              f"(合法: {'/'.join(sorted(VALID_MODE))})")
+
+    # (5) expect_bind 必须是**具体地址** —— 它的用途是断言"暴露面没超预期",
+    #     写成 * 或 0.0.0.0 则断言恒真, 等于没写。
+    for e in entries.get("managed") or []:
+        exp = (e or {}).get("expect_bind")
+        if exp and ("*" in str(exp) or str(exp).startswith("0.0.0.0")):
+            detail.append(f"managed :{e.get('port')} 的 expect_bind={exp!r} 不是具体地址, "
+                          f"该断言会恒真")
+
+    n_ports = len([1 for e in entries.get("managed") or []
+                   if isinstance(e, dict) and isinstance(e.get("port"), int)])
+    note = (f"分配表: managed {n_ports} · third_party {len(entries.get('third_party') or [])} · "
+            f"unmanaged {len(entries.get('unmanaged') or [])} · "
+            f"deprecated {len(entries.get('deprecated') or [])} · "
+            f"dynamic {len(entries.get('dynamic') or [])}")
+    if detail:
+        return "FAIL", note, detail
+    return "PASS", note, []
+
+
 # ── 断言 A?: 影响面反查表 (CI/CD Layer 3) ─────────────────────────
 # inventory/impact.yaml 登记"每个模型/端口/配置被谁消费"。此断言保证:
 #   (a) impact.yaml 存在且 YAML 合法
@@ -506,6 +632,9 @@ STATION_CMD = (
     "printf '\\n[conf]\\n'; ls -1 /etc/llama-instances/*.env 2>/dev/null "
     "| xargs -r -n1 basename | sed 's/\\.env$//' | tr '\\n' ' '; echo; "
     "printf '\\n[bind]\\n'; ss -ltn 2>/dev/null | awk 'NR>1{print $4}' | tr '\\n' ' '; echo; "
+    # UDP 侧单独一段 (P1-4): 系统里长期监听的 UDP 端口并不少 (nmbd/avahi/NetworkManager/
+    # wsdd/netconsole/rpc.statd), 只查 TCP 会让它们对账时"看不见"。
+    "printf '\\n[ubind]\\n'; ss -lun 2>/dev/null | awk 'NR>1{print $4}' | tr '\\n' ' '; echo; "
     "printf '\\n[mpath]\\n'; for f in /etc/llama-instances/*.env; do [ -e \"$f\" ] || continue; "
     "a=${f##*/}; a=${a%.env}; p=$(sed -n 's/^MODEL_PATH=//p' \"$f\" | head -1 | tr -d '\"'); "
     "if [ -z \"$p\" ]; then echo \"$a NO_MODEL_PATH\"; "
@@ -675,11 +804,90 @@ def check_stations(ctx):
                             f"A/B 站二者相同 (claude 走本地 :8080, 用引擎 key); "
                             f"C 站是 15B 占位串 'sk-local-noauth…', 是否有意待确认")
 
+    # (g) 站上监听端口 vs 分配表 (P1-4 占用对账)
+    #     方向一 (FAIL): 站上在听、端口 < EPHEMERAL_MIN、且分配表里没有它 →
+    #        真值表漏登记 (第一次跑就查出 137/138/546/5353/3702/6665/724 七类)。
+    #        ≥ EPHEMERAL_MIN 的一律豁免: 该段是内核临时端口, 服务每次启动换号
+    #        (NFS mountd/statd 即典型), 登记端口号必然过期。
+    #     方向二 (WARN): 分配表声明在用、站上却没听 → 可能只是服务挂了。
+    #        带 status 或 mode: on_demand 的条目豁免 (如 studio 的 8080 本就是按需启停)。
+    try:
+        port_entries = _port_entries()
+    except Exception as e:
+        # 解析失败必须报真因, 不能让下面的循环把"整张表读不出"表现成
+        # 几十条"端口未登记"的假象 (2026-09-15 实测踩到), 故直接跳过整段对账。
+        port_entries = None
+        detail.append(f"ports.yaml 解析失败, 端口占用对账无法进行 —— "
+                      f"{type(e).__name__}: {str(e)[:160]}")
+    ignored_eph, checked_ports = 0, 0
+    if port_entries is not None:
+        by_port = {}
+        for g in ("managed", "third_party", "unmanaged"):
+            for e in port_entries.get(g) or []:
+                if isinstance(e, dict) and isinstance(e.get("port"), int):
+                    by_port.setdefault(e["port"], []).append((g, e))
+
+        def _reg_covers(port, side, st):
+            """分配表是否已登记该 (端口, 协议侧, 站)。
+
+            proto 语义: tcp/http/https → TCP 侧; udp → UDP 侧;
+                        tcp+udp → 两侧 (mihomo 的 mixed / DNS 端口即双栈);
+                        缺省 → 两侧都算 (unmanaged 里的系统端口多不关心协议侧)。
+            """
+            for g, e in by_port.get(port, []):
+                if st not in _scopes(e):
+                    continue
+                p = str(e.get("proto") or "").lower()
+                if p == "udp" and side != "udp":
+                    continue
+                if p in ("tcp", "http", "https") and side != "tcp":
+                    continue
+                return True                  # tcp+udp 与缺省都覆盖两侧
+            return False
+
+        def _listening(st, sec):
+            out = set()
+            for tok in (live[st].get(sec) or "").split():
+                if ":" in tok:
+                    p = tok.rpartition(":")[2]
+                    if p.isdigit():
+                        out.add(int(p))
+            return out
+
+        for st in reach:
+            for side, sec in (("tcp", "bind"), ("udp", "ubind")):
+                for port in sorted(_listening(st, sec)):
+                    checked_ports += 1
+                    if _reg_covers(port, side, st):
+                        continue
+                    if port >= EPHEMERAL_MIN:
+                        ignored_eph += 1
+                        continue
+                    detail.append(f"{st} 站 {side.upper()} :{port} 有监听但分配表未登记 —— "
+                                  f"是常驻服务就登记到 inventory/ports.yaml "
+                                  f"(我方 = managed, 他方 = third_party/unmanaged)")
+            # 方向二
+            for g in ("managed", "third_party"):
+                for e in port_entries.get(g) or []:
+                    if not isinstance(e, dict) or not isinstance(e.get("port"), int):
+                        continue
+                    if st not in [str(x) for x in (e.get("scope") or [])]:
+                        continue      # 反向只查明确声明了该站的条目
+                    if e.get("status") or str(e.get("mode") or "") == "on_demand":
+                        continue
+                    if (e["port"] in _listening(st, "bind")
+                            or e["port"] in _listening(st, "ubind")):
+                        continue
+                    warn.append(f"{st} 站 :{e['port']} ({e.get('purpose', '?')}, "
+                            f"owner={e.get('owner', '?')}) 声明在用但未监听 —— "
+                            f"服务挂了? 若本就按需启停, 加 mode: on_demand")
+
     if unreachable:
         info.insert(0, f"站点不可达 (未计入判定): {', '.join(unreachable)}")
     note = (f"可达 {len(reach)}/3 站 · 对账 cfg{len(WATCHED)}/ROUTE{len(cluster.ROUTE)}"
             f"/RPC{len(cluster.RPC_MODELS)}/conf{sum(len(v) for v in declared_conf.values())}"
             f"/bind{sum(1 for m in (ports_inv or {}).values() if m.get('expect_bind'))}"
+            f"/port{checked_ports}(豁免临时段 {ignored_eph})"
             f"/weight{sum(1 for st in reach for _ in (live[st].get('mpath') or '').splitlines())}")
     if detail:
         return "FAIL", note, info + detail + [f"(WARN) {w}" for w in warn]
@@ -693,9 +901,10 @@ CHECKS = [
     {"id": "secrets", "title": "明文扫描", "fn": check_secrets, "quick": True},
     {"id": "syntax", "title": "语法检查", "fn": check_syntax, "quick": True},
     {"id": "inventory", "title": "真值登记", "fn": check_inventory, "quick": True},
+    {"id": "ports", "title": "端口分配表自洽", "fn": check_ports, "quick": True},
     {"id": "impact", "title": "影响面反查", "fn": check_impact, "quick": True},
     {"id": "aliases", "title": "别名解析契约", "fn": check_aliases, "quick": True},
-    {"id": "stations", "title": "三站配置一致", "fn": check_stations, "quick": False},
+    {"id": "stations", "title": "三站配置+占用一致", "fn": check_stations, "quick": False},
 ]
 
 

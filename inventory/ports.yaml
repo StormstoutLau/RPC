@@ -6,24 +6,42 @@
 #   475 处, 没有一处是"真值", 于是改一个端口就会忘掉别处。详见
 #   docs/research/2026-09-14_暴露问题调研.md 的 CI/CD 与流水线一节。
 #
-# 门禁怎么用它 (ops/rpc_check.py 的 inventory 断言 → **对账模式**):
-#   校验"声明源"里出现的端口都在本表登记 —— 声明源 = 
-#     (a) ops/cluster.py 的端口常量 (STATION_PORT 等)
-#     (b) docs/三机推理集群使用手册.md 的端点表格行
-#   不在本表 => FAIL, 提示登记或修正引用。
+# 门禁怎么用它 (ops/rpc_check.py 的两条断言):
 #
-#   **刻意不做的**: 扫描全仓库任意 4-5 位数字。2026-09-14 实测该方案不可行 ——
-#   51 个"端口"里有 19 个不是端口 (llama.cpp 提交号 9859、参数值 16384/4096/1024、
-#   截断匹配 127/808 ...)。文本里的数字没有唯一语义, 扫全仓库必然噪声爆炸。
+#   ① inventory 断言 → **声明源对账** (只对结构化声明源, 见下)
+#      校验"声明源"里出现的端口都在本表登记 —— 声明源 =
+#        (a) ops/cluster.py 的端口常量 (STATION_PORT 等)
+#        (b) docs/三机推理集群使用手册.md 的端点表格行
+#      不在本表 => FAIL, 提示登记或修正引用。
+#      **刻意不做的**: 扫描全仓库任意 4-5 位数字。2026-09-14 实测该方案不可行 ——
+#      51 个"端口"里有 19 个不是端口 (llama.cpp 提交号 9859、参数值 16384/4096/1024、
+#      截断匹配 127/808 ...)。文本里的数字没有唯一语义, 扫全仓库必然噪声爆炸。
+#
+#   ② ports 断言 (P1-4) → **分配表自洽 + 站上占用对账**
+#      本地自洽 (quick): 结构四件套齐全 / 同组端口唯一 / 跨组端口不得重叠 /
+#                        deprecated 与在用互斥 / scope 与 proto、mode 枚举合法
+#      站上对账 (非 quick, 并入 stations 断言): 把三站 `ss -ltnup` 的实测监听
+#        端口按站与本表比对 —— 见下方"对账规则"。
+#
+# 对账规则 (2026-09-15 定档, 首次实测三站后确定):
+#   - **无 scope = 三站通用**; 有 scope 则只在列出的站参与对账
+#   - **proto 缺省 = tcp+udp 都算**; tcp/http/https 归 TCP 侧, udp 归 UDP 侧,
+#     tcp+udp 表示双栈 (mihomo 的 mixed / DNS 端口即是)
+#   - **≥ 32768 的未登记端口一律豁免** (ip_local_port_range 下界 = 32768, 三站实测一致)。
+#     理由: 该段是内核临时端口, 服务每次启动换号 (NFS 的 mountd/statd 即典型),
+#     写死端口号必然过期 —— 见 dynamic 段。
+#   - 反向 (声明在用却没监听): 有 status 或 mode: on_demand 的条目豁免;
+#     其余未监听 => WARN (不阻断, 因为可能只是服务刚好挂了)
 #
 # 维护约定:
 #   - 本表只登记**实测过**的端口 (ss -ltnp + 服务配置核对); 不确定的宁可不登记
 #   - 退役端口不要删, 移到 deprecated (保留登记以识别历史引用)
+#   - **端口号随启动变化的服务**不要写死, 登记到 dynamic 段 (记 owner + 段位)
 #   - 新增服务 => 改本表
 # ============================================================================
 version: 1
-updated: 2026-09-14
-measured_by: "sudo ss -ltnp + 服务配置核对, 三站实测 2026-09-14"
+updated: 2026-09-15
+measured_by: "sudo ss -ltnup + 服务配置核对 + 进程归属反查, 三站实测 2026-09-15"
 
 # ── 本项目自管的服务端口 ────────────────────────────────────────────
 managed:
@@ -42,10 +60,12 @@ managed:
     bind: 127.0.0.1
     expect_bind: 127.0.0.1
     owner: unsloth studio (后端 llama-server)
+    mode: on_demand
     consumers: [opencode, claude code, hermes, ops/cluster.py, ops/rpc_check.py]
     note: |
       引擎**忽略**请求里的 model 字段, 服务的永远是"当前加载的那个模型"
       (2026-09-14 实测: 传 __bogus__ 仍返回 200)。故 agent provider 的模型键取常量 main。
+      mode: on_demand —— 三站均按需启停 (零自加载方针), 未监听属正常, 不算故障。
 
   - port: 32837
     proto: http
@@ -53,6 +73,7 @@ managed:
     scope: [B]
     bind: 127.0.0.1
     owner: llama-server
+    mode: on_demand
     note: 与 8080 跑同一模型; B 站的 provider 条目已删除, 此端口保留为 studio 内部路径
 
   - port: 8095
@@ -61,6 +82,7 @@ managed:
     scope: [master]
     bind: 127.0.0.1
     owner: ops/cluster.py web
+    mode: on_demand
 
   - port: 50052
     proto: tcp
@@ -68,9 +90,11 @@ managed:
     scope: [A]
     bind: 10.10.10.1
     owner: rpc-server
+    mode: on_demand
     note: |
       对应 cluster.py 的 llama-rpc backend (BACKENDS 里的 "llama-rpc")。
       手册端点表登记为 "A 站 10.10.10.1:50052"; 10.10.10.1 是 USB4 直连网, 非管理网。
+      仅 RPC 分布式加载时由 rpc-server@.service 拉起, 平时不监听。
 
   - port: 8642
     proto: http
@@ -93,11 +117,14 @@ third_party:
 
   - port: 8090
     proto: http
-    purpose: Beszel agent (负载监控)
-    scope: [A, B]
+    purpose: Beszel hub (监控面板/采集入口)
+    scope: [B]
     bind: "*"
-    owner: beszel-agent.service
-    note: C 站未装
+    owner: beszel-hub.service
+    note: |
+      2026-09-15 修正: 此前登记为 "Beszel agent, scope [A, B]" —— **错**。
+      实测 A 站只有 beszel-agent.service (active, 但它是**出站**连 hub 的客户端, 不监听);
+      :8090 的监听方是 B 站的 beszel-hub.service。故 scope 收敛为 [B], owner 改为 hub。
 
   - port: 9090
     proto: http
@@ -107,18 +134,20 @@ third_party:
     owner: mihomo
 
   - port: 7890
-    proto: http
-    purpose: mihomo 代理 HTTP 入口
+    proto: tcp+udp
+    purpose: mihomo 代理入口 (mixed port, TCP+UDP 双栈)
     scope: [A]
     bind: 127.0.0.1
     owner: mihomo
+    note: "2026-09-15 对账修正: 原登记 proto: http (只覆盖 TCP 侧), 实测 UDP 7890 亦在监听"
 
   - port: 1053
-    proto: udp
-    purpose: mihomo DNS
+    proto: tcp+udp
+    purpose: mihomo DNS (TCP+UDP 双栈)
     scope: [A]
     bind: "*"
     owner: mihomo
+    note: "2026-09-15 对账修正: 原登记 proto: udp (只覆盖 UDP 侧), 实测 TCP 1053 亦在监听"
 
 # ── 已退役 / 已废弃 (保留登记以识别历史引用) ────────────────────────
 deprecated:
@@ -146,6 +175,7 @@ deprecated:
     note: 手册端点表登记为"已退役"; vllm 仍在 cluster.py BACKENDS 白名单里 (换后端可用)
 
 # ── 系统/硬件服务 (非我方负责, 登记仅为让对账能解释它们) ─────────────
+# 无 scope = 三站通用; 有 scope = 只在该子集参与对账
 unmanaged:
   - {port: 53, purpose: systemd-resolved 本地 DNS, note: "127.0.0.54 / 127.0.0.53"}
   - {port: 111, purpose: rpcbind (NFS 依赖), scope: [B]}
@@ -155,6 +185,38 @@ unmanaged:
   - {port: 2049, purpose: "NFS server (B 站对外提供)", scope: [B]}
   - {port: 9000, purpose: "lemond (硬件守护, 非 HTTP)", scope: [A, B], bind: 127.0.0.1}
   - {port: 13305, purpose: "lemond (硬件守护)", scope: [A, B], bind: 127.0.0.1}
-  - {port: 52591, purpose: rpc.mountd, scope: [B]}
-  - {port: 53517, purpose: rpc.mountd, scope: [B]}
-  - {port: 55723, purpose: rpc.statd, scope: [B]}
+  # ── 2026-09-15 P1-4 对账补登 ──────────────────────────────────────
+  # 下面这批是首次做"站上监听端口 vs 本表"对账时暴露的漏登记。
+  # 判据: 端口 < 32768 (非内核临时段) 且实测有监听。
+  - {port: 137, proto: udp, purpose: "nmbd (NetBIOS 名称服务, Samba)", scope: [A, B]}
+  - {port: 138, proto: udp, purpose: "nmbd (NetBIOS 数据报, Samba)", scope: [A, B]}
+  - {port: 546, proto: udp, purpose: "NetworkManager DHCPv6 客户端",
+   note: "按接口绑定 (fe80::%if), 非全局监听"}
+  - {port: 5353, proto: udp, purpose: "avahi-daemon (mDNS / DNS-SD)"}
+  - {port: 3702, proto: udp, purpose: "wsdd (WS-Discovery)", scope: [A],
+   note: "由 gvfsd 会话拉起 (user-1000), 未登录时不存在; 故仅会话期监听"}
+  - {port: 6665, proto: udp, purpose: "netconsole-listen (A 站 printk 镜像接收)", scope: [B],
+   note: "netconsole 默认端口; B 站 netconsole-listen.service → /usr/local/bin/netconsole-listen.py"}
+  - {port: 724, proto: udp, purpose: "rpc.statd (NSM)", scope: [B], bind: 127.0.0.1}
+
+# ── 动态端口服务 (端口随启动变化 → 按 owner + 段位豁免, 不写死端口号) ──
+# 为什么单开一段: 2026-09-14 曾把 mountd/statd 的**当次**端口
+# (52591 / 53517 / 55723) 登记进 unmanaged; 2026-09-15 复核发现已全部变化
+# (本轮 mountd → 33179/43589/...)。**端口号不是真值, owner + 段位才是**。
+# 故这几条从 unmanaged 移出, 对应的对账豁免由"≥ 32768 段位规则"承担。
+dynamic:
+  - owner: rpc.mountd
+    purpose: NFS 挂载守护 (端口由 rpcbind 动态分配)
+    scope: [B]
+    proto: tcp+udp
+    note: "2026-09-15 实测 TCP 33179/43589/49945/54599/59535/59537, UDP 41770/41807/43053/43854/51920/60381"
+  - owner: rpc.statd
+    purpose: NFS 状态监控 (NSM)
+    scope: [B]
+    proto: tcp+udp
+    note: "2026-09-15 实测 TCP 33925/49957, UDP 36339/58847; 固定 NSM 端口 724 登记在 unmanaged"
+  - owner: nfsd (内核线程)
+    purpose: NFS 服务端内核套接字
+    scope: [B]
+    proto: tcp+udp
+    note: "ss 无 users 字段 (内核线程, 非用户态进程); 2026-09-15 实测 TCP 33709/36193, UDP 36102/39086"

@@ -3,7 +3,7 @@
 # 目标: 人只需要记一条命令 —— `ops\rpc.ps1 check`
 # 设计背景见 docs/research/2026-09-14_暴露问题调研.md (CI/CD 与流水线分析)
 #
-#   ops\rpc.ps1 check              # 全量校验 (明文 + 语法 + 三站配置一致)
+#   ops\rpc.ps1 check              # 全量校验 (明文 + 语法 + 真值登记 + 端口分配 + 三站配置/占用)
 #   ops\rpc.ps1 check -Quick       # 本地快检 (pre-commit 用)
 #   ops\rpc.ps1 check -List        # 只列断言清单
 #   ops\rpc.ps1 install-hooks      # 安装/更新 pre-commit + pre-push 门禁 (幂等)
@@ -52,7 +52,7 @@ function Show-Usage {
     Write-Host @'
 rpc 统一入口 (P0)
 
-  ops\rpc.ps1 check             全量校验 (明文扫描 + 语法 + 三站配置 sha256)
+  ops\rpc.ps1 check             全量校验 (明文扫描 + 语法 + 真值登记 + 端口分配 + 三站配置/占用)
   ops\rpc.ps1 check -Quick      本地快检 (pre-commit 门禁用, 不含三站比对)
   ops\rpc.ps1 check -Only <ids> 只跑指定断言, 逗号分隔 (见 -List)
   ops\rpc.ps1 check -List       列出全部断言
@@ -132,7 +132,7 @@ switch ($Command.ToLower()) {
         if (-not (Test-Path $hookDir)) { Write-Host "rpc: 未找到 $hookDir" -ForegroundColor Red; exit 2 }
         if (-not $script:Py) { Write-Host 'rpc: 未找到 Python, 无法生成门禁' -ForegroundColor Red; exit 2 }
         Install-HookEntry -Name 'pre-commit' -RunArgs '--quick' -Label 'git commit (本地快检: 明文+语法)'
-        Install-HookEntry -Name 'pre-push'   -RunArgs ''       -Label 'git push (全量: 明文+语法+三站配置比对+站上实况)'
+        Install-HookEntry -Name 'pre-push'   -RunArgs ''       -Label 'git push (全量: 明文+语法+真值登记+端口分配+三站配置/占用对账)'
         Write-Host '已完成; 全量手动校验: ops\rpc.ps1 check' -ForegroundColor Green
         exit 0
     }
