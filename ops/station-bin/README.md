@@ -11,6 +11,7 @@
 | infer-unload         | /usr/local/bin/infer-unload         | 卸载（含 unsloth 清理 + F2：rpc-server 未运行时跳过 GTT 等待 + 2026-09-15：停**全部** worker 的 rpc-server） |
 | infer-list           | /usr/local/bin/infer-list           | 模型清单（建议后端=unsloth，embedding/AWQ 特殊）          |
 | llama-serve-instance | /usr/local/bin/llama-serve-instance | systemd 实例包装器（回退路径用）                        |
+| cluster-ttl          | /usr/local/bin/cluster-ttl          | 空闲 TTL 自动卸载检查器（60s oneshot，**默认关**；见下 P2-5）  |
 | load-mem-gate        | /usr/local/bin/load-mem-gate        | 内存门（12G 垫）                                 |
 | wait-gtt-release     | /usr/local/bin/wait-gtt-release     | GTT 回收等待                                   |
 
@@ -19,6 +20,28 @@
 修改后核对：`md5sum /usr/local/bin/<file>`（两站必须一致）。
 当前（2026-09-15，**三站一致**）：infer-load `fb7df75c...`、infer-unload `6ff2a3b3...`、llama-serve-instance `0cf134f6...`。
 （下表 2026-09-04 的旧值已作废，保留仅为历史：infer-load `229c1328...`(B)/`09e8b60e...`(A)、infer-unload `dc948d63...`、infer-list `5b6d40fc...`。）
+
+## 空闲 TTL 自动卸载（2026-09-15, P2-5，**默认关**）
+
+**件**：`cluster-ttl`（检查器，本目录）+ `ttl.env`（配置模板 → `/etc/llama-instances/ttl.env`）
++ `../cluster-ttl.service` / `../cluster-ttl.timer`（60s oneshot）。**装即 disabled**，显式
+`cluster.py ttl enable` 才生效。
+
+**行为**：引擎空闲 ≥ `TTL_IDLE_SECONDS`（默认 1800s）即执行 `infer-unload`（会一并停掉全部 RPC worker）。
+
+**空闲判据**（为什么不能更省事）：llama.cpp `/metrics` 全是累计计数器，**没有**"最后请求时间"，
+故取差分 —— `Δtok>0` 活跃、`Δtok=0` 且在途请求为 0 才计空闲；`pid` 变化或计数器下降 ⇒ 时钟重新起算。
+`/metrics` 不可用或计数器缺失 ⇒ **不动作**（不拿别的信号冒名顶替）。`requests_processing>0` 或
+`/slots` 有 busy 槽 ⇒ 判活跃，**绝不打断在途请求**。
+
+**三层闸门**：`TTL_ENABLED=0`（默认，只演练）→ `TTL_DRY_RUN=1`（只演练）→ `cluster.py ttl check --go`（真卸）。
+
+**证据**：判定行（pid/在途/Δtok/idle/阈值）进 journald；结论写
+`/var/lib/cluster-ttl/state.json` 的 `last_action`（谁在何时被卸、依据）。
+
+**实测**（B 站 gpt-oss-20b @ llama-single）：关时到期只演练不卸 ✓；在途请求判定
+`在途=1 busy槽=1 Δtok=78.0 → 活跃` 未卸 ✓；真开后由 timer **62s** 自动卸载
+（`idle 60s ≥ 3s`，GTT 12.5G → 0.3G）✓。细节见 `docs/2026-09-15_统一管理入口_深入分析与优化方案_v2.md` §A.6 P2-5。
 
 ## 双机 RPC 回退修复记录（2026-09-15）
 

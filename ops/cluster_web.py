@@ -10,9 +10,11 @@ cluster_web.py — cluster.py web 子命令: 傻瓜式推理框架管理 Web UI 
 端点:
     GET  /            单页 HTML (公开)
     GET  /api/status  三站框架状态 + 引擎 :8080 + 加载实例  (需 token)
+    GET  /api/ttl     三站空闲 TTL 状态 (开关/阈值/定时器/空闲秒/最近动作)  (需 token)
     POST /api/load    {alias, backend?} 加载模型            (需 token)
     POST /api/unload  三站并行卸载                          (需 token)
     POST /api/backend {alias, backend} 切换后端一次命令      (需 token)
+    POST /api/ttl-toggle {station?, action:enable|disable, ttl?, dry_run?} 开关空闲 TTL (需 token)
 
 鉴权: X-Auth-Token header; 首次 401 前端弹 token 存 localStorage。
 设计: spec/d2-cluster-cli/  .trae/documents/cluster-web-ui-实现计划.md
@@ -238,6 +240,46 @@ def _collect_reqlog(n: int = 200):
             "file": "~/.local/share/rpc/reqlog.jsonl"}
 
 
+def _collect_ttl():
+    """三站空闲 TTL 状态聚合 (P2-5, 并行)。只读: 取各站 cluster-ttl --status --json。
+
+    状态解析复用 cluster._ttl_parallel (与 CLI `ttl status` 同一份实现) —— 单一定义点。
+    """
+    res = cluster._ttl_parallel(["A", "B", "C"])
+    out = {}
+    for st in ("A", "B", "C"):
+        r = res.get(st) or {}
+        s = r.get("state") or {}
+        out[st] = {"deployed": bool(r.get("deployed")), "unit": bool(r.get("unit")),
+                   "timer_enabled": r.get("timer_enabled"), "timer_active": r.get("timer_active"),
+                   "enabled": s.get("enabled"), "ttl_s": s.get("ttl_s"),
+                   "conf_dry_run": s.get("conf_dry_run"),
+                   "engine_pid": s.get("engine_pid"), "engine_port": s.get("engine_port"),
+                   "idle_s": s.get("idle_s"), "gtt_gib": s.get("gtt_gib"),
+                   "last_action": s.get("last_action")}
+    return {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "stations": out}
+
+
+def _collect_agent(limit: int = 20):
+    """三站 agent 任务视图聚合 (P1, 只读)。取数与 CLI `agent` **共用 cluster 的实现**。
+
+    两块数据: 已完成的派发台账(+run 详情) / 运行中节拍。**口径分列 + 新鲜度自显**是本项的两条
+    硬要求 (调研 §4.2): 产出是**字节口径**(不是 token), 且必须能看出数据是多久以前的。
+    """
+    rows, note = cluster.agent_runs(limit)
+    beats = cluster.agent_live(["A", "B", "C"])
+    working = [b for b in beats if b.get("running")]
+    return {"time": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "limit": limit, "note": note,
+            "beat_stale_s": cluster.AGENT_BEAT_STALE_S,
+            "ledger_freshness": cluster.agent_ledger_freshness(rows),
+            "live": beats, "runs": rows,
+            "summary": {"working": len(working),
+                        "finished": len([b for b in beats if not b.get("running") and not b.get("error")]),
+                        "unreachable": len([b for b in beats if b.get("error")]),
+                        "stale": len([b for b in beats if b.get("stale") and b.get("running")])}}
+
+
 def _collect_planes():
     """凭据 / Provider / 出站 三平面聚合 (统一入口的 ②③ 平面)。"""
     sec, pv, eg = {}, {}, {}
@@ -351,6 +393,14 @@ class Handler(BaseHTTPRequestHandler):
             if not self._auth_ok():
                 return self._json(401, {"error": "unauthorized"})
             return self._json(200, _collect_reqlog())
+        if path == "/api/ttl":
+            if not self._auth_ok():
+                return self._json(401, {"error": "unauthorized"})
+            return self._json(200, _collect_ttl())
+        if path == "/api/agent":
+            if not self._auth_ok():
+                return self._json(401, {"error": "unauthorized"})
+            return self._json(200, _collect_agent())
         return self._json(404, {"error": "not found"})
 
     def do_POST(self):
@@ -445,6 +495,25 @@ class Handler(BaseHTTPRequestHandler):
                     rc = 1
             return self._json(200 if rc == 0 else 500,
                               {"ok": rc == 0, "log": "\n".join(lines)})
+        if path == "/api/ttl-toggle":
+            # P2-5 空闲 TTL 开关。**默认关**; 开启 = 站上每 60s 判一次, 引擎空闲 ≥ 阈值
+            # 即执行 infer-unload (会一并停掉 RPC worker)。前端另有 confirm 二次确认。
+            action = (body.get("action") or "").strip()
+            st = (body.get("station") or "").strip().upper()
+            if action not in ("enable", "disable"):
+                return self._json(400, {"error": "action 必须是 enable|disable"})
+            if st and st not in ("A", "B", "C"):
+                return self._json(400, {"error": f"bad station '{st}'"})
+            argv = [action] + (["--station", st] if st else [])
+            if action == "enable":
+                try:
+                    argv += ["--ttl", str(int(body.get("ttl") or cluster.TTL_DEFAULT_S))]
+                except (TypeError, ValueError):
+                    return self._json(400, {"error": "ttl 必须是秒数"})
+                if body.get("dry_run"):
+                    argv.append("--dry-run")
+            res = _run_capture(lambda: cluster.cmd_ttl(argv))
+            return self._json(200 if res["rc"] == 0 else 400, res)
         return self._json(404, {"error": "not found"})
 
     def log_message(self, fmt, *args):  # 静默访问日志, 保持控制台干净
@@ -506,6 +575,7 @@ details>div{padding:0 16px 16px}
 .login{background:#fffbeb;border:1px solid #fde68a;padding:12px 16px;margin:16px 22px 0;border-radius:var(--radius)}
 .stmeta{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .metrics{display:flex;gap:6px;flex-wrap:wrap;padding:8px 16px;border-bottom:1px solid var(--line);background:#fbfcfe}
+.empty{color:var(--mut);padding:12px}
 .badge.warnb{background:#fef2f2;color:#b91c1c}
 </style></head><body>
 <header>
@@ -548,6 +618,14 @@ details>div{padding:0 16px 16px}
         采样**按需**触发，不常驻（要连续采样用主控站计划任务调 cluster.py reqlog sample）
       </span>
     </div>
+  </details>
+  <details>
+    <summary>空闲 TTL 自动卸载 (P2-5 · 默认关)</summary>
+    <div id="ttl"></div>
+  </details>
+  <details>
+    <summary>Agent 任务 (进行中 / 已完成) · 只读</summary>
+    <div id="agent"></div>
   </details>
 </div>
 
@@ -975,7 +1053,172 @@ async function doReqlogSample(){
   finally{ busy=false; setBtns(false); loadReqlog(); }
 }
 
-function refreshAll(){ loadModels(); loadStatus(); loadPlanes(); loadVersions(); loadReqlog(); }
+// P2-5 空闲 TTL: 默认关; 开启 = 站上每 60s 判一次, 引擎空闲 ≥ 阈值即 infer-unload。
+// 只对已部署 cluster-ttl 的站给按钮 —— 未部署的站显示原因而不是给一个必然失败的按钮。
+let ttlBusy=false;
+async function loadTtl(){
+  if(ttlBusy) return; ttlBusy=true;
+  try{
+    const d = await api('GET','/api/ttl');
+    const S = d.stations||{};
+    let h = '<table style="margin:8px 12px"><tr><th>站</th><th>开关</th><th>阈值</th>'
+          + '<th>定时器<div class="mut">enabled/active</div></th><th>引擎</th>'
+          + '<th>空闲/阈值</th><th>最近动作</th><th style="text-align:right">操作</th></tr>';
+    for(const st of ['A','B','C']){
+      const s = S[st]||{};
+      if(!s.deployed){
+        h += '<tr><td><b>'+st+'</b></td><td colspan="7" class="mut">未部署 '
+           + '(同步 ops/station-bin/cluster-ttl 与 cluster-ttl.service/.timer)</td></tr>';
+        continue;
+      }
+      const on = s.enabled===true;
+      const eng = s.engine_pid ? ('pid='+s.engine_pid+':'+s.engine_port) : '<span class="mut">无</span>';
+      const idle = (s.idle_s==null) ? '<span class="mut">未比对</span>'
+                                    : (s.idle_s+'s / '+s.ttl_s+'s');
+      const la = s.last_action||{};
+      const laTxt = la.iso
+        ? (esc(String(la.iso).slice(11,19))+' '+(la.result==='unloaded'?'<b>已卸载</b>':esc(la.result))
+           +' <span class="mut">(idle '+la.idle_s+'s)</span>')
+        : '<span class="mut">无</span>';
+      const btn = on
+        ? '<button class="mini danger" onclick="doTtl(\'disable\',\''+st+'\')">关闭</button>'
+        : '<button class="mini" onclick="doTtl(\'enable\',\''+st+'\')">开启</button>';
+      h += '<tr><td><b>'+st+'</b></td>'
+         + '<td>'+(on?'<span class="badge ok">开</span>':'<span class="badge">关</span>')
+         + (s.conf_dry_run?' <span class="badge noconf">演练</span>':'')+'</td>'
+         + '<td class="mut">'+(s.ttl_s==null?'-':s.ttl_s+'s')+'</td>'
+         + '<td class="mut">'+esc(s.timer_enabled)+' / '+esc(s.timer_active)+'</td>'
+         + '<td class="mut">'+eng+'</td><td>'+idle+'</td><td class="mut">'+laTxt+'</td>'
+         + '<td class="acts">'+btn+'</td></tr>';
+    }
+    h += '</table>';
+    h += '<div class="mut" style="padding:0 12px 10px">'
+       + '默认关。开启后站上 <b>cluster-ttl</b> 每 60s 判一次: 引擎空闲 ≥ 阈值即执行 '
+       + '<b>infer-unload</b> (会一并停掉 RPC worker)。空闲判据是 /metrics 累计计数器的'
+       + '<b>差分</b> (llama.cpp 没有"最后请求时间"), Δtok=0 才计空闲; 在途请求 &gt;0 视为活跃; '
+       + '引擎重启/刚加载则空闲时钟重新起算。与「零自加载」方针并存 —— TTL 只释放已加载资源, 从不加载模型。'
+       + '聚合时间 '+esc(d.time||'')+'</div>';
+    document.getElementById('ttl').innerHTML = h;
+  }catch(e){
+    if(e.message!=='unauthorized')
+      document.getElementById('ttl').innerHTML =
+        '<div class="mut" style="padding:12px">加载失败: '+esc(e.message)+'</div>';
+  }finally{ ttlBusy=false; setTimeout(loadTtl, 20000); }
+}
+
+async function doTtl(action, st){
+  if(busy) return;
+  let ttl = null;
+  if(action==='enable'){
+    const v = prompt('开启 '+st+' 站空闲 TTL — 空闲多少秒后自动卸载?\n(留空 = 默认 1800s = 30min)', '1800');
+    if(v===null) return;
+    ttl = parseInt(v,10); if(isNaN(ttl)) ttl = 1800;
+    if(!confirm(st+' 站: 引擎空闲 ≥ '+ttl+'s 将自动执行 infer-unload (含停 RPC worker)。确认开启?')) return;
+  }else{
+    if(!confirm(st+' 站: 关闭空闲 TTL? (已加载的模型不会被卸载)')) return;
+  }
+  busy=true; setBtns(true); showLog(st+' 站 TTL '+action+(ttl?(' ttl='+ttl+'s'):'')+' 中…');
+  try{
+    const body = {action:action, station:st};
+    if(ttl) body.ttl = ttl;
+    const res = await api('POST','/api/ttl-toggle', body);
+    showLog((res.log||'').trim()+'\n[exit '+res.rc+']');
+  }catch(e){ showLog('失败: '+e.message); }
+  finally{ busy=false; setBtns(false); loadTtl(); setTimeout(loadStatus,800); }
+}
+
+// P1 agent 任务视图: 两块 = 运行中节拍 (站上 .progress) + 已完成派发台账 (+run 详情)。
+// 两条硬要求 (调研 §4.2): **口径分列**(产出是**字节口径**, 不是 token, 与 reqlog 的引擎耗时口径
+// t/s 不可比) + **新鲜度自显**(运行中给"距上次节拍", 台账给"最新一条距今多久")。
+// 判据: 末行 t=end ⇒ finished (**上一次 run 的终值残留不算在跑**); 节拍超阈值 ⇒ 标 ⚠陈旧。
+let agentBusy=false;
+function fmtAge(s){
+  if(s==null) return '-';
+  if(s<90) return s+'s';
+  if(s<5400) return (s/60).toFixed(1)+'m';
+  if(s<172800) return (s/3600).toFixed(1)+'h';
+  return (s/86400).toFixed(1)+'d';
+}
+async function loadAgent(){
+  if(agentBusy) return; agentBusy=true;
+  try{
+    const d = await api('GET','/api/agent');
+    const sm = d.summary||{}, live = d.live||[], runs = d.runs||[];
+    let h = '<table style="margin:8px 12px"><tr><th>站</th><th>proj</th><th>状态</th>'
+          + '<th>已跑</th><th>已产出 bytes<div class="mut">字节口径</div></th>'
+          + '<th>B/s<div class="mut">字节口径</div></th>'
+          + '<th>距上次节拍</th><th>ETA</th><th>节拍时刻</th></tr>';
+    if(!live.length){
+      h += '<tr><td colspan="9" class="empty">没有任务在跑 (三站均无 .progress)</td></tr>';
+    }
+    for(const b of live){
+      if(b.error){
+        h += '<tr><td><b>'+esc(b.station)+'</b></td><td colspan="8" class="mut">站不可达: '+esc(b.error)+'</td></tr>';
+        continue;
+      }
+      const on = b.running===true;
+      let stTxt = on ? '<span class="badge ok">working</span>' : '<span class="badge">finished</span>';
+      if(on && b.stale) stTxt += ' <span class="badge err">⚠陈旧</span>';
+      h += '<tr><td><b>'+esc(b.station)+'</b></td><td>'+esc(b.proj)+'</td><td>'+stTxt+'</td>'
+         + '<td class="mut">'+(on?esc(b.t)+'s':'-')+'</td>'
+         + '<td>'+esc(b.bytes)+'</td><td><b>'+esc(b.bytes_s)+'</b></td>'
+         + '<td'+(on&&b.stale?' style="color:#b91c1c"':'')+'>'+fmtAge(b.age_s)+'</td>'
+         + '<td class="mut">NA<div class="mut">无 max_output 目标</div></td>'
+         + '<td class="mut">'+esc(b.beat_at)+'</td></tr>';
+    }
+    h += '</table>';
+    h += '<div class="mut" style="padding:0 4px 6px 12px">'
+       + '口径: 产出列 = <b>agent 产出字节口径</b>(bytes / B/s), <b>不是 token</b> —— '
+       + '与「引擎请求/token 统计」的引擎耗时口径 t/s 互不可比, 不要并列平均。'
+       + 'ETA 需目标量(max_output 只在 run 结束的 run.json 里) ⇒ 运行中一律 NA。'
+       + '节拍阈值 '+esc(d.beat_stale_s)+'s。'
+       + (sm.stale?(' <b style="color:#b91c1c">'+sm.stale+' 条节拍陈旧(疑似卡死)</b>'):'')
+       + (sm.unreachable?(' <b>'+sm.unreachable+' 站不可达</b>'):'') + '</div>';
+
+    const lf = d.ledger_freshness||{};
+    h += '<div class="mut" style="padding:0 4px 2px 12px">已完成台账: 最新一条 '
+       + esc(lf.label||'-') + ' (距今 '+fmtAge(lf.age_s)+')'
+       + (lf.age_s>172800 ? ' <span class="badge err">已久未更新</span>' : '')
+       + ' · 计 '+runs.length+' 条</div>';
+    h += '<table style="margin:8px 12px"><tr><th>时间</th><th>proj</th><th>模型</th><th>sens</th>'
+       + '<th>exit</th><th>状态</th><th>run_s</th><th>产出字节<div class="mut">字节口径</div></th>'
+       + '<th>B/s</th><th>slot</th><th>profile</th></tr>';
+    if(!runs.length){
+      h += '<tr><td colspan="11" class="empty">台账为空</td></tr>';
+    }
+    for(const r of runs){
+      const dd = r.detail||{};
+      const st = dd.status || r.status;
+      const cls = (st==='completed')?'ok':((st==='timeout')?'warn':'err');
+      const slot = (dd.slot&&dd.slot.gated) ? esc(dd.slot.action)+'('+esc(dd.slot.busy)+'/'+esc(dd.slot.total)+')' : '-';
+      let prof = '-';
+      if(dd.profile){
+        prof = esc(dd.profile.name)+' ctx='+esc(dd.profile.context)+' max='+esc(dd.profile.max_output)
+             + (dd.accept===false ? ' <span class="badge err">accept=Fail</span>' : '');
+      }
+      h += '<tr><td>'+esc(r.label)+'</td><td>'+esc(r.proj)+'</td><td>'+esc(r.model)+'</td>'
+         + '<td>'+esc(r.sens)+'</td><td>'+esc(r.code)+'</td>'
+         + '<td><span class="badge '+cls+'">'+esc(st)+'</span></td>'
+         + '<td>'+(dd.run_s!=null?esc(dd.run_s):'-')+'</td>'
+         + '<td>'+(dd.output_bytes!=null?esc(dd.output_bytes):'-')+'</td>'
+         + '<td>'+(dd.output_bps!=null?esc(dd.output_bps):'-')+'</td>'
+         + '<td class="mut">'+slot+'</td><td class="mut">'+prof+'</td></tr>';
+    }
+    h += '</table>';
+    h += '<div class="mut" style="padding:0 12px 12px">'
+       + '详情缺失(-)属正常: 早于 O-25 的 run 未落 .agent-run.json; 台账里的 run_s/queue_s 恒 0 ⇒ '
+       + '耗时看 run 详情列。usage.total_tokens 实测恒 0 (无头 run 不吐 usage) ⇒ 不给 token 速率。'
+       + '数据源: 主控 agent-runs.log + &lt;projRoot&gt;/agent-out/&lt;ts&gt;/.agent-run.json + 站上 .progress; '
+       + '聚合时间 '+esc(d.time||'')+'</div>';
+    document.getElementById('agent').innerHTML = h;
+  }catch(e){
+    if(e.message!=='unauthorized')
+      document.getElementById('agent').innerHTML =
+        '<div class="mut" style="padding:12px">加载失败: '+esc(e.message)+'</div>';
+  }finally{ agentBusy=false; setTimeout(loadAgent, 15000); }
+}
+
+function refreshAll(){ loadModels(); loadStatus(); loadPlanes(); loadVersions(); loadReqlog(); loadTtl(); loadAgent(); }
 refreshAll();
 </script></body></html>"""
 
@@ -1022,6 +1265,15 @@ def serve(argv=None):
         except OSError as e:
             if fam == socket.AF_INET:
                 print(f"[cluster-web] 绑定失败 {addr}:{port}: {e}")
+                # 2026-09-15 实测: 主控站上默认端口 8095 落在 **Windows 保留端口段**内
+                # (Hyper-V/WSL 的动态端口范围, 如 7981-8080 / 8081-8180), 表现为
+                # WinError 10013 "以一种访问权限不允许的方式做了一个访问套接字的尝试" ——
+                # 极易被误读成"权限不够/被占用"。故显式指路, 别让人去猜。
+                if getattr(e, "winerror", None) == 10013:
+                    print("[cluster-web]   提示: WinError 10013 通常是端口落在 Windows "
+                          "**保留端口段** (非权限问题)。查: "
+                          "netsh int ipv4 show excludedportrange protocol=tcp")
+                    print("[cluster-web]   换端口重试, 例如: cluster.py web --port 8850")
                 return 1
             print(f"[cluster-web] (提示) IPv6 未绑定 {addr}:{port}: {e}")
 
