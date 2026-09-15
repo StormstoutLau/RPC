@@ -197,7 +197,7 @@ A 站同款配置只需把 baseURL 换成本机端点 (双端点部署后 A 站 
 8. ✅ A 站 Zen 免费模型可经代理 + PTY 使用; C 站直连本地 (OPENCODE-NEM-OK 9/9)
 
 ### 阶段 3: 互验工作流（三机矩阵, 进行中）
-9. ⏳ 主控站 orchestrator 脚本扩展: 同题并行发三端点/四极 → 交叉判分 → 分歧标记 (可复用 agent-cli 跨站扇出 `_bs2_fanout.py` / `_bs2_cross.py` 先例)
+9. ⏳ 主控站 orchestrator 脚本扩展: 同题并行发三端点/四极 → 交叉判分 → 分歧标记 (先例见 git 历史 `_bs2_fanout.py` / `_bs2_cross.py` —— 已于 2026-09-15 按 ADR-0004 清减删除: 网关退役 + 密钥脱敏后已不可用)
 10. ✅ opencode 工作流已固化为手册章节 (§2a.4 headless 铁律 + agent-cli-smoke 4 CLI 冒烟)
 
 ---
