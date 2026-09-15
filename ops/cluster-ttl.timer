@@ -1,0 +1,9 @@
+[Unit]
+Description=run cluster-ttl every 60s (P2-5 idle TTL; **默认 disabled** — 显式 enable 才生效)
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=60s
+
+[Install]
+WantedBy=timers.target

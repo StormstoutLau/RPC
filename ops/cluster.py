@@ -15,6 +15,8 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
     python ops/cluster.py web [--host 127.0.0.1] [--port 8095] [--token <可选>]  # 傻瓜式 Web 管理 UI (按需服务)
     python ops/cluster.py flow [list|<name>] [--plan|--go] [args...]        # 声明式流程 (步骤→判据→台账)
     python ops/cluster.py reqlog {sample|summary|tail|path} [--minutes N]   # 引擎请求/token 统计 (站上采样)
+    python ops/cluster.py ttl {status|check|enable|disable} [--ttl N] [--dry-run] [--go]  # 空闲 TTL 自动卸载 (默认关)
+    python ops/cluster.py agent {runs|live|tail} [--limit N] [--station X] [--json]  # agent 任务进度/吞吐 (只读)
 
 子命令:
     status   三站 llama /health + 当前加载实例 + 引擎清单一屏聚合
@@ -41,6 +43,18 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
              sample=三站各采一次; summary=聚合表; tail=原始样本; path=日志落点。
              口径: **引擎耗时口径**(ΣΔtoken/ΣΔ引擎耗时, 与 API timings 可比)为主, 墙钟口径为辅。
              采样是**按需**的 (不做常驻采样服务); /metrics 无 requests 计数器, 故不给"请求数"。
+    ttl      空闲 TTL 自动卸载 (P2-5, **默认关**): 站上 `cluster-ttl` 每 60s 判一次引擎是否已空闲
+             ≥ 阈值, 到期执行 `infer-unload` (会一并停掉全部 RPC worker)。空闲判据是 /metrics
+             累计计数器的**差分** (llama.cpp 没有"最后请求时间"), 在途请求 >0 视为活跃。
+             status=三站状态; check=立刻判一次 (默认只演练, --go 才真卸); enable/disable=写 conf + 开关 timer。
+             与"零自加载"方针并存 —— TTL 只释放已加载资源, 从不加载任何模型。
+    agent    agent 任务进度/吞吐 (P0, 只读; 见 spec/agent-observability/ 调研):
+             runs=派发台账尾 N 条(join <projRoot>/agent-out/<ts>/.agent-run.json 详情);
+             live=扫三站 $HOME/agent-workspaces/*/out/.progress (运行中节拍: 末行 t=end ⇒ finished);
+             tail=台账原始行。**不新增采集器**, 只读站上既有文件。
+             ⚠ 口径: 产出列是 **agent 产出字节口径** (output_bytes / B/s), **不是 token** ——
+             与 reqlog 的引擎耗时口径 t/s、API timings 互不可比; 无头 run 不吐 usage ⇒ 不做换算;
+             ETA 需目标量而运行中不可得 ⇒ 一律 `NA` (不打荒数字)。
     web      傻瓜式推理框架管理 Web UI (按需服务, 见 ops/cluster_web.py; 浏览器点按钮加载/切后端/卸载)
 
 退出码:
@@ -2772,6 +2786,501 @@ def cmd_flow(argv) -> int:
     return 1 if (failed_at or guard_fail) else 0
 
 
+# ── P0: agent 任务进度/吞吐只读视图 (2026-09-15, 调研 spec/agent-observability/) ──
+# **一个采集器都不新增**: 三个数据源全是 O-25 已建的 ——
+#   ① 主控派发台账 ops/station-bin/agent-runs.log (ts,proj,model,sens,code,queue_s,run_s)
+#   ② 主控 run 详情 <projRoot>/agent-out/<ts>/.agent-run.json (status/run_s/output_bps/slot/profile/accept)
+#   ③ 站上运行中节拍 $HOME/agent-workspaces/<proj>/out/.progress (5s 一行 t=.. bytes=.. bytes_s=.., 终值 t=end)
+#
+# ⚠ 口径 (调研 §3 的关键结论, 别混):
+#   · 本视图的"产出"列是 **agent 产出字节口径** (output_bytes / output_bps) —— **不是 token**,
+#     与 reqlog 的"引擎耗时口径 t/s"、API timings 三者互不可比, 故分列显示、列头写明口径。
+#   · 上游无头 run 不吐 usage (run.json 里 usage.total_tokens 实测恒 0) ⇒ **不做字节→token 换算**。
+#   · ETA 需要"目标产出量", 而 max_output 只在 run 结束的 run.json 里 ⇒ 运行中**没有目标**,
+#     一律打 `NA` —— 不打荒数字 (O-25 no-bench 纪律)。
+# 字段命名对齐社区标准 (只为将来接 trace 后端不返工, 不引入依赖):
+#   run ≈ OTel GenAI `invoke_agent` span · 状态 ≈ A2A TaskState (我们原本缺 `working`, 由 live 补上)
+AGENT_LEDGER = Path(__file__).resolve().parent / "station-bin" / "agent-runs.log"
+AGENT_CLI_PS1 = Path(__file__).resolve().parent / "station-bin" / "agent-cli.ps1"
+AGENT_WS = "$HOME/agent-workspaces"
+AGENT_BEAT_STALE_S = 60          # 节拍 5s 一次; 超 60s 未更新 ⇒ 疑似卡死 (O-25 的"黑盒"信号)
+AGENT_STATUS_BY_CODE = {0: "completed", 6: "timeout", 24: "slot-rejected"}
+
+
+def _dw(s) -> int:
+    """终端显示宽度 —— CJK 占 2 格。不这样算, 中英混排的表头永远对不上 (实测)。"""
+    import unicodedata
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in str(s))
+
+
+def _pad(s, w: int, right: bool = False) -> str:
+    s = str(s)
+    gap = " " * max(0, w - _dw(s))
+    return gap + s if right else s + gap
+
+
+def _human_age(sec) -> str:
+    """秒 → 人读时长。freshness 列必须一眼看出"这是多久以前"。"""
+    try:
+        sec = float(sec)
+    except (TypeError, ValueError):
+        return "-"
+    if sec < 90:
+        return f"{sec:.0f}s"
+    if sec < 5400:
+        return f"{sec / 60:.1f}m"
+    if sec < 172800:
+        return f"{sec / 3600:.1f}h"
+    return f"{sec / 86400:.1f}d"
+
+
+def _agent_proj_roots() -> tuple:
+    """解析 agent-cli.ps1 的 PROJECTS 表 → (proj→root, note)。
+
+    **为什么不在这里再抄一份映射**: proj→root 的真值在 `agent-cli.ps1` 的 `$Script:PROJECTS`
+    (paper=D:\\Paper / Cpp_Hub=F:\\Cpp_Hub / Auto_Prover=F:\\Auto_Prover)。抄一份就是第二个定义点,
+    项目增删时必然漂移 (P1-6"取 conf 而非抄台账"同一条理由)。解析失败**显式降级**, 不猜。
+    """
+    roots, note = {}, ""
+    try:
+        text = AGENT_CLI_PS1.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError as e:
+        return {}, f"读不到 {AGENT_CLI_PS1.name} ({e.__class__.__name__})"
+    m = re.search(r"\$Script:PROJECTS\s*=\s*@\{(.*?)\}", text, re.S)
+    if not m:
+        return {}, "未在 agent-cli.ps1 找到 $Script:PROJECTS (详情列将不可用)"
+    for name, root in re.findall(r"(\w+)\s*=\s*'([^']+)'", m.group(1)):
+        roots[name] = Path(root)
+    if not roots:
+        note = "$Script:PROJECTS 解析为空 (详情列将不可用)"
+    return roots, note
+
+
+def _agent_ledger_rows(limit: int) -> list:
+    """读派发台账尾部 N 条。跳过标题行 (判据与 make-dashboard 一致: 必须 `^\\d{14,},`)。"""
+    try:
+        lines = AGENT_LEDGER.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+    except OSError:
+        return []
+    rows = []
+    for ln in lines:
+        ln = ln.strip()
+        if not re.match(r"^\d{14,},", ln):      # 台账首行是 "RPC_LEDGER_TEST 2026-09-06" 之类的标题
+            continue
+        f = ln.split(",")
+        if len(f) < 7:
+            continue
+        ts, proj, model, sens, code, qs, rs = (x.strip() for x in f[:7])
+        try:
+            label = time.strftime("%m-%d %H:%M:%S",
+                                  time.strptime(ts[:14], "%Y%m%d%H%M%S"))
+        except Exception:
+            label = ts[:14]
+        try:
+            code_i = int(code)
+        except ValueError:
+            code_i = None
+        rows.append({"ts": ts, "label": label, "proj": proj, "model": model, "sens": sens,
+                     "code": code_i, "queue_s": int(qs or 0), "run_s": int(rs or 0),
+                     "status": AGENT_STATUS_BY_CODE.get(code_i, "failed" if code_i is not None else "?")})
+    return rows[-limit:] if limit else rows
+
+
+def _agent_detail(roots: dict, proj: str, ts: str) -> dict:
+    """读该 run 的 .agent-run.json (终态快照)。缺文件返回 {} —— 老 run 无详情属正常。"""
+    root = roots.get(proj)
+    if not root:
+        return {}
+    p = root / "agent-out" / ts / ".agent-run.json"
+    try:
+        j = json.loads(p.read_text(encoding="utf-8-sig", errors="replace"))
+    except Exception:
+        return {}
+    if not isinstance(j, dict):
+        return {}
+    return {"status": j.get("status"), "exit_code": j.get("exit_code"),
+            "cli": j.get("cli"), "model": j.get("model"),
+            "run_s": j.get("run_s"), "queue_s": j.get("queue_s"),
+            "output_bytes": j.get("output_bytes"), "output_bps": j.get("output_bps"),
+            "slot": j.get("slot"), "profile": j.get("profile"),
+            "accept": (j.get("accept") or {}).get("passed"),
+            "collect": j.get("collect"),
+            "usage_total_tokens": (j.get("usage") or {}).get("total_tokens")}
+
+
+def _agent_beat(st: str) -> list:
+    """扫一站运行中节拍。**只读**: 遍历站上既有 .progress, 不写任何东西, 不装采集器。"""
+    cmd = ("for d in " + AGENT_WS + "/*/out; do "
+           "[ -f \"$d/.progress\" ] || continue; "
+           "proj=$(basename \"$(dirname \"$d\")\"); "
+           "last=$(grep '^t=' \"$d/.progress\" 2>/dev/null | tail -1); "
+           "[ -z \"$last\" ] && continue; "
+           "printf 'BEAT|%s|%s|%s\\n' \"$proj\" \"$last\" \"$(stat -c %Y \"$d/.progress\" 2>/dev/null)\"; "
+           "done")
+    ok, out = ssh_run(st, cmd, timeout=45)
+    if not ok:
+        return [{"station": st, "error": (out or "").strip().splitlines()[0][:80] if out else "ssh 失败"}]
+    beats, now = [], int(time.time())
+    for ln in out.splitlines():
+        if not ln.startswith("BEAT|"):
+            continue
+        parts = ln.split("|", 3)
+        if len(parts) < 4:
+            continue
+        _, proj, last, mtime = parts
+        m = re.search(r"^t=(\S+)\s+bytes=(\d+)\s+bytes_s=(\d+)", last.strip())
+        if not m:
+            continue
+        t_val, by, bps = m.group(1), int(m.group(2)), int(m.group(3))
+        try:
+            age = now - int(mtime)
+        except ValueError:
+            age = None
+        beats.append({"station": st, "proj": proj, "t": t_val, "bytes": by, "bytes_s": bps,
+                      "age_s": age, "running": (t_val != "end"),
+                      "stale": bool(age is not None and age > AGENT_BEAT_STALE_S),
+                      "beat_at": (time.strftime("%m-%d %H:%M:%S", time.localtime(int(mtime)))
+                                  if age is not None else "?")})
+    return beats
+
+
+def agent_live(stations=("A", "B", "C")) -> list:
+    """三站运行中节拍 (并行)。CLI `agent live` 与 web `/api/agent` **共用这一份**。"""
+    res, threads = {}, []
+    for st in stations:
+        t = threading.Thread(target=lambda s=st: res.__setitem__(s, _agent_beat(s)))
+        threads.append(t)
+        t.start()
+    for t in threads:
+        t.join()
+    return [b for st in stations for b in res.get(st, [])]
+
+
+def agent_runs(limit: int = 20) -> tuple:
+    """台账尾 N 条 + join run.json 详情 + 状态归并 → (rows, note)。
+
+    CLI `agent runs` 与 web `/api/agent` **共用这一份** —— join 逻辑只写一遍,
+    否则两处迟早漂移 (P2-1 已立过的同一条理由)。
+    """
+    roots, note = _agent_proj_roots()
+    rows = _agent_ledger_rows(limit)
+    for r in rows:
+        r["detail"] = _agent_detail(roots, r["proj"], r["ts"])
+        if r["detail"].get("status"):
+            r["status"] = r["detail"]["status"]          # run.json 的 status 优先于 code 映射
+    # 台账**不是严格有序的** (实测 09-12 有一对 17:18:20 / 17:18:18 反序, 并发派发所致) ⇒ 按 ts 排一次
+    rows.sort(key=lambda r: r["ts"])
+    return rows, note
+
+
+def agent_ledger_freshness(rows) -> dict:
+    """台账新鲜度: 事件级 (run 结束才写一行) ⇒ 用**最新一条 ts** 衡量。
+
+    刻意不用"最后一行"(台账实测有并发反序) 也不用文件 mtime (collect 崩了也可能已写过行)。
+    """
+    if not rows:
+        return {}
+    newest = max(rows, key=lambda r: r["ts"])
+    try:
+        t = time.mktime(time.strptime(newest["ts"][:14], "%Y%m%d%H%M%S"))
+    except Exception:
+        return {"label": newest.get("label"), "age_s": None}
+    return {"label": newest.get("label"), "age_s": int(time.time() - t)}
+
+
+def cmd_agent(argv) -> int:
+    """cluster.py agent {runs|live|tail} [--limit N] [--station A|B|C] [--json]
+
+    P0 只读视图: `runs`=派发台账尾 N 条(join run.json 详情) / `live`=三站运行中节拍 /
+    `tail`=台账原始行。**只读, 无副作用**; 口径与判据见 spec/agent-observability/。
+    """
+    act = (argv[0] if argv else "runs").lower()
+    if act not in ("runs", "live", "tail"):
+        print("用法: cluster.py agent {runs|live|tail} [--limit N] [--station A|B|C] [--json]")
+        return 1
+    limit, only, as_json = 20, None, ("--json" in argv)
+    i = 1
+    while i < len(argv):
+        if argv[i] == "--limit" and i + 1 < len(argv):
+            try:
+                limit = max(1, int(argv[i + 1]))
+            except ValueError:
+                print("--limit 需要整数")
+                return 1
+            i += 2
+            continue
+        if argv[i] == "--station" and i + 1 < len(argv):
+            only = argv[i + 1].upper()
+            i += 2
+            continue
+        i += 1
+    if only and only not in STATIONS:
+        print(f"未知站 '{only}' (可选: {', '.join(STATIONS)})")
+        return 1
+    stations = [only] if only else ["A", "B", "C"]
+
+    if act == "live":
+        beats = agent_live(stations)
+        if as_json:
+            print(json.dumps({"time": time.strftime("%Y-%m-%d %H:%M:%S"), "beats": beats},
+                             ensure_ascii=False))
+            return 0
+        print("\n=== agent 运行中 (站上 $HOME/agent-workspaces/*/out/.progress) — 只读 ===")
+        print("  口径: 产出为 **字节口径** (bytes / bytes_s), 不是 token; ETA 需目标量, 运行中不可得 ⇒ NA\n")
+        running = [b for b in beats if b.get("running")]
+        cols = [(3, "站", 0), (10, "proj", 0), (11, "状态", 0), (6, "已跑s", 1), (10, "已产出", 1),
+                (7, "B/s", 1), (11, "距上次节拍", 1), (24, "ETA", 0), (14, "节拍时刻", 0)]
+        print("  " + " ".join(_pad(t, w, bool(r)) for w, t, r in cols))
+        print("  " + "-" * (sum(w for w, _, _ in cols) + len(cols) - 1))
+        for b in beats:
+            if b.get("error"):
+                print("  " + _pad(b["station"], 3) + " " + _pad("不可达", 10) + " " + b["error"])
+                continue
+            st_txt = "working" if b["running"] else "finished"
+            if b.get("stale") and b["running"]:
+                st_txt += " ⚠陈旧"
+            age = "-" if b["age_s"] is None else _human_age(b["age_s"])
+            cells = [_pad(b["station"], 3), _pad(b["proj"], 10), _pad(st_txt, 11),
+                     _pad(b["t"] if b["running"] else "-", 6, True), _pad(b["bytes"], 10, True),
+                     _pad(b["bytes_s"], 7, True), _pad(age, 11, True),
+                     _pad("NA (无 max_output 目标)", 24), _pad(b["beat_at"], 14)]
+            print("  " + " ".join(cells))
+        if not beats:
+            print("  (三站均无 .progress —— 没有任务在跑; 注意 finished 行是**上一次** run 的终值残留)")
+        print(f"\n  working={len(running)} · 判据: 末行 t=end ⇒ finished (不是 running); "
+              f"节拍 >{AGENT_BEAT_STALE_S}s 未更新 ⇒ 疑似卡死")
+        return 0
+
+    rows, note = agent_runs(limit)
+    if act == "tail":
+        for r in rows:
+            print(",".join(str(r[k]) for k in ("ts", "proj", "model", "sens", "code",
+                                               "queue_s", "run_s")))
+        return 0
+
+    if as_json:
+        print(json.dumps({"time": time.strftime("%Y-%m-%d %H:%M:%S"), "note": note,
+                          "ledger": str(AGENT_LEDGER), "rows": rows,
+                          "ledger_freshness": agent_ledger_freshness(rows)}, ensure_ascii=False))
+        return 0
+
+    print("\n=== agent 任务台账 (终态) — 只读 ===")
+    print(f"  台账: {AGENT_LEDGER}")
+    roots, _ = _agent_proj_roots()
+    print("  详情: <projRoot>/agent-out/<ts>/.agent-run.json"
+          + (f"   ⚠ {note}" if note else f"   (projRoot 取自 agent-cli.ps1: "
+                                        f"{', '.join(f'{k}={v}' for k, v in roots.items())})"))
+    print("  ⚠ 口径: 产出列是 **字节口径** (output_bytes / B/s), 不是 token —— "
+          "与 reqlog 的引擎耗时口径 t/s 互不可比\n")
+    cols = [(15, "时间", 0), (10, "proj", 0), (26, "模型", 0), (10, "sens", 0), (4, "exit", 1),
+            (13, "状态", 0), (6, "run_s", 1), (7, "queue_s", 1), (9, "产出字节", 1),
+            (6, "B/s", 1), (12, "slot", 0), (34, "profile", 0)]
+    print("  " + " ".join(_pad(t, w, bool(r)) for w, t, r in cols))
+    print("  " + "-" * (sum(w for w, _, _ in cols) + len(cols) - 1))
+    for r in rows:
+        d = r["detail"]
+
+        def g(k, dflt="-"):
+            v = d.get(k)
+            return dflt if v is None else v
+        slot = "-"
+        if d.get("slot"):
+            s = d["slot"]
+            slot = f"{s.get('action', '?')}({s.get('busy', '?')}/{s.get('total', '?')})"
+        prof = "-"
+        if d.get("profile"):
+            p = d["profile"]
+            prof = f"{p.get('name', '?')} ctx={p.get('context', '?')} max={p.get('max_output', '?')}"
+            if d.get("accept") is False:
+                prof += "  accept=Fail"
+        cells = [_pad(r["label"], 15), _pad(r["proj"], 10), _pad(r["model"], 26),
+                 _pad(r["sens"], 10), _pad(r["code"], 4, True), _pad(r["status"], 13),
+                 _pad(g("run_s", r["run_s"]), 6, True), _pad(g("queue_s", r["queue_s"]), 7, True),
+                 _pad(g("output_bytes"), 9, True), _pad(g("output_bps"), 6, True),
+                 _pad(slot, 12), _pad(prof, 34)]
+        print("  " + " ".join(cells))
+    if not rows:
+        print("  (台账为空或文件不可读)")
+    fr = agent_ledger_freshness(rows)
+    if fr:
+        hint = "  ← 该台账已久未更新" if (fr.get("age_s") or 0) > 172800 else ""
+        print(f"\n  共 {len(rows)} 条 (取尾部) · 最新一条 {fr.get('label')} "
+              f"(距今 {_human_age(fr.get('age_s'))}){hint}")
+    print("  详情缺失(-)属正常: 早于 O-25 的 run 未落 .agent-run.json; "
+          "usage.total_tokens 实测恒 0 (无头 run 不吐 usage) ⇒ 本视图不给 token 速率")
+    return 0
+
+
+# ── P2-5: TTL 空闲自动卸载 ───────────────────────────────
+# 站上件: /usr/local/bin/cluster-ttl (检查器) + cluster-ttl.{service,timer} (60s oneshot)
+# 与"零自加载"方针并存: TTL 只**释放**已加载的资源, 从不加载任何模型。
+# **默认关**: conf `TTL_ENABLED=0` ⇒ 检查器降级为"演练"(照常判定并打印结论, 绝不卸载)。
+TTL_BIN = "/usr/local/bin/cluster-ttl"
+TTL_CONF = "/etc/llama-instances/ttl.env"
+TTL_TIMER = "cluster-ttl.timer"
+TTL_DEFAULT_S = 1800
+
+
+def _ttl_probe(st: str) -> dict:
+    """一次 ssh 取全 (部署态 + 状态 JSON + 单元态) —— 不做三次往返。
+
+    ⚠ `systemctl is-enabled` 对"存在但未启用"的单元会**既打印 disabled 又返回 1**,
+    直接写 `|| echo not-found` 会同时输出两行、把"未启用"误读成"不存在" (实测踩到)。
+    故一律用 `| head -1` 只取一行, 而"单元是否存在"单独用文件判据 (unit=yes/no)。
+    """
+    cmd = (f"if [ -x {TTL_BIN} ]; then echo DEPLOYED; else echo MISSING; fi; "
+           f"{TTL_BIN} --status --json 2>/dev/null || echo '{{}}'; "
+           f"[ -f /etc/systemd/system/{TTL_TIMER} ] && echo 'unit=yes' || echo 'unit=no'; "
+           f"printf 'enabled=%s\\n' \"$(systemctl is-enabled {TTL_TIMER} 2>/dev/null | head -1)\"; "
+           f"printf 'active=%s\\n' \"$(systemctl is-active {TTL_TIMER} 2>/dev/null | head -1)\"")
+    ok, out = ssh_run(st, cmd, timeout=45)
+    res = {"ok": ok, "deployed": False, "unit": False, "state": {},
+           "timer_enabled": "?", "timer_active": "?"}
+    for ln in out.splitlines():
+        ln = ln.strip()
+        if ln == "DEPLOYED":
+            res["deployed"] = True
+        elif ln == "MISSING":
+            res["deployed"] = False
+        elif ln.startswith("{"):
+            try:
+                res["state"] = json.loads(ln)
+            except Exception:
+                pass
+        elif ln == "unit=yes":
+            res["unit"] = True
+        elif ln == "unit=no":
+            res["unit"] = False
+        elif ln.startswith("enabled="):
+            res["timer_enabled"] = ln.split("=", 1)[1] or "?"
+        elif ln.startswith("active="):
+            res["timer_active"] = ln.split("=", 1)[1] or "?"
+    return res
+
+
+def _ttl_parallel(stations) -> dict:
+    res, threads = {}, []
+    for st in stations:
+        t = threading.Thread(target=lambda s=st: res.__setitem__(s, _ttl_probe(s)))
+        threads.append(t)
+        t.start()
+    for t in threads:
+        t.join()
+    return res
+
+
+def _ttl_row(st: str, r: dict) -> str:
+    s = r.get("state") or {}
+    if not r.get("deployed"):
+        return (f"  {st:<3} {'未部署':<6} {'-':<8} {'-':<11} {'-':<16} {'-':<14} "
+                f"装: ops/station-bin/cluster-ttl + systemd 单元")
+    on = "开" if s.get("enabled") else "关"
+    timer = f"{r.get('timer_enabled')}/{r.get('timer_active')}"
+    if s.get("engine_pid"):
+        eng = f"pid={s['engine_pid']}:{s.get('engine_port')}"
+        idle = (f"{s['idle_s']}s/{s.get('ttl_s')}s" if s.get("idle_s") is not None else "未比对")
+    else:
+        eng, idle = "无 (零自加载)", "-"
+    la = s.get("last_action") or {}
+    if la:
+        act = (f"{str(la.get('iso'))[11:19]} {('已卸载' if la.get('result') == 'unloaded' else la.get('result'))}"
+               f" (idle {la.get('idle_s')}s)")
+    else:
+        act = "无"
+    return (f"  {st:<3} {on:<6} {str(s.get('ttl_s', TTL_DEFAULT_S)) + 's':<8} {timer:<11} "
+            f"{eng:<16} {idle:<14} {act}")
+
+
+def cmd_ttl(argv) -> int:
+    """cluster.py ttl {status|check|enable|disable} [--station X] [--ttl N] [--go] [--dry-run]
+
+    P2-5 空闲 TTL 自动卸载: 站上 cluster-ttl 每 60s 判一次"引擎是否已空闲 ≥ 阈值",
+    到期执行 `infer-unload` (会一并停掉全部 RPC worker)。**默认关**。
+    check 默认只演练 (不卸载), --go 才真卸; enable/disable 写 conf + 开关 timer。
+    """
+    act = (argv[0] if argv else "status").lower()
+    if act not in ("status", "check", "enable", "disable"):
+        print("用法: cluster.py ttl {status|check|enable|disable} "
+              "[--station A|B|C] [--ttl N] [--dry-run] [--go]")
+        return 1
+    only, ttl, go, dry = None, None, ("--go" in argv), ("--dry-run" in argv)
+    i = 1
+    while i < len(argv):
+        if argv[i] == "--station" and i + 1 < len(argv):
+            only = argv[i + 1].upper()
+            i += 2
+            continue
+        if argv[i] == "--ttl" and i + 1 < len(argv):
+            ttl = int(float(argv[i + 1]))
+            i += 2
+            continue
+        i += 1
+    stations = [only] if only else ["A", "B", "C"]
+
+    if act == "status":
+        res = _ttl_parallel(stations)
+        print(f"\n=== TTL 空闲自动卸载 (P2-5) — 默认关; 开启后 idle ≥ 阈值即执行 infer-unload ===\n")
+        hdr = (f"  {'站':<3} {'开关':<6} {'阈值':<8} {'定时器':<11} {'引擎':<16} "
+               f"{'空闲/阈值':<14} {'最近动作'}")
+        print(hdr)
+        print("  " + "-" * (len(hdr) - 2))
+        for st in stations:
+            print(_ttl_row(st, res.get(st, {})))
+        print("\n  定时器列 = is-enabled/is-active; 开关列 = conf 的 TTL_ENABLED (关时检查器只演练, 不卸载)")
+        print("  空闲 = now − 上次活跃; 判据是 /metrics 累计计数器差分 (Δtok=0 才计空闲), 在途请求>0 视为活跃")
+        return 0
+
+    if act == "check":
+        mode = "执行" if go else "演练"
+        print(f"\n=== TTL 判定一次 [{mode}] ===  (演练=只判定不卸载; 关掉总开关时无论如何都不卸)\n")
+        res, threads = {}, []
+        for st in stations:
+            t = threading.Thread(target=lambda s=st: res.__setitem__(
+                s, ssh_run(s, f"{TTL_BIN} {'--dry-run' if not go else ''}", timeout=900)))
+            threads.append(t)
+            t.start()
+        for t in threads:
+            t.join()
+        for st in stations:
+            ok, out = res.get(st, (False, ""))
+            print(f"--- {st} 站 ---")
+            print((out or "(无输出)").strip() or "(空)")
+        return 0
+
+    # enable / disable
+    if act == "enable" and ttl is None:
+        ttl = TTL_DEFAULT_S
+    pairs = [f"TTL_ENABLED={'1' if act == 'enable' else '0'}"]
+    if act == "enable":
+        pairs.append(f"TTL_IDLE_SECONDS={ttl}")
+        pairs.append(f"TTL_DRY_RUN={'1' if dry else '0'}")
+    print(f"\n=== TTL {'开启' if act == 'enable' else '关闭'} ===")
+    if act == "enable":
+        print(f"  阈值 {ttl}s; 演练={'是' if dry else '否'}"
+              f"; 定时器 enable --now (60s 周期)")
+    for st in stations:
+        if not _ttl_probe(st).get("deployed"):
+            print(f"  [{st}] 未部署 cluster-ttl —— 跳过 (先同步 ops/station-bin/cluster-ttl 与单元)")
+            continue
+        ok, out = ssh_run(st, f"sudo -n {TTL_BIN} --set " + " ".join(pairs), timeout=60)
+        if not ok or "已更新" not in out:
+            print(f"  [{st}] 写 conf 失败: {(out or '').strip()[:120]}")
+            continue
+        verb = "enable --now" if act == "enable" else "disable --now"
+        ssh_run(st, f"sudo -n systemctl {verb} {TTL_TIMER}", timeout=60)
+        r = _ttl_probe(st)
+        s = r.get("state") or {}
+        if not r.get("unit"):
+            print(f"  [{st}] conf 已写, 但 systemd 单元不存在 —— "
+                  f"需部署 ops/cluster-ttl.service/.timer (仓库 → /etc/systemd/system/)")
+            continue
+        print(f"  [{st}] conf TTL_ENABLED={1 if act == 'enable' else 0}"
+              f" ttl={s.get('ttl_s')}s → timer {r.get('timer_enabled')}/{r.get('timer_active')}"
+              + ("  (演练: 只判定不卸载)" if s.get("conf_dry_run") else ""))
+    print("\n  复核: cluster.py ttl status")
+    return 0
+
+
 # ── main ───────────────────────────────────────────────
 def main() -> int:
     args = sys.argv[1:]
@@ -2809,6 +3318,10 @@ def main() -> int:
         return cmd_flow(args[1:])
     if sub == "reqlog":
         return cmd_reqlog(args[1:])
+    if sub == "ttl":
+        return cmd_ttl(args[1:])
+    if sub == "agent":
+        return cmd_agent(args[1:])
     if sub == "e2e":
         return cmd_e2e()
     if sub == "secrets":

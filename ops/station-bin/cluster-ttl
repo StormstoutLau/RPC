@@ -1,0 +1,381 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""cluster-ttl — 引擎空闲 TTL 自动卸载 (2026-09-15, 方案 v2 P2-5)
+
+用法:
+    cluster-ttl               跑一次检查 (由 cluster-ttl.timer 调起, 每 60s)
+    cluster-ttl --dry-run     只判定不卸载 (cli 级别的强制演练)
+    cluster-ttl --status      打印本站状态 (只读, 不写状态, 不卸载)
+    cluster-ttl --json        配合 --status: 输出 JSON 供主控解析
+    cluster-ttl --set KEY=VAL ...  改 conf 的键 (由 `cluster.py ttl enable|disable` 调)
+    cluster-ttl -h
+
+设计要点 (每条都是"为什么不能更省事"的理由)
+  · **默认关**: `/etc/llama-instances/ttl.env` 的 `TTL_ENABLED=0` ⇒ 永不卸载 —— 本脚本降级为
+    "演练": 照常判定并打印结论, 但不执行 infer-unload。这与"零自加载"方针并存:
+    TTL 只**释放**已加载的资源, 从不自动加载任何模型。
+  · **空闲判据靠差分, 不靠猜**: llama.cpp 的 `/metrics` 全是**累计计数器**, **没有**
+    "最后请求时间"这种东西 (P2-3 已核实)。故每次运行记下 `(pid, 计数器快照)`, 下次比对:
+        Δtoken > 0                → 有真实推理 → 刷新"上次活跃时刻"
+        Δtoken = 0 且在途请求为 0  → 空闲 (空闲时长 = now − 上次活跃时刻)
+        pid 变了 / 计数器变小     → 引擎重启或刚加载 → **空闲时钟重新起算**
+                                    (绝不把上一个实例的时钟套到新实例上)
+  · **绝不打断在途请求**: `requests_processing>0` 或 `/slots` 里有 busy 槽位 → 视为活跃。
+  · **判据缺失就不动作**: `/metrics` 无输出 (conf 未带 `--metrics`) 或计数器缺失 ⇒
+    打印"无法判定空闲"并退出 —— **宁可不动, 不拿别的信号冒名顶替**。
+  · **加载/卸载窗口跳过**: 与 cluster-watchdog 同一条判据 (防 Loading 期误判)。
+  · **卸载走 infer-unload** (而不是 systemctl stop): 它是本集群唯一的正规卸载路径, 会一并
+    停掉全部 RPC worker —— 否则 master 卸了、worker 还常驻 (2026-09-15 实测过的残留)。
+  · **动作必须留证据**: 每次判定都打印 pid/Δtoken/idle/阈值, 卸载前后各留一行, 并写进
+    `state.json` 的 `last_action` ⇒ `cluster.py ttl status` 能直接回答"谁在什么时候被卸了、为什么"。
+"""
+import glob
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import time
+
+CONF = os.environ.get("TTL_CONF", "/etc/llama-instances/ttl.env")
+STATE_DIR = os.environ.get("TTL_STATE_DIR", "/var/lib/cluster-ttl")
+STATE = os.path.join(STATE_DIR, "state.json")
+DEFAULT_TTL_S = 1800          # 空闲 30 分钟 (llama-swap 的 ttl 同义: 秒)
+# 参与"活跃判定"的累计计数器 —— 任一增长即视为发生了真实推理
+ACT_KEYS = ("prompt_tokens_total", "tokens_predicted_total", "prompt_tokens_cached_total")
+LOADING_PAT = "infer-load|infer-unload|load-mem-gate"
+
+
+def log(msg: str) -> None:
+    print(f"[ttl] {time.strftime('%Y-%m-%d %H:%M:%S')} {msg}", flush=True)
+
+
+def read_conf() -> dict:
+    d = {"TTL_ENABLED": "0", "TTL_IDLE_SECONDS": str(DEFAULT_TTL_S), "TTL_DRY_RUN": "0"}
+    try:
+        with open(CONF, encoding="utf-8") as fh:
+            for ln in fh:
+                ln = ln.split("#", 1)[0].strip()
+                if "=" not in ln:
+                    continue
+                k, _, v = ln.partition("=")
+                d[k.strip()] = v.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return d
+
+
+def flag(v: str) -> bool:
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def intv(v: str, dflt: int) -> int:
+    try:
+        return int(float(str(v).strip()))
+    except (TypeError, ValueError):
+        return dflt
+
+
+def find_engine():
+    """返回 (pid, port) 或 None。按 comm **精确**匹配 —— 不用 pgrep -f (会自匹配包装进程)。"""
+    try:
+        out = subprocess.run(["ps", "-eo", "pid,comm,args"], capture_output=True,
+                             text=True, timeout=15).stdout
+    except Exception:
+        return None
+    for line in out.splitlines()[1:]:
+        f = line.split(None, 2)
+        if len(f) < 3 or f[1] != "llama-server":
+            continue
+        m = re.search(r"--port\s+(\d+)", f[2])
+        return int(f[0]), (int(m.group(1)) if m else 8080)
+    return None
+
+
+def curl(url: str, timeout: int = 5) -> str:
+    try:
+        return subprocess.run(["curl", "-s", "--max-time", str(timeout), url],
+                              capture_output=True, text=True, timeout=timeout + 3).stdout
+    except Exception:
+        return ""
+
+
+def metrics(port: int) -> dict:
+    out, d = curl(f"http://127.0.0.1:{port}/metrics"), {}
+    for line in out.splitlines():
+        line = line.strip()
+        if not line.startswith("llamacpp:") or line.startswith("#"):
+            continue
+        k, _, v = line.partition(" ")
+        try:
+            d[k[len("llamacpp:"):].strip()] = float(v.strip())
+        except ValueError:
+            continue
+    return d
+
+
+def slots_busy(port: int) -> int:
+    try:
+        arr = json.loads(curl(f"http://127.0.0.1:{port}/slots", timeout=6) or "[]")
+    except Exception:
+        arr = []
+    if not isinstance(arr, list):
+        return 0
+    return sum(1 for x in arr if isinstance(x, dict) and x.get("is_processing"))
+
+
+def gtt_gib():
+    """本站 GTT 占用 (GiB) —— UMA 下模型权重的真实落点 (进程 RSS 只有几百 MB, 见 P2-4)。"""
+    tot = 0
+    for p in glob.glob("/sys/class/drm/card*/device/mem_info_gtt_used"):
+        try:
+            with open(p) as fh:
+                tot += int(fh.read().strip())
+        except Exception:
+            continue
+    return round(tot / 1024 ** 3, 1)
+
+
+def loading_window() -> bool:
+    return subprocess.run(["pgrep", "-f", LOADING_PAT], capture_output=True).returncode == 0
+
+
+def ensure_state_dir() -> bool:
+    if os.path.isdir(STATE_DIR) and os.access(STATE_DIR, os.W_OK):
+        return True
+    try:
+        subprocess.run(["sudo", "-n", "mkdir", "-p", STATE_DIR], check=True,
+                       capture_output=True, timeout=30)
+        subprocess.run(["sudo", "-n", "chown", f"{os.getuid()}:{os.getgid()}", STATE_DIR],
+                       check=True, capture_output=True, timeout=30)
+        return True
+    except Exception as e:
+        log(f"WARN: 状态目录不可用 ({STATE_DIR}: {e}) —— 无法判定空闲, 本次不动作")
+        return False
+
+
+def load_state() -> dict:
+    try:
+        with open(STATE, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+def save_state(st: dict) -> None:
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        tmp = STATE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(st, fh, ensure_ascii=False)
+        os.replace(tmp, STATE)                    # 原子替换: 半截文件不会被下次读到
+    except Exception as e:
+        log(f"WARN: 状态写入失败 ({e})")
+
+
+def act_sum(raw: dict):
+    present = [k for k in ACT_KEYS if k in raw]
+    if not present:
+        return None
+    return sum(raw.get(k, 0) for k in present)
+
+
+def status(as_json: bool) -> int:
+    conf, st = read_conf(), load_state()
+    enabled, ttl_s = flag(conf["TTL_ENABLED"]), intv(conf["TTL_IDLE_SECONDS"], DEFAULT_TTL_S)
+    eng = find_engine()
+    pid, port = (eng if eng else (None, None))
+    idle = None
+    if eng and st.get("pid") == pid and st.get("last_active_ts"):
+        idle = int(time.time()) - int(st["last_active_ts"])
+    d = {"station": socket.gethostname(), "conf": CONF,
+         "enabled": enabled, "ttl_s": ttl_s, "conf_dry_run": flag(conf["TTL_DRY_RUN"]),
+         "engine_pid": pid, "engine_port": port, "gtt_gib": gtt_gib(),
+         "idle_s": idle, "last_action": st.get("last_action"),
+         "state_age_s": (int(time.time()) - int(os.path.getmtime(STATE))
+                         if os.path.exists(STATE) else None)}
+    if as_json:
+        print(json.dumps(d, ensure_ascii=False))
+        return 0
+    print(f"cluster-ttl 状态 ({d['station']})")
+    print(f"  conf      : {CONF}")
+    print(f"  开关      : {'已开启' if enabled else '已关闭 (默认)'}"
+          + (f" · 阈值 {ttl_s}s" if enabled else f" · 阈值 {ttl_s}s (仅演练, 不会卸载)"))
+    if not eng:
+        print("  引擎      : 无 (零自加载方针下属正常)  GTT %.1fG" % d["gtt_gib"])
+    else:
+        print(f"  引擎      : pid={pid} :{port}  GTT {d['gtt_gib']}G")
+        print(f"  空闲      : {idle}s / {ttl_s}s" if idle is not None
+              else "  空闲      : 未知 (本次采样未与上次比对)")
+    la = d["last_action"] or {}
+    if la:
+        print(f"  最近动作  : {la.get('iso')} idle={la.get('idle_s')}s ≥ {la.get('ttl_s')}s "
+              f"→ {la.get('result')}")
+    else:
+        print("  最近动作  : 无 (从未触发)")
+    return 0
+
+
+def run(dry_run: bool) -> int:
+    conf = read_conf()
+    enabled = flag(conf["TTL_ENABLED"])
+    ttl_s = intv(conf["TTL_IDLE_SECONDS"], DEFAULT_TTL_S)
+    # 演练判据: 显式 --dry-run 或 conf 的 TTL_DRY_RUN=1 或 **总开关关闭**
+    effective_dry = dry_run or flag(conf["TTL_DRY_RUN"]) or not enabled
+    if effective_dry:
+        log(f"演练模式 (TTL_ENABLED={conf['TTL_ENABLED']}"
+            + (", --dry-run" if dry_run else "")
+            + (", TTL_DRY_RUN=1" if flag(conf["TTL_DRY_RUN"]) else "")
+            + f") —— 只判定不卸载; 阈值 {ttl_s}s")
+    if not ensure_state_dir():
+        return 0
+
+    st = load_state()
+    eng = find_engine()
+    if not eng:
+        if st.get("pid"):
+            log(f"引擎已不在 (上次 pid={st['pid']}) —— 清状态, 保留动作历史")
+            save_state({"pid": None, "last_action": st.get("last_action")})
+        else:
+            log("无引擎在运行 —— 无事可做 (零自加载方针下属正常)")
+        return 0
+    pid, port = eng
+
+    if loading_window():
+        log(f"infer-load/unload/load-mem-gate 正在运行 —— 跳过本次判定 (pid={pid})")
+        return 0
+
+    met = metrics(port)
+    if not met:
+        log(f"引擎 pid={pid} :{port} 但 /metrics 无输出 —— **无法判定空闲** "
+            f"(conf 是否带 --metrics?), 本次不动作")
+        return 0
+    act = act_sum(met)
+    if act is None:
+        log("计数器缺失 (prompt_tokens_total / tokens_predicted_total 均不在) —— "
+            "无法判定空闲, 本次不动作")
+        return 0
+
+    now = int(time.time())
+    rp = int(met.get("requests_processing", 0))
+    sb = slots_busy(port)
+    busy = rp > 0 or sb > 0
+
+    prev_act = act_sum(st.get("raw") or {})
+    if st.get("pid") != pid:
+        log(f"新实例 pid={pid} :{port} (上次 pid={st.get('pid')}) —— 空闲时钟重新起算")
+        delta, last_active = None, now
+    elif prev_act is None or act < prev_act:
+        log(f"计数器不可比 (Δ={None if prev_act is None else act - prev_act}) ⇒ 引擎重启过 —— "
+            "空闲时钟重新起算")
+        delta, last_active = None, now
+    else:
+        delta = act - prev_act
+        last_active = now if (delta > 0 or busy) else int(st.get("last_active_ts") or now)
+    idle = now - last_active
+
+    log(f"pid={pid} :{port} 在途={rp} busy槽={sb} Δtok={delta} "
+        f"距上次活跃={idle}s / 阈值 {ttl_s}s → "
+        + ("活跃" if (delta is None or delta > 0 or busy) else "空闲"))
+
+    st_new = {"pid": pid, "port": port, "raw": met, "last_active_ts": last_active,
+              "checked_ts": now, "last_action": st.get("last_action")}
+    if delta is None or delta > 0 or busy or idle < ttl_s:
+        save_state(st_new)
+        return 0
+
+    # ── 判定: TTL 到期 ────────────────────────────────
+    if effective_dry:
+        log(f"TTL 到期 (idle {idle}s ≥ {ttl_s}s) —— [演练] 本应执行 infer-unload "
+            f"(Δtok={delta})")
+        st_new["last_action"] = {"ts": now, "iso": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                 "idle_s": idle, "ttl_s": ttl_s, "delta_tokens": delta,
+                                 "result": "dry-run"}
+        save_state(st_new)
+        return 0
+
+    gtt0 = gtt_gib()
+    unload = shutil.which("infer-unload") or "/usr/local/bin/infer-unload"
+    log(f"TTL 到期 (idle {idle}s ≥ {ttl_s}s, Δtok={delta}) → 执行 {unload}")
+    t0 = time.time()
+    try:
+        r = subprocess.run([unload], capture_output=True, text=True, timeout=900)
+        rc, out = r.returncode, (r.stdout or "") + (r.stderr or "")
+    except Exception as e:
+        rc, out = -1, str(e)
+    for ln in [x for x in out.splitlines() if x.strip()][-4:]:
+        log(f"  | {ln}")
+    after = find_engine()
+    ok = rc == 0 and after is None
+    log(f"infer-unload rc={rc} 用时 {time.time() - t0:.0f}s · 卸载后引擎="
+        + ("已停" if after is None else f"仍在 pid={after[0]}")
+        + f" · GTT {gtt0}G → {gtt_gib()}G")
+    st_new["pid"] = None if ok else pid
+    st_new["last_action"] = {"ts": now, "iso": time.strftime("%Y-%m-%d %H:%M:%S"),
+                             "idle_s": idle, "ttl_s": ttl_s, "delta_tokens": delta,
+                             "result": "unloaded" if ok else "unload-failed",
+                             "unload_rc": rc, "gtt_gib_after": gtt_gib()}
+    save_state(st_new)
+    if not ok:
+        log("ERROR: 自动卸载未达成 (引擎仍在或 rc≠0) —— 下次触发会重试")
+        return 1
+    return 0
+
+
+def set_conf(pairs) -> int:
+    """`--set KEY=VAL ...` 改 conf (由 `cluster.py ttl enable|disable` 调)。
+
+    为什么把"改 conf"放在本脚本而不是主控侧 sed: conf 的语义只有本脚本在消费, 写入逻辑
+    与读取逻辑放在一起才不会漂移 (改键名时忘改 sed 是典型的静默失效)。保留原有注释与
+    未提及的键, 只替换/追加被点名的键; 写 /etc 需 root ⇒ 走 `sudo -n tee`。
+    """
+    try:
+        with open(CONF, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        lines = ["# cluster-ttl 配置 (由 cluster.py ttl enable/disable 维护)",
+                 "# 语义见 ops/station-bin/cluster-ttl 头部说明与 方案 v2 §A.6 P2-5"]
+    for pair in pairs:
+        if "=" not in pair:
+            print(f"ERROR: --set 需要 KEY=VAL 形式: {pair}")
+            return 2
+        k, _, v = pair.partition("=")
+        hit = False
+        for idx, ln in enumerate(lines):
+            body = ln.split("#", 1)[0]
+            if body.strip().startswith(k.strip() + "="):
+                lines[idx] = f"{k.strip()}={v.strip()}"
+                hit = True
+                break
+        if not hit:
+            lines.append(f"{k.strip()}={v.strip()}")
+    text = "\n".join(lines) + "\n"
+    try:
+        r = subprocess.run(["sudo", "-n", "tee", CONF], input=text, text=True,
+                           capture_output=True, timeout=30)
+        if r.returncode != 0:
+            print(f"ERROR: 写 {CONF} 失败 (rc={r.returncode}): {(r.stderr or '').strip()[:120]}")
+            return 1
+    except Exception as e:
+        print(f"ERROR: 写 {CONF} 失败: {e}")
+        return 1
+    print(f"已更新 {CONF}: " + " ".join(pairs))
+    return 0
+
+
+def main() -> int:
+    a = sys.argv[1:]
+    if a and a[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0
+    if a and a[0] == "--set":
+        return set_conf(a[1:])
+    if "--status" in a:
+        return status("--json" in a)
+    return run("--dry-run" in a)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

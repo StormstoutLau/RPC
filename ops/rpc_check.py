@@ -21,6 +21,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -115,16 +116,132 @@ foreach ($f in $files) {
 }
 """
 
-SH_SNIPPET = ("while IFS= read -r f; do [ -z \"$f\" ] && continue; "
-              "if ! out=$(bash -n \"$f\" 2>&1); then printf 'FAIL\\t1\\t%s\\n' \"$out\"; fi; "
-              "done")
+SH_LINT = ("n=0; while IFS= read -r f; do [ -z \"$f\" ] && continue; n=$((n+1)); "
+           "if ! out=$(bash -n \"$f\" 2>&1); then printf 'FAIL\\t%s\\t%s\\n' \"$f\" \"$out\"; fi; "
+           "done; printf 'COUNT\\t%s\\n' \"$n\"")
+
+# ── shell 语法检查的三条修复 (2026-09-15，方案 v2 §A.6 P2-5 记录的那次事故) ────
+# 旧实现把路径直接喂给裸 `bash -n`。本机 PATH 上的 `bash` 是 C:\Windows\system32\bash.EXE (WSL)，
+# 它**看不到 D:\ / /d/ 形式的仓库路径** ⇒ `bash -n` 等于"文件不存在"，而旧代码把这种"读不到"
+# 当成了"检查通过"：实测 447 个 .sh 报 0 失败，**往已跟踪文件注入语法错也不报**。
+# 静默降级落在提交门禁自己身上，是本仓库最不能接受的一类错。故:
+#   ① 显式找一个**能读到仓库路径**的 bash (Windows 上通常是 Git Bash)，并**实测它读得到**；
+#   ② 统一传 POSIX 形态路径 (/d/RPC/...)；
+#   ③ stdin 补尾换行 —— `while IFS= read -r` 会丢掉**没有换行结尾的最后一行**；
+#   ④ **自证**: 先拿故意写错的临时文件验证"它真能判错"，做不到就整栏判 FAIL("不可信")，绝不报 PASS。
+BASH_BROKEN_SAMPLE = "#!/bin/bash\nif [ 1 == ; then\n"
+
+
+def _posix(p) -> str:
+    """仓库内绝对路径 → POSIX 形态 (D:\\RPC\\x → /d/RPC/x)；任何 MSYS/Git Bash 都能读。"""
+    s = str(p)
+    if len(s) > 2 and s[1] == ":":
+        return "/" + s[0].lower() + s[2:].replace("\\", "/")
+    return s.replace("\\", "/")
+
+
+def _bash_candidates():
+    """候选 bash 列表 (去重、存在的)。PATH 上的排第一，其后是 Git for Windows 的常见落点。"""
+    cands = [shutil.which("bash")]
+    for env in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        base = os.environ.get(env)
+        if not base:
+            continue
+        cands += [os.path.join(base, "Git", "bin", "bash.exe"),
+                  os.path.join(base, "Git", "usr", "bin", "bash.exe"),
+                  os.path.join(base, "Programs", "Git", "bin", "bash.exe")]
+    seen, out = set(), []
+    for c in cands:
+        if c and c not in seen and os.path.exists(c):
+            seen.add(c)
+            out.append(c)
+    return out
+
+
+def _bash_can_read(bash: str) -> bool:
+    """用**真实仓库 .sh** 探一下它能不能打开我们的路径 —— "空转"与"真检查"的分界就在这。"""
+    probe = next((p for _, p in _iter_source_files()
+                  if p.suffix.lower() == ".sh" and p.is_file()), None)
+    if probe is None:
+        return False
+    try:
+        r = subprocess.run([bash, "-c", f'test -f "{_posix(probe)}" && echo READABLE'],
+                           capture_output=True, text=True, cwd=ROOT, timeout=30)
+        return "READABLE" in (r.stdout or "")
+    except Exception:
+        return False
+
+
+def _pick_bash():
+    """返回 (bash 路径, 说明)。找不到可用的就返回 (None, 原因)。"""
+    tried = []
+    for b in _bash_candidates():
+        if _bash_can_read(b):
+            return b, ""
+        tried.append(b)
+    return None, (f"找不到能读到仓库路径的 bash (试过 {len(tried)} 个: {', '.join(tried) or '无'}) —— "
+                  f"本栏**不可信**, 请装 Git for Windows 或把它的 bash.exe 放进 PATH")
+
+
+def _bash_lint(files, bash: str) -> tuple:
+    """用指定 bash 跑一遍 `bash -n`。返回 (bad, details, count_seen)。
+
+    count_seen = 远端循环实际处理的文件数 —— 用它断言"真的读到了全部文件"，
+    而不是只看"没有 FAIL 行"(那是空转也会有的结果)。
+    """
+    out = _run_with_stdin([bash, "-c", SH_LINT], [_posix(p) for p in files])
+    bad, details, seen = 0, [], None
+    for ln in out.splitlines():
+        if ln.startswith("FAIL\t"):
+            parts = ln.split("\t", 2)
+            msg = (parts[2] if len(parts) > 2 else "").strip()
+            name = parts[1] if len(parts) > 1 else "?"
+            bad += 1
+            details.append(f"(sh) {name if name not in ('1', '') else ''} {msg[:150]}".strip())
+        elif ln.startswith("COUNT\t"):
+            try:
+                seen = int(ln.split("\t", 1)[1])
+            except ValueError:
+                seen = None
+    return bad, details, seen
+
+
+def _iter_shebang_scripts():
+    """git 跟踪文件里**无扩展名但带 shebang** 的脚本 → (rel, path, kind)。
+
+    为什么必须有这一段: 站上件大多是**无扩展名**的 —— infer-load / infer-unload /
+    llama-serve-instance / cluster-ttl / reqlog / load-gate …，.py/.ps1/.sh/.json 一个都不覆盖
+    ⇒ 这批"真正跑在站上的东西"此前**完全不过语法门禁**，而它们恰恰最不能带语法错上站
+    (改坏 infer-load 会让整条加载链断掉)。
+    """
+    known = (".py", ".ps1", ".sh", ".json")
+    for rel, path in _iter_source_files():
+        if path.suffix.lower() in known or not path.is_file() or _is_binary(path):
+            continue
+        head = _read_text(path).splitlines()[:1]
+        if not head or not head[0].startswith("#!"):
+            continue
+        if "python" in head[0]:
+            yield rel, path, "py"
+        elif "/bash" in head[0] or head[0].rstrip().endswith("/sh"):
+            yield rel, path, "sh"
 
 
 def _run_with_stdin(argv, files):
+    """把文件列表喂给 argv 的 stdin。
+
+    两个都是**实测踩过**的坑, 少一个就会静默出错:
+    ⚠ ① **必须走字节模式** (不是 `text=True`): Windows 上文本模式会把写给孩子进程的 stdin 里的
+       `\\n` 翻成 `\\r\\n`; 子壳的 `while IFS= read -r` 只吃掉 `\\n`, 路径尾巴上留下 `\\r`
+       ⇒ 每个路径都变成"不存在的文件"。表现为**全部文件报失败** (实测 447/447), 极易误判成
+       "仓库全坏了"。`subprocess` **没有** `newline=` 参数 (传了会 TypeError), 故只能喂 bytes。
+    ⚠ ② **必须补尾换行**: `while IFS= read -r` 遇到没有换行结尾的最后一行时 read 返回非 0,
+       循环体**不执行** —— 少喂一个文件却毫无提示 (同一个 while-read 家族的两个不同坑)。
+    """
     try:
-        p = subprocess.run(argv, input="\n".join(files), capture_output=True,
-                           text=True, encoding="utf-8", errors="replace", cwd=ROOT)
-        return p.stdout
+        p = subprocess.run(argv, input=("\n".join(files) + "\n").encode("utf-8"),
+                           capture_output=True, cwd=ROOT)
+        return (p.stdout or b"").decode("utf-8", "replace")
     except Exception as e:
         return f"FAIL\t1\t(无法执行 {argv[0]}: {type(e).__name__})"
 
@@ -186,17 +303,72 @@ def check_syntax(ctx):
                 detail.append(f"(ps1) {msg[:160]}  [line {lineno}]")
     counts[".ps1"] = (len(ps_files), bad)
 
-    # .sh —— 单次 bash 调用
-    sh_files = by_ext.get(".sh", [])
-    bad = 0
-    if sh_files:
-        out = _run_with_stdin(["bash", "-c", SH_SNIPPET], [str(p) for _, p in sh_files])
-        for ln in out.splitlines():
-            if ln.startswith("FAIL\t"):
-                _, _, msg = ln.split("\t", 2)
-                bad += 1
-                detail.append(f"(sh) {msg.strip()[:160]}")
-    counts[".sh"] = (len(sh_files), bad)
+    # ── shell 语法: .sh + **无扩展名的 shebang 脚本** (站上件), 共用一次 bash 调用 ──
+    sh_files = [(rel, p) for rel, p in by_ext.get(".sh", [])]
+    sb = list(_iter_shebang_scripts())
+    sb_sh = [(rel, p) for rel, p, k in sb if k == "sh"]
+    sb_py = [(rel, p) for rel, p, k in sb if k == "py"]
+
+    bash, why = _pick_bash()
+    bad_sh, bad_sb_sh = 0, 0
+    if not bash:
+        # 判"不可信"而不是 PASS —— 见 SH_LINT 上方的说明 (本仓库最忌讳的静默降级正在这里)
+        bad_sh = len(sh_files)
+        bad_sb_sh = len(sb_sh)
+        detail.append(f"shell 语法检查不可信: {why}")
+    else:
+        # 自证 (双向对照): 好样本必须不报错、坏样本必须报**语法错**。
+        # ⚠ 只断言"出现了 FAIL"是不够的 —— 我第一版就是这么写的, 结果在"所有路径都因为 CRLF
+        # 变成不存在的文件"时, 自证依然"通过"(它测的其实是个不存在的文件)。必须校验**报错内容**。
+        with tempfile.TemporaryDirectory() as td:
+            good = Path(td) / "good.sh"
+            broke = Path(td) / "broken.sh"
+            good.write_text("#!/bin/bash\nset -u\nfor i in 1 2 3; do echo \"$i\"; done\n",
+                            encoding="utf-8", newline="\n")
+            broke.write_text(BASH_BROKEN_SAMPLE, encoding="utf-8", newline="\n")
+            n_good, det_good, seen_good = _bash_lint([good], bash)
+            n_broke, det_broke, seen_broke = _bash_lint([broke], bash)
+        ok_self = (n_good == 0 and seen_good == 1
+                   and n_broke == 1 and seen_broke == 1
+                   and any("syntax error" in d for d in det_broke))
+        if not ok_self:
+            bad_sh, bad_sb_sh = len(sh_files), len(sb_sh)
+            detail.append(
+                f"shell 语法检查自证失败: {os.path.basename(bash)} 好样本报错/坏样本未被判为语法错"
+                f" (good={n_good}/{seen_good} bad={n_broke}/{seen_broke}"
+                f" detail={' | '.join(det_broke)[:80]}) → 本栏不可信, 拒绝给 PASS")
+        else:
+            if sh_files:
+                bad_sh, det, seen = _bash_lint([p for _, p in sh_files], bash)
+                detail += det
+                if seen != len(sh_files):
+                    bad_sh = len(sh_files)
+                    detail.append(f".sh 覆盖不全: 实际检查 {seen} / 应有 {len(sh_files)} 个"
+                                  f" (读到数 != 喂入数 ⇒ 结果不可信)")
+            if sb_sh:
+                bad_sb_sh, det, seen = _bash_lint([p for _, p in sb_sh], bash)
+                detail += det
+                if seen != len(sb_sh):
+                    bad_sb_sh = len(sb_sh)
+                    detail.append(f"无扩展名脚本覆盖不全: 实际检查 {seen} / 应有 {len(sb_sh)} 个")
+    counts[".sh"] = (len(sh_files), bad_sh)
+
+    # 无扩展名脚本的 python 半边 (与 bash 无关, 总能查)
+    bad_sb_py = 0
+    if sb_py:
+        with tempfile.TemporaryDirectory() as td:
+            for rel, path in sb_py:
+                cfile = os.path.join(td, rel.replace("/", "_") + "c")
+                try:
+                    import py_compile
+                    py_compile.compile(str(path), cfile=cfile, doraise=True)
+                except py_compile.PyCompileError as e:
+                    bad_sb_py += 1
+                    detail.append(f"(无扩展名/py) {rel}  {str(e).strip().splitlines()[-1][:140]}")
+                except Exception as e:
+                    bad_sb_py += 1
+                    detail.append(f"(无扩展名/py) {rel}  {type(e).__name__}: {e}")
+    counts["无扩展名"] = (len(sb), bad_sb_sh + bad_sb_py)
 
     # .json —— 严格 JSON (跳过 .jsonc: 允许注释, 非标准 JSON)
     json_files = by_ext.get(".json", [])

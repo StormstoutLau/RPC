@@ -1,0 +1,10 @@
+[Unit]
+Description=cluster TTL idle auto-unload (one-shot; opt-in via /etc/llama-instances/ttl.env, see cluster-ttl.timer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=scott-lau
+Group=scott-lau
+ExecStart=/usr/local/bin/cluster-ttl
