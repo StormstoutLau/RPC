@@ -16,11 +16,10 @@ downloads/
 *.bak.*
 *.bak-*
 .tmp*
-# 安全: tmp 下的 git bundle 备份 / 密钥替换规则 / 敏感清单 一律不入库 (防意外推送含历史明文)
-tmp/repo-backup-*.bundle
-tmp/*_secret_keys*/
-tmp/git-filter-repo.py
-tmp/_sanitize_worktree.py
+# tmp/ 整体不入库 (调试/探针产物)。2026-09-14 收敛: 此前只逐项排除, 导致 git status
+# 长期显示 "?? tmp/" 噪声; 已确认 tmp 下无任何已跟踪文件 (git ls-files tmp/ = 0)。
+# 其中含 git bundle 备份 / 密钥替换规则 / 敏感清单 —— 一律不入库, 防意外推送含历史明文。
+tmp/
 
 # ── 系统垃圾 ──
 Thumbs.db

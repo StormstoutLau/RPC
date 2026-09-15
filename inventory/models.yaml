@@ -1,0 +1,139 @@
+# ============================================================================
+# 模型别名单点真值 (inventory)
+#
+# 为什么要这张表:
+#   同一个模型在本集群有**三套写法**并存, 一直靠人记:
+#     alias      ── infer-list / conf / cluster.py ROUTE / 文档里用的短名  (本表主键)
+#     engine_id  ── 引擎 /v1/models 返回的 id (GGUF repo 全名或量化名)
+#     file       ── 磁盘上的 .gguf 文件名
+#   例: `gpt-oss-120b` / `lmstudio-community/gpt-oss-120b-GGUF` / `...Q4_K_M.gguf`
+#
+# 门禁怎么用它 (ops/rpc_check.py 的 inventory 断言 → **对账模式**):
+#   校验"声明源"里出现的模型标识都在本表登记 —— 声明源 = ops/cluster.py 的 ROUTE 等常量。
+#
+#   **刻意不做的**: 扫描全仓库模型名。2026-09-14 实测该方案不可行 ——
+#   以 gguf 结尾的强标识有 114 个, **100% 是路径/文件名** (00001-of-00002.gguf、
+#   DEST/Qwen3.8-27B-....gguf), 与"模型别名"不是一回事, 纯文本匹配全是噪声。
+#
+# 数据来源: 2026-09-14 三站实测 (infer-list / /etc/llama-instances/*.env / :8080 /v1/models)
+# 字段约定:
+#   stations  ── 该别名在哪些站的模型库里 (infer-list)
+#   conf      ── 该别名在哪些站有 /etc/llama-instances/<alias>.env
+#   stations 与 conf 不一致 = 已知漂移, 记在文件末尾 known_issues
+# ============================================================================
+version: 1
+updated: 2026-09-14
+
+models:
+  - alias: gpt-oss-120b
+    engine_id: lmstudio-community/gpt-oss-120b-GGUF
+    quant: MXFP4
+    stations: [A, B, C]
+    conf: [A, B, C]
+    route: A
+    note: 速度档 (A 站单机 decode 58-64 t/s); 三站齐备, 是唯一完全一致的模型
+
+  - alias: gpt-oss-20b
+    engine_id: gpt-oss-20b-MXFP4
+    stations: [B]
+    conf: [B]
+    note: |
+      B 站 2026-09-14 实测常驻加载的就是它。engine_id 是"量化名"形态而非 repo 全名,
+      与其他条目不一致 (历史遗留); 引擎忽略请求里的 model 字段, 故不影响调用。
+
+  - alias: gpt-oss-120b-fable-5-distilled
+    engine_id: autotrust/gpt-oss-120b-Fable-5-Distilled-GGUF
+    stations: [B]
+    conf: [B]
+
+  - alias: nvidia-nemotron-3-super-120b-a12b
+    engine_id: lmstudio-community/NVIDIA-Nemotron-3-Super-120B-A12B-GGUF
+    stations: [A, B, C]
+    conf: [B, C]
+    route: B
+    note: 主力 (1M ctx)。A 站有模型库条目但无 conf
+
+  - alias: deepseek-v4-flash-0731
+    engine_id: lmstudio-community/DeepSeek-V4-Flash-0731-GGUF
+    stations: [A, B]
+    conf: [B]
+    note: A 站有模型库条目但无 conf
+
+  - alias: qwen3.8-27b-mtp
+    engine_id: Jackrong/Qwen3.8-27B-MTP-GGUF
+    stations: [B, C]
+    conf: [B, C]
+    route: C
+    note: |
+      C 站常驻主力。注意 cluster.py 的 ROUTE 用的是 `qwen3.8-27b` (无 -mtp 后缀),
+      与站上实际别名不一致 —— 见 known_issues。
+
+  - alias: qwen3.8-flash-next
+    engine_id: lmstudio-community/Qwen3.8-Flash-Next-GGUF
+    quant: UD-IQ4_XS
+    stations: [B]
+    conf: [B]
+    note: |
+      2026-09-14: conf 的 MODEL_PATH 原指向 /data/models/gguf/misc/Qwen3.8-Flash-Next/
+      (该目录**根本不存在**), 已修正为实际权重:
+      /data/models/gguf/lmstudio-community/Qwen3.8-Flash-Next-GGUF/UD-IQ4_XS/
+      Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf (三片齐全, 约 93.7GB)。
+      2026-09-15: 已移出 cluster.py 的 RPC_MODELS —— 单机量化加载, 用按站路由名
+      `qwen3.8-flash-next-b` 走 B 站本地加载, 不再经 RPC 双机通道。
+
+  - alias: qwen2.5-7b-instruct
+    engine_id: lmstudio-community/Qwen2.5-7B-Instruct-GGUF
+    stations: [B]
+    conf: []
+    note: 有模型库条目但无 conf
+
+  - alias: qwen3-coder-next
+    engine_id: lmstudio-community/Qwen3-Coder-Next-GGUF
+    stations: [B]
+    conf: []
+    note: 有模型库条目但无 conf
+
+  - alias: all-minilm-l6-v2-embedding
+    engine_id: second-state/All-MiniLM-L6-v2-Embedding-GGUF
+    stations: [B]
+    conf: []
+    note: 嵌入模型, 非生成模型
+
+  - alias: davidau-q38-27b-q4k
+    engine_id: DavidAU/Qwen3.8-27B-Cold-Fusion-GAIN-V1.1-NM-DAU-NEO-MAX-MTP-GGUF
+    stations: []
+    conf: [B]
+    note: |
+      有 conf 但模型库无条目。engine_id 由 ops/station-bin/_davidau_download.sh 的
+      repo 引用推定, **未经引擎实测确认** —— 标为待核实。
+
+# ── 非模型 conf (同目录, 但 infer-load 不用它) ──────────────────────
+# /etc/llama-instances/ 里并非所有 *.env 都是模型实例。显式登记, 以免被当成漂移。
+non_model_conf:
+  - alias: nodes
+    conf: [B]
+    purpose: RPC 节点声明清单
+    content: 'RPC_NODES="10.10.10.1:50052 10.10.11.3:50052"'
+    owner: /usr/local/bin/rpc-nodes (被其读取)
+    note: |
+      2026-09-14 查证: 内容是集群 RPC 节点清单 (B5q-1, spec/cluster-bench DESIGN §3),
+      由 rpc-nodes 读取, **不是模型实例、也不是误建**。
+      (此前在 known_issues 里误判为"疑似误建的伪条目", 已更正 —— 该误判源于只看
+      文件名与 infer-list 的差集, 没有打开文件看内容。)
+
+# ── 已登记但**坏的** conf (conf 在, 权重不在 => load 必失败) ─────────
+# 断言 stations 的 (e) 子项检出。已登记 => WARN (可见但不阻断); **新出现的缺失 => FAIL**。
+# 处置二选一: ① 补下载权重  ② 删除该 conf。
+#
+# 2026-09-14 首跑查出的两处均已处置, 故当前为空:
+#   · glm-5.3-flash        —— conf 已移除 (MODEL_PATH 指向的 unsloth/ 目录根本不存在)
+#   · qwen3.8-flash-next   —— MODEL_PATH 已修正为实际权重路径 (misc/ 目录不存在, 权重在 lmstudio-community/ 下)
+known_broken_conf: []
+
+# ── 已知漂移 (登记而非隐瞒; 处置见 spec/d2-cluster-cli/CHECKLIST.md F4) ──
+known_issues:
+  - "2026-09-14 已处置两处坏 conf: `glm-5.3-flash` 的 conf 已移除 (权重目录 unsloth/ 不存在); `qwen3.8-flash-next` 的 MODEL_PATH 已修正为实际权重路径"
+  - "B 站 conf 与**模型库(infer-list 反映磁盘 gguf)** 不一致: conf-only = {davidau-q38-27b-q4k}; model-only = {qwen2.5-7b-instruct, qwen3-coder-next, all-minilm-l6-v2-embedding}"
+  - "`nodes` 不属该漂移 —— 它是 non_model_conf (RPC 节点清单), 已单列"
+  - "A 站 conf 只有 1 个 (gpt-oss-120b), 而模型库有 3 个 —— 缺 deepseek-v4-flash-0731 与 nvidia-nemotron-3-super-120b-a12b 的 conf"
+  - "cluster.py ROUTE 的键曾是 `qwen3.8-27b` (与站上别名 `qwen3.8-27b-mtp` 不一致) —— 已于 2026-09-14 修复, 并由 aliases 断言 + stations 断言的 conf 存在性双向护栏"
