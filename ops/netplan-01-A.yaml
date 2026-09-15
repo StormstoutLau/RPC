@@ -1,3 +1,6 @@
+# 【历史模板·已废弃 2026-08-28 双机期】曾用于给 A 站 thunderbolt0 补 mtu 9000。
+# 现 A 站 thunderbolt 连接由 NM 托管的 /etc/netplan/90-NM-*.yaml 管理，本文件不再被引用。
+# 值 10.10.10.1/24 与现行 A-B 段一致（A.tb0 连 B，rpc-server 绑定地址），保留仅作参考。
 network:
   version: 2
   renderer: NetworkManager
