@@ -212,6 +212,32 @@ def _collect_versions():
             "stations": {st: res.get(st, {}) for st in ("A", "B", "C")}}
 
 
+def _collect_reqlog(n: int = 200):
+    """三站引擎请求/token 统计聚合 (P2-3)。
+
+    只读: 取回各站采样日志的最近 N 条, 聚合在**主控侧**(与 CLI 共用
+    cluster._reqlog_aggregate) —— 聚合口径只有一处实现。
+    不给"请求数": /metrics 实测无 requests 计数器 (只有两个 gauge)。
+    """
+    res = {}
+    threads = [threading.Thread(target=lambda s=st: res.__setitem__(
+        s, cluster._reqlog_station(s, "tail", n))) for st in ("A", "B", "C")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    out = {}
+    for st in ("A", "B", "C"):
+        r = res.get(st) or {}
+        recs = r.get("recs") or []
+        agg = cluster._reqlog_aggregate(recs) if recs else None
+        if agg:
+            agg["ports"] = sorted(agg["ports"])
+        out[st] = {"ok": bool(r.get("ok")), "samples": len(recs), "agg": agg}
+    return {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "stations": out,
+            "file": "~/.local/share/rpc/reqlog.jsonl"}
+
+
 def _collect_planes():
     """凭据 / Provider / 出站 三平面聚合 (统一入口的 ②③ 平面)。"""
     sec, pv, eg = {}, {}, {}
@@ -321,6 +347,10 @@ class Handler(BaseHTTPRequestHandler):
             if not self._auth_ok():
                 return self._json(401, {"error": "unauthorized"})
             return self._json(200, _collect_planes())
+        if path == "/api/reqlog":
+            if not self._auth_ok():
+                return self._json(401, {"error": "unauthorized"})
+            return self._json(200, _collect_reqlog())
         return self._json(404, {"error": "not found"})
 
     def do_POST(self):
@@ -404,6 +434,17 @@ class Handler(BaseHTTPRequestHandler):
             # 已在 do_POST 入口过了 token, 前端另有 confirm 二次确认。
             res = _run_capture(cluster._secrets_push)
             return self._json(200 if res["rc"] == 0 else 500, res)
+        if path == "/api/reqlog-sample":
+            # P2-3: 显式触发一次三站采样 (写盘是副作用, 故**不放进自动轮询**)。
+            # 本项目不新增常驻采样服务 (方案 §5.4 边界); 要连续采样用主控站计划任务。
+            lines, rc = [], 0
+            for st in ("A", "B", "C"):
+                r = cluster._reqlog_station(st, "sample")
+                lines.append(f"{st} 站: {r.get('out') or '(无输出)'}")
+                if not r.get("ok"):
+                    rc = 1
+            return self._json(200 if rc == 0 else 500,
+                              {"ok": rc == 0, "log": "\n".join(lines)})
         return self._json(404, {"error": "not found"})
 
     def log_message(self, fmt, *args):  # 静默访问日志, 保持控制台干净
@@ -496,6 +537,17 @@ details>div{padding:0 16px 16px}
   <details>
     <summary>引擎版本矩阵 (RPC 引擎 / 单机引擎 / LM Studio / opencode / 内核)</summary>
     <div id="versions"></div>
+  </details>
+  <details>
+    <summary>引擎请求/token 统计 (采样日志 · 引擎耗时口径为主)</summary>
+    <div id="reqlog"></div>
+    <div style="padding:0 12px 14px">
+      <button class="mini" onclick="doReqlogSample()">采样一次 (三站)</button>
+      <span class="mut" style="margin-left:8px">
+        逐请求日志引擎不提供（/metrics 只有累计计数器）→ 故用差分采样；
+        采样**按需**触发，不常驻（要连续采样用主控站计划任务调 cluster.py reqlog sample）
+      </span>
+    </div>
   </details>
 </div>
 
@@ -868,7 +920,62 @@ async function loadVersions(){
   }finally{ verBusy=false; }
 }
 
-function refreshAll(){ loadModels(); loadStatus(); loadPlanes(); loadVersions(); }
+// P2-3 引擎请求/token 统计: 三站采样日志的加权聚合。
+// 口径纪律: **引擎耗时口径**(ΣΔtoken/ΣΔ引擎耗时)为主口径 —— 与 API timings 可比;
+// 墙钟口径(含空闲)只作辅助, 两个都显示是为了让"忙占比"能解释差异, 不是二选一。
+async function loadReqlog(){
+  try{
+    const d = await api('GET','/api/reqlog');
+    const S = d.stations||{};
+    let h = '<table style="margin:8px 12px"><tr><th>站</th><th>样本</th><th>prompt tok</th>'
+          + '<th>gen tok</th><th>pp t/s<div class="mut">引擎耗时口径</div></th>'
+          + '<th>tg t/s<div class="mut">引擎耗时口径</div></th>'
+          + '<th>tg t/s<div class="mut">墙钟口径</div></th>'
+          + '<th>忙占比</th><th>峰值并发</th><th>重启</th></tr>';
+    let any=false;
+    for(const st of ['A','B','C']){
+      const s = S[st]||{}, a = s.agg;
+      if(!a){
+        h += '<tr><td>'+st+'</td><td colspan="9" class="mut">'
+           + (s.ok ? '无样本 —— 点下面「采样一次」' : '站不可达') + '</td></tr>';
+        continue;
+      }
+      any=true;
+      h += '<tr><td>'+st+'</td><td>'+a.n+'</td><td>'+(a.p_tok||0).toFixed(0)+'</td>'
+         + '<td>'+(a.g_tok||0).toFixed(0)+'</td>'
+         + '<td><b>'+(a.p_tps==null?'-':a.p_tps)+'</b></td>'
+         + '<td><b>'+(a.g_tps==null?'-':a.g_tps)+'</b></td>'
+         + '<td class="mut">'+(a.g_tps_wall==null?'-':a.g_tps_wall)+'</td>'
+         + '<td class="mut">'+(a.g_busy_ratio==null?'-':a.g_busy_ratio)+'</td>'
+         + '<td>'+(a.peak_proc||0)+'</td>'
+         + '<td>'+(a.restarts?(('<span class="badge err">'+a.restarts+'</span>')):'0')+'</td></tr>';
+      if(a.cached_tok)
+        h += '<tr><td></td><td colspan="9" class="mut">KV 前缀缓存命中 '
+           + a.cached_tok.toFixed(0)+' tok · 端口 '+(a.ports||[]).join(',')+'</td></tr>';
+    }
+    h += '</table>';
+    h += '<div class="mut" style="padding:0 12px 8px">'
+       + '站上落点 '+esc(d.file||'')+' · 聚合时间 '+esc(d.time||'')
+       + (any ? '' : ' · /metrics 无 requests 计数器, 故不给「请求数」') + '</div>';
+    document.getElementById('reqlog').innerHTML = h;
+  }catch(e){
+    if(e.message!=='unauthorized')
+      document.getElementById('reqlog').innerHTML =
+        '<div class="mut" style="padding:12px">加载失败: '+esc(e.message)+'</div>';
+  }
+}
+
+async function doReqlogSample(){
+  if(busy) return;
+  busy=true; setBtns(true); showLog('三站采样中…');
+  try{
+    const res = await api('POST','/api/reqlog-sample',{});
+    showLog((res.log||'').trim());
+  }catch(e){ showLog('失败: '+e.message); }
+  finally{ busy=false; setBtns(false); loadReqlog(); }
+}
+
+function refreshAll(){ loadModels(); loadStatus(); loadPlanes(); loadVersions(); loadReqlog(); }
 refreshAll();
 </script></body></html>"""
 
