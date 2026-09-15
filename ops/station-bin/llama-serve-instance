@@ -8,6 +8,19 @@ ALIAS="$1"
 CONF="${CONF_DIR:-/etc/llama-instances}/${ALIAS}.env"
 [ -f "$CONF" ] || { echo "FATAL: conf missing: $CONF"; exit 1; }
 source "$CONF"
+
+# 运行时覆盖层 (2026-09-15, 修"名义单机、实际双机"):
+# infer-load 收到**显式** --backend 时, 会把最终决定的 RPC_TARGET 写进
+# /run/llama-instances/<alias>.env。本 wrapper 会**重新 source conf**, 若不在 conf 之后
+# 再覆盖一次, conf 的 `RPC_TARGET=auto` 照样让单元带上 --rpc —— 即 `--backend llama-single`
+# 对**单元路径无效** (infer-load 清的是它自己 shell 里的变量, 管不到这里)。
+# 这是被 P2-4 `flow paths` 的后端生效性判据实测抓到的: 请求 llama-single, 进程却含 --rpc。
+# 放 /run (tmpfs): 重启自清; 不修改 /etc 下的配置文件。
+if [ -f "/run/llama-instances/${ALIAS}.env" ]; then
+  source "/run/llama-instances/${ALIAS}.env"
+  echo "[override] /run/llama-instances/${ALIAS}.env → RPC_TARGET='${RPC_TARGET:-}'"
+fi
+
 [ -f "$MODEL_PATH" ] || { echo "FATAL: model missing: $MODEL_PATH"; exit 1; }
 
 # B5q-1 哨兵: auto → rpc-nodes 存活列表 (无存活节点回退单机并告警)

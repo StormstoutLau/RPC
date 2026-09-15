@@ -59,10 +59,59 @@ BACKEND=${BACKEND}
 CEOF
   log "conf 生成: $CONF (backend=$BACKEND)"
 fi
+# 显式 --backend 必须**先存下来**: conf 里的 BACKEND= 会覆盖同名 shell 变量
+CLI_BACKEND="${BACKEND:-}"
+# 同理: --port / --ctx / --threads 也会被 `source "$CONF"` 静默覆盖 ——
+# 2026-09-15 实测: `infer-load <alias> --ctx 4096` 后日志仍打印 `ctx 262144` (conf 值),
+# 即 CLI 参数**完全没生效**。与 --backend 同一类 bug (source 覆盖同名变量)。
+CLI_PORT="${PORT:-}"; CLI_CTX="${CTX:-}"; CLI_THREADS="${THREADS:-}"
 source "$CONF"
-# conf 优先级: 显式 --backend > conf BACKEND > 默认 unsloth
-BACKEND="${BACKEND:-${CONF_BACKEND:-unsloth}}"
+# conf 优先级: 显式 CLI > conf > 默认
+BACKEND="${CLI_BACKEND:-${BACKEND:-${CONF_BACKEND:-unsloth}}}"
+[ -n "$CLI_PORT" ] && PORT="$CLI_PORT"
+[ -n "$CLI_CTX" ] && CTX="$CLI_CTX"
+[ -n "$CLI_THREADS" ] && THREADS="$CLI_THREADS"
+
+# ---- [2b] 显式 --backend 同时决定 RPC 与否 (2026-09-15 修) ----
+# 早版只切 BACKEND, 却把 conf 里的 RPC_TARGET 留着 → `--backend llama-single` 仍会
+# 起 A 站 rpc-server, 且 systemd 单元按 conf 的 RPC_TARGET 带上 --rpc ——
+# **名义"单机"实际"双机"**。
+# 这是被 P2-4 路径对比**实测抓到**的: 单机路径的加载日志里出现了 "A 站起 rpc-server@..."。
+# 判据不该只看"以为选了什么", 而要看"进程命令行里到底有没有 --rpc"。
+if [ -n "$CLI_BACKEND" ]; then
+  case "$CLI_BACKEND" in
+    llama-rpc)
+      if [ -z "${RPC_TARGET:-}" ]; then RPC_TARGET="auto"; log "显式 llama-rpc: RPC_TARGET 置 auto"; fi
+      ;;
+    *)
+      if [ -n "${RPC_TARGET:-}" ]; then
+        log "显式 ${CLI_BACKEND}: 清空 conf 的 RPC_TARGET='${RPC_TARGET}' —— 真正走单机"
+        RPC_TARGET=""
+      fi
+      ;;
+  esac
+fi
 [ -n "$PORT" ] && PORT_NUM="$PORT" || PORT_NUM="${PORT:-8080}"
+
+# ---- [2c] 运行时覆盖层: 让"显式后端"对 systemd 单元路径也生效 (2026-09-15 修) ----
+# 单机/双机路径真正执行的是 **systemd 单元 llama-server@<alias>**, 单元里的
+# llama-serve-instance 会**重新 source /etc/llama-instances/<alias>.env** ——
+# 于是上面 [2b] 清掉本脚本 shell 里的 RPC_TARGET **对单元无效**, 单元照样按 conf 的
+# `RPC_TARGET=auto` 带上 --rpc —— 即"名义单机、实际双机"。
+# (被 code 的后端生效性判据实测抓到: 请求 llama-single, 进程命令行却含 --rpc。
+#  我上一版"单机无 --rpc"的验证是**假通过** —— 当时 RPC 节点恰好没起, 单元静默回退了。)
+# 办法: 把最终决定写进 /run 下的覆盖文件, 由 wrapper 在 source conf **之后**再 source 一遍。
+# 放 /run (tmpfs): 重启自清, 不动 /etc 下的配置。
+# 未显式指定后端 ⇒ 删除该文件, 回归 conf 语义 (避免上一次的覆盖变成陈旧状态)。
+RUN_OVERRIDE="/run/llama-instances/${ALIAS}.env"
+if [ -n "$CLI_BACKEND" ]; then
+  sudo install -d -m 0755 /run/llama-instances
+  printf 'RPC_TARGET=%s\n' "${RPC_TARGET:-}" | sudo tee "$RUN_OVERRIDE" >/dev/null
+  sudo chmod 644 "$RUN_OVERRIDE"
+  log "运行时覆盖: ${RUN_OVERRIDE} (RPC_TARGET='${RPC_TARGET:-}')"
+else
+  sudo rm -f "$RUN_OVERRIDE" 2>/dev/null || true
+fi
 
 # ---- [3] 互斥: 停另一后端 (systemd llama + vllm + unsloth) ----
 log "停旧实例 (llama/vllm/unsloth)..."
@@ -104,10 +153,38 @@ if [ "$BACKEND" = "vllm" ]; then
   exec bash /home/scott-lau/scripts/a4_vllm_launch.sh
 fi
 
-# ---- [5] A 站 rpc-server (分布式, llama-rpc 回退) ----
+# ---- [5] RPC 节点 (分布式) ----
+# ⚠ 两个真因 (2026-09-15 实测定位, 缺一都会"名义双机、实际单机"):
+#
+# 真因① **身份错了**: infer-load 由 `sudo` 拉起 ⇒ 以 **root** 执行 ssh, 而 root 的
+#   ~/.ssh 里没有到各 worker 的密钥。旧实现 `ssh -o BatchMode=yes <A> systemctl start`
+#   因此认证失败; 又因本脚本是 `set -uo pipefail`(**没有 -e**), 失败**不中断也不报错**
+#   → 节点从没起来 → master 侧的 rpc-nodes 探测为空 → 回退单机。
+#   全程只有一个 stderr 的 warn, /health 照样通过 —— 加载看起来完全"成功"。
+#   ⇒ RPC 节点必须用**持有密钥的服务用户**来起 (`sudo -u <user> rpc-nodes ...`)。
+#
+# 真因② **没等端口**: master 侧 `RPC_TARGET=auto` 的展开是**单次探测、无重试**,
+#   端口若还没监听, /dev/tcp 连接被**立即拒绝**(不是等 2s 超时) → 同样落空回退。
+#   ⇒ 用 `rpc-nodes --start`: 它自带 `wait_port`(15×2s), 且按 nodes.env 声明启动**全部**
+#   节点 (A + C), 即文档中的"1 master + 2 worker"。
+#
+# 另外: 拿不到节点时**不再静默回退**, 而是响亮失败 (exit 7) —— 静默回退正是这类错误
+# 长期不可见的根源 (P2-4 路径对比的两条路径就因此都跑成了单机)。
 if [ -n "${RPC_TARGET:-}" ]; then
-  log "A 站起 rpc-server@${ALIAS}..."
-  ssh -o BatchMode=yes "$AWORK" "sudo systemctl start rpc-server@${ALIAS}"
+  RPCCMD="$(command -v rpc-nodes || echo /usr/local/bin/rpc-nodes)"
+  log "起 RPC 节点 (${RPCCMD} --start ${ALIAS}, 服务用户身份 + 自带等端口)..."
+  if [ "$(id -u)" = "0" ]; then
+    RPC_ALIVE="$(sudo -u "${RPC_USER:-scott-lau}" "$RPCCMD" --start "${ALIAS}")"
+  else
+    RPC_ALIVE="$("$RPCCMD" --start "${ALIAS}")"
+  fi || {
+    log "ERROR: RPC 节点未能就绪 —— 拒绝静默回退单机"
+    log "       排查: (a) 是否以服务用户身份 ssh (root 无节点密钥)"
+    log "             (b) /etc/llama-instances/nodes.env 的 RPC_NODES 是否可达"
+    log "             (c) 各站 systemctl status rpc-server@${ALIAS}"
+    exit 7
+  }
+  log "RPC 节点就绪: ${RPC_ALIVE}"
 fi
 
 # ---- [6a] unsloth 后端 (默认) ----
