@@ -42,29 +42,53 @@ def _model_suggestions():
 
 
 def _collect_status():
-    """聚合三站: 框架探测 + 引擎 :8080 health + 加载实例。返回可 JSON 化 dict。"""
-    frames = {st: cluster.probe_frames(st) for st in ("A", "B", "C")}
-    base = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "stations": {}}
+    """聚合三站: 框架探测 + 引擎 :8080 health + 加载实例。返回可 JSON 化 dict。
+
+    并行说明 (2026-09-14, 修 CHECKLIST F19): 复用 cluster 里**已并行**的
+    collect_frames() / collect_status(), 而不是逐站串行调用 (原实现为
+    3×probe_frames + 3×probe_station 串行 = 9 次 ssh, 实测 129.6s)。
+    """
+    fd = cluster.collect_frames()      # 三站并行
+    st_status = cluster.collect_status(with_list=False)   # 三站并行; 跳过慢的 infer-list
+    base = {"time": st_status["time"], "stations": {}}
     for st in ("A", "B", "C"):
-        f = frames[st]
+        f = fd.get(st, {})
+        ps = st_status["stations"].get(st, {})
         fr = {}
         for name in ("llama", "unsloth", "vllm", "litellm", "opencode", "claude"):
-            status, detail = f["frames"].get(name, ("Unknown", ""))
+            status, detail = f.get("frames", {}).get(name, ("Unknown", ""))
             fr[name] = {"status": status, "detail": detail}
-        # 引擎 :8080 health
-        engine, loaded = "?", "?"
-        if f["reachable"]:
-            # 复用 cluster.probe_station 的 loaded 判定 (含 /health + systemd + infer-list)
-            ps = cluster.probe_station(st)
-            engine = ps.get("llama", "?")
-            loaded = ps.get("loaded", "?")
         base["stations"][st] = {
-            "reachable": f["reachable"],
+            "reachable": f.get("reachable", False),
             "frames": fr,
-            "engine": engine,
-            "loaded": loaded,
+            "engine": ps.get("llama", "?"),
+            "loaded": ps.get("loaded", "?"),
         }
     return base
+
+
+def _collect_planes():
+    """凭据 / Provider / 出站 三平面聚合 (统一入口的 ②③ 平面)。"""
+    sec, pv, eg = {}, {}, {}
+    threads = []
+    for st in ("A", "B", "C"):
+        threads.append(threading.Thread(target=lambda s=st: sec.__setitem__(s, cluster.probe_secrets(s))))
+        threads.append(threading.Thread(target=lambda s=st: pv.__setitem__(s, cluster.probe_providers(s))))
+        threads.append(threading.Thread(target=lambda s=st: eg.__setitem__(s, cluster.probe_egress_station(s))))
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    out = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "secrets": {}, "providers": {}, "egress": {}}
+    for st in ("A", "B", "C"):
+        state, note = cluster._secrets_verdict(sec.get(st, {}))
+        out["secrets"][st] = {"state": state, "note": note}
+        d = pv.get(st, {}) or {}
+        out["providers"][st] = {"opencode": d.get("opencode", {}), "claude": d.get("claude", {})}
+        r = eg.get(st, {}) or {}
+        out["egress"][st] = {"http": r.get("http"), "time": r.get("time"), "info": r.get("info", {})}
+    return out
 
 
 def _run_capture(fn):
@@ -132,6 +156,10 @@ class Handler(BaseHTTPRequestHandler):
             if not self._auth_ok():
                 return self._json(401, {"error": "unauthorized"})
             return self._json(200, _collect_status())
+        if self.path == "/api/planes":
+            if not self._auth_ok():
+                return self._json(401, {"error": "unauthorized"})
+            return self._json(200, _collect_planes())
         return self._json(404, {"error": "not found"})
 
     def do_POST(self):
@@ -154,6 +182,12 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/unload":
             res = _run_capture(cluster.cmd_unload)
             return self._json(200 if res["rc"] == 0 else 400, res)
+        if self.path == "/api/secrets-push":
+            # 凭据管理: 从主控 secrets/stations/<st>/ 重下发三站 ~/.config/rpc/
+            # (密钥轮换落地: 覆盖正本后在这里一键 push, 对齐审计 §16.3 ① 的闭环)。
+            # 已在 do_POST 入口过了 token, 前端另有 confirm 二次确认。
+            res = _run_capture(cluster._secrets_push)
+            return self._json(200 if res["rc"] == 0 else 500, res)
         return self._json(404, {"error": "not found"})
 
     def log_message(self, fmt, *args):  # 静默访问日志, 保持控制台干净
@@ -197,11 +231,14 @@ input[type=text]{width:120px}
   <button onclick="doOp('load')"    id="bLoad">加载</button>
   <button onclick="doOp('backend')" id="bBackend">切换后端</button>
   <button onclick="doOp('unload')"  id="bUnload">三站卸载</button>
+  <button onclick="doOp('secrets-push')" id="bPush">凭据重下发</button>
+  <span class="mt" id="pushHint"></span>
   <span id="spinner"></span>
   <div id="log"></div>
 </div>
 
 <div id="panels"></div>
+<div id="planes"></div>
 <p class="mt" id="foot">刷新状态中…</p>
 
 <script>
@@ -230,7 +267,13 @@ function frameRow(name, fr){
          s+'</td><td class="mt">'+(fr.detail||'')+'</td></tr>';
 }
 
+// 轮询采用「完成后自调度」+ in-flight 去重 (2026-09-14, 修 CHECKLIST F20):
+// 原实现用定时间隔触发, 与慢响应叠加会堆积成并发请求风暴 (曾约 26 并发)。
+let statusBusy=false, planesBusy=false;
+
 async function loadStatus(){
+  if(statusBusy) return;
+  statusBusy=true;
   try{
     const d = await api('GET','/api/status');
     const names=['llama','unsloth','vllm','litellm','opencode','claude'];
@@ -246,31 +289,65 @@ async function loadStatus(){
     document.getElementById('panels').innerHTML=html;
     document.getElementById('foot').textContent='刷新于 '+d.time;
   }catch(e){ if(e.message!=='unauthorized') document.getElementById('foot').textContent='状态拉取失败: '+e.message; }
+  finally{ statusBusy=false; setTimeout(loadStatus, 5000); }
 }
 
 async function doOp(op){
-  if(busy) return; busy=true;
+  if(busy) return;
+  if(op==='secrets-push'){
+    const ok=confirm('将用主控 secrets/stations/ 正本覆盖三站离线凭据。继续?');
+    if(!ok) return;
+  }
+  busy=true;
   const d=document.getElementById('log'); d.style.display='block'; d.textContent='操作中…';
-  for(const id of ['bLoad','bBackend','bUnload']) document.getElementById(id).disabled=true;
+  for(const id of ['bLoad','bBackend','bUnload','bPush']) document.getElementById(id).disabled=true;
   const sp=document.getElementById('spinner'); sp.textContent='…';
+  const hint=document.getElementById('pushHint');
   try{
     let res;
     if(op==='load')      res=await api('POST','/api/load',{alias:document.getElementById('aliasInput').value});
     else if(op==='backend') res=await api('POST','/api/backend',
         {alias:document.getElementById('aliasInput').value,
          backend:document.getElementById('backendSel').value});
+    else if(op==='secrets-push') res=await api('POST','/api/secrets-push');
     else                res=await api('POST','/api/unload');
     d.textContent=(res.log||'').trim()+'\n[exit '+res.rc+']';
+    if(op==='secrets-push'){ hint.textContent='凭据已重下发, 站内 agent 需重启生效'; }
   }catch(e){ d.textContent='失败: '+e.message; }
   finally{
     busy=false; sp.textContent='';
-    for(const id of ['bLoad','bBackend','bUnload']) document.getElementById(id).disabled=false;
+    for(const id of ['bLoad','bBackend','bUnload','bPush']) document.getElementById(id).disabled=false;
     setTimeout(loadStatus,600);
   }
 }
 
+async function loadPlanes(){
+  if(planesBusy) return;
+  planesBusy=true;
+  try{
+    const d = await api('GET','/api/planes');
+    let h='<h3>统一入口 · 平面② 凭据/Provider · 平面③ 出站</h3>';
+    h+='<table><tr><th>站</th><th>凭据 (~/.config/rpc)</th><th>opencode 默认模型</th>'
+     + '<th>claude 凭据</th><th>出站 OpenRouter</th></tr>';
+    for(const st of ['A','B','C']){
+      const s=d.secrets[st]||{}, p=d.providers[st]||{}, e=d.egress[st]||{};
+      const oc=(p.opencode&&(p.opencode.model||p.opencode.error))||'?';
+      const cl=(p.claude&&(p.claude.token_form||p.claude.error))||'?';
+      const eg=(e.http==='200')?('OK '+(e.time||'')+'s'):('FAIL '+e.http);
+      const col=(s.state==='OK')?'#2e7d32':'#c62828';
+      h+='<tr><td>'+st+'</td>'
+       + '<td style="color:'+col+'">'+s.state+' <span class="mt">'+(s.note||'')+'</span></td>'
+       + '<td class="mt">'+oc+'</td>'
+       + '<td class="mt">'+cl+((p.claude&&p.claude.helper)?' +apiKeyHelper':'')+'</td>'
+       + '<td class="mt">'+eg+'</td></tr>';
+    }
+    document.getElementById('planes').innerHTML=h+'</table>';
+  }catch(e){}
+  finally{ planesBusy=false; setTimeout(loadPlanes, 15000); }
+}
+
 loadStatus();
-setInterval(loadStatus, 5000);
+loadPlanes();
 </script></body></html>"""
 
 
