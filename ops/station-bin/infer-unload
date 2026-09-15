@@ -1,7 +1,6 @@
 #!/bin/bash
-# infer-unload — 停两站全部推理实例 (systemd llama + vllm + unsloth), 等 GTT 释放
+# infer-unload — 停两站全部推理实例 (systemd llama + vllm + unsloth) + RPC worker, 等 GTT 释放
 set -uo pipefail
-AWORK="scott-lau@scott-lau-NEX.local"
 log() { echo "[infer-unload] $(date '+%H:%M:%S') $*"; }
 log "停 B 站 llama-server@*..."
 sudo systemctl stop 'llama-server@*' 2>/dev/null || true
@@ -14,12 +13,46 @@ if pgrep -f 'vllm.entrypoint[s]' >/dev/null 2>&1; then
   pkill -f '^ray::' 2>/dev/null || true
   /home/scott-lau/vllm-rocm/bin/ray stop -f 2>/dev/null || true
 fi
-log "停 A 站 rpc-server@*..."
-A_RPC_WAS=$(ssh -o BatchMode=yes "$AWORK" "systemctl list-units 'rpc-server@*' --state=active --no-legend 2>/dev/null | grep -q . && echo active || echo inactive; sudo systemctl stop 'rpc-server@*' 2>/dev/null; pkill -f '^ray::' 2>/dev/null; /home/scott-lau/vllm-rocm/bin/ray stop -f 2>/dev/null" 2>/dev/null | head -1)
-[ -z "$A_RPC_WAS" ] && A_RPC_WAS=inactive
-wait_gtt() {  # $1=tag, $2=ssh
+
+# ---- 停 RPC worker (两层, 都幂等; 2026-09-15 修) ----
+# 原先只 ssh A 站停 rpc-server。C 站 2026-09-15 起也是 worker (nodes.env 的 RPC_NODES 声明 A+C)
+# ⇒ 每轮双机加载都会在 C 留下常驻 `rpc-server@<alias>`, 让集群门禁 engine 项长期黄灯
+# (实测 "C 站引擎在服务: 端口 50052 · RSS 0G / 有端口在听但 RSS 仅 121M")。
+# ⚠ ssh 必须用**持有节点密钥的服务用户**: 以 root 跑本脚本时 root 无密钥 (与 infer-load 真因①同源)。
+RPC_USER="${RPC_USER:-scott-lau}"
+if [ "$(id -u)" = "0" ]; then SSHX=(sudo -u "$RPC_USER" ssh -o BatchMode=yes)
+else SSHX=(ssh -o BatchMode=yes); fi
+
+# ① 本站就地停 —— 不经 ssh: 避开"自 ssh 到本机 USB4 IP"的 host key 坑 (实测 A/C 均 Host key verification failed),
+#    也让"单独在某台 worker 上跑 infer-unload"真能停掉它自己的 rpc-server。
+log "停本站 rpc-server@*..."
+LOCAL_RPC_WAS=$(systemctl list-units 'rpc-server@*' --state=active --no-legend 2>/dev/null | grep -q . && echo active || echo inactive)
+sudo systemctl stop 'rpc-server@*' 2>/dev/null || true
+
+# ② master 侧停**远端** worker: 清单取自 nodes.env (rpc-nodes --all), 不在脚本里再抄一份 IP。
+#    nodes.env 只在 master 存在 ⇒ 非 master 站查不到清单属正常, 静默跳过 (停 worker 由 master 负责),
+#    **不能**因此报 WARN —— 那会让常规 unload 看起来像出错。
+NODES_ENV_F="${NODES_ENV:-/etc/llama-instances/nodes.env}"
+RPC_WAS_ACTIVE=""
+[ "$LOCAL_RPC_WAS" = "active" ] && RPC_WAS_ACTIVE="本站"
+if [ -f "$NODES_ENV_F" ]; then
+  NODES_LIST="$("${RPC_NODES_BIN:-/usr/local/bin/rpc-nodes}" --all 2>/dev/null || true)"
+  [ -z "$NODES_LIST" ] && log "WARN: 有 ${NODES_ENV_F} 但取不到节点清单 (rpc-nodes --all 失败)"
+  for node in $NODES_LIST; do
+    ip="${node%%:*}"
+    log "停远端 worker ${node} 的 rpc-server@*..."
+    was=$("${SSHX[@]}" "$ip" "systemctl list-units 'rpc-server@*' --state=active --no-legend 2>/dev/null | grep -q . && echo active || echo inactive; sudo systemctl stop 'rpc-server@*' 2>/dev/null" 2>/dev/null | head -1)
+    # 本机 IP 会自 ssh 失败 (见上 ①) —— 那不算错误, 已由本地分支处理
+    if [ "$was" = "active" ]; then RPC_WAS_ACTIVE="$RPC_WAS_ACTIVE ${node}"
+    elif [ -z "$was" ]; then log "WARN: ${ip} 不可达 —— 该 worker 是否仍在跑**无法确认** (不假装已停)"; fi
+  done
+else
+  log "远端 worker: 本站无 ${NODES_ENV_F} (节点清单在 master 站), 由 master 侧的 unload 负责"
+fi
+
+wait_gtt() {  # $1=tag, $2=ip (缺省=本站)
   for i in $(seq 1 90); do
-    if [ -n "$2" ]; then used=$(ssh -o BatchMode=yes "$2" "cat /sys/class/drm/card*/device/mem_info_gtt_used 2>/dev/null | head -1")
+    if [ -n "$2" ]; then used=$("${SSHX[@]}" "$2" "cat /sys/class/drm/card*/device/mem_info_gtt_used 2>/dev/null | head -1")
     else used=$(cat /sys/class/drm/card*/device/mem_info_gtt_used 2>/dev/null | head -1); fi
     [ -z "$used" ] && used=0
     [ "$used" -lt 2000000000 ] && { log "$1 GTT released (${used}B)"; return 0; }
@@ -27,10 +60,9 @@ wait_gtt() {  # $1=tag, $2=ssh
   done
   log "WARN: $1 GTT 未完全释放"
 }
-wait_gtt "B" ""
-if [ "$A_RPC_WAS" = "active" ]; then
-  wait_gtt "A" "$AWORK"
-else
-  log "A GTT 跳过 (A 站 rpc-server 未运行)"
-fi
+wait_gtt "本站" ""
+for tag in $RPC_WAS_ACTIVE; do
+  [ "$tag" = "本站" ] && continue
+  wait_gtt "RPC ${tag}" "${tag%%:*}"
+done
 log "UNLOADED ✓ (两站内存回收)"
