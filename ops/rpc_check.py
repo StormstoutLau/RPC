@@ -386,6 +386,73 @@ def check_syntax(ctx):
     return ("FAIL" if total_bad else "PASS"), note, detail
 
 
+# ── 断言 A13: 脚本治理 (ADR-0004「统一管理入口为唯一管理面」) ──────────
+# 背景: ops/ 下积累了两百多个一次性脚本 (`_xxx.sh` 一片), 各自管一小块、与统一入口能力重复、
+# 还要各自维护。规则: **所有管理操作从统一入口 (cluster.py / cluster_web.py) 执行**;
+# 存量冻结(只减不增), 新增脚本必须登记 —— 登记这个动作本身就是 review 时能看见的留痕。
+# 只写规则不绑定执行等于空头承诺, 故做成断言 (与 plugins 的 known_drift 同一套纪律)。
+OPS_INV = ROOT / "inventory" / "ops.yaml"
+SCRIPT_EXT = (".py", ".ps1", ".sh")
+
+
+def _iter_ops_scripts():
+    """ops/ 下 git 跟踪的**脚本** → [(rel, path)]。含无扩展名但带 shebang 的 (站上件常见)。"""
+    for rel, path in _iter_source_files():
+        if not rel.startswith("ops/") or not path.is_file():
+            continue
+        if path.suffix.lower() in SCRIPT_EXT:
+            yield rel, path
+        elif not path.suffix and not _is_binary(path):
+            head = _read_text(path).splitlines()[:1]
+            if head and head[0].startswith("#!"):
+                yield rel, path
+
+
+def check_scripts(ctx):
+    """ops/ 脚本治理: 任何脚本必须在登记表里 (入口 / 站上运行时件 / 冻结存量)。"""
+    try:
+        import yaml
+    except Exception:
+        return "WARN", "缺 pyyaml, 跳过脚本治理断言 (不复现于 CI 环境即视为通过)", []
+    if not OPS_INV.exists():
+        return "FAIL", "inventory/ops.yaml 缺失 (本断言的登记依据)", []
+    try:
+        inv = yaml.safe_load(OPS_INV.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        return "FAIL", f"inventory/ops.yaml 解析失败: {type(e).__name__}: {e}", []
+
+    entry = list(inv.get("entry") or [])
+    runtime = list(inv.get("station_runtime") or [])
+    frozen = list(inv.get("frozen_ops_scripts") or [])
+    known = set(entry) | set(runtime) | set(frozen)
+
+    scripts = dict(_iter_ops_scripts())
+    unknown = sorted(s for s in scripts if s not in known)
+    missing_entry = [e for e in entry if not (ROOT / e).exists()]
+    gone = sorted(f for f in frozen if f not in scripts)
+
+    detail = []
+    if unknown:
+        detail.append(f"新增未登记脚本 {len(unknown)} 个 —— 管理操作请优先给统一入口加子命令 "
+                      f"(ops/cluster.py <sub>), 而非再写一个脚本:")
+        detail += [f"  {s}" for s in unknown[:20]]
+        if len(unknown) > 20:
+            detail.append(f"  …另 {len(unknown) - 20} 个")
+    if missing_entry:
+        detail.append("统一入口件缺失: " + ", ".join(missing_entry))
+    if gone:
+        detail.append(f"冻结清单里已不存在的 {len(gone)} 项可从 inventory/ops.yaml 删掉 "
+                      f"(只减不增, 删减是欢迎的方向): " + ", ".join(gone[:8])
+                      + (" …" if len(gone) > 8 else ""))
+    bad = bool(unknown) or bool(missing_entry)
+    note = (f"扫描 {len(scripts)} 个脚本 · 入口 {len(entry)} · 站上运行时 {len(runtime)} "
+            f"· 冻结存量 {len(frozen)} · 未登记 {len(unknown)}")
+    # 提示必须进 note: PASS 时明细块不打印, 只放 detail 等于没人看得到 (实测踩到)
+    if gone:
+        note += f" · 清单含 {len(gone)} 项已不存在(应移除)"
+    return ("FAIL" if bad else "PASS"), note, detail
+
+
 # ── 断言 A3: inventory 单点真值 (P1) ──────────────────────────────
 # 目的: 阻止"改了这个忘了那个" —— 端口/模型标识变更时, 保证声明源与真值表一致。
 #
@@ -1654,6 +1721,9 @@ CHECKS = [
      "fix": "删除明文密钥, 或加入 SECRET_ALLOW 并写明原因(不允许静默放行)"},
     {"id": "syntax", "title": "语法检查", "fn": check_syntax, "quick": True,
      "fix": "按明细里的行号修语法; 扩展名与内容不符的应解包或改名"},
+    {"id": "scripts", "title": "脚本治理", "fn": check_scripts, "quick": True,
+     "fix": "管理操作请走统一入口 (ops/cluster.py <sub> / web 卡片), 不要新增一次性脚本; "
+            "确需独立脚本则在 inventory/ops.yaml 登记并在提交信息里说明理由 (ADR-0004)"},
     {"id": "inventory", "title": "真值登记", "fn": check_inventory, "quick": True,
      "fix": "端口/模型标识有变更时同步 inventory/*.yaml 真值表"},
     {"id": "ports", "title": "端口分配表自洽", "fn": check_ports, "quick": True,
