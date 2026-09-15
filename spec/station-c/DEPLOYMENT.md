@@ -82,10 +82,10 @@
 |---|---|---|
 | O1 | **A-C 直连段 down（retimer 抖动）** | ✅ **已关闭（重插线缆）**：用户物理重插后两侧 tbt1 回归，路由恢复直连优先（A↔C ttl=64、引擎可达）。恢复流程：C 侧 tbt1 自动激活；A 侧 `nmcli con up 'thunderbolt1'` |
 | O2 | **静态路由无自动 failover** | 主 nexthop 不可达不回落备路由（工程教训）；环网冗余硬化待做（多路径/监控切换） |
-| O3 | C 站未纳入 agent-cli ROUTE_TABLE | 引擎就绪（10.10.11.3:18080），接入路由待决策 |
+| O3 | C 站未纳入 agent-cli ROUTE_TABLE | **部分收口（2026-09-15 核实）**：统一入口侧已纳入 —— `cluster.py STATION_ROUTES` 有 `gpt-oss-120b-c` / `nvidia-nemotron-3-super-120b-a12b-c` / `qwen3.8-27b-mtp-c`，`STATIONS["C"]`/`STATION_PORT["C"]` 均已修正；C 站 station_runtime 工具链 11/11 实装（infer-load/unload/llama-serve-instance/load-gate/load-mem-gate/wait-gtt-release/cluster-ttl/cluster-watchdog/reqlog/plugin-probe/gguf-meta）。**剩**：agent-cli `$ROUTE_TABLE`（模型别名→站）仍无 C 条目 —— 现行派发走 `--RemoteHost 192.168.1.37`，是否需要给 C 加模型别名待定 |
 | O4 | ROCm HIP llama 后端未实测 | ✅ **已实测（2026-09-12）**：gpt-oss-120b-MXFP4 经 HIP llama-server 加载 (PORT 8080, ctx131072)，health ok + 推理冒烟通过 |
-| O5 | `claude` base URL/auth 未配 | 待 C 站接入链路决议（B 的 127.0.0.1:8080 网关不达 C） |
-| O7 | gpt-oss 引擎已就绪，未纳入 agent-cli ROUTE_TABLE | 111G 显存档位下可与 qwen3.8(18080) 并存；接入路由（如编排层将其作为 C 站推理目标）待决策 |
+| O5 | `claude` base URL/auth 未配 | ✅ **已解决（2026-09-09）**：C 站 `~/.claude/settings.json` baseURL = `http://127.0.0.1:8080/v1`（直连本地引擎，不经网关），claude 会话实测 `end_turn` ✅（见 [双端点调研 §2.2](../../docs/双端点部署与opencode混合框架调研.md)） |
+| O7 | gpt-oss 引擎已就绪，未纳入 agent-cli ROUTE_TABLE | **同 O3**：统一入口 `STATION_ROUTES` 已含 C 站条目、`STATION_PORT["C"]=8080`；agent-cli `$ROUTE_TABLE` 仍无 C 模型别名（走 `--RemoteHost`） |
 | O8 | ROCm 报“gfx1151×2”双设备 | **确认为误报**（2026-09-12）：物理单 GPU（gfx1151 单 die），KFD node0 为空占位（属性全 0）、node1 为真 GPU。观测时勿据 `×2` 误判双卡，真实可用计算在 node1 |
 | O6 | AMD 官方 amdgpu 源 commit（repo.radeon.com 6.3.3/7.2）与 B 的 `Enabled:no` 差异 | C 保持 amdgpu 源存在但 DKMS purge；不进 apt 自动升级路径 |
 

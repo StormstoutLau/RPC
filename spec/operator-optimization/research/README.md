@@ -13,4 +13,4 @@
 
 - 新增编排/运维调研 → 直接放入本目录并登记
 - 算子层/协议层依据见 `../rpc-optimization/research/`
-- 实测数据入 [metrics-log](../rpc-optimization/metrics-log.md)（配合台账）
+- 实测数据入 [metrics-log](../../rpc-optimization/metrics-log.md)（配合台账）

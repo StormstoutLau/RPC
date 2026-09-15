@@ -41,6 +41,11 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0001, ADR-0002]
 | D-18 | ctx 一致性 | **引擎 ctx = 唯一真相**：`_station_ready` 探测引擎真实 n_ctx → `Resolve-Profile` 按 `min(intent, ENGINE_CTX)` clamp；`ENGINE_CTX>0` 覆盖静态 ctxMax 表；station-ready 前置到 profile 前 | 统一大 ctx / 同步 opencode client-limit | O-23 根因=三层 ctx 解耦（profile 元数据 ≠ opencode limit ≠ 引擎 `-c`）→ refdedupe 引擎 8192 < 请求 12536 → 400 挂死 | `_complexity_route_test` 16/16 + refdedupe 实机 RUN_S=111/TASK_RC=0/ACCEPT=1 无 400 | O-23 |
 | D-19 | C++ golden 验收形态 | **后续 C++ 任务卡 golden 走真 `cmake` 编译**（非纯源码静态断言） | 维持静态断言（更快/主控免编译链） | O-13 半收口判据：`cmake` 真编译方满足 bit-exact 领域范式（CROSS-PROJECT §2 最高约束）与 golden 强验收初衷（防模型自写测试自证）；Cpp_Hub-001 静态断言仅为试点过渡 | 待首个真编译型 C++ 卡落地回填（golden cmd 调 `cmake` + 断言，本地 fallback 静态断言） | O-13 / O-12 |
 
+> **⚠ 现状注记 (2026-09-15) — D-14 / D-15 的"链路形态"部分已漂移，决策**意图**仍有效**：
+> - LiteLLM 网关 `:4000` **已退役**（2026-09-13, ADR-0002 决策 C 的后续）⇒ D-14 里"绕网关"已无对象，"直连各站引擎端口"成为唯一链路
+> - 跨站扇出**不再走 `ssh -NL 18081→A:8080` 隧道**：现行做法是 `agent-cli ... --RemoteHost <站>`，每站独立子进程 + 站内 `_station_ready.sh` **自发现引擎端口**（端口是每载随机/按 conf 的，硬编码隧道口本就会漂）。`_bs2_fanout.py`/`_bs2_cross.py` 已按 ADR-0004 清减删除；B 站 `18081` 现被 conf `davidau-q38-27b-q4k`（llama-single）声明占用
+> - **D-15 的并发铁律本身不变**：fan-out 优先跨站各 1 并发、勿同站叠
+
 ## 2. 方案取舍详情（DESIGN §7，四案）
 
 ### D-01 编排形态选型
@@ -89,7 +94,7 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0001, ADR-0002]
 | ADR      | 决策摘要                                    | 对 D6 的影响                                  |
 | -------- | ---------------------------------------- | ---------------------------------------- |
 | ADR-0001 | 收尾→重构→聚合→加固；运维层补全                        | D6 属调用标准层，不触碰 infer-load/网关/CLI 配置（D1/D5 域） |
-| ADR-0002 | 网关 401 根因 + fan-out 路由决策：绕网关直连 B/A:8080 | D-14 直接继承：D6 模型链路绕 LiteLLM，跨站走 ssh 隧道       |
+| ADR-0002 | 网关 401 根因 + fan-out 路由决策：绕网关直连 B/A:8080 | D-14 直接继承：D6 模型链路绕 LiteLLM，跨站走 ssh 隧道（**2026-09-15 现状：网关已退役、隧道已弃用，见 §1 表下注记**） |
 
 ## 5. 决策维护规则
 

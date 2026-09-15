@@ -50,6 +50,10 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0002]
                     │  ├─ 本地: A:8080 gpt-oss / B:8080 nemotron(直连)   │
                     │  ├─ 免费档: opencode → Zen 网关(美国托管, 出站)      │
                     │  └─ 跨站扇出: B ssh -NL 18081:127.0.0.1:8080 → A   │
+                    │     (⚠ 2026-09-15 现状: 已改为 agent-cli --RemoteHost │
+                    │      <站> + 站内 _station_ready.sh 自发现引擎端口,   │
+                    │      无需隧道; 且 B:18081 现被 conf davidau-q38-    │
+                    │      27b-q4k 声明占用)                              │
                     └──────────────────────────────────────────────────┘
 ```
 
@@ -122,7 +126,7 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0002]
 - 两站 llama-server slots=1（is_processing 互斥）→ 同站多请求在后端排队
 - **同站内 2 并发被统一内存带宽顶起**（单请求 1.7→4.8s，~2.8× 恶化，BS-2 L1）
 - **跨站扇出真并行**（A+B 各 2 并发：A 串行 4 次 6.8s → cross_wall 4.8s，ratio 0.71；L1 实测源 `_bs2_cross.py` targets=[A,B,A,B]）
-- **落地铁律：fan-out 优先跨站各 1 并发，勿同站叠并发**；跨站接入用 B 站 `ssh -NL 18081:127.0.0.1:8080` 无侵入隧道
+- **落地铁律：fan-out 优先跨站各 1 并发，勿同站叠并发**；~~跨站接入用 B 站 `ssh -NL 18081:127.0.0.1:8080` 无侵入隧道~~ → **2026-09-15 现状：跨站派发走 `agent-cli ... --RemoteHost <站>`（每站独立子进程 + 站内 `_station_ready.sh` 自发现引擎端口），隧道方案已不用**——`_bs2_fanout.py`/`_bs2_cross.py` 已按 ADR-0004 清减删除，且 B 站 18081 已被 conf `davidau-q38-27b-q4k`（llama-single）声明占用，隧道端口不再空闲。**并发铁律本身仍然有效**（跨站各 1 并发、勿同站叠）
 - **单机形态同样适用（O-24 ④ 入册）**：单机独立跑多任务时也勿就地叠并发（同一带宽顶起 ~2.8×），应串行派发/手动限流；O-18 铁律无跨站豁免。并发纪律见手册 §2 agent-cli「并发纪律」。
 
 ## 5. 控制流（异常路径与退出码）
@@ -169,7 +173,7 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0002]
 | claude 路径        | 铁律 4 已固化 `< /dev/null`；ROUTE_TABLE 需在 G1 补 cli 键 + claude 模型条目                     | 二期 (G1)   |
 | --continue        | Continue-vs-Spawn 决策表（调研 §9.6-2）为路由规则                         | 二期 (G1)   |
 | readonly 层2锁     | §4 层 2 schema 字段在                                              | V2        |
-| 跨站扇出           | B:18081→A:8080 隧道已验证；路由表可按需加跨站模型名                            | V2 输入已就绪  |
+| 跨站扇出           | ~~B:18081→A:8080 隧道~~ **2026-09-15: 改 `agent-cli --RemoteHost <站>` + 站内自发现端口 (隧道方案弃用)**；路由表可按需加跨站模型名 | 已落地      |
 | 后端并发探测         | 触发条件=queue_s 排队成常态；调 /slots + 槽位占则拒/等                        | 升级项 (F1)  |
 | review --peer     | 站间互审协议                                                         | D7+       |
 | trae 派发          | 任务卡 schema 冻结即接口                                                 | D7        |

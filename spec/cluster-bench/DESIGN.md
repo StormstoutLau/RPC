@@ -10,7 +10,7 @@
 | 借鉴点 | beowulf 源码实证 (审计注记 #3-#6) | 我方现状差距 |
 |--------|----------------------------------|-------------|
 | RPC 列表声明式生成 | `llama_cpp-benchmark-cluster.yml`: `host_ips` 遍历 `groups[cluster][1:]` → `join(':50052,')` → `--rpc` | conf `RPC_TARGET` 与 bench 脚本均硬编码 `10.10.10.1:50052`, 多节点手拼 |
-| 一键基准+自动收尾 | 同 play: `run_once` 跑 `llama-bench --rpc` → 末尾 `Ensure llama-rpc is stopped` | [b5p_lb_bench.sh](file:///d:/RPC/scripts/b5p_lb_bench.sh) 手工版: 起服务→bench→**不收尾不落档** |
+| 一键基准+自动收尾 | 同 play: `run_once` 跑 `llama-bench --rpc` → 末尾 `Ensure llama-rpc is stopped` | [b5p_lb_bench.sh](file:///d:/RPC/archive/scripts-history/b5p_lb_bench.sh) 手工版: 起服务→bench→**不收尾不落档**（已归档, `d:\RPC\scripts\` 前缀已不存在） |
 | 下载 checksum 幂等 | `get_url force:false + checksum` (config 注释: 省略 checksum = 强制重下) | 下载侧已有 (lm-download 双验); **传输侧 b5k_sync 无校验**; 完整性教训 = B5m1/7.11 勘误 (B5m1a 行动项已撤销, 见报告 v1.5) |
 | `GGML_VK_PREFER_HOST_MEMORY=1` | `example.config.yml` → 模板 `Environment=` 注入 rpc-server | rpc-server 路径**未实测** (llama-server 路径 DSpark 已用 `=ON`; 属不同进程不同路径) |
 
@@ -165,7 +165,7 @@ b5_bench_cluster.sh [--alias m27-q4ks] [--pp 512] [--tn 128] [-r 2] [--keep]
 | b5k_sync manifest/verify | 4/4 | main guard 可 source / .sha256 生成兼容 sha256sum -c / 完整通过 / 篡改**点名报错**非零退出 |
 
 - **RED 证据**: 初跑 31 项全失败且均为功能缺失; 期间修正 2 处**测试自身缺陷** (TDD 纪律): ① 哨兵 T2 假通过 (grep 作用于不存在文件, 取反误判 pass — 加 server 真执行断言) ② 探测竞态 (start_listener 无就绪等待, 而默认探测模式按设计单次尝试 — 测试侧补就绪循环, 实现不改)
-- **部署**: `rpc-nodes`/`b5_bench_cluster.sh` → /usr/local/bin; `nodes.env` → /etc/llama-instances; `llama-serve-instance`/`infer-load` 原地替换 (备份 `*.bak-b5q`); `b5k_sync.sh` → ~/scripts (main guard 重构); 源文件均版本化于 d:\RPC\scripts\
+- **部署**: `rpc-nodes`/`b5_bench_cluster.sh` → /usr/local/bin; `nodes.env` → /etc/llama-instances; `llama-serve-instance`/`infer-load` 原地替换 (备份 `*.bak-b5q`); `b5k_sync.sh` → ~/scripts (main guard 重构); 源文件版本化位置 (2026-09-15 现状, 原记 `d:\RPC\scripts\` 该前缀已不存在): 现役件在 [ops/rpc-nodes](../../ops/rpc-nodes) / [ops/nodes.env](../../ops/nodes.env) / [ops/station-bin/](../../ops/station-bin); 已退役的 `b5_bench_cluster.sh` / `b5k_sync.sh` 归档于 [archive/scripts-history/](../../archive/scripts-history)
 - **infer-load L50**: `RPCV=auto` (仅影响新生成 conf; 现有 conf 不重写)。集成验证归 CHECKLIST §2.2
 - **回归**: b5k dry-run 行为不变 ✓; 现存 4 个 conf 逐字节不变 (gpt-oss-120b 空=单机 ✓, 其余显式值 ✓)
 - **集成层已完成 (2026-08-31, CHECKLIST 48/48 验收通过)**: 真实 bench 全流程 4min15s (141.82/20.53, Δ ≤±2%) / B5q-4 GGML_VK 对照 Δpp -4.94% → 撤销 / b5k --go --verify 双端 (篡改 rc=6 点名 + 恢复 rc=0 + NVMe ~550MB/s/端 实测回填) / infer-load auto conf 真链实测 (ps 含 --rpc)。另修复 3 处验收中实锤问题: A_MGMT mDNS 化 (IP 漂移免疫) / sync_dir 父目录 TDD 修复 (套件 35/35) / verify 范围闸门 (A_ONLY ∨ .sha256 标记)

@@ -7,6 +7,12 @@
 
 > **三机形态续记 (2026-09-09/10)**: 本文为 9/1 双端点决策史档，2026-09-10 按三机群状态完成正文更新。C 站 (seaviv, 192.168.1.37) 已于 2026-09-08/09 作为**第三独立端点**接入: UMA=4G 档 HIP 全通 (gpt-oss-120b decode 48.8 t/s), 常驻 nemotron-120B 手动引擎 :8080, opencode 1.18.25 + claude 2.1.258 双 CLI 直连 127.0.0.1:8080, infer-* 工具链/load-gate 三件套已补装 (与 A/B 同构)。**"80G 级模型=独立端点而非 RPC" 的论证结论对第三站同样成立**（原文 §1.2 RPC 税证据链、§1.3 推荐形态、§2 opencode headless 铁律均为三机形态的直接先例）。下文各节已按三机群实况标注。详见 [三机推理集群使用手册.md](三机推理集群使用手册.md) v1.8。
 
+> **⚠ 现状注记 (2026-09-15) —— LiteLLM 网关已退役，本文中一切"经 litellm :4000"的描述均已失效**：
+> - **`LiteLLM :4000` 于 2026-09-13 退役**（ADR-0002 决策 C 的后续；`cluster.py` 已移除 `LITELLM_BASE`/`KEY_FILE`/`read_key` 及 status/e2e 对网关的硬依赖）。**当前没有任何链路经过网关**：三站各自直连本机引擎端口
+> - **provider 名 `cluster-litellm` 保留，但 baseURL 不再是 `127.0.0.1:4000`** —— 现行做法是 `_station_ready.sh` 探测该站引擎**真实端口**（引擎端口每载随机/按 conf）后**幂等注入** baseURL 到该端口（见 [agent-cli.ps1](../ops/station-bin/agent-cli.ps1) 注释）
+> - 故本文 §2 的 jsonc 留档、层②"B 站 :8080 → litellm :4000"、§末尾"经 USB4 的 litellm `10.10.10.2:4000`"等，**均为 9/1~9/10 历史记档，保留作溯源，勿照抄执行**
+> - 文中 **`_bs2_fanout.py` / `_bs2_cross.py` 先例已按 ADR-0004 清减删除**（网关退役 + 密钥脱敏后不可用）
+
 ---
 
 ## 摘要 (结论先行, 三机群形态)
@@ -104,7 +110,7 @@
     "cluster-litellm": {
       "name": "Cluster LiteLLM",
       "npm": "@ai-sdk/openai-compatible",
-      "options": { "baseURL": "http://127.0.0.1:4000/v1", "apiKey": "<litellm master key>" },
+      "options": { "baseURL": "http://127.0.0.1:4000/v1", "apiKey": "<litellm master key>" },  // ⚠ 9/1 历史留档: 网关已退役, 现行 baseURL = 该站引擎真实端口
       "models": {
         "nemotron": { "name": "Nemotron 3 Super 120B (local)" },
         "gpt-oss": { "name": "GPT-OSS 120B (local)" }
@@ -114,7 +120,7 @@
 }
 ```
 
-A 站同款配置只需把 baseURL 换成本机端点 (双端点部署后 A 站 :8080 或经 USB4 的 litellm `http://10.10.10.2:4000/v1`)。**C 站同款配置**: baseURL 直接 `http://127.0.0.1:8080/v1` (C 站独立引擎, 不经 litellm), 9/9 已写入 C 站 `opencode.jsonc` 并验证 `INJECT_OK`。
+A 站同款配置只需把 baseURL 换成本机端点 (双端点部署后 A 站 :8080 ~~或经 USB4 的 litellm `http://10.10.10.2:4000/v1`~~)。**C 站同款配置**: baseURL 直接 `http://127.0.0.1:8080/v1` (C 站独立引擎), 9/9 已写入 C 站 `opencode.jsonc` 并验证 `INJECT_OK`。**⚠ 2026-09-15 现状: 三站统一为「baseURL = 本机引擎端口」, 由 `_station_ready.sh` 探测后幂等注入; `10.10.10.2:4000` 网关路径已随网关退役作废。**
 
 ### 2.3 三层混合框架设计（三机群版: 四极）
 
@@ -138,7 +144,7 @@ A 站同款配置只需把 baseURL 换成本机端点 (双端点部署后 A 站 
 | 层 | 位置 | 模型 | 认证 | 依赖 |
 |---|---|---|---|---|
 | ① 本地 gpt-oss | A 站 :8080 | 59G MXFP4, decode 50+ t/s | 无 | ✅ **现役** (双端点部署已生效) |
-| ② 本地 nemotron | B 站 :8080 → litellm :4000 | 80G, 1M ctx, 96.5k needle 5/5 | litellm key (已配) | ✅ **现役主力** |
+| ② 本地 nemotron | B 站本机引擎端口 (~~:8080 → litellm :4000~~, 网关已退役) | 80G, 1M ctx, 96.5k needle 5/5 | 无 (直连) | ✅ **现役主力** |
 | ③ **C 站本地** (2026-09-09) | C 站 `192.168.1.37:8080` (或本机 127.0.0.1:8080) | 常驻 nemotron Q4_K_M (~83G) / 可换 gpt-oss | 无 (直连) | ✅ **现役** — 第三独立端点, 不经 litellm |
 | ④ Zen 免费云模型 | opencode.ai | deepseek-v4-flash-free / nemotron-3-ultra-free / big-pickle 等 | keyring + PTY + 代理 | 仅 A 站可用 (有 mihomo) |
 
