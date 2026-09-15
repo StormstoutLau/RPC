@@ -73,7 +73,10 @@ def _collect_status():
 # 新实现直扫站上模型库 (与 infer-load 同一数据源), 保证"页面所见 = 站上可加载"。
 _MODEL_SCAN = (
     "echo '===M==='; "
-    "find -L /data/models/gguf -mindepth 3 -name '*.gguf' ! -name 'mmproj*' -printf '%s|%p\\n' 2>/dev/null; "
+    # 深度用 -mindepth 2 不限上限: 实测三种落点 (仓库级直放 / 模型目录 / 模型目录下的量化子目录),
+    # 早期写 -mindepth 3 会漏掉"仓库级直放"那一类 (B 站 davidau-q38-27b-q4k, 有 conf、能加载,
+    # 却在清单里看不到)。分组规则见 cluster.group_by_model。
+    "find -L /data/models/gguf -mindepth 2 -name '*.gguf' ! -name 'mmproj*' -printf '%s|%p\\n' 2>/dev/null; "
     "echo '===C==='; ls /etc/llama-instances/ 2>/dev/null; "
     # 物理库与聚合视图的差集 = 孤儿 (物理库有、聚合视图无 → 清单看不到、也加载不了)。
     # 见 cluster._scan_models 的说明; 这里并进同一次 ssh, 避免多一轮往返。
@@ -82,65 +85,71 @@ _MODEL_SCAN = (
     "echo '===AGG==='; find -L /data/models/gguf -mindepth 2 -maxdepth 2 -type d 2>/dev/null "
     "| sed 's|.*/gguf/||' | sort; "
     "echo '===BRK==='; find /data/models/gguf -mindepth 2 -maxdepth 2 -type l "
-    "! -exec test -e {} \\; -print 2>/dev/null | sed 's|.*/gguf/||' | sort"
+    "! -exec test -e {} \\; -print 2>/dev/null | sed 's|.*/gguf/||' | sort; "
+    # P1-6 模型元数据 (原生 ctx / 量化 / conf 加载参数): 并进同一次 ssh。
+    # 采集器与解析器都在 cluster.py —— 单一定义点, CLI `models meta` 复用同一份。
+    + cluster._MODEL_META_SCAN
 )
 
 
 def _alias_of(model_dir: str) -> str:
-    """目录名 → infer-load 别名。规则与站上 infer-load 保持一致 (含 minimax 重映射)。"""
-    a = re.sub(r"-GGUF$", "", model_dir, flags=re.I).lower()
-    return "m27-q4ks" if a.startswith("minimax-m2.7") else a
+    """目录名 → infer-load 别名 (单一定义点在 cluster.alias_of)。"""
+    return cluster.alias_of(model_dir)
+
 
 
 def _station_models(st: str) -> dict:
-    """单站: 模型库清单 (含大小/conf 状态/是否已加载) + 引擎态。"""
+    """单站: 模型库清单 (含大小/conf 状态/是否已加载/元数据) + 引擎态。"""
     d = {"station": st, "reachable": False, "engine": "?", "loaded": "?", "models": []}
-    ok, out = cluster.ssh_run(st, _MODEL_SCAN, timeout=60)
+    # timeout 120: 这次 ssh 里含 find + 每个 gguf 一次 gguf-meta (实测单站 0.5~15s, 视模型数)
+    ok, out = cluster.ssh_run(st, _MODEL_SCAN, timeout=120)
     if not ok:
         return d
     d["reachable"] = True
     m_part, _, tail = out.partition("===C===")
     c_part, _, phy_agg = tail.partition("===PHY===")
     phy_raw, _, rest_agg = phy_agg.partition("===AGG===")
-    agg_raw, _, brk_raw = rest_agg.partition("===BRK===")
+    agg_raw, _, rest_brk = rest_agg.partition("===BRK===")
+    # BRK 段**必须**在 ===G=== 处截断: 后面还有 P1-6 的元数据段, 不截断会把
+    # 每条元数据行都当成一个"断链"(2026-09-15 实测踩到: 断链数被虚报为 10/29/17)。
+    brk_raw, _, _meta = rest_brk.partition("===G===")
     # 孤儿 = 物理库有、聚合视图无 (→ 清单看不到、infer-load 也找不到, 需补软链)
     # 断链 = 聚合视图里的软链指向不存在的目标 (真目录不算, 见 cluster._scan_models)
     phy_set = {x.strip() for x in phy_raw.splitlines() if x.strip()}
     agg_set = {x.strip() for x in agg_raw.splitlines() if x.strip()}
     d["unmanaged"] = sorted(phy_set - agg_set)
     d["broken"] = sorted(x.strip() for x in brk_raw.splitlines() if x.strip())
-    sizes = {}
+    size_of = {}
     for line in m_part.replace("===M===", "").splitlines():
         line = line.strip()
         if "|" not in line:
             continue
         sz, _, path = line.partition("|")
-        # 路径形如 /data/models/gguf/<repo>/<model_dir>/[<子目录>/]<file>.gguf。
-        # 必须从 marker 之后取**前两段** —— 若用 parts[-3]/parts[-2], 遇到
-        # "模型目录下还有子目录"的情况 (如 MiniMax-M2.7-GGUF/UD-IQ4_XS/*.gguf)
-        # 会取成子目录名, 把 MiniMax 误显示为 UD-IQ4_XS (2026-09-15 实测踩到)。
-        marker = "/data/models/gguf/"
-        if marker not in path:
-            continue
-        seg = path.split(marker, 1)[1].split("/")
-        if len(seg) < 2:
-            continue
-        key = (seg[0], seg[1])                # (repo, model_dir)
         try:
-            sizes[key] = sizes.get(key, 0) + int(sz)
+            size_of[path] = size_of.get(path, 0) + int(sz)
         except ValueError:
             pass
+    # 模型粒度 (repo, model_dir) 的单一定义点在 cluster.group_by_model —— 它也处理
+    # "仓库级直放"(<repo>/<file>.gguf) 这一形态, 见其 docstring。
+    groups = cluster.group_by_model(size_of)
+    sizes = {k: sum(size_of[p] for p in ps) for k, ps in groups.items()}
+    # P1-6 元数据: 原生 ctx / 量化 / conf 加载参数 (解析器与 CLI 共用)
+    meta = cluster.parse_model_meta(out)
+    gguf_meta, conf_params = meta["gguf"], meta["params"]
     confs = {c for c in c_part.split() if c.endswith(".env")}
     ps = cluster.probe_station(st, with_list=False)
     d["engine"] = ps.get("llama", "?")
     d["loaded"] = ps.get("loaded", "?")
     loaded_low = (ps.get("loaded") or "").lower()
     for (repo, model), sz in sorted(sizes.items()):
-        alias = _alias_of(model)
-        disp = re.sub(r"-GGUF$", "", model, flags=re.I)
+        alias = _alias_of(model or repo)
+        disp = re.sub(r"-GGUF$", "", model or repo, flags=re.I)
         # 已加载判定: A 站 unsloth 报的是 "gpt-oss-120b-MXFP4", 目录名是 "gpt-oss-120b-GGUF",
         # 故用"显示名的首个词段"做包含匹配 (gpt-oss-120b / m27 / qwen3.8 等前缀足够区分)。
         stem = disp.lower().split("-")[0]
+        rep = cluster.pick_representative(groups[(repo, model)])
+        gm = gguf_meta.get(rep, {})
+        quant, quant_src = cluster.resolve_quant(alias, rep)
         d["models"].append({
             "alias": alias,
             "display": disp,
@@ -148,6 +157,15 @@ def _station_models(st: str) -> dict:
             "size_gb": round(sz / 1073741824, 1),
             "has_conf": (alias + ".env") in confs,
             "loaded": bool(loaded_low) and bool(stem) and stem in loaded_low,
+            # ── P1-6 元数据 ──
+            # ctx_native: 模型自带上下文上限 (GGUF); ctx: 站上 conf 的实际加载值。
+            # 两者常不同 (如 qwen3.8-27b-mtp 原生 262144 / B 站按 32768 加载) ——
+            # 它们回答的是不同问题, 故并列暴露, 不合并。
+            "ctx_native": gm.get("ctx"),
+            "arch": gm.get("arch") or "",
+            "quant": quant,
+            "quant_src": quant_src,
+            "params": conf_params.get(alias) or {},
         })
     return d
 
@@ -434,6 +452,7 @@ th{background:#fafbfc;color:var(--mut);font-weight:600;font-size:12px;position:s
 tr.loaded{background:#f0f8f2}
 td.acts{white-space:nowrap;text-align:right}
 .mut{color:var(--mut);font-size:12px}
+.mmeta{font-size:11px;color:#8a949e;margin-top:2px}
 details{margin-top:16px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius)}
 summary{padding:12px 16px;cursor:pointer;font-weight:600;font-size:13px}
 details>div{padding:0 16px 16px}
@@ -538,6 +557,21 @@ function metricsLine(mt){
 }
 
 // 单站一张卡片: 站头(状态+已加载+卸载本站) + 指标行 + 该站模型清单(每行可加载)
+// P1-6 模型元数据行: 原生 ctx / 架构 / 量化(含来源) / 站上 conf 的加载参数。
+// 刻意把"原生 ctx"与"加载 ctx"并列显示 —— 它们回答不同问题 (模型能吃到多少 vs 本站
+// 实际给了多少), 合并成一个数字会掩盖 conf 把 ctx 调小这类事实。
+function metaLine(m){
+  const bits = ['原生 ctx ' + (m.ctx_native==null ? '?' : m.ctx_native)];
+  if(m.arch) bits.push(m.arch);
+  if(m.quant) bits.push(m.quant + (m.quant_src==='ledger' ? '(台账)' : '(文件名)'));
+  const p = m.params || {};
+  if(p.ctx) bits.push('加载 ctx ' + p.ctx);
+  if(p.backend) bits.push(p.backend);
+  if(p.port) bits.push(':' + p.port);
+  if(p.n_cpu_moe) bits.push('n_cpu_moe ' + p.n_cpu_moe);
+  if(p.rpc_target) bits.push('rpc ' + p.rpc_target);
+  return '<div class="mut mmeta">'+esc(bits.join(' · '))+'</div>';
+}
 function stationCard(st, s, mt){
   const loc = {A:'NEX', B:'GTR-Pro', C:'seaviv'}[st] || '';
   let h = '<div class="card"><div class="card-head">'
@@ -557,7 +591,8 @@ function stationCard(st, s, mt){
       const stt = m.loaded ? ' <span class="badge">已加载</span>' : '';
       h += '<tr class="'+(m.loaded?'loaded':'')+'">'
          + '<td><div>'+esc(m.display)+'</div>'
-         + '<div class="mut">'+esc(m.alias)+' · '+esc(m.repo)+'</div></td>'
+         + '<div class="mut">'+esc(m.alias)+' · '+esc(m.repo)+'</div>'
+         + metaLine(m) + '</td>'
          + '<td class="mut">'+m.size_gb+'G</td>'
          + '<td>'+badge+stt+'</td>'
          + '<td class="acts">'
