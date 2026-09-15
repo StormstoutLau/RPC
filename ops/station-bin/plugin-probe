@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""plugin-probe — 站上插件面事实采集 (P1-5)，输出 `id=value` 行。
+
+被 `ops/rpc_check.py` 的 stations 断言 (h) 子项消费；期望值定义在 `inventory/plugins.yaml`。
+
+设计约定（与 gguf-meta 同一路数：站上只报事实，判定全在门禁侧）：
+  · 每行一个 `id=value`，id 与 inventory/plugins.yaml 的 items[].id **一一对应**
+  · 集合类 = 元素排序后逗号连接（顺序无关）；计数类 = 整数；标记类 = yes/no
+  · **取不到就输出空值或 0，绝不抛异常** —— 缺失本身正是要断言的事实
+  · 只读，不写任何文件
+
+为什么要有这个脚本（而不是把逻辑塞进门禁的 ssh 命令串）：
+  三站采集要读 JSONC/JSON、遍历目录、判软链可达性，用 shell 一行串写会变成
+  转义地狱（2026-09-15 实测：PowerShell + ssh + 引号嵌套三层后命令解析直接失败）。
+  落成站上工具后可**单独测试**，也让采集口径只有一处。
+"""
+import json
+import os
+import re
+import sys
+
+
+def _home(*p):
+    return os.path.expanduser(os.path.join("~", *p))
+
+
+def _read_json(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
+def _read_jsonc(path):
+    """容错读 JSONC：去 // 与 /* */ 注释、去尾逗号。失败返回 None。"""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            s = fh.read()
+    except Exception:
+        return None
+    s = re.sub(r"/\*.*?\*/", "", s, flags=re.S)
+    s = re.sub(r"^\s*//.*$", "", s, flags=re.M)
+    s = re.sub(r",(\s*[}\]])", r"\1", s)
+    try:
+        return json.loads(s)
+    except Exception:
+        return None
+
+
+def _keys(d, sub=None):
+    """取 dict 的键（可先下钻一层），排序后返回列表。"""
+    if sub is not None:
+        d = (d or {}).get(sub) if isinstance(d, dict) else None
+    return sorted(str(k) for k in (d or {}).keys()) if isinstance(d, dict) else []
+
+
+def _skill_names(root):
+    """~/.claude/skills 下含 SKILL.md 的技能目录名。"""
+    names = []
+    for dirpath, _dirnames, filenames in os.walk(root):
+        if "SKILL.md" in filenames:
+            names.append(os.path.basename(dirpath))
+    return sorted(names)
+
+
+ARS_LINK_DIRS = ("skills", "commands", "agents", "plugins")
+
+
+def _link_stats():
+    """~/.config/opencode 下四类落点的软链数与死链数（逐类返回）。
+
+    死链 (broken) 是本项的核心指标：2026-09-15 实测 C 站 25 个软链**全部**指向
+    不存在的 ~/tools/opencode-academic-research —— 只数软链个数会显示"三站一致"，
+    必须判可达性才看得见。
+    """
+    per, total, broken = {}, 0, 0
+    for sub in ARS_LINK_DIRS:
+        d = _home(".config", "opencode", sub)
+        n = nb = 0
+        try:
+            entries = os.listdir(d)
+        except OSError:
+            entries = []
+        for name in entries:
+            p = os.path.join(d, name)
+            if os.path.islink(p):
+                n += 1
+                if not os.path.exists(p):
+                    nb += 1
+        per[sub] = n
+        total += n
+        broken += nb
+    return per, total, broken
+
+
+def _cli_version(prog):
+    """`<prog> --version` 的第一个 token（如 `2.1.258 (Claude Code)` → `2.1.258`）。"""
+    import subprocess
+    for cand in (["/usr/local/bin/" + prog], [prog]):
+        try:
+            out = subprocess.run(cand + ["--version"], capture_output=True, text=True,
+                                 timeout=20).stdout.strip()
+            if out:
+                return out.split()[0]
+        except Exception:
+            continue
+    return ""
+
+
+def main():
+    oc = _read_jsonc(_home(".config", "opencode", "opencode.jsonc")) or {}
+    inst = _read_json(_home(".claude", "plugins", "installed_plugins.json")) or {}
+    mkt = _read_json(_home(".claude", "plugins", "known_marketplaces.json")) or {}
+    settings = _read_json(_home(".claude", "settings.json")) or {}
+
+    skills = _skill_names(_home(".claude", "skills"))
+    per, links, broken = _link_stats()
+
+    facts = {
+        "cli.opencode": _cli_version("opencode"),
+        "cli.claude": _cli_version("claude"),
+        # opencode 声明启用的插件（配置文件口径；**不用** ~/.cache/opencode/packages/
+        # ——那里会累积历史包，B 站就多一个 opencode-qwencode-auth@1.3.0 的残留）
+        "opencode.plugins": sorted(str(x) for x in (oc.get("plugin") or [])),
+        "claude.plugins": _keys(inst, "plugins"),
+        "claude.enabled": _keys(settings, "enabledPlugins"),
+        "claude.mkt": _keys(mkt),
+        "claude.skills.n": len(skills),
+        "claude.skills.names": skills,
+        "ars.links.skills": per["skills"],
+        "ars.links.commands": per["commands"],
+        "ars.links.agents": per["agents"],
+        "ars.links.plugins": per["plugins"],
+        "ars.links": links,
+        "ars.broken": broken,
+        "ars.source": "yes" if os.path.isdir(_home("tools", "opencode-academic-research")) else "no",
+    }
+
+    for k in sorted(facts):
+        v = facts[k]
+        if isinstance(v, list):
+            v = ",".join(v)
+        sys.stdout.write(f"{k}={v}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

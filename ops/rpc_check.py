@@ -452,6 +452,177 @@ def check_ports(ctx):
     return "PASS", note, []
 
 
+# ── 断言 A7: 插件/技能三站同构基线 (P1-5) ─────────────────────────
+# 目的: 把 PLUGIN-LEDGER 的"三站完全同构"从**人工文字断言**改成可断言的真值。
+# 为什么必须改: 2026-09-15 首次实测即推翻该结论 —— C 站 ARS 链的 25 个软链
+# **全部是死链**(源目录 ~/tools/opencode-academic-research 在 C 站不存在), 而
+# "只数软链个数"三站恰好都是 25, 手工核对显示"一致"。判据必须定在**可达性**上。
+#
+# 本断言(index)只做**纯本地**部分(可进 quick 门禁):
+#   · items 结构自洽: id 唯一非空 / kind 合法 / expect 类型与 kind 匹配
+#   · local_sources 对账: 仓库侧源(ops/agent-skills/*/SKILL.md)的名字集合必须
+#     等于它所镜像的 item 的 expect —— 抓"仓库加了技能但没登记", 无需 ssh
+#   · known_drift 必须指向存在的 item 与合法站, 且 extra 不得落在 expect 内
+# 站上部分在 stations 断言的 (h) 子项 (复用同一次 ssh 往返)。
+INVENTORY_PLUGINS = INVENTORY_DIR / "plugins.yaml"
+PLUGIN_KINDS = {"scalar", "set", "count", "flag"}
+PLUGIN_STATIONS = ("A", "B", "C")
+
+
+def _plugins_doc():
+    """读 inventory/plugins.yaml。文件缺失返回 {}; **解析失败抛异常**(同 ports)。"""
+    if not INVENTORY_PLUGINS.is_file():
+        return {}
+    import yaml
+    return yaml.safe_load(INVENTORY_PLUGINS.read_text(encoding="utf-8")) or {}
+
+
+def _plugin_items(doc):
+    """{id: item}。"""
+    out = {}
+    for it in doc.get("items") or []:
+        if isinstance(it, dict) and it.get("id"):
+            out[str(it["id"])] = it
+    return out
+
+
+def _plugin_scope(it):
+    """item 适用的站; 无 scope = 三站通用。"""
+    s = it.get("scope")
+    return [str(x) for x in s] if s else list(PLUGIN_STATIONS)
+
+
+def _plugin_diff(it, got):
+    """把站上实得值与基线比对。返回 None=一致, 否则 (差异类, 明细)。
+
+    set 类区分两种差异: ("extra", 只多出的元素) 与 ("diff", 明细) ——
+    前者才有可能匹配 known_drift（已登记的多余项降 WARN），
+    后者(少了元素/多出未登记元素)一律 FAIL。
+    """
+    kind, exp = it.get("kind"), it.get("expect")
+    if kind == "count":
+        try:
+            return None if int(got) == exp else ("diff", [got, exp])
+        except (TypeError, ValueError):
+            return ("diff", [got, exp])
+    if kind in ("scalar", "flag"):
+        return None if got == exp else ("diff", [got, exp])
+    if kind == "set":
+        g = {x for x in str(got).split(",") if x}
+        e = {str(x) for x in (exp or [])}
+        if g == e:
+            return None
+        if not (e - g):
+            return ("extra", sorted(g - e))
+        return ("diff", [f"缺{sorted(e - g)}", f"多{sorted(g - e)}"])
+    return ("diff", [f"未知 kind={kind!r}"])
+
+
+def _plugin_src_names(path, glob):
+    """仓库侧源的条目名。glob 形如 '*/SKILL.md' → 取条目所在目录名。"""
+    files = sorted(path.glob(glob))
+    names = set()
+    for p in files:
+        names.add(p.parent.name if len(p.parts) > len(path.parts) + 1 else p.name)
+    return sorted(names)
+
+
+def check_plugins(ctx):
+    """纯本地: 基线结构自洽 + 仓库内源与登记值对账。"""
+    if not INVENTORY_PLUGINS.is_file():
+        return "WARN", "inventory/plugins.yaml 缺失 (插件同构基线未建)", []
+    try:
+        doc = _plugins_doc()
+    except Exception as e:
+        return "FAIL", f"plugins.yaml 解析失败: {type(e).__name__}: {str(e)[:180]}", []
+
+    detail = []
+    raw = [it for it in (doc.get("items") or []) if isinstance(it, dict)]
+    items = _plugin_items(doc)
+
+    # (1) 结构自洽
+    dup = {}
+    for i, it in enumerate(raw, 1):
+        iid = it.get("id")
+        if not iid:
+            detail.append(f"items[{i}] 缺 id")
+            continue
+        dup[iid] = dup.get(iid, 0) + 1
+        if it.get("kind") not in PLUGIN_KINDS:
+            detail.append(f"{iid} 的 kind 非法 {it.get('kind')!r} "
+                          f"(合法: {'/'.join(sorted(PLUGIN_KINDS))})")
+        else:
+            exp = it.get("expect")
+            ok = (isinstance(exp, int) and not isinstance(exp, bool) if it["kind"] == "count"
+                  else isinstance(exp, list) and bool(exp) and all(isinstance(x, str) for x in exp)
+                  if it["kind"] == "set"
+                  else isinstance(exp, str) and bool(exp) if it["kind"] == "scalar"
+                  else exp in ("yes", "no"))
+            if not ok:
+                detail.append(f"{iid} 的 expect 与 kind={it['kind']} 不匹配: {exp!r}")
+        if not it.get("purpose"):
+            detail.append(f"{iid} 缺 purpose")
+        for s in (it.get("scope") or []):
+            if str(s) not in PLUGIN_STATIONS:
+                detail.append(f"{iid} 的 scope 含非法站 {s!r}")
+    for iid, n in sorted(dup.items()):
+        if n > 1:
+            detail.append(f"item id {iid!r} 重复 {n} 次 —— 后者会覆盖前者")
+    if not items:
+        detail.append("items 为空 —— 该断言需要基线才能工作")
+
+    # (2) 仓库内源 → 登记值对账 (本地就能抓"加了技能没登记")
+    for src in doc.get("local_sources") or []:
+        if not isinstance(src, dict):
+            continue
+        name = src.get("name") or "?"
+        mirrors = src.get("mirrors")
+        path = ROOT / str(src.get("path") or "")
+        glob = str(src.get("glob") or "*/SKILL.md")
+        if mirrors not in items:
+            detail.append(f"local_sources/{name} 的 mirrors={mirrors!r} 在 items 中不存在")
+            continue
+        if not path.is_dir():
+            detail.append(f"local_sources/{name} 的路径不存在: {src.get('path')}")
+            continue
+        exp = items[mirrors].get("expect")
+        if not isinstance(exp, list):
+            detail.append(f"local_sources/{name} 镜像的 {mirrors} 不是 set 类, 无法对账")
+            continue
+        got = _plugin_src_names(path, glob)
+        if got != sorted(exp):
+            detail.append(
+                f"仓库源 {src.get('path')} 与基线 {mirrors} 不一致: "
+                f"源 {len(got)} 项 / 基线 {len(exp)} 项; "
+                f"仅在源 {sorted(set(got) - set(exp)) or '无'}; "
+                f"仅在基线 {sorted(set(exp) - set(got)) or '无'}")
+
+    # (3) known_drift 自洽
+    for kd in doc.get("known_drift") or []:
+        if not isinstance(kd, dict):
+            continue
+        tag = f"known_drift({kd.get('station')}/{kd.get('id')})"
+        if kd.get("id") not in items:
+            detail.append(f"{tag} 指向不存在的 item")
+        if str(kd.get("station")) not in PLUGIN_STATIONS:
+            detail.append(f"{tag} 的 station 非法")
+        if not kd.get("note"):
+            detail.append(f"{tag} 缺 note (登记必须写明原因)")
+        extra, exp = kd.get("extra"), (items.get(kd.get("id")) or {}).get("expect")
+        if isinstance(extra, list) and isinstance(exp, list):
+            inside = [x for x in extra if x in exp]
+            if inside:
+                detail.append(f"{tag} 的 extra 里有本就属于 expect 的元素 {inside} —— "
+                              f"extra 只应列**多余项**")
+
+    n_drift = len([k for k in (doc.get("known_drift") or []) if isinstance(k, dict)])
+    note = (f"基线 {len(items)} 项 · 本地源 {len(doc.get('local_sources') or [])} 个 · "
+            f"已登记漂移 {n_drift} 项")
+    if detail:
+        return "FAIL", note, detail
+    return "PASS", note, []
+
+
 # ── 断言 A?: 影响面反查表 (CI/CD Layer 3) ─────────────────────────
 # inventory/impact.yaml 登记"每个模型/端口/配置被谁消费"。此断言保证:
 #   (a) impact.yaml 存在且 YAML 合法
@@ -635,6 +806,10 @@ STATION_CMD = (
     # UDP 侧单独一段 (P1-4): 系统里长期监听的 UDP 端口并不少 (nmbd/avahi/NetworkManager/
     # wsdd/netconsole/rpc.statd), 只查 TCP 会让它们对账时"看不见"。
     "printf '\\n[ubind]\\n'; ss -lun 2>/dev/null | awk 'NR>1{print $4}' | tr '\\n' ' '; echo; "
+    # 插件面事实 (P1-5): 由站上工具一次性汇报 `id=value` 行, 判定留在门禁侧。
+    # 不把采集逻辑内联在这里 —— JSONC 解析 + 目录遍历 + 软链可达性判断用 shell
+    # 单行串写会变成转义地狱, 且三站口径无法保证一致。
+    "printf '\\n[plug]\\n'; plugin-probe 2>/dev/null || true; "
     "printf '\\n[mpath]\\n'; for f in /etc/llama-instances/*.env; do [ -e \"$f\" ] || continue; "
     "a=${f##*/}; a=${a%.env}; p=$(sed -n 's/^MODEL_PATH=//p' \"$f\" | head -1 | tr -d '\"'); "
     "if [ -z \"$p\" ]; then echo \"$a NO_MODEL_PATH\"; "
@@ -882,12 +1057,62 @@ def check_stations(ctx):
                             f"owner={e.get('owner', '?')}) 声明在用但未监听 —— "
                             f"服务挂了? 若本就按需启停, 加 mode: on_demand")
 
+    # (h) 插件/技能三站同构 (P1-5)
+    #     站上 plugin-probe 汇报 `id=value` → 与 inventory/plugins.yaml 的 expect 逐项比对。
+    #     known_drift 命中降 WARN, 但**只有"恰好多出已登记的那些"**才降级 —— 少了元素、
+    #     或多了未登记的东西, 一律 FAIL (与 models.yaml 的 known_broken_conf 同一精神:
+    #     已登记的可见不阻断, 但新差异不许被登记这件事糊过去)。
+    try:
+        pdoc = _plugins_doc()
+    except Exception as e:
+        pdoc = None
+        detail.append(f"inventory/plugins.yaml 解析失败, 插件同构对账无法进行 —— "
+                      f"{type(e).__name__}: {str(e)[:160]}")
+    plugin_checked = 0
+    if pdoc is not None:
+        pitems = _plugin_items(pdoc)
+        drift = {}
+        for kd in pdoc.get("known_drift") or []:
+            if isinstance(kd, dict) and kd.get("id") in pitems:
+                drift[(str(kd.get("station")), str(kd.get("id")))] = \
+                    sorted(str(x) for x in (kd.get("extra") or []))
+
+        for st in reach:
+            facts = {}
+            for line in (live[st].get("plug") or "").splitlines():
+                if "=" in line:
+                    k, _, v = line.partition("=")
+                    facts[k.strip()] = v.strip()
+            if not facts:
+                warn.append(f"{st} 站 plugin-probe 无输出 —— 站上未部署 "
+                            f"ops/station-bin/plugin-probe (部署后重跑); 本子项对该站跳过")
+                continue
+            for iid, it in sorted(pitems.items()):
+                if st not in _plugin_scope(it):
+                    continue
+                plugin_checked += 1
+                got = facts.get(iid)
+                if got is None:
+                    detail.append(f"{st} 站 plugin-probe 未汇报 {iid} —— 站上脚本比基线旧, "
+                                  f"需重新部署 ops/station-bin/plugin-probe")
+                    continue
+                diff = _plugin_diff(it, got)
+                if diff is None:
+                    continue
+                reg = drift.get((st, iid))
+                if diff[0] == "extra" and reg is not None and sorted(diff[1]) == reg:
+                    warn.append(f"{st} 站 {iid} 多出已登记项 {diff[1]} "
+                                f"(inventory/plugins.yaml 的 known_drift, 不阻断)")
+                else:
+                    detail.append(f"{st} 站 {iid} ({it.get('purpose', '?')}) "
+                                  f"实得 {got!r} · 基线 {it.get('expect')!r} · 差异 {diff[1]}")
+
     if unreachable:
         info.insert(0, f"站点不可达 (未计入判定): {', '.join(unreachable)}")
     note = (f"可达 {len(reach)}/3 站 · 对账 cfg{len(WATCHED)}/ROUTE{len(cluster.ROUTE)}"
             f"/RPC{len(cluster.RPC_MODELS)}/conf{sum(len(v) for v in declared_conf.values())}"
             f"/bind{sum(1 for m in (ports_inv or {}).values() if m.get('expect_bind'))}"
-            f"/port{checked_ports}(豁免临时段 {ignored_eph})"
+            f"/port{checked_ports}(豁免临时段 {ignored_eph})/plugin{plugin_checked}"
             f"/weight{sum(1 for st in reach for _ in (live[st].get('mpath') or '').splitlines())}")
     if detail:
         return "FAIL", note, info + detail + [f"(WARN) {w}" for w in warn]
@@ -902,9 +1127,10 @@ CHECKS = [
     {"id": "syntax", "title": "语法检查", "fn": check_syntax, "quick": True},
     {"id": "inventory", "title": "真值登记", "fn": check_inventory, "quick": True},
     {"id": "ports", "title": "端口分配表自洽", "fn": check_ports, "quick": True},
+    {"id": "plugins", "title": "插件同构基线", "fn": check_plugins, "quick": True},
     {"id": "impact", "title": "影响面反查", "fn": check_impact, "quick": True},
     {"id": "aliases", "title": "别名解析契约", "fn": check_aliases, "quick": True},
-    {"id": "stations", "title": "三站配置+占用一致", "fn": check_stations, "quick": False},
+    {"id": "stations", "title": "三站实况对账", "fn": check_stations, "quick": False},
 ]
 
 

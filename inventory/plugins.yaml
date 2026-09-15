@@ -1,0 +1,135 @@
+# ============================================================================
+# 插件/技能三站同构基线 (inventory)
+#
+# 为什么需要 (P1-5):
+#   spec/d6-agent-standard/PLUGIN-LEDGER.md 一直声称"**三站完全同构**", 但那是
+#   **人工文字断言**: 表格只有一列"版本（三站同）", 没有逐站列, 也没有可机读的
+#   集合/计数。2026-09-15 首次实测即推翻该结论 —— C 站 ARS 链的 25 个软链
+#   **全部是死链**（源目录 ~/tools/opencode-academic-research 在 C 站不存在）,
+#   而"只数软链个数"恰好三站都是 25, 于是手工核对显示"一致"。
+#   本表的职责: 把"三站同构"从文字变成**可断言的真值**, 并把判据定在
+#   "软链**可达**"而不是"软链存在"。
+#
+# 与其它真值表的分工:
+#   ports.yaml   → 端口分配与占用
+#   models.yaml  → 模型别名与各站 conf/权重
+#   impact.yaml  → 影响面反查
+#   plugins.yaml → **本表**: 插件/技能面的三站同构基线 (版本 / 插件集合 / 技能数)
+#
+# 门禁怎么用它 (ops/rpc_check.py 的两条断言):
+#   ① plugins  (quick, 纯本地):
+#        · items 结构自洽: id 唯一且非空 / kind 合法 / expect 类型与 kind 匹配
+#        · local_sources 对账: 仓库侧源（ops/agent-skills/*/SKILL.md）的名字集合
+#          必须等于它所镜像的那个 item 的 expect —— 抓"仓库加了技能但没登记"
+#        · known_drift 条目必须指向存在的 item 与合法站
+#   ② stations 断言 (h) 子项 (非 quick, 需 ssh):
+#        · 每站执行 ops/station-bin/plugin-probe, 得到 `id=value` 事实
+#        · 逐 item × 逐站与 expect 比对; 任一不符即 FAIL
+#        · known_drift 命中的项降为 WARN（已登记不隐瞒, 但**新出现的差异仍 FAIL**）
+#
+# 采集口径 (为什么用这些源, 而不是别的):
+#   · 版本取自 `opencode --version` / `claude --version` 首个 token
+#   · opencode 插件集合取 **opencode.jsonc 的 plugin 数组**（声明口径）。
+#     刻意**不用** ~/.cache/opencode/packages/ —— 那里会累积历史包:
+#     2026-09-15 实测 B 站多一个 opencode-qwencode-auth@1.3.0 残留, 拿它当
+#     "插件集合"会把残留误判成漂移。
+#   · claude 侧分三个口径, 因为它们会各自独立漂移:
+#       claude.plugins   = installed_plugins.json 的插件键   (装了什么)
+#       claude.enabled   = settings.json enabledPlugins 的键 (启用了什么)
+#       claude.mkt       = known_marketplaces.json 的注册源  (能从哪里装)
+#   · 技能名集合是"技能数"维度里更强的判据: 同数量但换了技能, 计数看不出来
+#   · ARS 链必须同时看 ars.links(个数) 与 ars.broken(可达性) —— 见上
+#
+# 刻意不做的:
+#   · 不把 A 站 Hermes 生态纳入本表: PLUGIN-LEDGER 已登记它是"A 站独有、58 插件
+#     全 builtin 未启用、bundles 为空"的**未接入**状态, 不属于"三站同构"命题。
+#   · 不校验插件/技能**内容**（如 SKILL.md 的 frontmatter 或压缩质量）—— 那是
+#     ops/station-bin/ars-migrate-verify.sh 的 T4b-2 与 d5 台账的职责。
+#
+# 维护约定:
+#   · 站上新增/升级任何插件或技能 => 改本表 (与 ports.yaml / models.yaml 同理)
+#   · 无法立即修复的真实差异 => 登记到 known_drift 并写明原因与处置计划
+# ============================================================================
+version: 1
+updated: 2026-09-15
+measured_by: >-
+  三站实测 2026-09-15, 由 ops/station-bin/plugin-probe 采集
+  (opencode/claude --version + opencode.jsonc plugin 数组 +
+  ~/.claude/plugins/{installed_plugins,known_marketplaces}.json +
+  ~/.claude/settings.json enabledPlugins + ~/.claude/skills 的 SKILL.md +
+  ~/.config/opencode/{skills,commands,agents,plugins} 软链可达性)
+
+# ── 登记项 ────────────────────────────────────────────────────────
+# id 必须与 station-bin/plugin-probe 输出的键一一对应
+# kind: scalar(字符串等值) | set(集合相等, 顺序无关) | count(整数等值) | flag(yes/no)
+# scope: 适用站; 缺省 = 三站通用
+items:
+  # ── 维度 1: 版本 ──
+  - {id: cli.opencode, kind: scalar, purpose: "opencode CLI 版本", expect: "1.18.25"}
+  - {id: cli.claude, kind: scalar, purpose: "claude code CLI 版本", expect: "2.1.258"}
+
+  # ── 维度 2: 插件集合 ──
+  - id: opencode.plugins
+    kind: set
+    purpose: "opencode.jsonc 的 plugin 数组 (声明启用)"
+    expect: ["@tarquinen/opencode-dcp@latest", "opencode-codex-memory@0.6.5"]
+
+  - id: claude.plugins
+    kind: set
+    purpose: "installed_plugins.json 的插件键 (已安装)"
+    expect: ["document-skills@anthropic-skills-local", "superpowers@superpowers-marketplace"]
+
+  - id: claude.enabled
+    kind: set
+    purpose: "settings.json enabledPlugins 的键 (已启用)"
+    expect: ["document-skills@anthropic-skills-local", "superpowers@superpowers-marketplace"]
+
+  - id: claude.mkt
+    kind: set
+    purpose: "known_marketplaces.json 的注册源 (可从何处安装)"
+    expect: ["anthropic-skills-local", "superpowers-marketplace"]
+
+  # ── 维度 3: 技能数 ──
+  - id: claude.skills.n
+    kind: count
+    purpose: "~/.claude/skills 下含 SKILL.md 的技能数 (claude 与 opencode 共读)"
+    expect: 12
+
+  - id: claude.skills.names
+    kind: set
+    purpose: "定制技能名集合 (源在仓库 ops/agent-skills, 见 local_sources)"
+    expect: ["assertion-audit", "cross-examine", "math-finance-reasoning",
+             "paper-lookup", "research-baseline", "research-decision",
+             "research-experiment", "research-finalize", "research-idea",
+             "research-scout", "research-write", "what-if-oracle"]
+
+  # ── ARS 链落点 (opencode 侧学术研究链) ──
+  # 源: ~/tools/opencode-academic-research (本地解包, 非 git checkout —— 故
+  # PLUGIN-LEDGER 记的 commit 1d3032f 在站上**无法自证**, 本表不登记该 commit)
+  - {id: ars.links.skills, kind: count, purpose: "ARS 落点 skills 软链数", expect: 4}
+  - {id: ars.links.commands, kind: count, purpose: "ARS 落点 commands 软链数", expect: 16}
+  - {id: ars.links.agents, kind: count, purpose: "ARS 落点 agents 软链数", expect: 4}
+  - {id: ars.links.plugins, kind: count, purpose: "ARS 落点 plugins 软链数", expect: 1}
+  - {id: ars.links, kind: count, purpose: "ARS 落点软链总数 (上四项之和)", expect: 25}
+  - {id: ars.broken, kind: count, purpose: "ARS 落点**死链**数 (必须 0: 个数相同不代表可用)", expect: 0}
+  - {id: ars.source, kind: flag, purpose: "ARS 源目录 ~/tools/opencode-academic-research 存在", expect: "yes"}
+
+# ── 仓库内源 → 站上落点 (本地可查的一侧) ──────────────────────────
+# 作用: 把"仓库里加/删了技能"这件事在 quick 门禁就拦住, 不必等 ssh。
+local_sources:
+  - name: agent-skills
+    path: ops/agent-skills
+    glob: "*/SKILL.md"
+    mirrors: claude.skills.names
+    purpose: "定制技能源 (git 跟踪); 部署落点 ~/.claude/skills (双 CLI 共读)"
+
+# ── 已登记漂移 (登记即不隐瞒; 命中降为 WARN, 但新差异仍 FAIL) ──────
+known_drift:
+  - station: A
+    id: claude.mkt
+    extra: ["claude-plugins-official"]
+    note: >-
+      A 站 known_marketplaces.json 多一个 claude-plugins-official 注册项。
+      该注册**未安装任何插件**（claude.plugins 三站一致, 不含它）, 属历史残留,
+      不影响功能。修它需改 claude CLI 自己的注册文件（非我方配置）, 故先登记容忍。
+      B/C 站无此项。2026-09-15 首次对账发现。
