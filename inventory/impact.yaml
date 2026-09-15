@@ -1,0 +1,102 @@
+# ============================================================================
+# 影响面反查表 (CI/CD Layer 3) — inventory/impact.yaml
+#
+# 为什么需要: 改一个声明前, 先反查"它影响到谁", 防止"改了这个忘了哪个"。
+#   它把「模型 / 端口 / 配置 / 凭据」这些真值的**下游消费者**集中登记,
+#   让改之前有据可查; 门禁校验这些记录的 consumer 路径确实存在 (防登记即漂移)。
+#
+# 使用方式:
+#   - 改任何模型别名/端口/配置前, 先在此表按别名或端口查到 consumers 清单,
+#     逐个确认是否需要同步修改。
+#   - 新增模型/端口/配置时, 在对应段补一条登记 + 如实填下游消费者。
+#
+# 门禁 (ops/rpc_check.py 的 impact 断言):
+#   - impact.yaml 必须存在且 YAML 合法
+#   - 每个登记的 consumer 路径必须真实存在 (文件/目录/手册锚点)
+#   - inventory/impact.yaml 的 updated 至少 >= 最近一次改声明的日期, 否则提示
+# ============================================================================
+version: 1
+updated: 2026-09-15
+
+# ── 模型影响面: 键 = inventory/models.yaml 里的 alias ─────────────────
+# consumers = 直接消费该模型名/别名的文件或入口; 用 "file:path" 指代码/脚本,
+# "doc:path#锚点" 指手册章节。别名若有跨站或别名变体 (如按站路由名), 一并注明。
+models:
+  gpt-oss-120b:
+    consumers:
+      - "file:ops/cluster.py"            # ROUTE / STATION_ROUTES (0a-0c / 0b)
+      - "file:ops/cluster_web.py"        # /api/load 下拉建议
+      - "doc:docs/三机推理集群使用手册.md" # §2.2 按站路由名 (gpt-oss-120b[*]-*)
+    variants: [gpt-oss-120b-a, gpt-oss-120b-b, gpt-oss-120b-c]
+  gpt-oss-120b-fable-5-distilled:
+    consumers:
+      - "file:ops/cluster.py"            # RPC_MODELS (走 RPC 双机通道)
+    variants: [gpt-oss-120b-fable-5-distilled-b]
+  gpt-oss-20b:
+    consumers:
+      - "file:ops/cluster.py"            # STATION_ROUTES
+    variants: [gpt-oss-20b-b]
+  nvidia-nemotron-3-super-120b-a12b:
+    consumers:
+      - "file:ops/cluster.py"            # STATION_ROUTES
+    variants: [nvidia-nemotron-3-super-120b-a12b-b, nvidia-nemotron-3-super-120b-a12b-c]
+  deepseek-v4-flash-0731:
+    consumers:
+      - "file:ops/cluster.py"            # RPC_MODELS + STATION_ROUTES
+    variants: [deepseek-v4-flash-0731-b]
+  qwen3.8-27b-mtp:
+    consumers:
+      - "file:ops/cluster.py"            # ROUTE + STATION_ROUTES
+    variants: [qwen3.8-27b-mtp-b, qwen3.8-27b-mtp-c]
+  qwen3.8-flash-next:
+    consumers:
+      - "file:ops/cluster.py"            # STATION_ROUTES (单机量化, 已移出 RPC_MODELS 2026-09-15)
+    variants: [qwen3.8-flash-next-b]
+  davidau-q38-27b-q4k:
+    consumers:
+      - "file:ops/cluster.py"            # STATION_ROUTES
+    variants: [davidau-q38-27b-q4k-b]
+
+# ── 端口影响面: 键 = 数字端口 ─────────────────────────────────────────
+# consumers = 在代码/脚本/配置里硬编码该端口的文件。改端口前先同步这些。
+ports:
+  "22":
+    consumers:
+      - "file:ops/cluster.py"            # STATIONS ssh 登录 (间接)
+      - "doc:docs/三机推理集群使用手册.md" # 登录入口
+  "8080":
+    consumers:
+      - "file:ops/cluster.py"            # STATION_PORT / 引擎 /health 探测
+      - "file:ops/rpc_check.py"          # 站上实况对账 expect_bind
+      - "file:ops/llama-server.service"  # ExecStart --port 8080
+  "8095":
+    consumers:
+      - "file:ops/cluster.py"            # cluster.py web --port 默认值
+      - "file:ops/cluster_web.py"        # WEB_PORT = 8095
+  "8090":
+    consumers:
+      - "file:ops/cluster.py"            # PANELS (Beszel 监控)
+  "50052":
+    consumers:
+      - "file:ops/llama-server.service"  # ExecStart --rpc 10.10.10.1:50052
+      - "file:ops/rpc-server.service"    # ggml-rpc-server -p 50052
+      - "file:ops/nodes.env"             # RPC_NODES="10.10.10.1:50052"
+
+# ── 配置影响面: 键 = 相对仓库根的配置文件路径 ─────────────────────────
+# consumers = 谁在解析/比对这些配置 (如 sha256 对账、凭据引用)。
+configs:
+  "ops/cluster.py":
+    consumers:
+      - "file:ops/rpc_check.py"          # _declared 从 cluster.py 解析端口/模型常量
+      - "file:ops/cluster_web.py"        # 复用 resolve_alias / cmd_load 等
+  "inventory/models.yaml":
+    consumers:
+      - "file:ops/rpc_check.py"          # load_inventory / 对账模式
+  "inventory/ports.yaml":
+    consumers:
+      - "file:ops/rpc_check.py"          # expect_bind 对账
+  "ops/rpc_check.py":
+    consumers:
+      - "file:ops/rpc.ps1"               # 唯一入口调用
+      - ".git/hooks/pre-commit"
+      - ".git/hooks/pre-push"

@@ -1,0 +1,160 @@
+# ============================================================================
+# 端口单点真值 (inventory)
+#
+# 为什么需要这张表:
+#   `8080 / 32837 / 1234 / 8642 / 8095 / 9095 / 42387` 等端口号曾散落在 100 个文件、
+#   475 处, 没有一处是"真值", 于是改一个端口就会忘掉别处。详见
+#   docs/research/2026-09-14_暴露问题调研.md 的 CI/CD 与流水线一节。
+#
+# 门禁怎么用它 (ops/rpc_check.py 的 inventory 断言 → **对账模式**):
+#   校验"声明源"里出现的端口都在本表登记 —— 声明源 = 
+#     (a) ops/cluster.py 的端口常量 (STATION_PORT 等)
+#     (b) docs/三机推理集群使用手册.md 的端点表格行
+#   不在本表 => FAIL, 提示登记或修正引用。
+#
+#   **刻意不做的**: 扫描全仓库任意 4-5 位数字。2026-09-14 实测该方案不可行 ——
+#   51 个"端口"里有 19 个不是端口 (llama.cpp 提交号 9859、参数值 16384/4096/1024、
+#   截断匹配 127/808 ...)。文本里的数字没有唯一语义, 扫全仓库必然噪声爆炸。
+#
+# 维护约定:
+#   - 本表只登记**实测过**的端口 (ss -ltnp + 服务配置核对); 不确定的宁可不登记
+#   - 退役端口不要删, 移到 deprecated (保留登记以识别历史引用)
+#   - 新增服务 => 改本表
+# ============================================================================
+version: 1
+updated: 2026-09-14
+measured_by: "sudo ss -ltnp + 服务配置核对, 三站实测 2026-09-14"
+
+# ── 本项目自管的服务端口 ────────────────────────────────────────────
+managed:
+  - port: 22
+    proto: tcp
+    purpose: SSH 管理入口
+    scope: [master, A, B, C]
+    bind: 0.0.0.0
+    owner: systemd (ssh.socket)
+    note: 三站一致
+
+  - port: 8080
+    proto: http
+    purpose: 本地推理引擎 API (unsloth studio 对外面)
+    scope: [A, B, C]
+    bind: 127.0.0.1
+    expect_bind: 127.0.0.1
+    owner: unsloth studio (后端 llama-server)
+    consumers: [opencode, claude code, hermes, ops/cluster.py, ops/rpc_check.py]
+    note: |
+      引擎**忽略**请求里的 model 字段, 服务的永远是"当前加载的那个模型"
+      (2026-09-14 实测: 传 __bogus__ 仍返回 200)。故 agent provider 的模型键取常量 main。
+
+  - port: 32837
+    proto: http
+    purpose: unsloth studio 内部第二 llama-server (--parallel 4)
+    scope: [B]
+    bind: 127.0.0.1
+    owner: llama-server
+    note: 与 8080 跑同一模型; B 站的 provider 条目已删除, 此端口保留为 studio 内部路径
+
+  - port: 8095
+    proto: http
+    purpose: cluster.py web 面板 (按需启停, 非常驻)
+    scope: [master]
+    bind: 127.0.0.1
+    owner: ops/cluster.py web
+
+  - port: 50052
+    proto: tcp
+    purpose: llama.cpp rpc-server (仅 RPC 模式运行时)
+    scope: [A]
+    bind: 10.10.10.1
+    owner: rpc-server
+    note: |
+      对应 cluster.py 的 llama-rpc backend (BACKENDS 里的 "llama-rpc")。
+      手册端点表登记为 "A 站 10.10.10.1:50052"; 10.10.10.1 是 USB4 直连网, 非管理网。
+
+  - port: 8642
+    proto: http
+    purpose: hermes api_server
+    scope: [A]
+    bind: 127.0.0.1
+    owner: hermes (platforms.api_server)
+    status: configured_but_stopped
+    note: 配置已启用, 但 2026-09-14 实测无监听
+
+# ── 非我方开发, 但我方依赖 (实测登记) ───────────────────────────────
+third_party:
+  - port: 9095
+    proto: https
+    purpose: Cockpit (systemd socket activation)
+    scope: [A, B, C]
+    bind: "*"
+    owner: cockpit.socket
+    note: 三站一致。监听 * 是 socket activation 的默认行为, 非误配
+
+  - port: 8090
+    proto: http
+    purpose: Beszel agent (负载监控)
+    scope: [A, B]
+    bind: "*"
+    owner: beszel-agent.service
+    note: C 站未装
+
+  - port: 9090
+    proto: http
+    purpose: mihomo 代理控制 API (实测 401, 有鉴权)
+    scope: [A]
+    bind: "*"
+    owner: mihomo
+
+  - port: 7890
+    proto: http
+    purpose: mihomo 代理 HTTP 入口
+    scope: [A]
+    bind: 127.0.0.1
+    owner: mihomo
+
+  - port: 1053
+    proto: udp
+    purpose: mihomo DNS
+    scope: [A]
+    bind: "*"
+    owner: mihomo
+
+# ── 已退役 / 已废弃 (保留登记以识别历史引用) ────────────────────────
+deprecated:
+  - port: 1234
+    purpose: LM Studio (A 站遗留)
+    scope: [A]
+    status: deprecated
+    note: 未运行; 2026-09-14 决定废弃, A 站 claude 已改指 8080
+
+  - port: 4000
+    purpose: LiteLLM 网关
+    scope: [B]
+    status: retired
+    note: 依 ADR-0002 决策 C 退役; B 站服务已 stop + disable
+
+  - port: 42387
+    purpose: 旧 LiteLLM 别名映射端口 (A 站 opencode 曾引用, 死端口)
+    scope: [A]
+    status: dead
+
+  - port: 8081
+    purpose: vLLM TP=2 (B 站, prefill 优路径)
+    scope: [B]
+    status: retired
+    note: 手册端点表登记为"已退役"; vllm 仍在 cluster.py BACKENDS 白名单里 (换后端可用)
+
+# ── 系统/硬件服务 (非我方负责, 登记仅为让对账能解释它们) ─────────────
+unmanaged:
+  - {port: 53, purpose: systemd-resolved 本地 DNS, note: "127.0.0.54 / 127.0.0.53"}
+  - {port: 111, purpose: rpcbind (NFS 依赖), scope: [B]}
+  - {port: 139, purpose: Samba (SMB), scope: [A, B]}
+  - {port: 445, purpose: Samba (SMB), scope: [A, B]}
+  - {port: 631, purpose: CUPS 打印服务}
+  - {port: 2049, purpose: "NFS server (B 站对外提供)", scope: [B]}
+  - {port: 9000, purpose: "lemond (硬件守护, 非 HTTP)", scope: [A, B], bind: 127.0.0.1}
+  - {port: 13305, purpose: "lemond (硬件守护)", scope: [A, B], bind: 127.0.0.1}
+  - {port: 52591, purpose: rpc.mountd, scope: [B]}
+  - {port: 53517, purpose: rpc.mountd, scope: [B]}
+  - {port: 55723, purpose: rpc.statd, scope: [B]}
