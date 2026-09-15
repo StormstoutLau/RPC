@@ -1,52 +1,192 @@
 #!/bin/bash
-# infer-list — 两站模型清单: alias/位置/大小/建议后端/conf 状态
-AWORK="scott-lau@scott-lau-NEX.local"
-scan() {  # $1=tag(本站路径前缀)
-  find -L /data/models/gguf -mindepth 2 -maxdepth 2 -type d 2>/dev/null | while read -r d; do
-    repo=$(echo "$d" | sed 's|/data/models/gguf/||')
-    # 主 gguf 优先级: 合并单文件 (B5j 产物, 排除分片/mmproj) > 分片首片 (未合并)
-    F=$(find -L "$d" -name '*.gguf' ! -name '*-of-0000*.gguf' ! -name 'mmproj*' -size +1G -printf '%s %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-    [ -z "$F" ] && F=$(find -L "$d" -name '*-00001-of-*.gguf' 2>/dev/null | head -1)
-    [ -z "$F" ] && F=$(find -L "$d" -name '*.gguf' 2>/dev/null | head -1)  # embedding 等小模型
-    [ -z "$F" ] && continue
-    # 大小用 repo 总量, -L 跟随软链 (repo 是 B5m2 收编软链; 分片首片可能 header-only)
-    SZ=$(du -smL "$d" 2>/dev/null | cut -f1)
-    alias=$(basename "$d" | sed 's/-GGUF$//' | tr 'A-Z' 'a-z')
-    case "$alias" in minimax-m2.7*) alias="m27-q4ks";; esac
-    echo "${alias}|${repo}|${SZ}|${F}"
+# infer-list — 模型清单: alias / 位置 / 大小 / 建议后端 / CONF
+#
+# ── 2026-09-15 重写(修两处结构性问题) ──────────────────────────────
+# ① 落点形态漏了一类。旧实现按 `find -mindepth 2 -maxdepth 2 -type d` 找**模型目录**,
+#    于是 `gguf/<repo>/<file>.gguf` 这种"仓库级直放"完全看不到 —— B 站
+#    `davidau-q38-27b-q4k` 有 conf(:18081)、能加载, 却在清单里不存在(实测)。
+#    新实现改从 **gguf 文件**分组, 与主控侧 cluster.group_by_model 同一规则:
+#      gguf/<repo>/<file>.gguf            → 模型 = <repo>                 (路径两段)
+#      gguf/<repo>/<Model>-GGUF/…/<file>  → 模型 = <repo>/<Model>-GGUF
+# ② 视角写死成 B 站。旧实现把**本站**结果一律标"位置 = B", A 侧写死
+#    `ssh scott-lau@scott-lau-NEX.local`。于是:
+#      · 在 A/C 站运行时"位置"列全错 (实测 A 站把只在 A 的 glm-5.3-flash 标成 B)
+#      · 该 ssh 用 `.local` 域名 —— 实测站间 mDNS 解析不可靠, 首次连接还会
+#        `Host key verification failed` → 结果为空 → **静默退化成"只有 B 站有"**
+#    新实现: 由 hostname 判定本站(SELF), 对端走管理网 IP; 取不到的对端**显式告警**
+#    且位置列不含它, 绝不静默降级 (与 P1-4「解析失败不能表现成业务全错」同一原则)。
+#
+# 站间免密: A/B/C 三向**全通** (2026-09-15 补齐 A→C: A 的公钥此前未下发到 C,
+# 表现为 Permission denied (publickey,password))。新站入网时须把本站公钥下发到
+# 其余两站的 ~/.ssh/authorized_keys, 否则这里会出现"取不到 X 站"的告警。
+#
+# 寻址: 每站给**候选列表**(空格分隔, 顺序即优先级) —— 管理网 IP 优先, .local 名兜底。
+#   为什么 IP 优先: 2026-09-15 实测站间 mDNS 解析需 6~10s (慢), 且各站 known_hosts
+#     是按 **IP** 收录的 → 直接用 .local 会 `Host key verification failed`; 而 IP 六向全通。
+#   为什么保留 .local 兜底: 管理网是 DHCP, IP 漂移过 (.11→.33 / .15→.32) —— 名字仍在,
+#     届时 IP 那一次会失败并回落到名字, 工具不至于因此失明。
+#
+# 数据源: 与 infer-load 同源 —— find -L /data/models/gguf (聚合视图)。
+# 别名规则须与 cluster.alias_of / 站上 infer-load 一致(含 minimax 重映射)。
+
+declare -A NODE=(
+  [A]="scott-lau@192.168.1.33 scott-lau@scott-lau-NEX.local"
+  [B]="scott-lau@192.168.1.32 scott-lau@scott-lau-GTR-Pro.local"
+  [C]="scott-lau@192.168.1.37 scott-lau@seaviv.local"
+)
+ORDER=(A B C)
+
+# 本站判定: hostname -s → 站代号。改名/换机时此处需同步。
+case "$(hostname -s 2>/dev/null)" in
+  scott-lau-NEX)     SELF=A ;;
+  scott-lau-GTR-Pro) SELF=B ;;
+  seaviv)            SELF=C ;;
+  *)                 SELF="?" ;;
+esac
+
+usage() {
+  cat <<'USAGE'
+infer-list — 模型清单: alias / 位置 / 大小 / 建议后端 / CONF
+
+用法:
+  infer-list            对端 = 除本站外的其余站
+  infer-list A C        只对指定站
+  infer-list -h
+
+说明:
+  位置 = 拥有该别名的站代号串 (如 AB / B / AC / C); 本站由 hostname 判定。
+  取不到的对端会在表末显式告警, 且位置列**不含**它 —— 不代表它没有这些模型。
+  站间寻址 = 管理网 IP 优先, .local 名兜底 (两者都登记在脚本的 NODE 表)。
+USAGE
+}
+
+# 单站扫描: 输出 `alias|模型目录|大小MB|主gguf`
+scan() {
+  find -L /data/models/gguf -mindepth 2 -name '*.gguf' ! -name 'mmproj*' -printf '%P\n' 2>/dev/null \
+  | awk -F/ '{ print (NF == 2) ? $1 : $1"/"$2 }' \
+  | sort -u \
+  | while IFS= read -r d; do
+      [ -z "$d" ] && continue
+      full="/data/models/gguf/$d"
+      # 主 gguf 优先级: 合并单文件(B5j 产物, 排除分片/mmproj) > 分片首片 > 任意非 mmproj
+      F=$(find -L "$full" -name '*.gguf' ! -name '*-of-0000*.gguf' ! -name 'mmproj*' \
+             -size +1G -printf '%s %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+      [ -z "$F" ] && F=$(find -L "$full" -name '*-00001-of-*.gguf' 2>/dev/null | head -1)
+      [ -z "$F" ] && F=$(find -L "$full" -name '*.gguf' ! -name 'mmproj*' 2>/dev/null | head -1)
+      [ -z "$F" ] && continue
+      # 大小用模型目录总量, -L 跟随软链 (软链指向物理库; 分片首片可能 header-only)
+      SZ=$(du -smL "$full" 2>/dev/null | cut -f1)
+      alias=$(basename "$d" | sed 's/-GGUF$//' | tr 'A-Z' 'a-z')
+      case "$alias" in minimax-m2.7*) alias="m27-q4ks" ;; esac
+      printf '%s|%s|%s|%s\n' "$alias" "$d" "${SZ:-0}" "$F"
+    done
+  # 非 GGUF 权重 (vLLM AWQ 分片目录); 现役已无, 保留以识别历史引用
+  for d in /data/models/*/; do
+    case "$d" in */gguf/) continue ;; esac
+    ST=$(find -L "$d" -name '*.safetensors' 2>/dev/null | wc -l)
+    [ "$ST" -gt 0 ] && printf '%s|%s|%s|%s\n' "m27-awq" "$(basename "$d")" \
+                                              "$(du -m "$d" | cut -f1)" "$d"
   done
 }
-# AWQ
-for d in /data/models/*/; do
-  case "$d" in */gguf/) ;; *)
-    ST=$(find -L "$d" -name '*.safetensors' 2>/dev/null | wc -l)
-    [ "$ST" -gt 0 ] && { SZ=$(du -m "$d" | cut -f1); echo "m27-awq|$(basename $d)|${SZ}|$d"; }
-  ;; esac
+
+# 对端扫描: 把 scan 的定义**原样送过去**执行, 保证两端口径不可能漂移
+# (旧实现是内联一份手抄的 find, 这正是它漏掉仓库级直放形态的原因)。
+# ⚠ 必须先把 payload 存进变量再 printf —— 若写成 `ssh host bash -s <<EOF ... EOF`,
+#   非引用型 heredoc 会在**本地**展开函数体里的 $d/$full/$() , 送过去就成了坏函数。
+peer_scan() {
+  local payload addr out
+  payload="$(declare -f scan)
+scan"
+  for addr in ${NODE[$1]}; do
+    out=$(printf '%s\n' "$payload" | ssh -o BatchMode=yes -o ConnectTimeout=6 "$addr" bash -s)
+    [ -n "$out" ] && { printf '%s\n' "$out"; return 0; }
+  done
+  return 1
+}
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+esac
+
+PEERS=("$@")
+if [ ${#PEERS[@]} -eq 0 ]; then
+  for s in "${ORDER[@]}"; do [ "$s" != "$SELF" ] && PEERS+=("$s"); done
+fi
+# 去重, 且**剔除本站** —— 本站的模型由本地 scan 覆盖; ssh 自己不仅多余, 还会因为
+# 自己的 host key 通常不在本站 known_hosts 里而报 "Host key verification failed",
+# 于是表末出现一条纯属虚构的"取不到 X 站"告警 (2026-09-15 实测)。
+declare -A _SEEN
+_UNIQ=()
+for p in "${PEERS[@]}"; do
+  [ -z "$p" ] && continue
+  [ "$p" = "$SELF" ] && continue
+  [ -n "${_SEEN[$p]:-}" ] && continue
+  _SEEN[$p]=1
+  _UNIQ+=("$p")
 done
-B_LIST=$(scan)
-A_LIST=$(ssh -o BatchMode=yes "$AWORK" "find -L /data/models/gguf -mindepth 2 -maxdepth 2 -type d 2>/dev/null | while read -r d; do
-  F=\$(find -L \"\$d\" -name '*-00001-of-*.gguf' 2>/dev/null | head -1)
-  [ -z \"\$F\" ] && F=\$(find -L \"\$d\" -name '*.gguf' -size +1G -printf '%s %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-  [ -z \"\$F\" ] && continue
-  echo \"\$(basename \"\$d\" | sed 's/-GGUF\$//' | tr 'A-Z' 'a-z')\"
-done")
+PEERS=()
+[ ${#_UNIQ[@]} -gt 0 ] && PEERS=("${_UNIQ[@]}")
+[ "$SELF" = "?" ] && echo "[警告] 未能由 hostname 判定本站代号, 位置列不可信" >&2
+
+# ── 采集 ────────────────────────────────────────────────────────
+SELF_LIST=""
+[ "$SELF" != "?" ] && SELF_LIST=$(scan)
+
+declare -A PEER_LIST
+FAILED=()
+for p in "${PEERS[@]}"; do
+  if [ -z "${NODE[$p]:-}" ]; then
+    echo "[警告] 未知站代号 '$p' (可选: ${ORDER[*]})" >&2
+    continue
+  fi
+  out=$(peer_scan "$p")
+  if [ -z "$out" ]; then
+    FAILED+=("$p")
+  else
+    PEER_LIST["$p"]="$out"
+  fi
+done
+
+# ── 汇总: 每 alias 的拥有站 / 首选大小(本站优先) ──────────────────
+declare -A LOC SZPICK REPOPICK MAINPICK
+add() {   # $1=站代号  $2=清单
+  local a repo sz f
+  while IFS='|' read -r a repo sz f; do
+    [ -z "$a" ] && continue
+    case "${LOC[$a]:-}" in *"$1"*) ;; *) LOC["$a"]="${LOC[$a]:-}$1" ;; esac
+    if [ -z "${SZPICK[$a]:-}" ]; then
+      SZPICK["$a"]="$sz"; REPOPICK["$a"]="$repo"; MAINPICK["$a"]="$f"
+    fi
+  done <<< "$2"
+}
+add "$SELF" "$SELF_LIST"
+for p in "${!PEER_LIST[@]}"; do add "$p" "${PEER_LIST[$p]}"; done
+
+# ── 输出 ────────────────────────────────────────────────────────
 printf "%-38s %-6s %-7s %-12s %s\n" "ALIAS" "位置" "大小" "建议后端" "CONF"
 printf "%-38s %-6s %-7s %-12s %s\n" "-----" "----" "----" "--------" "----"
-echo "$B_LIST" | while IFS='|' read -r a repo sz f; do
+for a in $(printf '%s\n' "${!LOC[@]}" | sort); do
   [ -z "$a" ] && continue
-  LOC="B"; inA=$(echo "$A_LIST" | grep -cx "$a" || true); [ "$inA" -ge 1 ] && LOC="AB"
-  G=$(( sz / 1024 ))
-  if [ -f "/etc/llama-instances/${a}.env" ]; then CF="✓"; else CF="-"; fi
+  # <1024MB 显示 MB: 旧实现一律 sz/1024, 于是 embedding 这类小模型显示成 "0G"(误导)
+  sz=${SZPICK[$a]:-0}
+  if [ "$sz" -lt 1024 ]; then SIZE="${sz}M"; else SIZE="$(( sz / 1024 ))G"; fi
+  if [ "$SELF" != "?" ] && [ -f "/etc/llama-instances/${a}.env" ]; then CF="✓"; else CF="-"; fi
   case "$a" in
-    m27-awq) BE="vllm" ;;
+    m27-awq)     BE="vllm" ;;
     all-minilm*) BE="llama-emb" ;;
-    *) BE="unsloth" ;;
+    *)           BE="unsloth" ;;
   esac
-  printf "%-38s %-6s %-7s %-12s %s\n" "$a" "$LOC" "${G}G" "$BE" "$CF"
+  # 位置串按固定站序重排, 便于肉眼比对 (AB / B / AC / C …)
+  loc=""
+  for s in "${ORDER[@]}"; do case "${LOC[$a]}" in *"$s"*) loc="${loc}${s}" ;; esac; done
+  printf "%-38s %-6s %-7s %-12s %s\n" "$a" "${loc:-?}" "$SIZE" "$BE" "$CF"
 done
-# A 独有
-echo "$A_LIST" | while read -r a; do
-  [ -z "$a" ] && continue
-  inB=$(echo "$B_LIST" | grep -c "^${a}|" || true)
-  [ "$inB" -eq 0 ] && printf "%-38s %-6s %-7s %-12s %s\n" "$a" "A-only" "-" "(需同步B)" "-"
-done
+
+if [ ${#FAILED[@]} -gt 0 ]; then
+  echo
+  echo "[警告] 未能取得以下站的清单: ${FAILED[*]}" >&2
+  echo "       位置列**不含**它们 —— 不代表它们没有这些模型" >&2
+  echo "       排查: ssh -o BatchMode=yes ${NODE[${FAILED[0]}]%% *} hostname" >&2
+  echo "       提示: 先试管理网 IP, 失败再试 .local 名 (两处都写在脚本的 NODE 表里);" >&2
+  echo "             新站入网需先把本站公钥下发到对方 ~/.ssh/authorized_keys" >&2
+fi
