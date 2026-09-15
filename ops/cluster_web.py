@@ -18,27 +18,25 @@ cluster_web.py — cluster.py web 子命令: 傻瓜式推理框架管理 Web UI 
 设计: spec/d2-cluster-cli/  .trae/documents/cluster-web-ui-实现计划.md
 """
 import io
+import re
 import sys
 import json
 import time
+import socket
 import secrets
 import contextlib
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse
 
 import cluster  # 复用 ssh_run / probe_frames / cmd_load / cmd_unload / BACKENDS / ROUTE 等
 
 WEB_HOST = "127.0.0.1"
 WEB_PORT = 8095
 
-# 前端下拉可选模型 (ROUTE 键优先, 再补 RPC_MODELS, 去重保序; 也允许自由输入)
-def _model_suggestions():
-    seen, out = set(), []
-    for name in list(cluster.ROUTE) + sorted(cluster.RPC_MODELS):
-        if name not in seen:
-            seen.add(name)
-            out.append(name)
-    return out
+# 前端模型清单改为 /api/models 动态渲染 (2026-09-15):
+# 旧实现 _model_suggestions() 只返回 ROUTE(2)+RPC_MODELS(2) 共 4 个静态名字, 与实际
+# 可加载模型 (站上 /data/models/gguf/*/*/, 10+) 严重不符 —— 见 _station_models 注释。
 
 
 def _collect_status():
@@ -65,6 +63,135 @@ def _collect_status():
             "loaded": ps.get("loaded", "?"),
         }
     return base
+
+
+# ── 模型清单 (2026-09-15 新增) ────────────────────────────────
+# 为什么: 旧实现 _model_suggestions() 只把 ROUTE(2) + RPC_MODELS(2) 共 4 个名字
+# 塞进下拉框。而站上实际可加载模型有 10+ 个 —— infer-load 扫的是
+# /data/models/gguf/*/*/ 并按需**自动生成 conf**, 所以"有权重 = 可加载"。
+# 结果: B/C 站的 MiniMax-M2.7 等根本不在下拉里, 用户既看不到也点不了。
+# 新实现直扫站上模型库 (与 infer-load 同一数据源), 保证"页面所见 = 站上可加载"。
+_MODEL_SCAN = (
+    "echo '===M==='; "
+    "find -L /data/models/gguf -mindepth 3 -name '*.gguf' ! -name 'mmproj*' -printf '%s|%p\\n' 2>/dev/null; "
+    "echo '===C==='; ls /etc/llama-instances/ 2>/dev/null; "
+    # 物理库与聚合视图的差集 = 孤儿 (物理库有、聚合视图无 → 清单看不到、也加载不了)。
+    # 见 cluster._scan_models 的说明; 这里并进同一次 ssh, 避免多一轮往返。
+    "echo '===PHY==='; find -L ~/.lmstudio/models -mindepth 2 -maxdepth 2 -type d 2>/dev/null "
+    "| sed 's|.*/models/||' | sort; "
+    "echo '===AGG==='; find -L /data/models/gguf -mindepth 2 -maxdepth 2 -type d 2>/dev/null "
+    "| sed 's|.*/gguf/||' | sort; "
+    "echo '===BRK==='; find /data/models/gguf -mindepth 2 -maxdepth 2 -type l "
+    "! -exec test -e {} \\; -print 2>/dev/null | sed 's|.*/gguf/||' | sort"
+)
+
+
+def _alias_of(model_dir: str) -> str:
+    """目录名 → infer-load 别名。规则与站上 infer-load 保持一致 (含 minimax 重映射)。"""
+    a = re.sub(r"-GGUF$", "", model_dir, flags=re.I).lower()
+    return "m27-q4ks" if a.startswith("minimax-m2.7") else a
+
+
+def _station_models(st: str) -> dict:
+    """单站: 模型库清单 (含大小/conf 状态/是否已加载) + 引擎态。"""
+    d = {"station": st, "reachable": False, "engine": "?", "loaded": "?", "models": []}
+    ok, out = cluster.ssh_run(st, _MODEL_SCAN, timeout=60)
+    if not ok:
+        return d
+    d["reachable"] = True
+    m_part, _, tail = out.partition("===C===")
+    c_part, _, phy_agg = tail.partition("===PHY===")
+    phy_raw, _, rest_agg = phy_agg.partition("===AGG===")
+    agg_raw, _, brk_raw = rest_agg.partition("===BRK===")
+    # 孤儿 = 物理库有、聚合视图无 (→ 清单看不到、infer-load 也找不到, 需补软链)
+    # 断链 = 聚合视图里的软链指向不存在的目标 (真目录不算, 见 cluster._scan_models)
+    phy_set = {x.strip() for x in phy_raw.splitlines() if x.strip()}
+    agg_set = {x.strip() for x in agg_raw.splitlines() if x.strip()}
+    d["unmanaged"] = sorted(phy_set - agg_set)
+    d["broken"] = sorted(x.strip() for x in brk_raw.splitlines() if x.strip())
+    sizes = {}
+    for line in m_part.replace("===M===", "").splitlines():
+        line = line.strip()
+        if "|" not in line:
+            continue
+        sz, _, path = line.partition("|")
+        # 路径形如 /data/models/gguf/<repo>/<model_dir>/[<子目录>/]<file>.gguf。
+        # 必须从 marker 之后取**前两段** —— 若用 parts[-3]/parts[-2], 遇到
+        # "模型目录下还有子目录"的情况 (如 MiniMax-M2.7-GGUF/UD-IQ4_XS/*.gguf)
+        # 会取成子目录名, 把 MiniMax 误显示为 UD-IQ4_XS (2026-09-15 实测踩到)。
+        marker = "/data/models/gguf/"
+        if marker not in path:
+            continue
+        seg = path.split(marker, 1)[1].split("/")
+        if len(seg) < 2:
+            continue
+        key = (seg[0], seg[1])                # (repo, model_dir)
+        try:
+            sizes[key] = sizes.get(key, 0) + int(sz)
+        except ValueError:
+            pass
+    confs = {c for c in c_part.split() if c.endswith(".env")}
+    ps = cluster.probe_station(st, with_list=False)
+    d["engine"] = ps.get("llama", "?")
+    d["loaded"] = ps.get("loaded", "?")
+    loaded_low = (ps.get("loaded") or "").lower()
+    for (repo, model), sz in sorted(sizes.items()):
+        alias = _alias_of(model)
+        disp = re.sub(r"-GGUF$", "", model, flags=re.I)
+        # 已加载判定: A 站 unsloth 报的是 "gpt-oss-120b-MXFP4", 目录名是 "gpt-oss-120b-GGUF",
+        # 故用"显示名的首个词段"做包含匹配 (gpt-oss-120b / m27 / qwen3.8 等前缀足够区分)。
+        stem = disp.lower().split("-")[0]
+        d["models"].append({
+            "alias": alias,
+            "display": disp,
+            "repo": repo,
+            "size_gb": round(sz / 1073741824, 1),
+            "has_conf": (alias + ".env") in confs,
+            "loaded": bool(loaded_low) and bool(stem) and stem in loaded_low,
+        })
+    return d
+
+
+def _collect_models():
+    """三站模型清单聚合 (并行)。耗时主要在站上 find, 三站并行 ~数秒。"""
+    res = {}
+    threads = [threading.Thread(target=lambda s=st: res.__setitem__(s, _station_models(s)))
+               for st in ("A", "B", "C")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return {"time": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "stations": {st: res.get(st, {}) for st in ("A", "B", "C")}}
+
+
+def _collect_metrics():
+    """三站引擎指标聚合 (并行): 内层端口 + Prometheus /metrics + /slots。
+
+    数据源是 llama.cpp 原生端点 (见 cluster.probe_metrics), 不引入 exporter/时序库。
+    """
+    res = {}
+    threads = [threading.Thread(target=lambda s=st: res.__setitem__(s, cluster.probe_metrics(s)))
+               for st in ("A", "B", "C")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return {"time": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "stations": {st: res.get(st, {}) for st in ("A", "B", "C")}}
+
+
+def _collect_versions():
+    """三站引擎版本矩阵 (并行)。P1-3: 暴露版本漂移与受控路径完整性缺口。"""
+    res = {}
+    threads = [threading.Thread(target=lambda s=st: res.__setitem__(s, cluster.probe_versions(s)))
+               for st in ("A", "B", "C")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return {"time": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "stations": {st: res.get(st, {}) for st in ("A", "B", "C")}}
 
 
 def _collect_planes():
@@ -150,13 +277,29 @@ class Handler(BaseHTTPRequestHandler):
         return {}
 
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
+        # ⚠️ 必须先剥离 query string! `self.path` 形如 "/?token=xxx",
+        # 直接与 "/" 比较会失配 → 免输链接 /?token=… 会返回 {"error":"not found"}。
+        # 2026-09-15 实测踩到: 只测了不带 query 的 "/", 漏测了带 token 的真实入口。
+        path = urlparse(self.path).path
+        if path in ("/", "/index.html"):
             return self._text(200, self._page)
-        if self.path == "/api/status":
+        if path == "/api/status":
             if not self._auth_ok():
                 return self._json(401, {"error": "unauthorized"})
             return self._json(200, _collect_status())
-        if self.path == "/api/planes":
+        if path == "/api/models":
+            if not self._auth_ok():
+                return self._json(401, {"error": "unauthorized"})
+            return self._json(200, _collect_models())
+        if path == "/api/versions":
+            if not self._auth_ok():
+                return self._json(401, {"error": "unauthorized"})
+            return self._json(200, _collect_versions())
+        if path == "/api/metrics":
+            if not self._auth_ok():
+                return self._json(401, {"error": "unauthorized"})
+            return self._json(200, _collect_metrics())
+        if path == "/api/planes":
             if not self._auth_ok():
                 return self._json(401, {"error": "unauthorized"})
             return self._json(200, _collect_planes())
@@ -166,23 +309,78 @@ class Handler(BaseHTTPRequestHandler):
         if not self._auth_ok():
             return self._json(401, {"error": "unauthorized"})
         body = self._body_json()
-        if self.path == "/api/load":
+        path = urlparse(self.path).path      # 同上: 剥离 query string
+        if path == "/api/load":
             alias = (body.get("alias") or "").strip()
+            station = (body.get("station") or "").strip().upper()
             if not alias:
                 return self._json(400, {"error": "alias required"})
-            res = _run_capture(lambda: _load_action(alias, body.get("backend")))
+            if station:
+                # 按站加载 (2026-09-15): 用户在某一站的模型列表里点了"加载",
+                # 目标站已明确 → 走 cmd_load_on (跳过别名路由, 不再"猜站")。
+                if station not in ("A", "B", "C"):
+                    return self._json(400, {"error": f"bad station '{station}'"})
+                res = _run_capture(lambda: cluster.cmd_load_on(station, alias, body.get("backend")))
+            else:
+                res = _run_capture(lambda: _load_action(alias, body.get("backend")))
             return self._json(200 if res["rc"] == 0 else 400, res)
-        if self.path == "/api/backend":
+        if path == "/api/backend":
             alias = (body.get("alias") or "").strip()
             backend = (body.get("backend") or "").strip()
+            station = (body.get("station") or "").strip().upper()
             if not alias or not backend:
                 return self._json(400, {"error": "alias and backend required"})
-            res = _run_capture(lambda: cluster.cmd_load(alias, backend))
+            if station:
+                if station not in ("A", "B", "C"):
+                    return self._json(400, {"error": f"bad station '{station}'"})
+                res = _run_capture(lambda: cluster.cmd_load_on(station, alias, backend))
+            else:
+                res = _run_capture(lambda: cluster.cmd_load(alias, backend))
             return self._json(200 if res["rc"] == 0 else 400, res)
-        if self.path == "/api/unload":
-            res = _run_capture(cluster.cmd_unload)
+        if path == "/api/unload":
+            station = (body.get("station") or "").strip().upper()
+            if station:
+                if station not in ("A", "B", "C"):
+                    return self._json(400, {"error": f"bad station '{station}'"})
+                res = _run_capture(lambda: cluster.cmd_unload_on(station))
+            else:
+                res = _run_capture(cluster.cmd_unload)
             return self._json(200 if res["rc"] == 0 else 400, res)
-        if self.path == "/api/secrets-push":
+        if path == "/api/estimate":
+            # 事前预估 (2026-09-15, P1-1): 提交加载前先算"能不能装下 / 该改哪个参数"。
+            alias = (body.get("alias") or "").strip()
+            station = (body.get("station") or "").strip().upper()
+            if not alias:
+                return self._json(400, {"error": "alias required"})
+            if station and station not in ("A", "B", "C"):
+                return self._json(400, {"error": f"bad station '{station}'"})
+            if not station:
+                try:
+                    station = cluster.resolve_alias(alias)[0]
+                except Exception:
+                    station = None
+                station = station or cluster.DEFAULT_STATION
+            def _int(v):
+                try:
+                    return int(v) if v not in (None, "") else None
+                except (TypeError, ValueError):
+                    return None
+            res = cluster.estimate_load(
+                station, alias, _int(body.get("ctx")), _int(body.get("parallel")),
+                (body.get("ctk") or "q8_0"), (body.get("ctv") or "q8_0"))
+            return self._json(200 if res.get("ok") else 400, res)
+        if path == "/api/models-link":
+            # P1-2 模型全生命周期: 给"未纳管"模型补软链 (物理库有、聚合视图无 → 清单与加载都看不到)。
+            # 只建软链, 不复制权重 —— 权重留在 ~/.lmstudio/models, /data/models/gguf 只是聚合视图。
+            st = (body or {}).get("station")
+            if st not in ("A", "B", "C"):
+                return self._json(400, {"error": "station 必须是 A/B/C"})
+            m = cluster._scan_models(st) or {}
+            orph = m.get("orphans", [])
+            logs = [cluster._link_model(st, x, dry=False) for x in orph]
+            return self._json(200, {"ok": True, "station": st, "count": len(orph),
+                                    "log": "\n".join(logs) if logs else "无孤儿, 无需补链"})
+        if path == "/api/secrets-push":
             # 凭据管理: 从主控 secrets/stations/<st>/ 重下发三站 ~/.config/rpc/
             # (密钥轮换落地: 覆盖正本后在这里一键 push, 对齐审计 §16.3 ① 的闭环)。
             # 已在 do_POST 入口过了 token, 前端另有 confirm 二次确认。
@@ -198,58 +396,110 @@ PAGE_HTML = r"""<!DOCTYPE html>
 <html lang="zh"><head><meta charset="utf-8">
 <title>三机推理集群 · 框架管理</title>
 <style>
-body{font-family:Consolas,'Microsoft YaHei',monospace;margin:2em;background:#fafafa;color:#222}
-h1{font-size:1.3em;margin-bottom:0.2em} .meta{color:#666;font-size:0.85em}
-table{border-collapse:collapse;margin:0.8em 0;width:100%}
-td,th{border:1px solid #ccc;padding:5px 10px;font-size:0.9em;text-align:left}
-th{background:#eee} .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
-.RUNNING{background:#2e7d32}.STOPPED{background:#9e9e9e}.Unknown{background:#c62828}
-.ops{background:#fff;border:1px solid #ddd;padding:12px;margin:1em 0;border-radius:6px}
-.ops input,.ops select{padding:5px;font-size:0.9em;margin-right:8px}
-button{padding:6px 14px;font-size:0.9em;margin-right:8px;cursor:pointer}
-button:disabled{opacity:.5;cursor:not-allowed}
-#log{background:#111;color:#8dbfff;border-radius:6px;padding:10px;font-size:0.85em;
- white-space:pre-wrap;max-height:260px;overflow:auto;display:none}
-input[type=text]{width:120px}
-.login{background:#fff8e1;border:1px solid #e6c44a;padding:10px;margin:1em 0;border-radius:6px}
-.mt{color:#888;font-size:0.8em}
+:root{--bg:#f6f7f9;--card:#fff;--line:#e3e6ea;--fg:#1f2328;--mut:#6b7280;
+      --ok:#16a34a;--warn:#d97706;--err:#dc2626;--accent:#2563eb;--radius:10px}
+*{box-sizing:border-box}
+.warnbar{margin:10px;padding:10px 12px;border:1px solid #f0c36d;background:#fffaf0;
+         border-radius:8px;color:#8a5a00;font-size:13px;line-height:1.5}
+body{font-family:'Segoe UI','Microsoft YaHei',system-ui,sans-serif;margin:0;background:var(--bg);color:var(--fg);font-size:14px}
+header{background:var(--card);border-bottom:1px solid var(--line);padding:13px 22px;display:flex;
+       align-items:center;gap:14px;flex-wrap:wrap;position:sticky;top:0;z-index:10}
+header h1{font-size:16px;margin:0;font-weight:600}
+.spacer{flex:1}
+button{font-family:inherit;font-size:13px;padding:7px 14px;border:1px solid var(--line);background:#fff;
+       border-radius:8px;cursor:pointer;transition:.15s}
+button:hover:not(:disabled){background:#f0f2f5;border-color:#c9cfd6}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.primary:hover:not(:disabled){background:#1d4ed8}
+button.danger{color:var(--err);border-color:#f3c7c7}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.mini{padding:3px 10px;font-size:12px;border-radius:6px}
+select{font-family:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:#fff}
+.wrap{padding:18px 22px 80px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.card-head{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.card-head b{font-size:15px}
+.card-body{padding:0;max-height:460px;overflow:auto}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex:0 0 auto}
+.ok{background:var(--ok)}.off{background:#c3c8ce}.err{background:var(--err)}.warn{background:var(--warn)}
+.badge{font-size:11px;padding:2px 8px;border-radius:20px;background:#eef1f4;color:var(--mut);white-space:nowrap}
+.badge.conf{background:#e7f5ec;color:#15803d}
+.badge.noconf{background:#fdf1e3;color:#b45309}
+.badge.ok{background:#e7f5ec;color:#15803d}
+.badge.err{background:#fdecec;color:#b91c1c}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:8px 12px;font-size:13px;border-bottom:1px solid var(--line)}
+th{background:#fafbfc;color:var(--mut);font-weight:600;font-size:12px;position:sticky;top:0}
+tr.loaded{background:#f0f8f2}
+td.acts{white-space:nowrap;text-align:right}
+.mut{color:var(--mut);font-size:12px}
+details{margin-top:16px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius)}
+summary{padding:12px 16px;cursor:pointer;font-weight:600;font-size:13px}
+details>div{padding:0 16px 16px}
+#log{position:fixed;left:0;right:0;bottom:0;max-height:40vh;overflow:auto;background:#0f172a;color:#c9e2ff;
+     font-family:Consolas,monospace;font-size:12px;padding:14px 18px 18px;white-space:pre-wrap;display:none;
+     border-top:1px solid #1e293b;z-index:20}
+#log.show{display:block}
+#logBar{position:fixed;right:14px;bottom:calc(40vh + 8px);z-index:21;display:none}
+#logBar.show{display:block}
+.login{background:#fffbeb;border:1px solid #fde68a;padding:12px 16px;margin:16px 22px 0;border-radius:var(--radius)}
+.stmeta{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.metrics{display:flex;gap:6px;flex-wrap:wrap;padding:8px 16px;border-bottom:1px solid var(--line);background:#fbfcfe}
+.badge.warnb{background:#fef2f2;color:#b91c1c}
 </style></head><body>
-<h1>三机推理集群 · 傻瓜式框架管理</h1>
-<p class="meta">主控 `cluster.py web` 按需服务 · 状态自动刷新 · token 存本地</p>
+<header>
+  <h1>三机推理集群 · 模型与框架管理</h1>
+  <span class="spacer"></span>
+  <span class="mut">后端</span>
+  <select id="backendSel">{{BACKEND_OPTIONS}}</select>
+  <button class="danger" onclick="doUnloadAll()" id="bUnloadAll">三站全部卸载</button>
+  <button onclick="doPush()" id="bPush">凭据重下发</button>
+  <span class="badge" id="foot">连接中…</span>
+</header>
 
 <div class="login" id="loginBox">
   首次访问请输入服务 token: <input type="password" id="tokInput" placeholder="token" />
-  <button onclick="saveToken()">保存</button>
-  <span class="mt">(存浏览器 localStorage; 刷新需已保存)</span>
+  <button class="primary" onclick="saveToken()">保存</button>
+  <span class="mut">(存浏览器 localStorage)</span>
 </div>
 
-<div class="ops">
-  <b>操作</b><br/>
-  模型 <input type="text" id="aliasInput" list="aliasList" placeholder="如 gpt-oss" />
-  <datalist id="aliasList">{{ALIAS_OPTIONS}}</datalist>
-  后端 <select id="backendSel">{{BACKEND_OPTIONS}}</select>
-  <button onclick="doOp('load')"    id="bLoad">加载</button>
-  <button onclick="doOp('backend')" id="bBackend">切换后端</button>
-  <button onclick="doOp('unload')"  id="bUnload">三站卸载</button>
-  <button onclick="doOp('secrets-push')" id="bPush">凭据重下发</button>
-  <span class="mt" id="pushHint"></span>
-  <span id="spinner"></span>
-  <div id="log"></div>
+<div class="wrap">
+  <div class="grid" id="stations"></div>
+  <details>
+    <summary>框架运行状态 (llama / unsloth / vLLM / litellm / opencode / claude)</summary>
+    <div id="panels"></div>
+  </details>
+  <details>
+    <summary>统一入口平面 ② ③ (凭据 / Provider / 出站)</summary>
+    <div id="planes"></div>
+  </details>
+  <details>
+    <summary>引擎版本矩阵 (RPC 引擎 / 单机引擎 / LM Studio / opencode / 内核)</summary>
+    <div id="versions"></div>
+  </details>
 </div>
 
-<div id="panels"></div>
-<div id="planes"></div>
-<p class="mt" id="foot">刷新状态中…</p>
+<button id="logBar" onclick="closeLog()">收起输出 ✕</button>
+<div id="log"></div>
 
 <script>
 let token = localStorage.getItem('cluster_token') || '';
+// 支持从 URL ?token= 自动登录: 启动日志会打印"免输链接", 点击即用, 无需手输。
+// (手输入口仍保留, 作为换机/清缓存后的兜底)
+const urlTok = new URLSearchParams(location.search).get('token');
+if(urlTok){ token = urlTok; localStorage.setItem('cluster_token', token);
+  history.replaceState(null, '', location.pathname); }
 let busy = false;
 const tokBox = document.getElementById('tokInput');
 tokBox.value = token;
 document.getElementById('loginBox').style.display = token ? 'none' : 'block';
 
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
 function saveToken(){ token = tokBox.value.trim(); localStorage.setItem('cluster_token', token);
-  document.getElementById('loginBox').style.display='none'; loadStatus(); }
+  document.getElementById('loginBox').style.display='none'; refreshAll(); }
 
 async function api(method, path, body){
   const r = await fetch(path, {method, headers:{'Content-Type':'application/json',
@@ -260,101 +510,338 @@ async function api(method, path, body){
   return r.json();
 }
 
-function frameRow(name, fr){
-  const s = fr.status || 'Unknown';
-  const col = s==='RUNNING'?'#2e7d32':(s==='STOPPED'?'#9e9e9e':'#c62828');
-  return '<tr><td>'+name+'</td><td><span class="dot" style="background:'+col+'"></span>'+
-         s+'</td><td class="mt">'+(fr.detail||'')+'</td></tr>';
+function showLog(txt){ const d=document.getElementById('log'); d.textContent=txt;
+  d.classList.add('show'); document.getElementById('logBar').classList.add('show'); }
+function closeLog(){ document.getElementById('log').classList.remove('show');
+  document.getElementById('logBar').classList.remove('show'); }
+
+function engineDot(e){
+  if(e==='READY') return '<span class="dot ok"></span>已就绪';
+  if(e==='STOPPED') return '<span class="dot off"></span>空闲';
+  return '<span class="dot err"></span>'+esc(e);
 }
 
-// 轮询采用「完成后自调度」+ in-flight 去重 (2026-09-14, 修 CHECKLIST F20):
-// 原实现用定时间隔触发, 与慢响应叠加会堆积成并发请求风暴 (曾约 26 并发)。
-let statusBusy=false, planesBusy=false;
+// 引擎实时指标行 (数据源: llama.cpp 原生 /metrics + /slots, 经内层端口)
+function metricsLine(mt){
+  if(!mt || !mt.port) return '<div class="metrics"><span class="mut">指标: 引擎未运行</span></div>';
+  const m = mt.metrics || {};
+  const f = k => (m[k]!==undefined ? Number(m[k]).toFixed(1) : '—');
+  let s = '<div class="metrics">'
+        + '<span class="badge">端口 '+mt.port+'</span>'
+        + '<span class="badge">prefill '+f('prompt_tokens_seconds')+' t/s</span>'
+        + '<span class="badge">decode '+f('predicted_tokens_seconds')+' t/s</span>'
+        + '<span class="badge">槽位 '+(mt.slots_busy||0)+'/'+(mt.n_slots||0)+'</span>'
+        + '<span class="badge">ctx '+(mt.ctx||0)+'</span>';
+  if(m.requests_deferred > 0) s += '<span class="badge warnb">排队 '+m.requests_deferred+'</span>';
+  if(Object.keys(m).length === 0) s += '<span class="badge noconf">/metrics 未启用</span>';
+  return s + '</div>';
+}
+
+// 单站一张卡片: 站头(状态+已加载+卸载本站) + 指标行 + 该站模型清单(每行可加载)
+function stationCard(st, s, mt){
+  const loc = {A:'NEX', B:'GTR-Pro', C:'seaviv'}[st] || '';
+  let h = '<div class="card"><div class="card-head">'
+        + '<b>'+st+' 站</b><span class="mut">'+loc+'</span>'
+        + '<span class="stmeta">'+engineDot(s.engine)+'</span>'
+        + '<span class="spacer"></span>'
+        + '<span class="mut">已加载: '+esc(s.loaded||'(无)')+'</span>'
+        + '<button class="mini danger" onclick="doUnload(\''+st+'\')">卸载本站</button>'
+        + '</div>' + metricsLine(mt) + '<div class="card-body">';
+  if(!s.reachable){ h += '<div style="padding:16px" class="mut">站不可达</div>'; }
+  else if(!s.models || !s.models.length){ h += '<div style="padding:16px" class="mut">模型库为空</div>'; }
+  else {
+    h += '<table><tr><th>模型</th><th>大小</th><th>状态</th><th style="text-align:right">操作</th></tr>';
+    for(const m of s.models){
+      const badge = m.has_conf ? '<span class="badge conf">conf ✓</span>'
+                               : '<span class="badge noconf">加载时自动生成 conf</span>';
+      const stt = m.loaded ? ' <span class="badge">已加载</span>' : '';
+      h += '<tr class="'+(m.loaded?'loaded':'')+'">'
+         + '<td><div>'+esc(m.display)+'</div>'
+         + '<div class="mut">'+esc(m.alias)+' · '+esc(m.repo)+'</div></td>'
+         + '<td class="mut">'+m.size_gb+'G</td>'
+         + '<td>'+badge+stt+'</td>'
+         + '<td class="acts">'
+         + '<button class="mini" onclick="doEstimate(\''+st+'\',\''+esc(m.alias)+'\')">预估</button> '
+         + '<button class="mini" onclick="doLoad(\''+st+'\',\''+esc(m.alias)+'\')">加载</button>'
+         + (m.loaded ? ' <button class="mini danger" onclick="doUnload(\''+st+'\')">卸载</button>' : '')
+         + '</td></tr>';
+    }
+    h += '</table>';
+    // 未纳管 / 断链 (2026-09-15 P1-2): 物理库里有权重、但聚合视图(/data/models/gguf)里
+    // 没有软链的模型 —— "文件在, 清单看不到, infer-load 也找不到"。这正是 MiniMax-M2.7
+    // 当初"存在却加载不了"的形态。这里显式暴露, 并给一键补链。
+    const un = s.unmanaged||[], br = s.broken||[];
+    if(un.length || br.length){
+      h += '<div class="warnbar">';
+      if(un.length)
+        h += '⚠ <b>'+un.length+'</b> 个模型未纳管（有权重、无软链 → 清单与加载都看不到）'
+           + '<div class="mut" style="margin:3px 0">'+un.map(esc).join(' · ')+'</div>'
+           + '<button class="mini" onclick="doModelsLink(\''+st+'\')">一键补链</button>';
+      if(br.length)
+        h += (un.length?'<div style="margin-top:6px"></div>':'')
+           + '⚠ <b>'+br.length+'</b> 个软链已断（目标不存在，建议清理）'
+           + '<div class="mut" style="margin:3px 0">'+br.map(esc).join(' · ')+'</div>';
+      h += '</div>';
+    }
+  }
+  return h + '</div></div>';
+}
+
+// 轮询一律「完成后自调度」+ in-flight 去重 (沿用 CHECKLIST F20 修复, 防并发堆积)
+let modelsBusy=false, statusBusy=false, planesBusy=false;
+
+async function loadModels(){
+  if(modelsBusy) return; modelsBusy=true;
+  try{
+    // 模型清单 + 引擎指标并行拉取 (指标来自 llama.cpp 原生 /metrics 与 /slots)
+    const [d, mt] = await Promise.all([api('GET','/api/models'), api('GET','/api/metrics')]);
+    let h='';
+    for(const st of ['A','B','C'])
+      h += stationCard(st, d.stations[st]||{}, ((mt.stations||{})[st])||{});
+    document.getElementById('stations').innerHTML = h;
+  }catch(e){
+    if(e.message!=='unauthorized')
+      document.getElementById('stations').innerHTML='<div class="mut">模型清单拉取失败: '+esc(e.message)+'</div>';
+  }
+  finally{ modelsBusy=false; setTimeout(loadModels, 20000); }
+}
 
 async function loadStatus(){
-  if(statusBusy) return;
-  statusBusy=true;
+  if(statusBusy) return; statusBusy=true;
   try{
     const d = await api('GET','/api/status');
     const names=['llama','unsloth','vllm','litellm','opencode','claude'];
-    let html='';
+    let h='<table><tr><th>站</th>'+names.map(n=>'<th>'+n+'</th>').join('')+'</tr>';
     for(const st of ['A','B','C']){
-      const s=d.stations[st];
-      html+='<h3>'+st+' 站 '+ (s.reachable? '' : '(不可达)') +
-            ' · 引擎:'+s.engine+' · 加载:'+s.loaded+'</h3>';
-      html+='<table><tr><th>框架</th><th>状态</th><th>详情</th></tr>';
-      for(const n of names) html+=frameRow(n,s.frames[n]);
-      html+='</table>';
+      const s=d.stations[st]||{};
+      h += '<tr><td><b>'+st+'</b>'+(s.reachable?'':' <span class="mut">不可达</span>')+'</td>';
+      for(const n of names){
+        const fr=(s.frames||{})[n]||{};
+        const t=fr.status||'Unknown';
+        h += '<td><span class="dot '+(t==='RUNNING'?'ok':(t==='STOPPED'?'off':'err'))+'"></span> '+t+'</td>';
+      }
+      h += '</tr>';
     }
-    document.getElementById('panels').innerHTML=html;
-    document.getElementById('foot').textContent='刷新于 '+d.time;
-  }catch(e){ if(e.message!=='unauthorized') document.getElementById('foot').textContent='状态拉取失败: '+e.message; }
-  finally{ statusBusy=false; setTimeout(loadStatus, 5000); }
-}
-
-async function doOp(op){
-  if(busy) return;
-  if(op==='secrets-push'){
-    const ok=confirm('将用主控 secrets/stations/ 正本覆盖三站离线凭据。继续?');
-    if(!ok) return;
-  }
-  busy=true;
-  const d=document.getElementById('log'); d.style.display='block'; d.textContent='操作中…';
-  for(const id of ['bLoad','bBackend','bUnload','bPush']) document.getElementById(id).disabled=true;
-  const sp=document.getElementById('spinner'); sp.textContent='…';
-  const hint=document.getElementById('pushHint');
-  try{
-    let res;
-    if(op==='load')      res=await api('POST','/api/load',{alias:document.getElementById('aliasInput').value});
-    else if(op==='backend') res=await api('POST','/api/backend',
-        {alias:document.getElementById('aliasInput').value,
-         backend:document.getElementById('backendSel').value});
-    else if(op==='secrets-push') res=await api('POST','/api/secrets-push');
-    else                res=await api('POST','/api/unload');
-    d.textContent=(res.log||'').trim()+'\n[exit '+res.rc+']';
-    if(op==='secrets-push'){ hint.textContent='凭据已重下发, 站内 agent 需重启生效'; }
-  }catch(e){ d.textContent='失败: '+e.message; }
-  finally{
-    busy=false; sp.textContent='';
-    for(const id of ['bLoad','bBackend','bUnload','bPush']) document.getElementById(id).disabled=false;
-    setTimeout(loadStatus,600);
-  }
+    document.getElementById('panels').innerHTML = h+'</table>';
+    document.getElementById('foot').textContent = '更新于 '+d.time;
+  }catch(e){ if(e.message!=='unauthorized') document.getElementById('foot').textContent='状态拉取失败'; }
+  finally{ statusBusy=false; setTimeout(loadStatus, 8000); }
 }
 
 async function loadPlanes(){
-  if(planesBusy) return;
-  planesBusy=true;
+  if(planesBusy) return; planesBusy=true;
   try{
     const d = await api('GET','/api/planes');
-    let h='<h3>统一入口 · 平面② 凭据/Provider · 平面③ 出站</h3>';
-    h+='<table><tr><th>站</th><th>凭据 (~/.config/rpc)</th><th>opencode 默认模型</th>'
-     + '<th>claude 凭据</th><th>出站 OpenRouter</th></tr>';
+    let h='<table><tr><th>站</th><th>凭据 (~/.config/rpc)</th><th>opencode 默认模型</th>'
+         +'<th>claude 凭据</th><th>出站 OpenRouter</th></tr>';
     for(const st of ['A','B','C']){
       const s=d.secrets[st]||{}, p=d.providers[st]||{}, e=d.egress[st]||{};
       const oc=(p.opencode&&(p.opencode.model||p.opencode.error))||'?';
       const cl=(p.claude&&(p.claude.token_form||p.claude.error))||'?';
       const eg=(e.http==='200')?('OK '+(e.time||'')+'s'):('FAIL '+e.http);
-      const col=(s.state==='OK')?'#2e7d32':'#c62828';
-      h+='<tr><td>'+st+'</td>'
-       + '<td style="color:'+col+'">'+s.state+' <span class="mt">'+(s.note||'')+'</span></td>'
-       + '<td class="mt">'+oc+'</td>'
-       + '<td class="mt">'+cl+((p.claude&&p.claude.helper)?' +apiKeyHelper':'')+'</td>'
-       + '<td class="mt">'+eg+'</td></tr>';
+      h+='<tr><td><b>'+st+'</b></td>'
+       + '<td><span class="dot '+(s.state==='OK'?'ok':'err')+'"></span> '+esc(s.state)
+       + ' <span class="mut">'+esc(s.note||'')+'</span></td>'
+       + '<td class="mut">'+esc(oc)+'</td>'
+       + '<td class="mut">'+esc(cl)+((p.claude&&p.claude.helper)?' +apiKeyHelper':'')+'</td>'
+       + '<td class="mut">'+esc(eg)+'</td></tr>';
     }
     document.getElementById('planes').innerHTML=h+'</table>';
   }catch(e){}
-  finally{ planesBusy=false; setTimeout(loadPlanes, 15000); }
+  finally{ planesBusy=false; setTimeout(loadPlanes, 20000); }
 }
 
-loadStatus();
-loadPlanes();
+function setBtns(dis){
+  for(const id of ['bUnloadAll','bPush']){ const el=document.getElementById(id); if(el) el.disabled=dis; }
+}
+
+// 事前预估 (P1-1): 提交前算"能不能装下 / 该改哪个参数"
+async function doEstimate(st, alias){
+  if(busy) return;
+  busy=true; setBtns(true); showLog('['+st+'] 预估 '+alias+' 中… (读 GGUF 元数据 + 站上内存)');
+  try{
+    const r = await api('POST','/api/estimate',{station:st, alias:alias});
+    if(!r.ok){ showLog('预估失败: '+((r.reasons||[]).join('; ')||'未知原因')); return; }
+    const m = r.model||{}, mem = r.mem||{};
+    let t = '=== 事前预估: '+alias+' @ '+r.station+' 站 ===\n';
+    t += '  模型      : '+(m.name||'?')+' ['+(m.arch||'?')+'] 层='+m.block_count
+       + ' kv_heads='+m.head_count_kv+' head_dim='+r.head_dim+' 原生ctx='+m.context_length+'\n';
+    t += '  加载参数  : ctx='+r.ctx+' parallel='+r.n_parallel+' KV=('+r.ctk+','+r.ctv+')\n';
+    t += '  权重      : '+r.weights_gib+' GiB\n';
+    t += '  KV cache  : '+r.kv_gib+' GiB   (全注意力层 '+r.n_attn_layer+' 层)\n';
+    if(r.ssm_gib) t += '  SSM state : '+r.ssm_gib+' GiB  (hybrid 架构, 近似, 与 ctx 无关)\n';
+    t += '  运行开销  : '+r.overhead_gib+' GiB\n';
+    t += '  ────────────────────────\n';
+    t += '  合计需求  : '+r.need_gib+' GiB\n';
+    if(mem.total) t += '  站上内存  : total '+mem.total+' / used '+mem.used+' / avail '+mem.avail+' GiB\n';
+    t += '  结论      : 【'+r.verdict+'】\n';
+    for(const x of (r.reasons||[])) t += '    ✗ '+x+'\n';
+    for(const x of (r.advice||[]))  t += '    → '+x+'\n';
+    showLog(t);
+  }catch(e){ showLog('预估失败: '+e.message); }
+  finally{ busy=false; setBtns(false); }
+}
+
+// 预估结果 → 可读文本 (与 CLI `cluster.py estimate` 同口径)
+function fmtEstimate(r){
+  const m=r.model||{}, mem=r.mem||{};
+  let t = '=== 事前预估: '+(r.alias||'')+' @ '+r.station+' 站 ===\n';
+  let kvh = m.head_count_kv;
+  if(Array.isArray(kvh)) kvh = '逐层(全注意力 '+r.n_attn_layer+'/'+m.block_count+' 层)';
+  t += '  模型      : '+m.name+' ['+m.arch+'] 层='+m.block_count+' kv_heads='+kvh
+     + ' head_dim='+r.head_dim+' 原生ctx='+m.context_length+'\n';
+  t += '  加载参数  : ctx='+r.ctx+' parallel='+r.n_parallel+' KV=('+r.ctk+','+r.ctv+')\n';
+  t += '  权重      : '+r.weights_gib+' GiB\n';
+  t += '  KV cache  : '+r.kv_gib+' GiB  (全注意力层 '+r.n_attn_layer+' 层)\n';
+  if(r.ssm_gib) t += '  SSM state : '+r.ssm_gib+' GiB  (hybrid 架构, 近似, 与 ctx 无关)\n';
+  t += '  运行开销  : '+r.overhead_gib+' GiB\n';
+  t += '  ─────────────────────\n';
+  t += '  合计需求  : '+r.need_gib+' GiB\n';
+  if(mem.total) t += '  站上内存  : total '+mem.total+' / used '+mem.used+' / avail '+mem.avail
+                   + (mem.existing_rss ? ' / 已有引擎RSS '+mem.existing_rss : '') + ' GiB\n';
+  t += '  门禁判据  : (对齐 load-gate) avail_eff '
+     + (r.avail_effective !== undefined ? r.avail_effective : '?') + ' ≥ need+'+r.pad_gib+'\n';
+  t += '  结论      : 【'+r.verdict+'】\n';
+  (r.notes||[]).forEach(function(x){ t += '    · '+x+'\n'; });
+  (r.reasons||[]).forEach(function(x){ t += '    ✗ '+x+'\n'; });
+  (r.advice||[]).forEach(function(x){ t += '    → '+x+'\n'; });
+  return t;
+}
+
+async function doEstimate(st, alias){
+  if(busy) return;
+  busy=true; setBtns(true); showLog('['+st+'] 预估 '+alias+' 中…');
+  try{
+    const r = await api('POST','/api/estimate',{station:st, alias:alias});
+    showLog(r.ok ? fmtEstimate(r) : ('预估失败: '+((r.reasons||[]).join('; ')||'未知')));
+  }catch(e){ showLog('预估失败: '+e.message); }
+  finally{ busy=false; setBtns(false); }
+}
+
+async function doLoad(st, alias){
+  if(busy) return;
+  busy=true; setBtns(true);
+  const bd = document.getElementById('backendSel').value;
+  // 加载前自动预估: NO_FIT 时把原因与建议放进确认框 (预估失败不阻断加载)
+  let warn = '';
+  try{
+    const est = await api('POST','/api/estimate',{station:st, alias:alias});
+    if(est && est.ok){
+      const avail = (est.avail_effective !== undefined ? est.avail_effective
+                    : (est.mem && est.mem.avail));
+      warn = '预估: 需求 '+est.need_gib+'G / 可用 '+(avail!==undefined?avail:'?')+'G → 【'+est.verdict+'】\n';
+      if((est.notes||[]).length) warn += est.notes.join('\n')+'\n';
+      if(est.verdict === 'NO_FIT'){
+        warn += '原因: '+((est.reasons||[]).join('; ')||'—')+'\n';
+        warn += '建议: '+((est.advice||[]).join('; ')||'—')+'\n';
+      }
+    }
+  }catch(e){ /* 预估不可用则跳过 */ }
+  if(!confirm('在 '+st+' 站加载 '+alias+' ?\n\n'+warn+'\n会先卸载该站当前引擎; 大模型可能需 1-3 分钟。')){
+    busy=false; setBtns(false); showLog('已取消'); return;
+  }
+  showLog('['+st+'] 加载 '+alias+' 中… (大模型请耐心等待, 完成后此处显示日志)');
+  try{
+    const res = await api('POST','/api/load',{station:st, alias:alias, backend:bd||undefined});
+    showLog((res.log||'').trim()+'\n[exit '+res.rc+']');
+  }catch(e){ showLog('失败: '+e.message); }
+  finally{ busy=false; setBtns(false); setTimeout(loadModels,600); setTimeout(loadStatus,600); }
+}
+
+async function doUnload(st){
+  if(busy) return;
+  if(!confirm('卸载 '+st+' 站引擎?')) return;
+  busy=true; setBtns(true); showLog('['+st+'] 卸载中…');
+  try{
+    const res = await api('POST','/api/unload',{station:st});
+    showLog((res.log||'').trim()+'\n[exit '+res.rc+']');
+  }catch(e){ showLog('失败: '+e.message); }
+  finally{ busy=false; setBtns(false); setTimeout(loadModels,600); setTimeout(loadStatus,600); }
+}
+
+async function doUnloadAll(){
+  if(busy) return;
+  if(!confirm('三站全部卸载?')) return;
+  busy=true; setBtns(true); showLog('三站卸载中…');
+  try{
+    const res = await api('POST','/api/unload',{});
+    showLog((res.log||'').trim()+'\n[exit '+res.rc+']');
+  }catch(e){ showLog('失败: '+e.message); }
+  finally{ busy=false; setBtns(false); setTimeout(loadModels,600); setTimeout(loadStatus,600); }
+}
+
+async function doPush(){
+  if(busy) return;
+  if(!confirm('用主控 secrets/stations/ 正本覆盖三站离线凭据?')) return;
+  busy=true; setBtns(true); showLog('凭据重下发中…');
+  try{
+    const res = await api('POST','/api/secrets-push',{});
+    showLog((res.log||'').trim()+'\n[exit '+res.rc+']\n凭据已重下发, 站内 agent 需重启生效');
+  }catch(e){ showLog('失败: '+e.message); }
+  finally{ busy=false; setBtns(false); }
+}
+
+async function doModelsLink(st){
+  if(busy) return;
+  if(!confirm(st+' 站: 给所有未纳管模型补软链?\n（在 /data/models/gguf 下建指向 ~/.lmstudio/models 的软链，不复制权重）')) return;
+  busy=true; setBtns(true); showLog(st+' 站补链中…');
+  try{
+    const res = await api('POST','/api/models-link',{station:st});
+    showLog((res.log||'').trim()+'\n[exit '+(res.ok?0:1)+']');
+  }catch(e){ showLog('失败: '+e.message); }
+  finally{ busy=false; setBtns(false); setTimeout(loadModels,800); }
+}
+
+// P1-3 引擎版本矩阵: 逐维度比对三站, 不一致打红并标"漂移"
+let verBusy=false;
+async function loadVersions(){
+  if(verBusy) return; verBusy=true;
+  try{
+    const d = await api('GET','/api/versions');
+    const S = d.stations||{};
+    const dims = [
+      ['RPC 引擎 (/opt/llama.cpp)', s=>(s.rpc||{}).commit,
+        s=>((s.rpc||{}).version||'')+(s.rpc&&s.rpc.built?' · '+s.rpc.built:'')],
+      ['RPC 完整性 (md5sum -c)', s=>s.md5, null],
+      ['单机引擎 (~/llama.cpp)', s=>((s.single||{}).commit||'').slice(0,7),
+        s=>(s.single||{}).version||''],
+      ['LM Studio', s=>s.lmstudio, null],
+      ['opencode', s=>s.opencode, null],
+      ['内核', s=>s.kernel, null],
+    ];
+    let h='<table style="margin:8px 12px"><tr><th>维度</th><th>A</th><th>B</th><th>C</th><th>一致</th></tr>';
+    for(const [name,keyf,extf] of dims){
+      const vals = ['A','B','C'].map(st=>keyf(S[st]||{}));
+      const same = vals.every(v=>v===vals[0]);
+      h += '<tr><td>'+esc(name)+'</td>';
+      for(const st of ['A','B','C']){
+        const s=S[st]||{};
+        const main = esc(String(keyf(s)===undefined?'?':keyf(s)));
+        h += '<td'+(same?'':' style="color:#dc2626;font-weight:600"')+'>'+main
+           + (extf && extf(s) ? '<div class="mut">'+esc(String(extf(s)))+'</div>' : '')
+           + '</td>';
+      }
+      h += '<td>'+(same?'<span class="badge ok">一致</span>'
+                        :'<span class="badge err">漂移</span>')+'</td></tr>';
+    }
+    h += '</table>';
+    document.getElementById('versions').innerHTML = h;
+  }catch(e){
+    if(e.message!=='unauthorized')
+      document.getElementById('versions').innerHTML =
+        '<div class="mut" style="padding:12px">加载失败: '+esc(e.message)+'</div>';
+  }finally{ verBusy=false; }
+}
+
+function refreshAll(){ loadModels(); loadStatus(); loadPlanes(); loadVersions(); }
+refreshAll();
 </script></body></html>"""
 
 
 def _build_page():
-    alias_opts = "".join(f'<option value="{m}">' for m in _model_suggestions())
+    # ALIAS_OPTIONS 已废弃 (2026-09-15): 模型列表由前端 /api/models 动态渲染。
     backend_opts = "".join(f'<option value="{b}">{b}</option>' for b in sorted(cluster.BACKENDS))
-    return PAGE_HTML.replace("{{ALIAS_OPTIONS}}", alias_opts).replace("{{BACKEND_OPTIONS}}", backend_opts)
+    return PAGE_HTML.replace("{{BACKEND_OPTIONS}}", backend_opts)
 
 
 def serve(argv=None):
@@ -372,22 +859,45 @@ def serve(argv=None):
     token = token or secrets.token_urlsafe(9)
     Handler._token = token
     Handler._page = _build_page()
-    try:
-        srv = ThreadingHTTPServer((host, port), Handler)
-    except OSError as e:
-        print(f"[cluster-web] 绑定失败 {host}:{port}: {e}")
-        return 1
-    print(f"[cluster-web] 三机推理框架管理 UI 已启动 (按需服务, Ctrl-C 退出)")
-    print(f"[cluster-web]   地址: http://{host}:{port}/")
-    print(f"[cluster-web]   token: {token}")
+
+    # 双栈监听 (2026-09-15 修): Windows 下 `localhost` 会同时解析出 `::1`(IPv6) 与
+    # `127.0.0.1`, 且 **::1 排在前面**; 而默认 ThreadingHTTPServer 只绑 IPv4 →
+    # 浏览器访问 http://localhost:port 先试 ::1 被拒, 部分浏览器不做 fallback 直接报错
+    # (curl 有 happy-eyeballs fallback, 所以命令行测不出来)。故 IPv4 / IPv6 各起一个。
+    if host in ("127.0.0.1", "localhost"):
+        bindings = [(socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")]
+    elif host in ("0.0.0.0", ""):
+        bindings = [(socket.AF_INET, "0.0.0.0"), (socket.AF_INET6, "::")]
+    else:
+        bindings = [(socket.AF_INET, host)]
+
+    servers, bound = [], []
+    for fam, addr in bindings:
+        try:
+            cls = type("_Srv", (ThreadingHTTPServer,), {"address_family": fam})
+            servers.append(cls((addr, port), Handler))
+            bound.append(addr)
+        except OSError as e:
+            if fam == socket.AF_INET:
+                print(f"[cluster-web] 绑定失败 {addr}:{port}: {e}")
+                return 1
+            print(f"[cluster-web] (提示) IPv6 未绑定 {addr}:{port}: {e}")
+
+    print("[cluster-web] 三机推理框架管理 UI 已启动 (按需服务, Ctrl-C 退出)")
+    print(f"[cluster-web]   免输链接(推荐): http://127.0.0.1:{port}/?token={token}")
+    print(f"[cluster-web]   或手输 token : {token}")
+    print(f"[cluster-web]   监听: {', '.join(bound)}  (port {port}; localhost 与 127.0.0.1 均可用)")
     if host in ("0.0.0.0", ""):
         print("[cluster-web]   已监听局域网, 请妥善保管 token")
     try:
-        srv.serve_forever()
+        for s in servers[1:]:
+            threading.Thread(target=s.serve_forever, daemon=True).start()
+        servers[0].serve_forever()
     except KeyboardInterrupt:
         print("\n[cluster-web] 退出, 端口已释放。")
     finally:
-        srv.server_close()
+        for s in servers:
+            s.server_close()
     return 0
 
 
