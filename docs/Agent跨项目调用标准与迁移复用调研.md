@@ -27,7 +27,7 @@ upstream: D5 Agent 生态升级（已 verified 2026-09-02）; 调研 §4.2 五�
 > **3. LiteLLM 网关 `:4000` 已退役**（2026-09-13, ADR-0002 后续）：凡「经网关」的表述均失效。
 > agent 侧 provider 名 `cluster-litellm` 保留，但 baseURL = 各站引擎**真实端口**（由 `_station_ready.sh` 探测后幂等注入）。
 >
-> **4. §9.8 G8 的落地范围与实测不符（降级链当前不成立）**：G8 定案写的是「sympy 装**两站**、R 装**两站**（CRAN noble-cran40 → 4.6.x 对齐主控站 4.6.1）」，实测：
+> **4. §9.8 G8 的落地范围与实测不符（降级链当前不成立）**：G8 定案写的是「sympy 装**两站**、R 装**两站**（CRAN noble-cran40 → 4.6.x 对齐主控站 4.6.1）」，实测（2026-09-15 初检）：
 >
 > | 站 | sympy | numpy | scipy | antlr4 | R |
 > |---|---|---|---|---|---|
@@ -37,7 +37,24 @@ upstream: D5 Agent 生态升级（已 verified 2026-09-02）; 调研 §4.2 五�
 >
 > ⇒ ① `sympy 快筛` 这一层**只有 B 站可用**，Auto_Prover 型任务卡若派到 A/C 会缺依赖；
 > ② `parse_latex` 所需的 `antlr4-python3-runtime` **三站全缺**（注入点 D 的恒等式预验证不可用）；
-> ③ B 站 R 版本与 G8 决定的「对齐主控站 4.6.x」不一致。**该三项属未收口项，需另行决策（补装 or 改路由到 B）。**
+> ③ B 站 R 版本与 G8 决定的「对齐主控站 4.6.x」不一致。
+>
+> **✅ 已收口（2026-09-16，三站补装完成）**：
+>
+> | 站 | sympy | numpy | scipy | antlr4 | R |
+> |---|---|---|---|---|---|
+> | A | 1.14.0 | 2.5.3 | 1.18.1 | **4.11.0** | **4.6.1**（CRAN noble-cran40） |
+> | B | 1.14.0 | 2.5.3 | 1.18.1 | **4.11.0** | **4.6.1**（由 4.3.3 升级） |
+> | C | 1.14.0 | 2.5.3 | 1.18.1 | **4.11.0** | **4.6.1** |
+>
+> - **antlr4 必须钉 `==4.11`**：sympy 1.14 的 `_parse_latex_antlr.py` 硬校验 antlr4 版本为 4.11，装最新 4.13 会抛
+>   `ImportError: ... requires the antlr4 Python package ... version 4.11` —— 第一版装 4.13.2 后 `import` 能过、
+>   **功能级 `parse_latex` 才暴露**（判据须到功能级，教训见 ADR-0004）。
+> - **R 源签名坑**：cran40 仓库由新 key（指纹 `E298A3A825C0D65DFD57CBB651716619E084DAB9`）签名，且 `signed-by=` 的
+>   keyring 必须是 **gpg 二进制**（ASCII armor 会 `NO_PUBKEY 51716619E084DAB9`，apt 静默回落到默认源装 4.3.3）。
+> - **功能验证**：三站 `parse_latex(r'\frac{1}{2}')` → `simplify(x - 1/2) == 0` 均 True，注入点 D 恒等式预验证可用。
+> - **仍待办**：Cpp_Hub 基准对拍的 R 依赖包（forecast/rugarch/urca/ARDL/midasr/Spillover/vars，G8 执行列 T0 预置）
+>   尚未安装；G8 的"`sessionInfo()` 版本对照 + 不一致按主控站钉版"流程留待对拍试点时执行。
 >
 > *(本次仅加现状注记，正文 510 行不改写 —— 与本文件同期同类史档的处理纪律一致，见 ADR-0004 第四批。)*
 
