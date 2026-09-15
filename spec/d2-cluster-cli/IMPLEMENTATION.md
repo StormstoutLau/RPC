@@ -166,6 +166,70 @@ def cmd_web()/cluster_web.py         # Web UI 按需服务
 - **C 站**（2026-09-09 起）：常驻为手动 /opt/llama.cpp llama-server（Vulkan），infer-* 工具链已补装，load/unload 与 A/B 同路径（pkill 兜底管理手动引擎）。
 - 探测全部经 paramiko（`ssh_run`），单站不可达标注 Unknown/UNREACHABLE，不阻塞他站。
 
+### 3.8 统一入口四平面：凭据 / Provider / 出站（2026-09-14 扩展）
+
+#### 职责
+
+把「本地推理框架已有统一管理」延伸为**三站 agent API 配置 + 外部商业 API 的统一管理**，四平面收口同一 CLI：
+
+| 平面 | 子命令 | 管理对象 | 动作 |
+|------|--------|---------|------|
+| ① 本地引擎 | `frames` / `load` / `unload` / `status` | 三站 llama/unsloth/vllm 进程与引擎 | 状态、加载、切后端、卸载 |
+| ② 凭据 | `secrets {status\|scan\|push}` | 站内 `~/.config/rpc/*.key` | 巡检、明文门禁、正本下发 |
+| ②b Provider | `providers` | opencode / claude / hermes 配置 | 聚合视图 + 漂移检测 |
+| ③ 出站 | `egress` | OpenRouter 等外部商业 API | 健康、用量、余额 |
+| 汇总 | `status --all` + `web` | 四平面 | 一屏视图 / 浏览器面板 |
+
+#### 收敛约定（明文治理的落地形态）
+
+- **站内唯一落点**：`~/.config/rpc/`（700）+ `<name>.key`（600，**无尾换行**）。key 仍是每站一份，但只此一处。
+- **配置引用化**：`opencode.jsonc` → `apiKey: "{file:~/.config/rpc/<name>.key}"`（opencode 官方变量替换，支持 `~`，内容原样取用）；`.claude/settings.json` → `apiKeyHelper: /home/scott-lau/.config/rpc/claude-key.sh`（Claude Code 专用取 key 脚本）。
+- **主控正本**：`secrets/stations/<st>/`（`.gitignore` 覆盖），经 `secrets push` 用 SFTP 下发并 chmod。
+- **历史备份**：脱敏为 `***REMOVED***` 后归档至 `backups-keys-<date>/`（700）。
+
+#### 接口签名
+
+```python
+RPC_DIR = "~/.config/rpc"
+SECRETS_ROOT = Path(__file__).parent.parent / "secrets" / "stations"   # 主控正本
+KEY_PAT = r"sk-(or-v1|unsloth|RPC|local|lm)-[A-Za-z0-9_-]{6,}"          # 明文指纹
+def probe_secrets(st) -> dict          # 落点/权限/生效明文/归档明文/引用/helper
+def _secrets_verdict(p) -> (state, note)   # OK | ATTENTION | UNREACHABLE
+def cmd_secrets(action="status") -> int    # scan 有命中则 exit 1 (门禁语义)
+def _secrets_push() -> int                 # SFTP 下发 .key=600 / .sh=700
+def probe_providers(st) -> dict        # opencode 默认模型+provider key 形态; claude 形态
+def _claude_forms(cl) -> dict          # env token 区分 ref / PLAIN / 占位符(nB)
+def cmd_providers() -> int             # 聚合 + 默认模型/provider 集合漂移检测
+def probe_egress_station(st) / probe_egress_master() -> dict
+def cmd_egress() -> int                # OpenRouter /api/v1/key, 强制 IPv4
+def _planes_compact()                  # status --all 的四平面一行摘要
+```
+
+#### 实施要点
+
+- **明文只能治「散落」，不能治「持有」**：站点调用外部 API 必然持有 key。目标是把明文面收敛为「每站 1 个 600 文件 + 主控 1 个正本」，而非追求零落盘。
+- **`{file:}` 验证靠 `opencode debug config`**：`opencode run` 在 B 站长时间无输出（`--pure` 与付费模型同样复现，与本次改造无关，未闭环），故采用 `debug config` 作为 acceptance gate——它输出**解析后**的配置，可直接断言「无残留 `{file:` + apiKey 为真实值」。
+- **marker 拼接坑**：`opencode.jsonc` 无尾换行，探测脚本若用 `echo '### marker'` 分隔区块，marker 会被粘到上一行末尾导致解析失败。必须用 `printf '\n### x\n'` 前置换行。
+- **claude env token 判定要分档**：A 站 `ANTHROPIC_AUTH_TOKEN` 值为本地占位符 `lmstudio`（8B），不是密钥。仅按「字段存在」判定会误报明文，须按 `ref / PLAIN(len≥20) / 占位符` 三档区分。
+- **egress 强制 IPv4**：主控到 openrouter.ai 的 IPv6 路径黑洞（ADR-0003 实测），主控侧用 `curl.exe -4`、站内侧 `curl -4`，否则超时。
+- **`/key` label 会回显 key 前段**：输出前必须过 `_mask_key()` 脱敏。
+- 四平面探测均复用 `ssh_run` 并行线程，单站不可达不阻塞他站；`providers` / `egress` 恒 exit 0（观测语义），`secrets scan` 是唯一带门禁退出码的（有明文 → exit 1）。
+
+#### 实测验收（2026-09-14）
+
+| 项 | 结果 |
+|----|------|
+| 三站 `opencode debug config` | EXIT=0，未解析 `{file:` 计数 0，apiKey 为真实值（脱敏后可见前缀） |
+| Claude Code 2.1.258 | 经 `apiKeyHelper` 于 B 站完成一轮对话（`stop_reason=end_turn`） |
+| `secrets scan` | A/B/C 明文命中均 0 → PASS |
+| `secrets push` | 11 个文件下发（A 3 / B 4 / C 4），权限 600（脚本 700） |
+| `egress` | 主控+A/B/C 均 http=200，同一 key（label 一致），单程 0.6~1.8s |
+| `web /api/planes` | 200，返回 secrets/providers/egress 三平面 JSON |
+
+#### 发现的漂移（已暴露，未擅自变更）
+
+三站 opencode 默认模型互不相同：A `opencode/nemotron-3-ultra-free`、B `opencode/nemotron-3.5-lightning-free`、C `cluster-litellm/nemotron`。属配置漂移而非密钥问题，改变默认模型会影响站上行为，故仅由 `providers` 持续暴露，待显式决策。
+
 ## 4. 实施顺序与检查点
 
 ```
