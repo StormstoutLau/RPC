@@ -3,6 +3,9 @@
 > **状态**: A/B/C 三站实盘盘点（opencode/claude 双 CLI 同构，见 §1-5）｜ A 站 Hermes Agent 插件生态盘点（2026-09-10，见 §6）
 > **关联**: [ARCHITECTURE.md](ARCHITECTURE.md) §9（记忆层 + DCP 落地）｜ [DEV-LOG-011](../docs/DEV-LOG-011-d6-agent-standard.md) §8（C 站接入）
 > **落档**: Scott ｜ 2026-09-09（opencode/claude）/ 2026-09-10（Hermes）
+> **2026-09-15 起**: §1 的"三站同构"**不再靠人工核对** —— 已落成可断言的真值
+> `inventory/plugins.yaml` + 门禁 `ops/rpc_check.py` 的 `plugins` 断言（本地）
+> 与 `stations` 断言 (h) 子项（站上实况）。**本表的人工结论以门禁为准**。
 
 ---
 
@@ -20,9 +23,49 @@
 | claude 定制技能 ×12 | ✅ | ✅ | ✅ | `~/.claude/skills/` |
 | claude 插件 | ✅ | ✅ | ✅ | superpowers + anthropic-skills（document-skills）|
 | CLAUDE.md | ✅ | ✅ | ✅ | 集群铁律（C 站已适配） |
-| opencode ARS 链 | ✅ | ✅ | ✅ | skills 4 + agents 4 + commands 16 |
+| opencode ARS 链 | ✅ | ✅ | ✅ | skills 4 + agents 4 + commands 16 + plugins 1 |
 
 **三站完全同构**（DCP 安装为 2026-09-09 统一完成）。
+
+### 1.1 ⚠️ 2026-09-15 修正：上表曾把"C 站 ARS 链 ✅"判错
+
+首次做**站上实况对账**（门禁 `stations` 断言 (h) 子项）即发现：
+
+| 项 | A | B | C（修复前） | C（修复后） |
+|---|---|---|---|---|
+| ARS 落点软链数 | 25 | 25 | 25 | 25 |
+| **其中死链数** | 0 | 0 | **25（全断）** | 0 |
+| 源目录 `~/tools/opencode-academic-research` | 有 | 有 | **不存在** | 有（1058 文件 / 17M） |
+
+**根因**：C 站只有**落点软链**（2026-09-09 随 B→C 复刻时建的），**源目录从未同步过去**。
+于是 25 个软链全部悬空 —— C 站的 ARS 学术链（4 skills + 16 commands + 4 agents + 1 plugin）
+**实际完全不可用**，而本表原判据只看"软链是否存在"，个数三站又恰好都是 25，
+所以手工核对显示"一致"。
+
+**教训（已写进判据）**：插件面同构必须判**软链可达性**（`ars.broken` 必须为 0），
+不能只数个数。这也是 §1 表格此前唯一的真实误判。
+
+**修复**：A → 主控站 SFTP 中转 → C（A→C 免密不通），tar md5 双向一致后解包；
+C 站复验 `ars.broken=0`、`ars.source=yes`，与 A 站逐项对齐（169/16/4/1）。
+
+### 1.2 口径澄清：ARS 落点软链到底几个
+
+`~/.config/opencode` 下**递归**共有 32 个软链，此前台账/手册曾直接引用 32，容易被误读：
+
+| 构成 | 个数 | 是否 ARS |
+|---|---|---|
+| `commands/` | 16 | ✅ |
+| `skills/` | 4 | ✅ |
+| `agents/` | 4 | ✅ |
+| `plugins/` | 1 | ✅ |
+| **小计（ARS 落点）** | **25** | — |
+| `node_modules/.bin/` | 7 | ❌ npm 依赖的 bin 软链 |
+
+真值表 `inventory/plugins.yaml` 只登记 ARS 落点 25（刻意排除 `node_modules`），
+并由 `ars.links.{skills,commands,agents,plugins}` 四项分类计数 + `ars.links` 总数共同锁定。
+
+**另注**：源目录在本集群是**解包产物、非 git checkout**（`git rev-parse` 报"不是 git 仓库"），
+故上游 commit `1d3032f` 在站上**无法自证**，真值表刻意不登记该 commit。
 
 ---
 
