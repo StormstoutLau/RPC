@@ -1749,11 +1749,20 @@ def group_by_model(paths) -> dict:
 #   RPC 引擎   /opt/llama.cpp           受控路径, 只放 ggml-rpc-server + 库 (MANIFEST 管版本)
 #   单机引擎   ~/llama.cpp/build/bin    单机 llama-server (--version 直读 commit)
 _VER_SCAN = (
-    "echo '===RPC==='; grep -E '^(commit|version|build_date|toolchain)[[:space:]]*=' "
-    "/opt/llama.cpp/MANIFEST* 2>/dev/null | head -6; "
-    "echo '===MD5==='; if [ -f /opt/llama.cpp/MANIFEST.md5 ]; then "
-    "(cd /opt/llama.cpp && md5sum -c MANIFEST.md5 2>&1 | grep -c ': OK$'); "
-    "(cd /opt/llama.cpp && md5sum -c MANIFEST.md5 2>&1 | grep 'FAILED' | head -3); "
+    "echo '===RPC==='; grep -E '^(commit|version|build_date|toolchain|rpc_protocol)[[:space:]]*=' "
+    "/opt/llama.cpp/MANIFEST* 2>/dev/null | head -8; "
+    # 完整性: 优先 MANIFEST.md5; 否则用 MANIFEST **自带**的校验段 —— 实测 MANIFEST 前 9 行是键值元数据,
+    # md5 列表从第 10 行起 (check_llama_version.sh 也是 tail -n +10)。旧实现只找 MANIFEST.md5 ⇒ 三站
+    # 全部显示"缺失", 明明校验数据就在 MANIFEST 里 —— 属"能力看着坏了其实数据在"的假阴性。
+    # ⚠ `LC_ALL=C` 是必须的: 站上 LANG=zh_CN.UTF-8, md5sum 会打印"成功"而不是 "OK" ——
+    #   按英文文本解析会把**全部通过**读成"全 FAILED"(实测踩到)。凡是解析命令输出的地方都要锁 locale
+    #   (同 memory 里 "free 输出随 locale 变化 ⇒ 改读 /proc/meminfo" 那条教训)。
+    "echo '===MD5==='; R=$(readlink -f /opt/llama.cpp 2>/dev/null || echo /opt/llama.cpp); "
+    "if [ -f \"$R/MANIFEST.md5\" ]; then F=\"$R/MANIFEST.md5\"; SKIP=0; "
+    "elif [ -f \"$R/MANIFEST\" ]; then F=\"$R/MANIFEST\"; SKIP=9; else F=; fi; "
+    "if [ -n \"$F\" ]; then "
+    "(cd \"$R\" && tail -n +$((SKIP+1)) \"$F\" | LC_ALL=C md5sum -c 2>&1 | grep -c ': OK$'); "
+    "(cd \"$R\" && tail -n +$((SKIP+1)) \"$F\" | LC_ALL=C md5sum -c 2>&1 | grep 'FAILED' | head -3); "
     "else echo 'MISSING'; fi; "
     "echo '===SINGLE==='; ~/llama.cpp/build/bin/llama-server --version 2>&1 | head -2; "
     "git -C ~/llama.cpp rev-parse --short HEAD 2>/dev/null; echo; "
@@ -1787,6 +1796,8 @@ def probe_versions(st: str) -> dict:
             d["rpc"]["commit"] = v
         elif k == "version":
             d["rpc"]["version"] = v
+        elif k == "rpc_protocol":
+            d["rpc"]["rpc_protocol"] = v
         elif k == "build_date":
             d["rpc"]["built"] = v.split("(")[0].strip()
 
@@ -1838,8 +1849,9 @@ def cmd_versions(argv) -> int:
         r, s = d.get("rpc", {}), d.get("single", {})
         print(f"\n=== {st} 站 ===")
         print(f"  RPC 引擎  (/opt/llama.cpp)   commit {r.get('commit','?')} · "
-              f"{r.get('version','?')} · built {r.get('built','?')}")
-        print(f"    完整性  md5sum -c            {d.get('md5','?')}")
+              f"{r.get('version','?')} · built {r.get('built','?')}"
+              + (f" · rpc_protocol {r['rpc_protocol']}" if r.get("rpc_protocol") else ""))
+        print(f"    完整性  md5sum -c (MANIFEST) {d.get('md5','?')}")
         print(f"  单机引擎  (~/llama.cpp)       commit {s.get('commit','?')} · "
               f"{s.get('version','?')}")
         print(f"  LM Studio                     {d.get('lmstudio','?')}")
@@ -1848,6 +1860,7 @@ def cmd_versions(argv) -> int:
     # 漂移比对
     print("\n=== 一致性检查 ===")
     for field, getter in (("RPC commit", lambda d: d.get("rpc", {}).get("commit")),
+                          ("RPC rpc_protocol", lambda d: d.get("rpc", {}).get("rpc_protocol")),
                           # commit 短哈希长度随各站 git core.abbrev 而异 (0d18aaa vs 0d18aaa9),
                           # 实际是同一个 commit → 统一取前 7 位再比, 避免把长度差异误报成漂移
                           ("单机 commit", lambda d: (d.get("single", {}).get("commit") or "")[:7]),
@@ -1861,8 +1874,11 @@ def cmd_versions(argv) -> int:
             print(f"  ⚠ {field:<12} **漂移** {detail}")
     for st in ("A", "B", "C"):
         if (rows.get(st) or {}).get("md5") == "缺失":
-            print(f"  ⚠ {st} 站 MANIFEST.md5 缺失 → 无法执行 md5sum -c 完整性校验"
-                  f"（硬规则要求, 应重建）")
+            print(f"  ⚠ {st} 站 MANIFEST/MANIFEST.md5 缺失 → 无法执行 md5sum -c 完整性校验"
+                  f"（硬规则要求: 引擎升级前必须重建 MANIFEST 且 md5sum -c 通过）")
+        elif "/" in str((rows.get(st) or {}).get("md5", "")):
+            print(f"  ⚠ {st} 站 完整性有失败项: {(rows.get(st) or {}).get('md5')}"
+                  f" → 引擎文件被改动或升级未同步 (查 cluster.py versions 明细)")
     return 0
 
 
