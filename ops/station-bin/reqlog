@@ -1,0 +1,228 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""reqlog — 站上引擎「请求/时延/token」采样式日志 (2026-09-15, 方案 v2 P2-3)
+
+用法:
+    reqlog sample [--file P]     采一次并**追加一行** JSONL (默认 ~/.local/share/rpc/reqlog.jsonl)
+    reqlog tail [-n N] [--file P] 输出最近 N 行原文 (默认 100)
+    reqlog path [--file P]       打印日志文件路径与行数
+    reqlog -h
+
+设计要点 (为什么是"采样式"而不是"逐请求日志"):
+  · llama.cpp 原生 `/metrics` 是 **Prometheus 累计计数器** (tokens_predicted_total 等),
+    没有"逐请求"的接口; 而 `/slots` 只给当前槽位状态。
+    逐请求时延只能去解析 server 日志文本 —— 那既脆又依赖 unsloth studio 的日志格式,
+    且会随上游输出变化而失效。故取**采样差分**: 两行相减得到该区间的 token 增量与
+    区间平均吞吐 (Δtoken/Δt), 这才是**能自证**的口径。
+  · 刻意**不伪造"请求数"**: llama.cpp 未暴露 requests 计数器。若某版本出现真正的
+    requests counter, 本脚本会自动差分它 (见 _COUNTERS/_REQ_KEYS); 没有就不写该字段,
+    由主控侧显示 n/a —— 宁可缺字段, 也不拿 decode 批次数冒名顶替。
+  · **引擎未运行时不写盘**: 零自加载方针下"没有引擎"是常态, 写空样本只会污染统计。
+  · 计数器在引擎重启后归零 → 检测到负增量即标 `restart=true` 并只记增量起点,
+    绝不把负值混进聚合。
+
+口径纪律: 本日志是 **API/metrics 口径**; 与 `llama-bench`、vLLM usage 三种口径互不可比
+(手册 §"基准对比铁律")。台账/汇总里必须标明本口径。
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+DEFAULT_FILE = os.path.expanduser("~/.local/share/rpc/reqlog.jsonl")
+# 需要差分的累计计数器 (区间增量 = 本区间处理量 / 本区间引擎耗时)
+# 含 *_seconds_total: 它们是**引擎自报的计算耗时**, 是算"引擎耗时口径"吞吐的关键 ——
+# 少了它们就只能用墙钟间隔当分母, 会把引擎空闲时间算进去 (2026-09-15 实测踩到:
+# 墙钟口径算出 32 t/s, 而引擎自报 67.3 t/s, 差 2 倍)。
+COUNTERS = ("prompt_tokens_total", "prompt_seconds_total",
+            "tokens_predicted_total", "tokens_predicted_seconds_total",
+            "prompt_tokens_cached_total", "n_decode_total",
+            "n_busy_slots_per_decode")
+# 可能的"请求数"计数器名 (上游尚未统一; 有则差分, 无则跳过)
+REQ_KEYS = ("requests_total", "request_total", "n_requests_total")
+# 瞬时 gauge 快照 (不差分, 直接记)
+GAUGES = ("prompt_tokens_seconds", "predicted_tokens_seconds",
+          "requests_processing", "requests_deferred")
+
+
+def _inner_port() -> int:
+    """找 llama-server 的内层端口 (unsloth studio 对外 8080 不透传原生端点)。"""
+    try:
+        out = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True,
+                             timeout=15).stdout
+    except Exception:
+        return 0
+    for line in out.splitlines():
+        if "llama-server" not in line or "grep" in line:
+            continue
+        m = re.search(r"--port\s+(\d+)", line)
+        if m:
+            return int(m.group(1))
+    return 0
+
+
+def _curl(url: str, timeout: int = 5) -> str:
+    try:
+        return subprocess.run(["curl", "-s", "--max-time", str(timeout), url],
+                              capture_output=True, text=True, timeout=timeout + 3).stdout
+    except Exception:
+        return ""
+
+
+def _metrics(port: int) -> dict:
+    """解析 Prometheus exposition: 只要 llamacpp: 前缀。"""
+    out, d = _curl(f"http://127.0.0.1:{port}/metrics"), {}
+    for line in out.splitlines():
+        line = line.strip()
+        if not line.startswith("llamacpp:") or line.startswith("#"):
+            continue
+        key, _, val = line.partition(" ")
+        key = key[len("llamacpp:"):].strip()
+        try:
+            d[key] = float(val.strip())
+        except ValueError:
+            continue
+    return d
+
+
+def _slots(port: int) -> dict:
+    try:
+        raw = _curl(f"http://127.0.0.1:{port}/slots", timeout=6)
+        arr = json.loads(raw) if raw.strip() else []
+    except Exception:
+        arr = []
+    if not isinstance(arr, list):
+        arr = []
+    ctxs = [x.get("n_ctx") for x in arr if isinstance(x, dict) and x.get("n_ctx")]
+    return {"n_slots": len(arr),
+            "slots_busy": sum(1 for x in arr if isinstance(x, dict) and x.get("is_processing")),
+            "ctx": max(ctxs) if ctxs else 0}
+
+
+def _last(path: str) -> dict:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = [ln for ln in fh.read().splitlines() if ln.strip()]
+        return json.loads(lines[-1]) if lines else {}
+    except Exception:
+        return {}
+
+
+def sample(path: str) -> int:
+    port = _inner_port()
+    if not port:
+        print("(无引擎在运行, 未写样本) —— 零自加载方针下属正常")
+        return 0
+    met = _metrics(port)
+    if not met:
+        print(f"(引擎在 :{port} 但 /metrics 无输出 —— conf 是否带 --metrics?)")
+        return 1
+    now = int(time.time())
+    prev = _last(path)
+    dt = (now - int(prev.get("t") or 0)) if prev else None
+    rec = {"t": now, "iso": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
+           "port": port, "dt_s": round(dt, 1) if dt else None}
+
+    restart = False
+    for k in COUNTERS:
+        if k not in met:
+            continue
+        if prev and k in (prev.get("raw") or {}):
+            d = met[k] - float(prev["raw"][k])
+            if d < 0:
+                restart = True
+                d = met[k]          # 计数器归零: 本区间从 0 起算
+        else:
+            d = met[k]
+        rec["d_" + k] = d
+    for k in REQ_KEYS:
+        if k in met:
+            if prev and k in (prev.get("raw") or {}):
+                dd = met[k] - float(prev["raw"][k])
+                rec["d_requests"] = met[k] if dd < 0 else dd
+            else:
+                rec["d_requests"] = met[k]
+            break
+    for k in GAUGES:
+        if k in met:
+            rec[k] = round(met[k], 2)
+
+    # 派生吞吐两个口径, **必须分清**(混用即口径漂移):
+    #   引擎耗时口径 p_tps/g_tps = Δtoken / Δ引擎耗时  ← 与 API timings、llama-bench 可比, **主口径**
+    #   墙钟口径   *_tps_wall   = Δtoken / Δ采样间隔  ← 含引擎空闲, 反映"这段时间引擎多忙", 只作辅助
+    #   *_busy = Δ引擎耗时 / Δ采样间隔 → 忙碌占比 (墙钟口径被稀释的程度就由它解释)
+    for tag, tok, sec in (("p", "prompt_tokens_total", "prompt_seconds_total"),
+                          ("g", "tokens_predicted_total", "tokens_predicted_seconds_total")):
+        dtok, dsec = rec.get("d_" + tok), rec.get("d_" + sec)
+        if dtok is None or dsec is None:
+            continue
+        if dsec > 0:
+            rec[tag + "_tps"] = round(dtok / dsec, 1)
+        if dt and dt > 0:
+            rec[tag + "_tps_wall"] = round(dtok / dt, 1)
+            rec[tag + "_busy"] = round(dsec / dt, 3)
+    rec.update(_slots(port))
+    rec["restart"] = restart
+    rec["raw"] = met                    # 原始计数器全量留存 → 未知/新指标不丢
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    print(f"已采样 :{port} Δt={rec['dt_s']}s "
+          f"p_tok={rec.get('d_prompt_tokens_total', '-')} "
+          f"g_tok={rec.get('d_tokens_predicted_total', '-')} | "
+          f"引擎耗时口径 p={rec.get('p_tps', '-')} g={rec.get('g_tps', '-')} t/s | "
+          f"墙钟口径 p={rec.get('p_tps_wall', '-')} g={rec.get('g_tps_wall', '-')} t/s "
+          f"(忙 {rec.get('g_busy', '-')})"
+          + ("  [检测到引擎重启]" if restart else ""))
+    return 0
+
+
+def tail(path: str, n: int) -> int:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = [ln for ln in fh.read().splitlines() if ln.strip()]
+    except FileNotFoundError:
+        print(f"(无日志文件: {path})")
+        return 0
+    for ln in lines[-n:]:
+        print(ln)
+    return 0
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0
+    path, n, i = DEFAULT_FILE, 100, 1
+    act = args[0]
+    while i < len(args):
+        if args[i] == "--file" and i + 1 < len(args):
+            path = os.path.expanduser(args[i + 1])
+            i += 2
+            continue
+        if args[i] == "-n" and i + 1 < len(args):
+            n = int(args[i + 1])
+            i += 2
+            continue
+        i += 1
+    if act == "sample":
+        return sample(path)
+    if act == "tail":
+        return tail(path, n)
+    if act == "path":
+        cnt = 0
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as fh:
+                cnt = sum(1 for ln in fh if ln.strip())
+        print(f"{path}  ({cnt} 条)")
+        return 0
+    print(f"未知动作: {act}\n{__doc__}")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

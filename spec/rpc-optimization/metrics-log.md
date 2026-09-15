@@ -525,3 +525,57 @@
 - gpt-oss-120b 单站 decode ≈ 49-53（用户确认"接近 50"达成一致）。
 - MiniMax-M2.7 现役单机锚 = 22.1（agent 长 CoT 口径，非纯 tg128；短题可比出 24-25）。
 - 教训（复用手册§1 防编造纪律）: 复制数据入表必须带「实测日期+方法+日志路径」三要素，只信 source 列非空的行；跨模型借数字推断（如 nemotron → gpt-oss）属归因漂移，禁止入锚。
+
+## Phase 7: flow 运行记录 (2026-09-15 起, 由 `cluster.py flow` 自动追加)
+
+| 日期 | flow | 目标 | 判据(口径) | 结果 | 证据 |
+|---|---|---|---|---|---|
+| 2026-09-15 17:46 | bench | gpt-oss-20b@B | API timings 口径 · max_tokens=128 · prompt 实测 468 tok | PASS | pp 468 tok 932.3 t/s · tg 128 tok 67.0 t/s |
+| 2026-09-15 17:47 | bench | - | API timings 口径 · max_tokens=128 · prompt 实测 ? tok | FAIL | - |
+| 2026-09-15 18:14 | paths | gpt-oss-120b-fable-5-distilled@B | API timings 口径 · 单机 vs 双机各一次实测 (同请求体, max_tokens=128) | PASS | 单机 tg=36.7 / 双机 RPC tg=30.6 |
+
+> **更正说明（2026-09-15 18:50 追加，原行保留不回滚）**
+>
+> - **17:47 那行是负向测试的噪音，不是真实运行**：那是验证"无引擎且无 alias → fail-fast"时留下的。
+>   已给 flow 加 `--no-ledger` 开关，此后负向测试不再落账（跑了的记录由退出码与输出留存，不需要占台账）。
+> - **18:14 那行（paths）数据无效，不可用于决策**：当轮"单机"路径实际仍按双机跑 ——
+>   根因是 `infer-load` 收到 `--backend llama-single` 后**只切了 `BACKEND`，没有清 conf 里的
+>   `RPC_TARGET=auto`**，于是 A 站 rpc-server 照样被拉起。已修（见下），并给 `flow paths`
+>   加了**后端生效性判据**（读 /proc/<pid>/cmdline 全文判断有没有 `--rpc`），
+>   同类错误此后会被直接判为"该路径未按请求生效，数据不可用于对照"，不会再进台账。
+> - 另：当时的"内存 +0.1G"是错的 —— UMA 下模型权重表现为 Cached，`MemAvailable` 差值测不出占用
+>   （`_station_mem` 的 docstring 早记过这个坑）。已改用**引擎进程 RSS**。
+> - **待办**：双机 RPC 路径当前**不可靠**（实测 `auto` 展开存在竞态 → 探测不到刚起的 A 站节点
+>   即静默回退单机；预热后加载耗时异常且 llama-server 进程消失）。在该问题解决前，
+>   `flow paths` 的"双机"列应视为**未取得有效数据**。
+| 2026-09-15 19:34 | paths | gpt-oss-120b-fable-5-distilled@B | API timings 口径 · 单机 vs 双机各一次实测 (同请求体, max_tokens=128) | PASS | 单机 tg=36.1 / 双机 RPC tg=27.6 |
+| 2026-09-15 19:51 | paths | gpt-oss-120b-fable-5-distilled@B | API timings 口径 · 单机 vs 双机各一次实测 (同请求体, max_tokens=128) | PARTIAL | 单机 tg=36.5 / 双机 RPC tg=26.9 |
+| 2026-09-15 19:56 | paths | gpt-oss-120b-fable-5-distilled@B | API timings 口径 · 单机 vs 双机各一次实测 (同请求体, max_tokens=128) | PASS | 单机 tg=36.7 / 双机 RPC tg=27.1 |
+
+> **更正说明二（2026-09-15 20:05 追加，原行保留不回滚）**
+>
+> - **双机 RPC 回退已定位并修复 —— 19:56 行起"双机"列才是首次有效对照**
+>   (该行 `双机 ✓ rpc=是(10.10.10.1:50052,10.10.11.3:50052)`，即真用上两个 worker)。
+>   三个真因都在"静默回退"这条链上，缺一都会得到"名义双机、实际单机"：
+>   1. **身份错**：`infer-load` 由 `sudo` 拉起 ⇒ 以 **root** 执行 ssh，而 root 的 `~/.ssh` 无节点密钥
+>      → `Host key verification failed.`；又因脚本是 `set -uo pipefail`（**没有 `-e`**），
+>      失败**不中断也不报错** → 节点从没起来 → 回退单机，而 `/health` 照样通过，加载看起来完全"成功"。
+>      修：`sudo -u <服务用户> rpc-nodes --start <alias>`；拿不到节点 **exit 7**，不再静默回退。
+>   2. **没等端口**：`RPC_TARGET=auto` 的展开原为**单次探测、无重试**，端口未监听时连接被
+>      **立即拒绝**（不是等超时）。修：改用自带 `wait_port`(15×2s) 的 `rpc-nodes --start`
+>      （实测节点 bind 仅 1.06s，窗口窄但非零）。
+>   3. **单元重新读 conf**：单机路径起的是 **systemd 单元**，单元里的 `llama-serve-instance` 会
+>      **重新 source conf** ⇒ `infer-load` 清掉自己 shell 的 `RPC_TARGET` **对单元无效**，
+>      conf 的 `RPC_TARGET=auto` 照样让单元带上 `--rpc`。**19:34 行"单机"能通过纯属侥幸**
+>      （当时节点恰好没起 ⇒ 单元静默回退成单机）。修：新增**运行时覆盖层**
+>      `/run/llama-instances/<alias>.env`（tmpfs，重启自清）—— `infer-load` 显式指定后端时写入，
+>      wrapper 在 source conf **之后**再 source 一次；未显式指定后端则删除该文件，回归 conf 语义。
+>      （验：wrapper 级 4/4 —— 无覆盖时 `auto` 仍照常展开〔防改坏原语义〕/ 覆盖为空 ⇒ 不含 `--rpc` /
+>      覆盖 `auto` ⇒ 照常展开 / 覆盖内容有显式日志。）
+> - **19:51 行的 `PARTIAL` 是代码缺陷，不是数据问题**：那一步的实测数值有效，
+>   只是返回串引用了改名前的键 `mem_used_gib`（RSS→GTT 改名时漏改）→ `KeyError` → 被记成"步骤失败"。
+>   已修，19:56 行据此为 `PASS`。
+> - **内存口径第三次更正（以此为准）**：`MemAvailable` 差值（假 0.1G）→ 进程 RSS（仍只 0.2G）
+>   → **GTT**。UMA (AMD 8060S) 下权重驻留 **GTT**：77G 模型实测 `ps` RSS 仅 **217MB** 而 GTT **54.6GB**。
+>   `flow paths` 对照表内存列已改为 **GTT 增量**：单机 **+77.2G** / 双机 **+41.7G**
+>   —— 双机因把层分到两站而更省单站内存，与其"为省单站内存而存在"的定位一致。
