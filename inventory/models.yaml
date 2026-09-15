@@ -121,6 +121,16 @@ non_model_conf:
       (此前在 known_issues 里误判为"疑似误建的伪条目", 已更正 —— 该误判源于只看
       文件名与 infer-list 的差集, 没有打开文件看内容。)
 
+  - alias: ttl
+    conf: [A, B, C]
+    purpose: 空闲 TTL 自动卸载的开关与阈值
+    content: 'TTL_ENABLED=0 / TTL_IDLE_SECONDS=1800 / TTL_DRY_RUN=0'
+    owner: /usr/local/bin/cluster-ttl (被其每次运行读取; 由 cluster.py ttl enable|disable 写)
+    note: |
+      2026-09-15 P2-5 (方案 v2 §A.6): **默认关** —— TTL_ENABLED=0 时检查器只演练、绝不卸载。
+      与 nodes.env 同类: 集群级声明文件, 不是模型实例。改它无需重启 (检查器每次运行重读)。
+      三站都装 (含 C 站); timer `cluster-ttl.timer` **部署即 disabled**, 显式 enable 才生效。
+
 # ── 已登记但**坏的** conf (conf 在, 权重不在 => load 必失败) ─────────
 # 断言 stations 的 (e) 子项检出。已登记 => WARN (可见但不阻断); **新出现的缺失 => FAIL**。
 # 处置二选一: ① 补下载权重  ② 删除该 conf。
