@@ -23,8 +23,9 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
              --html 生成静态快照页 ops/cluster_status.html
              --frames 追加各站框架级运行状态一览 (llama/unsloth/vllm/litellm/opencode)
              --all 追加凭据/Provider/出站三平面一行摘要 (统一入口四平面视图)
-    load     自动路由到正确站并执行 infer-load (gpt-oss-120b->A, qwen3.8-27b->C, 其余->B;
-             llama-rpc 类默认打印手动步骤, exit 2)
+    load     自动路由到正确站并执行 infer-load (gpt-oss-120b->A, qwen3.8-27b-mtp->C, 其余->B;
+             支持按站路由名 STATION_ROUTES, 如 gpt-oss-120b-c = C 站的 gpt-oss-120b;
+             RPC 双机类 (RPC_MODELS) 走 _load_rpc 编排, 已自动化 —— 2026-09-15 P0-3 前为"打印手动步骤, exit 2")
              --backend 显式指定后端四线切换 (unsloth|llama-rpc|llama-single|vllm)。
              换后端只需 load <alias> --backend <new> 一次 (infer-load 已做站内互斥), 无需先 unload;
              但显式 --backend 才会改后端, 缺省沿用 conf 旧值。

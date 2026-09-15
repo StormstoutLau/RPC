@@ -9,7 +9,7 @@
 
 ## 1. 背景：为什么换框架
 
-llama.cpp RPC + Vulkan 在 Strix Halo（本集群 A/B/C）加载 V4-Flash-0731（146G MXFP4）**4 次 kernel panic**（详见 [V4-Flash-0731加载崩溃根因分析_20260908.md](../docs/V4-Flash-0731加载崩溃根因分析_20260908.md)）。社区 evidence 显示 Vulkan 后端在 Strix Halo UMA 只能用 ~43G（beowulf #2），**Vulkan 路线不可行**。本调研评估替代框架。
+llama.cpp RPC + Vulkan 在 Strix Halo（本集群 A/B/C）加载 V4-Flash-0731（146G MXFP4）**4 次 kernel panic**（详见 [V4-Flash-0731加载崩溃根因分析_20260908.md](../../docs/V4-Flash-0731加载崩溃根因分析_20260908.md)）。社区 evidence 显示 Vulkan 后端在 Strix Halo UMA 只能用 ~43G（beowulf #2），**Vulkan 路线不可行**。本调研评估替代框架。
 
 ## 2. 框架全景矩阵
 

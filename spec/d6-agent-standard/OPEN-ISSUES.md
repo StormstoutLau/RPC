@@ -364,7 +364,7 @@ limit: { context: J.context_length ?? Y?.limit.context ?? 0,
 
 - **剩余**: L2 端到端（真实 readonly 卡）+ L3 回归
 
-- **方案**: fan-out 优先跨站各 1 并发（同站叠并发被带宽顶起）；跨站走 B:18081→A:8080 隧道
+- **方案**: fan-out 优先跨站各 1 并发（同站叠并发被带宽顶起）；~~跨站走 B:18081→A:8080 隧道~~ → **2026-09-15 现状：改走 `agent-cli ... --RemoteHost <站>`（每站独立子进程 + 站内 `_station_ready.sh` 自发现引擎端口），隧道方案已弃用**；B 站 18081 现被 conf `davidau-q38-27b-q4k` 声明占用
 
 ### O-11：跨站扇出 L2/L3
 

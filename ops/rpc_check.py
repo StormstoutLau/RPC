@@ -453,6 +453,76 @@ def check_scripts(ctx):
     return ("FAIL" if bad else "PASS"), note, detail
 
 
+# ── 断言: 文档内链接可达 (文档漂移的机械防线) ─────────────────────────
+# 触发背景 (2026-09-15, ADR-0004 第四批"文档漂移审计"): 用户提出"三站配置实况与手册/派发表
+# 存在漂移", 机械扫描全部 144 个 md 后查出 **65 条失效的仓库内相对链接** —— 典型两类:
+#   ① 前缀写重: `spec/<x>/` 里写 `../spec/y` ⇒ 解析成 `spec/spec/y`; `../docs/z` 同理
+#   ② 实体移动后未跟进: 脚本进 archive/、文档进 research/、C 站 IP/端口变更
+# 这类漂移**此前没有任何门禁拦得住**, 只能靠人工翻文档 ⇒ 补此断言。
+#
+# 判据 (可机械判定, 零主观):
+#   · 只查**仓库内相对链接** (http/https/mailto/#锚点/file:/// 一律不查)
+#   · 解析后仍在仓库内、且路径不存在 ⇒ 记一条失效
+#   · 解析后落到仓库外 (如 `../../../x`)、含占位符 (空格 / `...` / `url`) 或绝对盘符
+#     ⇒ **跳过** (目标不可判定, 报出来是噪声)
+# 真实差异可登记进 DOCLINK_ALLOW, 但**登记动作在 review 里必须可见** (同 known_drift 纪律)。
+DOCLINK_ALLOW = {
+    # (相对仓库根的 md 路径, 失效目标) -> 原因
+    ("ops/agent-skills/what-if-oracle/SKILL.md", "references/scenario-templates.md"):
+        "vendored 技能只收 SKILL.md, 其 references/ 未随仓库分发 (非本仓库文档漂移)",
+}
+DOCLINK_SKIP_PARTS = {".git", "node_modules", ".trae", "archive", "tmp"}
+DOCLINK_LINK = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
+
+
+def _doclink_bad(p, base):
+    """返回 (是否失效, 是否可判定)。可判定=解析后落在仓库内。"""
+    if base.startswith(("http://", "https://", "mailto:", "file:///", "#")):
+        return False, False
+    if not base or " " in base or "..." in base or base in ("url", "path", "link"):
+        return False, False
+    if len(base) > 1 and base[1] == ":":          # Windows 绝对盘符
+        return False, False
+    q = os.path.normpath(str(p.parent / base))
+    root = os.path.normpath(str(ROOT))
+    if not q.lower().startswith(root.lower() + os.sep):
+        return False, False                       # 落到仓库外 ⇒ 不可判定
+    return (not Path(q).exists()), True
+
+
+def check_doclinks(ctx):
+    """文档链接可达: md 里的仓库内相对链接不得指向不存在的路径。"""
+    n_md = n_link = n_bad = n_allow = n_skip = 0
+    bad = []
+    for p in sorted(ROOT.rglob("*.md")):
+        rel = p.relative_to(ROOT)
+        if any(s in rel.parts for s in DOCLINK_SKIP_PARTS):
+            continue
+        n_md += 1
+        for i, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            for m in DOCLINK_LINK.finditer(line):
+                base = m.group(2).strip().split("#")[0]
+                n_link += 1
+                hit, judgeable = _doclink_bad(p, base)
+                if not judgeable:
+                    n_skip += 1
+                    continue
+                if not hit:
+                    continue
+                if (rel.as_posix(), base) in DOCLINK_ALLOW:
+                    n_allow += 1
+                    continue
+                n_bad += 1
+                bad.append((f"{rel.as_posix()}:{i}", base))
+
+    detail = []
+    for loc, base in bad:
+        detail.append(f"{loc}  ->  {base}")
+    note = (f"扫描 {n_md} 个 md · 链接 {n_link} 条 (其中非仓库内相对链接/占位词 {n_skip} 条不判) "
+            f"· 已登记例外 {n_allow} · 失效 {n_bad}")
+    return ("FAIL" if n_bad else "PASS"), note, detail
+
+
 # ── 断言 A3: inventory 单点真值 (P1) ──────────────────────────────
 # 目的: 阻止"改了这个忘了那个" —— 端口/模型标识变更时, 保证声明源与真值表一致。
 #
@@ -1724,6 +1794,9 @@ CHECKS = [
     {"id": "scripts", "title": "脚本治理", "fn": check_scripts, "quick": True,
      "fix": "管理操作请走统一入口 (ops/cluster.py <sub> / web 卡片), 不要新增一次性脚本; "
             "确需独立脚本则在 inventory/ops.yaml 登记并在提交信息里说明理由 (ADR-0004)"},
+    {"id": "doclinks", "title": "文档链接可达", "fn": check_doclinks, "quick": True,
+     "fix": "资源移动/改名后, 文档里的相对链接要跟着改 (注意别写重前缀: spec/<x>/ 里是 "
+            "`../y` 不是 `../spec/y`, 引 docs/ 是 `../../docs/z`); 确有不可修的登记 DOCLINK_ALLOW"},
     {"id": "inventory", "title": "真值登记", "fn": check_inventory, "quick": True,
      "fix": "端口/模型标识有变更时同步 inventory/*.yaml 真值表"},
     {"id": "ports", "title": "端口分配表自洽", "fn": check_ports, "quick": True,
