@@ -71,7 +71,6 @@ frozen_ops_scripts:
   - ops/station-bin/_af16.sh
   - ops/station-bin/_afinal.sh
   - ops/station-bin/_agen2.sh
-  - ops/station-bin/_agent-cli-bom.ps1
   - ops/station-bin/_ahealth.sh
   - ops/station-bin/_aic.sh
   - ops/station-bin/_ainferload.sh

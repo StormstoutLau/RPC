@@ -9,6 +9,8 @@ timeout_s: 900
 accept-golden:
   source: ops/station-bin/golden/cpphub_golden.py
   cmd: python3 .golden/cpphub_golden.py
+status: retired (2026-09-16) —— 样本专用卡, 勿派发
+note: 目标源目录是 spec/d6-agent-standard/Cpp_Hub 轻量样本; 但 PROJECTS['Cpp_Hub'] 自 cc3b75c (2026-09-14) 起已改指 F:\Cpp_Hub 真项目, 且 wrapper 无 per-card 源目录覆盖键 => 直接派发必 golden FAIL。真源卡见 cpphub-beta.md。另: 该样本已被 2026-09-12 试点本身改过 (源码已含 向量均值), 不再是干净 fixture, 即使重指也无法作回归用。(wrapper 的 front-matter 白名单会忽略 status/note 两键, 故二者只是人工标记, 不进 prompt、不影响解析。)
 ---
 ## 任务描述
 
