@@ -9,7 +9,7 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
     python ops/cluster.py frames
     python ops/cluster.py unload
     python ops/cluster.py e2e
-    python ops/cluster.py secrets {status|scan|push}
+    python ops/cluster.py secrets {status|scan|push|pull}
     python ops/cluster.py providers
     python ops/cluster.py egress
     python ops/cluster.py web [--host 127.0.0.1] [--port 8095] [--token <可选>]  # 傻瓜式 Web 管理 UI (按需服务)
@@ -33,7 +33,10 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
     frames   三站框架级运行状态一览 (llama-server/unsloth/vllm/litellm/opencode), 恒 exit 0
     unload   三站并行幂等卸载
     e2e      三站引擎在线冒烟 (直连 :8080, 不经 LiteLLM 网关——网关已退役)
-    secrets  站内凭据治理 (平面②): status=落点+权限+明文巡检; scan=明文扫描; push=从主控下发
+    secrets  站内凭据治理 (平面②): status=落点+权限+明文巡检+"站内产物"型凭据与正本是否一致;
+             scan=明文扫描; push=从主控下发 (对"站内产物"型凭据默认**跳过**覆盖, --force 强制);
+             pull [站]=把"站内产物"型凭据 (如 unsloth.key, 由 studio 每次加载重铸) **从站上收回正本**
+             —— push 前先 pull 才是幂等的, 否则会用陈旧正本覆盖站上真 key、打断该站 agent
     providers 三站 agent provider 聚合 (平面②): provider 集合/默认模型/凭据引用形态/漂移检测
     egress   出站平面探针 (平面③): 主控+三站 -> OpenRouter 健康/用量/余额
     flow     声明式流程 (P2-1): 每个 flow 声明「步骤 → 判据 → 台账落点」, 一次跑完并落 metrics-log。
@@ -71,6 +74,7 @@ import re
 import time
 import json
 import socket
+import hashlib
 import datetime
 import subprocess
 import threading
@@ -652,6 +656,11 @@ def _frame_status(detail: str) -> tuple:
 # 配置侧用引用而非明文 —— opencode 走 {file:...}, claude code 走 apiKeyHelper。
 RPC_DIR = "~/.config/rpc"
 SECRETS_ROOT = Path(__file__).parent.parent / "secrets" / "stations"   # 主控正本
+# "站内产物"型凭据 (2026-09-16): 真值在**站上**, 主控正本只是兜底。
+#   unsloth.key = unsloth studio 每次加载重铸, 唯一写入方是站上 infer-load ⇒ 正本必然陈旧,
+#   而 push 会用陈旧值**覆盖站上真 key**, 直接打断该站的 opencode/claude。
+#   ⇒ push 对这类文件**默认拒绝覆盖**(除非 --force); 要收回站上真值用 `secrets pull`。
+STATION_MINTED = {"unsloth.key"}
 # 明文 key 指纹: 用于巡检。占位符 ***REMOVED*** 与 {file:...} 不命中。
 KEY_PAT = r"sk-(or-v1|unsloth|RPC|local|lm)-[A-Za-z0-9_-]{6,}"
 MASK_SED = r"sed -E 's/(sk-[A-Za-z0-9_-]{4})[A-Za-z0-9_-]+/\1***/g'"
@@ -665,14 +674,20 @@ SECRETS_PROBE = (
     "printf '\\n[archive]\\n'; grep -rlE '" + KEY_PAT + "' ~/.config/opencode/backups-keys-* "
     "~/.claude/backups-keys-* 2>/dev/null | wc -l; "
     "printf '\\n[refs]\\n'; grep -hoE '\\{file:[^}]*\\}' " + OPC_CONF + " 2>/dev/null | sort -u; "
-    "printf '\\n[helper]\\n'; grep -oE '\"apiKeyHelper\": *\"[^\"]*\"' " + CLD_CONF + " 2>/dev/null"
+    "printf '\\n[helper]\\n'; grep -oE '\"apiKeyHelper\": *\"[^\"]*\"' " + CLD_CONF + " 2>/dev/null; "
+    # [kv] "站内产物"型凭据的**归一化指纹** (去尾换行后 sha256 前 12 位) —— 供 status 判定
+    # "站上 vs 主控正本"是否一致 (不一致 ⇒ push 会跳过, 需先 secrets pull)。
+    # 只打指纹不打值: 巡检输出不应携带密钥材料。
+    "printf '\\n[kv]\\n'; for n in " + " ".join(sorted(STATION_MINTED)) + "; do "
+    "v=$(tr -d '\\n' < " + RPC_DIR + "/$n 2>/dev/null); "
+    "[ -n \"$v\" ] && printf '%s %s\\n' \"$n\" \"$(printf '%s' \"$v\" | sha256sum | cut -c1-12)\"; done"
 )
 
 
 def probe_secrets(st: str) -> dict:
     """单站凭据落点探测。返回 {station, reachable, dir, perm, live, archive, refs, helper}。"""
     res = {"station": st, "reachable": False, "dir": [], "perm": [],
-           "live": [], "archive": 0, "refs": [], "helper": ""}
+           "live": [], "archive": 0, "refs": [], "helper": "", "kv": {}}
     ok, out = ssh_run(st, SECRETS_PROBE, timeout=20)
     if not ok:
         return res
@@ -699,6 +714,10 @@ def probe_secrets(st: str) -> dict:
             res["refs"].append(s)
         elif section == "helper":
             res["helper"] = s
+        elif section == "kv":
+            parts = s.split()
+            if len(parts) == 2:
+                res["kv"][parts[0]] = parts[1]
     return res
 
 
@@ -722,12 +741,29 @@ def _secrets_verdict(p: dict) -> tuple:
     return "OK", f"落点 {len(keys)} key; 引用 {len(p['refs'])} 处"
 
 
-def cmd_secrets(action: str = "status") -> int:
-    if action not in ("status", "scan", "push"):
-        print(f"用法: cluster.py secrets {{status|scan|push}}  (未知动作: {action})")
+def _master_minted_fp(st: str, name: str):
+    """主控正本里"站内产物"型凭据的**归一化指纹** (去换行后 sha256 前 12 位)。
+
+    口径必须与站上探针 `[kv]` 完全一致, 否则比较会假阳/假阴。只算指纹不返回值。
+    """
+    p = SECRETS_ROOT / st / name
+    if not p.is_file():
+        return None
+    v = p.read_bytes().replace(b"\n", b"").replace(b"\r", b"")
+    if not v:
+        return None
+    return hashlib.sha256(v).hexdigest()[:12]
+
+
+def cmd_secrets(action: str = "status", extra: list = None) -> int:
+    extra = extra or []
+    if action not in ("status", "scan", "push", "pull"):
+        print(f"用法: cluster.py secrets {{status|scan|push|pull [A|B|C]}}  (未知动作: {action})")
         return 1
     if action == "push":
-        return _secrets_push()
+        return _secrets_push(force=("--force" in extra))
+    if action == "pull":
+        return _secrets_pull(extra[0] if extra else None)
 
     probes = {}
     threads = []
@@ -751,6 +787,22 @@ def cmd_secrets(action: str = "status") -> int:
             print(f"    站内落点 : {', '.join(p.get('dir') or ['(未建立)'])}")
             print(f"    引用点   : {', '.join(p.get('refs') or ['(无)'])}")
             print(f"    claude   : {p.get('helper') or '(无 apiKeyHelper)'}")
+            # 站内产物 vs 正本 (2026-09-16): 不一致时 push 会跳过该文件 (防覆盖真 key),
+            # 这里把它显式报出来并给出下一步 —— 否则"push 看着成功却少下发一个"很难察觉。
+            for name in sorted(STATION_MINTED):
+                fp_r = (p.get("kv") or {}).get(name)
+                fp_m = _master_minted_fp(st, name)
+                if fp_r is None and fp_m is None:
+                    continue
+                if fp_r is None:
+                    verdict = "站上缺失 (下一次 infer-load 会重建)"
+                elif fp_m is None:
+                    verdict = "正本缺失 (可 secrets pull 回写)"
+                elif fp_r == fp_m:
+                    verdict = "一致 ✓"
+                else:
+                    verdict = f"**不一致** —— push 会跳过该文件; 先回写: cluster.py secrets pull {st}"
+                print(f"    站内产物 : {name} 站上={fp_r or '—'} 正本={fp_m or '—'}  {verdict}")
             loose = [f"{m} {n}" for m, n in p.get("perm", []) if m not in ("600", "700")]
             if loose:
                 print(f"    权限告警 : {'; '.join(loose)}")
@@ -761,8 +813,65 @@ def cmd_secrets(action: str = "status") -> int:
     return 0
 
 
-def _secrets_push() -> int:
-    """从主控 secrets/stations/<st>/ 下发到各站 ~/.config/rpc/ (SFTP, 600 / 脚本 700)。"""
+def _remote_secret(st: str, name: str):
+    """读站上 ~/.config/rpc/<name> 的**原始字节**; 不存在返回 None。仅用于"站内产物"型凭据。"""
+    try:
+        cli = paramiko.SSHClient()
+        cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        cli.connect(resolve_host(st), username=STATIONS[st]["user"],
+                    timeout=SSH_TIMEOUT, banner_timeout=SSH_TIMEOUT)
+        sftp = cli.open_sftp()
+        try:
+            with sftp.open(f"/home/{STATIONS[st]['user']}/.config/rpc/{name}", "rb") as fh:
+                data = fh.read()
+        except Exception:
+            data = None
+        sftp.close(); cli.close()
+        return data
+    except Exception as e:
+        print(f"[secrets] {st} 站读取 {name} 失败: {type(e).__name__}: {e}")
+        return None
+
+
+def _secrets_pull(only: str = None) -> int:
+    """把"站内产物"型凭据从**站上取回**主控正本 (2026-09-16)。
+
+    存在理由: `unsloth.key` 由 unsloth studio 每次加载重铸 ⇒ **站上才是真值**, 正本必然陈旧,
+    而 `push` 若直接下发会用陈旧值**覆盖站上真 key**、打断该站 opencode/claude。正确顺序 =
+    「先 pull 回写正本 → 再 push (此时幂等)」。把这一步做成入口动作, 而不是手工 scp。
+    """
+    sts = [only] if only in ("A", "B", "C") else ["A", "B", "C"]
+    total = 0
+    for st in sts:
+        dst = SECRETS_ROOT / st
+        if not dst.is_dir():
+            print(f"[secrets] {st} 站: 跳过 (无正本目录 {dst})")
+            continue
+        written = []
+        for name in sorted(STATION_MINTED):
+            data = _remote_secret(st, name)
+            if data is None:
+                print(f"[secrets] {st} 站 {name}: 站上不存在 -> 跳过")
+                continue
+            cur = dst / name
+            if cur.is_file() and cur.read_bytes().strip() == data.strip():
+                print(f"[secrets] {st} 站 {name}: 已一致 -> 跳过")
+                continue
+            cur.write_bytes(data)
+            written.append(name)
+            total += 1
+        if written:
+            print(f"[secrets] {st} 站 回写正本 {len(written)} 个: {', '.join(written)}")
+    print(f"[secrets] pull 完成, 共回写 {total} 个 (之后 push 才是幂等的)")
+    return 0
+
+
+def _secrets_push(force: bool = False) -> int:
+    """从主控 secrets/stations/<st>/ 下发到各站 ~/.config/rpc/ (SFTP, 600 / 脚本 700)。
+
+    `--force` 之外, "站内产物"型凭据 (STATION_MINTED) **站上已有且与正本不同则跳过** ——
+    那种情况下站上才是真值, 覆盖会打断该站; 要收回真值用 `secrets pull`。
+    """
     if not SECRETS_ROOT.is_dir():
         print(f"[secrets] 主控正本目录不存在: {SECRETS_ROOT}")
         return 1
@@ -780,17 +889,32 @@ def _secrets_push() -> int:
             ssh_run(st, f"mkdir -p {RPC_DIR} && chmod 700 {RPC_DIR}")   # 复用 ssh_run 建目录
             sftp = cli.open_sftp()
             names = []
+            skipped = []
             for f in sorted(src.iterdir()):
                 if not f.is_file():
                     continue
                 remote = f"/home/{STATIONS[st]['user']}/.config/rpc/{f.name}"
+                # "站内产物"型凭据保护 (2026-09-16): 站上已有且与正本不同 ⇒ 站上才是真值, 跳过。
+                if f.name in STATION_MINTED and not force:
+                    try:
+                        with sftp.open(remote, "rb") as fh:
+                            cur = fh.read()
+                    except Exception:
+                        cur = None
+                    if cur is not None and cur.strip() != f.read_bytes().strip():
+                        skipped.append(f.name)
+                        continue
                 with sftp.open(remote, "w") as fh:
                     fh.write(f.read_bytes())
                 sftp.chmod(remote, 0o700 if f.name.endswith(".sh") else 0o600)
                 names.append(f.name)
                 total += 1
             sftp.close(); cli.close()
-            print(f"[secrets] {st} 站 下发 {len(names)} 个: {', '.join(names)}")
+            print(f"[secrets] {st} 站 下发 {len(names)} 个: {', '.join(names) if names else '(无)'}")
+            if skipped:
+                print(f"[secrets] {st} 站 **跳过** {len(skipped)} 个'站内产物'型凭据: {', '.join(skipped)}")
+                print(f"[secrets]   ↑ 站上值 ≠ 正本(站上才是真值, 覆盖会打断该站 opencode/claude)。"
+                      f"回写正本: cluster.py secrets pull {st} ; 强制覆盖: secrets push --force")
         except Exception as e:
             print(f"[secrets] {st} 站 下发失败: {type(e).__name__}: {e}")
             return 1
@@ -2488,11 +2612,14 @@ def _flow_verify_checks(ctx) -> tuple:
 
 
 def _flow_rotate_status(ctx) -> tuple:
-    ok, out = ssh_run("A", "true", timeout=20)   # 借一次 ssh 判可达性
+    # 2026-09-16 顺带修 (既有缺陷, 非本次引入): 原实现把 ssh_run 回来的**原始文本**喂给
+    # `_secrets_verdict`(它期望 probe_secrets 的 dict) ⇒ `p["reachable"]` 直接 TypeError;
+    # 且即便不崩, 下一行 `v != "OK"` 比的是 tuple ≠ str ⇒ 该步恒判"需关注"。
+    # 改为直接调 probe_secrets 取状态字符串 (顺带去掉了那次多余的 ssh_run("A","true"))。
     verdicts = {}
     for st in ("A", "B", "C"):
-        ok, out = ssh_run(st, SECRETS_PROBE, timeout=90)
-        verdicts[st] = _secrets_verdict(out) if ok else "UNREACHABLE"
+        p = probe_secrets(st)
+        verdicts[st] = _secrets_verdict(p)[0] if p.get("reachable") else "UNREACHABLE"
     ctx["rotate_verdicts"] = verdicts
     bad = [s for s, v in verdicts.items() if v != "OK"]
     return (not bad), "凭据落点/引用/权限: " + ", ".join(f"{s}={v}" for s, v in verdicts.items()), \
@@ -3456,7 +3583,7 @@ def main() -> int:
     if sub == "e2e":
         return cmd_e2e()
     if sub == "secrets":
-        return cmd_secrets(args[1] if len(args) > 1 else "status")
+        return cmd_secrets(args[1] if len(args) > 1 else "status", args[2:])
     if sub == "providers":
         return cmd_providers()
     if sub == "egress":

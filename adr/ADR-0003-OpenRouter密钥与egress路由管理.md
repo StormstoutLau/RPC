@@ -246,6 +246,14 @@ upstream: \[ADR-0002]
 
 **studio 日志的明文面（②，同日闭环）**：`~/.unsloth/run-<alias>.log` 是**引擎 key 的第三个明文落点**，且此前**完全不在审计视野内**（`secrets scan` 只探 `~/.config/rpc` 与两份配置及备份）。实测：studio **每次加载写 key 4 处**、权限 **775 目录 / 664 日志**（组与其他用户可读）、三站累积 **21 份 / 68 处明文 / 16 个历史 key 值**（含 `.pre-repro-*` 副本）。**关键判断**：该日志含 key 是**设计使然**（`infer-load` 正是从它 grep 取 key）⇒ 消除不掉，**故判据只能落在权限上**（目录 700 / 日志 600），而非"含不含 key"。处置：`infer-load` 输出改掩码 + 每次加载强制 chmod + 存量 21 份就地脱敏 + `stations` 门禁补 `unslothlog` 探针（判权限，含负向自证）+ 补登明文面表。详见 [DEVELOPMENT-LOG 2026-09-16 ⑩](../spec/d6-agent-standard/DEVELOPMENT-LOG.md)。
 
-**仍待处置（1 项，见 [OPEN-ISSUES §6](../spec/d6-agent-standard/OPEN-ISSUES.md)）**：`secrets push` 的正本陈旧覆盖危害目前靠人工纪律兜住（"加载后先回写正本"），可考虑加门禁断言（"站上 `unsloth.key` ≠ 同站正本 ⇒ WARN"）或给 `secrets` 增 `pull` 动作。
+**下发方向保护 + `secrets pull`（2026-09-16，同日闭环）**：⑨ 暴露的"正本陈旧覆盖站上真 key"陷阱，**未**采用"加一条常态黄灯"（那只会制造噪声、最后被整体忽略），而是**在危险动作上设闸 + 把正路做成一等入口动作**：
 
-**落地件**：`ops/rpc_check.py`（`[cred]` 探针 + `stations` 判据 + 告警文案 + `secrets` 处置建议补掩码写法）、`ops/station-bin/infer-load`（输出掩码 + 每次加载强制 `chmod 700 ~/.unsloth` / `600 run-*.log`；三站已 `sudo install -m 755` 部署，sha `8155968d…`）、`secrets/stations/{A,B,C}/claude-key.sh`（46B / LF）、`secrets/stations/{A,B,C}/claude.key`（删除）、[DEVELOPMENT-LOG 2026-09-16 ⑨⑩](../spec/d6-agent-standard/DEVELOPMENT-LOG.md)、[密钥轮换清单现状注记](../docs/security/2026-09-13_密钥轮换清单.md)。
+| 机制 | 设计 |
+|---|---|
+| 新增 `secrets pull [A\|B\|C]` | 把"站内产物"型凭据（`STATION_MINTED`，当前 = `unsloth.key`）**从站上收回**主控正本（SFTP 原始字节）—— 取代原先的手工 `scp`；**push 前先 pull 才是幂等的** |
+| `push` 默认拒绝覆盖 | 站上已有且与正本不同 ⇒ **跳过**该文件并打印两条出路（`secrets pull <站>` / `secrets push --force`）；`--force` 保留强制能力 |
+| `status` 增"站内产物"行 | `SECRETS_PROBE` 增 `[kv]` 段，只打**归一化指纹**（去换行后 sha256 前 12 位，**不打值**），显示"站上 vs 正本 一致/不一致 + 下一步" |
+
+**验收**：负向（正本换成假值 ⇒ `push` 跳过该文件、**站上指纹未变**）／`--force` 生效（站上被覆盖）／`pull` 回写 + 幂等复跑报"已一致"／终态三站 `一致 ✓`（临时备份已删）。**顺带修** `_flow_rotate_status` 既有缺陷（把探针**原始文本**喂给期望 dict 的 `_secrets_verdict` ⇒ `TypeError`，且 `v != "OK"` 比 tuple ⇒ 该步恒判"需关注"）。
+
+**落地件**：`ops/rpc_check.py`（`[cred]` 探针 + `stations` 判据 + 告警文案 + `secrets` 处置建议补掩码写法）、`ops/station-bin/infer-load`（输出掩码 + 每次加载强制 `chmod 700 ~/.unsloth` / `600 run-*.log`；三站已 `sudo install -m 755` 部署，sha `8155968d…`）、`ops/cluster.py`（`STATION_MINTED` / `secrets pull` / push 保护 / `status` 站内产物行）、`secrets/stations/{A,B,C}/claude-key.sh`（46B / LF）、`secrets/stations/{A,B,C}/claude.key`（删除）、[DEVELOPMENT-LOG 2026-09-16 ⑨⑩⑪](../spec/d6-agent-standard/DEVELOPMENT-LOG.md)、[密钥轮换清单现状注记](../docs/security/2026-09-13_密钥轮换清单.md)。
