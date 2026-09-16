@@ -629,7 +629,7 @@ limit: { context: J.context_length ?? Y?.limit.context ?? 0,
 | G10 | opencode 位置参数 bug（1.18.25） | wrapper 已规避（stdin 管道形式）；升级窗口回归验证 | 与 G14 合并 | 🔵 **已规避**（升级回归触发时复查） |
 | G11 | **并发与互斥** | **层2锁激活**（readonly→`flock -s` 共享 / write→`flock -n` 排它）+ **slot 门**（busy 默认 exit 24 reject，`--slot-allow-busy` 放行）+ **O-18 铁律**（跨站各1，勿同站叠） | O-08/17/18/25 | ✅ **闭环** |
 | G12 | 失败恢复 / 续跑未定义 | **`--continue` 续接循环**（首跑被超时杀→续跑拿独立预算）+ 失败终态 `failed`+`REVIEW_NEEDED`（不静默 done）+ timeout 语义保持 | O-24 P0-① / O-21③ | ✅ **闭环** |
-| G13 | 成本/额度观测（zen 限额无预警） | **O-25 吞吐基准 + .progress 打点 + 预算预估**（HIT 才给 / MISS 不打荒 / TIMEOUT-WARN）；zen 限额 429→exit 7 定义置位 | O-07/25 + 09-15 入口 | 🔵 **主体落地**；O-07 待真实触发（事件驱动，不可预约） |
+| G13 | 成本/额度观测（zen 限额无预警） | **O-25 吞吐基准 + .progress 打点 + 预算预估**（HIT 才给 / MISS 不打荒 / TIMEOUT-WARN）；zen 限额 429→exit 7 定义置位；**OpenRouter 免费档每日计数已落地（2026-09-16）**——统一入口 `egress` 读 `is_free_tier` 定档位（实证 paid→1000/天）+ 本地自建 `.egress_daily.json` 计数 + 80% 预警（详见 [ADR-0003 §免费档每日计数](../../adr/ADR-0003-OpenRouter密钥与egress路由管理.md)；本地计数为主、429 `X-RateLimit-*` 头校准） | O-07/25 + 09-15 入口 + 09-16 egress | 🔵 **主体落地**；O-07（zen）仍待真实触发（事件驱动，不可预约） |
 | G14 | 版本协同矩阵（升级回归面） | **方案已定（2026-09-16）**：版本策略（锁定基线+小步+单站试点铺开）+ **七项升级回归 SOP**（agent-cli-smoke / G10 双用例 / provider 直连零 :4000 / timeout 注入仍生效 / 插件加载 / 记忆读写前后对照 / task 全链）——详见 [Agent调研 §9.11](../../docs/Agent跨项目调用标准与迁移复用调研.md)；G10 合并，判定**维持 stdin 规避**（上游 1.18.31 仍无位置参数修复） | 升级窗口开启时按 SOP 执行 | 🔵 **方案已定（判据落定），非"待办"——执行随升级触发** |
 
 ### 综合结论
