@@ -5,7 +5,8 @@
 # 调用形式 (2026-09-02 实测定版, 勿改):
 #   claude:    timeout N claude -p '<prompt>' < /dev/null   (stdin 必须显式关闭)
 #   opencode:  echo '<prompt>' | timeout N opencode run -m <provider/model>
-#              (1.18.25 位置参数形式挂死, 只能用 stdin 管道形式 —— 见下方 G10 负向用例)
+#              (1.18.25 位置参数形式挂死, 只能用 stdin 管道形式 —— 位置参数另有一段**观测**(非判据),
+#               2026-09-16 由负向断言降级, 理由见下方 G10 段注释)
 # 模型 id (2026-09-16 起): provider 统一为 `local`, 即 local/<flavor> (旧名 cluster-litellm/* 已不存在)
 # 前置: 各站模型已加载 (B: nemotron / A: gpt-oss-120b / C: gpt-oss-120b); 未加载时报 SKIP 不算 FAIL
 # 用法: bash agent-cli-smoke.sh          # 全量
@@ -16,12 +17,12 @@
 # ============================================================================
 set -u
 SCOPE="${1:-ALL}"
-PASS=0; FAIL=0; SKIP=0
+PASS=0; FAIL=0; SKIP=0; INFO=0
 P='reply with exactly: OK'
 
 report() { # name status detail
   printf '%-22s %-6s %s\n' "$1" "$2" "$3"
-  case "$2" in PASS) PASS=$((PASS+1));; FAIL) FAIL=$((FAIL+1));; SKIP) SKIP=$((SKIP+1));; esac
+  case "$2" in PASS) PASS=$((PASS+1));; FAIL) FAIL=$((FAIL+1));; SKIP) SKIP=$((SKIP+1));; INFO) INFO=$((INFO+1));; esac
 }
 
 # ---------------------------------------------------------------- B 站
@@ -141,31 +142,37 @@ REMOTE
   fi
 fi
 
-# ------------------------------------------------- G10 负向用例 (期望"仍挂死")
-# 1.18.25 位置参数形式挂死; 上游至 1.18.31 无修复记录 (Agent调研 §9.11)。
-# 本用例是"期望失败"型: 位置参数形式**不该**返回 OK。若某版本开始返回 OK => 上游行为变更信号,
-# 需重评(全链重测)而非当作进步直接拥抱。
+# ------------------------------------------------- G10 位置参数"观测"（2026-09-16 由断言降级）
+# 原设计是"期望失败"型负向断言（位置参数**不该**返回 OK）；现降级为**观测，不判 PASS/FAIL**。
+# 降级理由（2026-09-16 重评，三条，均为实测/文档证据）：
+#   ① **证据冲突**：2026-09-14 复测位置参数 4/4 成功（仅"间歇性慢"），与本轮"位置参数无输出"
+#      相反 ⇒ 该断言描述的不是确定行为；按纪律"不可把间歇现象断言为确定行为"。
+#   ② **探针区分不了"挂死"与"慢"**：用例是 `timeout 25` + 尾部取值，模型慢即被算作"仍挂死"
+#      ⇒ 会给出假 PASS（把"慢"当"挂死"读）。
+#   ③ **官方 CLI 参考里位置参数是常规用法之一** ⇒ 它"能跑"不必然是 bug 修复，原 FAIL 文案
+#      （"上游行为已变"）会误导。
+# 真正的契约由**正向**守护：wrapper 一律走 stdin 管道（本脚本 A/B/C 的 opencode 用例 +
+# CHECKLIST BP-3 静态断言 `opencode run -m ... < .prompt.txt`），与位置参数是否可用无关。
+# 保留观测的价值：升级窗口人工比对"耗时/结果"与历史记录，作为行为变更的线索。
 if [ "$SCOPE" = "ALL" ] || [ "$SCOPE" = "B" ]; then
   G10B=$(ssh -o ConnectTimeout=10 scott-lau@scott-lau-GTR-Pro.local "pgrep -c -f llama-server" 2>/dev/null || echo 0)
   if [ "${G10B:-0}" -lt 1 ]; then
     report g10-positional SKIP "B backend 未加载 (未加载时位置参数必然失败, 测不出真假)"
   else
+    T0=$(date +%s)
     OUT=$(ssh scott-lau@scott-lau-GTR-Pro.local 'bash -s' <<'REMOTE' 2>/dev/null
 cd /tmp
 out=$(timeout 25 opencode run -m local/nemotron 'reply with exactly: OK' 2>/dev/null | tail -1)
 echo "OUT=$out"
 REMOTE
 )
-    if echo "$OUT" | grep -q 'OUT=OK'; then
-      report g10-positional FAIL "位置参数形式意外成功 -> 上游行为已变, 需重评: $OUT"
-    else
-      report g10-positional PASS "位置参数仍挂死(符合预期)"
-    fi
+    EL=$(( $(date +%s) - T0 ))
+    report g10-positional INFO "观测(非判据): 位置参数 ${EL}s 内返回='${OUT:-<空>}' —— 与历史记录比对即可"
   fi
 fi
 
 echo "--------------------------------"
-echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP"
+echo "PASS=$PASS FAIL=$FAIL SKIP=$SKIP INFO=$INFO"
 
 # ---------------------------------------------------------------- D6 agent-cli wrapper（第四节，2026-09-03）
 # 端到端探活: agent-cli task 全链（sync->lock->run->collect->.agent-run.json）+ 超时退出码 6 (A13)
