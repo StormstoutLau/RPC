@@ -200,4 +200,19 @@ upstream: \[ADR-0002]
 
 **区别于 zen（OP-07 原对象）**：zen 免费档无额度 API，"~100/天"未文档化，只能"本地计数 + 429 事件驱动"，O-07 维持该语义。
 
+**硬规则限速（2026-09-16，用户拍板「RPM20 限速 + 429 退避」）**
+
+决策（渐进，非全硬）：**RPM 20 硬限速 + 429 指数退避**；日 1000 维持软预警（用量 >50% 再升硬门）。只在"经过 wrapper 的出口"限速，opencode 内部 HTTP（`-m openrouter/...`）拦不到、仅靠 429 退避兜底。诚实边界见上节。
+
+落地（`agent-cli.ps1` `Invoke-JudgeHttp`，即 review 源① commercial 唯一出口）：
+
+| 机制 | 实现 | 验证 |
+|---|---|---|
+| **RPM20 令牌桶** | 最小 3s 间隔（`$Script:JudgeHttpLast` 进程内记上次），不足则 `Start-Sleep` 补足 | 假 OpenRouter（429→429→200）本地端到端：相邻请求被拉到 ≈3s（`+0.0→+2.9s`） |
+| **429 指数退避** | `Invoke-WebRequest` 捕获状态码，`429 && attempt<3 → Sleep 2^(attempt-1)（1s/2s）重试`；第三次仍 429 才 throw | 同实验：429 后 `+2.9→+4.0s`（≈1s 退避）→ 200 `JUDGE_OK` |
+
+- 原先 `Invoke-RestMethod` → `Invoke-WebRequest -UseBasicParsing`（PS5.1 才能拿状态码）。
+- ⚠ **BOM 坑再度踩中**：Edit 修改 `agent-cli.ps1` 剥掉 UTF-8 BOM → PS5.1 按 CP936 读中文注释级连误报 38 个语法错（全假阳性）；补回 `EF BB BF` 后 14 个 .ps1 全绿。**凡编辑此 .ps1 必查 BOM。**
+- 测试桩局限：BaseHTTPRequestHandler 首连传输层不完整（一条 `NETFAIL`）且只 serve 3 次（`timeout`）——均测试桩问题，真实 OpenRouter 429 是标准 HTTP 响应、走正确退避路径。
+
 详见 [2026-09-14_暴露问题调研.md](../docs/research/2026-09-14_暴露问题调研.md)（含方法论教训：P1/P2 初稿结论均因**未先检索既有记档**而出错）。
