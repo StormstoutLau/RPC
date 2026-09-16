@@ -1146,7 +1146,17 @@ STATION_CMD = (
     "UK=$(cat ~/.config/rpc/unsloth.key 2>/dev/null | tr -d '\\n'); "
     "if [ -z \"$OUT\" ]; then echo 'claudekey=SKIP_NO_HELPER'; "
     "elif [ \"$OUT\" = \"$UK\" ]; then echo 'claudekey=HELPER_EQ_UNSLOTH'; "
-    "else echo 'claudekey=DIFFERS'; fi"
+    "else echo 'claudekey=DIFFERS'; fi; "
+    # (f2) unsloth studio 日志的明文面 (2026-09-16 增补): studio 每次加载都会把引擎 key 写进
+    # ~/.unsloth/run-<alias>.log (实测每次 4 处), 而 infer-load 正是**从该日志 grep 取 key** ⇒
+    # "日志含 key" 是设计使然、无法消除, 所以判据只能落在**权限**上:
+    #   ~/.unsloth 须 700, run-*.log 须 600 (默认 umask 022 下是 775/664 ⇒ 组与其他用户可读)。
+    # 顺带报"含 key 的日志份数 + 总份数", 供评估存量(实测三站曾累积 16 个历史 key / 64 处明文)。
+    "DP=$(stat -c %a $HOME/.unsloth 2>/dev/null || echo NA); "
+    "LF=$(ls -1 $HOME/.unsloth/run-*.log 2>/dev/null | wc -l); "
+    "LK=$(grep -lE 'sk-(or-v1|unsloth|RPC|local|lm)-[A-Za-z0-9_-]{6,}' $HOME/.unsloth/run-*.log 2>/dev/null | wc -l); "
+    "LL=$(find $HOME/.unsloth -maxdepth 1 -name 'run-*.log' ! -perm 0600 2>/dev/null | wc -l); "
+    "echo \"unslothlog=dirperm:${DP} files:${LF} withkeys:${LK} loose:${LL}\""
 )
 # 刻意不取 infer-list: (1) 它自身约 10s+, 三站并行也要 30s+ (实测全量从 31s 涨到 60s);
 # (2) 判定"别名在该站是否可用"本来就该看 conf —— infer-load 读的正是
@@ -1296,6 +1306,19 @@ def check_stations(ctx):
                     warn.append(f"{st} 站 claude apiKeyHelper 的输出与同站引擎 key "
                                 f"(~/.config/rpc/unsloth.key) 不一致 —— claude 走本地 :8080, "
                                 f"必须与 opencode 用同一份引擎 key; 站上跑一次 infer-load 会重铸该 key")
+            elif line.startswith("unslothlog="):
+                # 2026-09-16 (f2): unsloth studio 日志的明文面 —— 判据是**权限**而非"含不含 key"
+                # (studio 每次加载必写 key 进日志, 且 infer-load 依赖从日志取 key, 消除不掉)。
+                kv = dict(p.split(":", 1) for p in line.split("=", 1)[1].split() if ":" in p)
+                dp = kv.get("dirperm", "NA")
+                loose = kv.get("loose", "0")
+                wk = kv.get("withkeys", "0")
+                if dp not in ("700", "NA"):
+                    warn.append(f"{st} 站 ~/.unsloth 权限 {dp} (应 700) —— 该目录含 studio 每次"
+                                f"加载写入的引擎 key 明文日志; 修: chmod 700 ~/.unsloth")
+                if loose != "0":
+                    warn.append(f"{st} 站 {loose} 份 run-*.log 权限非 600 (含 key 的共 {wk} 份) "
+                                f"—— 修: chmod 600 ~/.unsloth/run-*.log")
 
     # (g) 站上监听端口 vs 分配表 (P1-4 占用对账)
     #     方向一 (FAIL): 站上在听、端口 < EPHEMERAL_MIN、且分配表里没有它 →
@@ -1797,7 +1820,8 @@ def check_models(ctx):
 # 只报"哪里不对")。main() 在结论区按严重度打印。
 CHECKS = [
     {"id": "secrets", "title": "明文扫描", "fn": check_secrets, "quick": True,
-     "fix": "删除明文密钥, 或加入 SECRET_ALLOW 并写明原因(不允许静默放行)"},
+     "fix": "删除明文密钥, 或加入 SECRET_ALLOW 并写明原因(不允许静默放行); "
+            "文档里引用样串/占位串时**掩码为 sk-xxx-****** (2026-09-16 增: 未掩码的样串会命中本判据)"},
     {"id": "syntax", "title": "语法检查", "fn": check_syntax, "quick": True,
      "fix": "按明细里的行号修语法; 扩展名与内容不符的应解包或改名"},
     {"id": "scripts", "title": "脚本治理", "fn": check_scripts, "quick": True,
