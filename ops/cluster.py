@@ -84,8 +84,12 @@ import paramiko
 
 # ── 常量层 ──────────────────────────────────────────────
 STATIONS = {
-    "A": {"host": "scott-lau-NEX.local", "user": "scott-lau"},
-    "B": {"host": "scott-lau-GTR-Pro.local", "user": "scott-lau"},
+    # 2026-09-16 (ADR-0006): A/B 由 `*.local` 名改为 **LAN IPv4** —— 与 C 站同一结论(见下行注释)。
+    #   理由: Windows 解析 `*.local` 需 ~16-17s 且**只返回公网 IPv6**(2409:8a20:...) => 控制面经
+    #   ISP IPv6 绕行而非走局域网; 实测按名 16.2s -> 按 LAN IPv4 0.18s (约 90x)。
+    #   真值见 inventory/net.yaml 的 lan 段; 漂移会被门禁 stations 断言报 FAIL(不比"ssh 连不上"更难查)。
+    "A": {"host": "192.168.1.33", "user": "scott-lau"},
+    "B": {"host": "192.168.1.32", "user": "scott-lau"},
     "C": {"host": "192.168.1.37", "user": "scott-lau"},   # seaviv (2026-09-09 IP 修正: 原 192.168.1.24 过期; seaviv.local 可解析但保持 IPv4 规避 paramiko/IPv6)
 }
 # 各站引擎 /health 端口 (A/B/C 均 8080; 原 C=18080 为过时值)
