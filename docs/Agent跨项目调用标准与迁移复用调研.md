@@ -163,16 +163,18 @@ upstream: D5 Agent 生态升级（已 verified 2026-09-02）; 调研 §4.2 五�
 
 ### 2.1 4 CLI 定版实测（2026-09-02 晚，`ops/station-bin/agent-cli-smoke.sh` 4/4 PASS）
 
-| CLI                  | 路由                                       | 实测                   | 关键调用铁律                                                                                                                                                                                               |
-| -------------------- | ---------------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| B-claude (2.1.258)   | LiteLLM(4000)→nemotron                   | **PASS** 热缓存 30-120s | **`< /dev/null`** **显式关闭 stdin**（否则可能长时间等 stdin）；**冷启动慢（估计 \~20min，非测量值**：观察事实=首次无 stdin 重定向调用 >25min 未完成被中断；20min 系算术估计 33k token ÷ \~27 t/s CPU 卸载预填速度，且 stdin 等待与预填两因素未隔离——首次调用前轻量 PING 预热仍是合理纪律） |
-| B-opencode (1.18.25) | LiteLLM→nemotron/gpt-oss                 | **PASS**             | **必须 stdin 管道形式** `echo "<prompt>" \| opencode run -m <model>`——位置参数形式挂死（init 后无任何 LLM 调用，日志实证；1.18.25 bug）                                                                                          |
-| A-claude (2.1.258)   | 直连本机 llama-server(8080) gpt-oss          | **PASS** 3s          | 同 `< /dev/null`；**CLAUDE\_CODE\_DISABLE\_TOOLS=1 = 纯文本模式无工具调用**（A-claude 只适合文本任务，文件级 agent 任务走 opencode）                                                                                             |
-| A-opencode (1.18.25) | cluster-litellm(10.10.10.2:4000)/gpt-oss | **PASS**             | 同 stdin 管道形式；provider 三件套 lm-studio-local(禁)/cluster-local/cluster-litellm                                                                                                                           |
+**现行路由（2026-09-16 统一入口 `cluster.py providers` 实测，三站 A/B/C 完全同构、全直连本机引擎）**：
+
+| CLI（三站同版） | 现行路由 | 实测 | 关键调用铁律 |
+| ---- | ---- | ---- | ---- |
+| claude **2.1.258** | `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`（本机引擎）；模型 `claude-opus-4-6`、`modelOverrides` 3；`apiKeyHelper=ref` | ✅ 09-09 以来持续在用 | **`< /dev/null`** 显式关 stdin；`CLAUDE_CODE_DISABLE_TOOLS=1` = 纯文本模式无工具（C-claude 文本任务）；`CLAUDE_CODE_MAX_CONTEXT_TOKENS=120000` |
+| opencode **1.18.25** | 默认模型 `opencode/nemotron-3-ultra-free`（free 档，出站）；provider **`local`** = `127.0.0.1:8080`（本机引擎）、**`openrouter`** = 出站 | ✅ 09-09 以来持续在用 | **必须 stdin 管道形式** `echo "<prompt>" | opencode run -m <model>`——位置参数形式挂死（1.18.25 bug，G10，上游至 1.18.31 未修，维持规避） |
+
+> **⚠ 与 09-02 定版的差异（去时态化）**：原表四行（B-claude `LiteLLM(4000)→nemotron` / B-opencode `LiteLLM→nemotron·gpt-oss` / A-claude 直连 8080 gpt-oss / A-opencode `cluster-litellm(10.10.10.2:4000)/gpt-oss`）是 **2026-09-02 史实**。LiteLLM 网关 `:4000` 已于 **2026-09-13 退役**（ADR-0002 后续），三站现全为**直连本机引擎端口**；且 opencode provider 命名已由 `cluster-litellm`/`cluster-local`/`lm-studio-local` 三个旧名**统一为 `local`（本机引擎）+ `openrouter`（出站）** 两个——`providers` 输出三站均只含这两个，`cluster-litellm` 名在历史文档中仍反复出现但**当前配置已不存在**。调用铁律（`< /dev/null`、stdin 管道、纯文本模式）保持不变。
 
 - 主控站 ssh 调度链路全程畅通（冒烟脚本从主控站发起，heredoc 传远端脚本规避 PowerShell 引用陷阱——R14 铁律在 ssh 场景的等价形式：**远端命令一律** **`ssh host 'bash -s' <<'EOF'`** **或脚本落盘**）
 
-- **配置漂移 2 处（本轮发现并修复，均留 .bak）**：① A 站 opencode 无默认 `model` 键 → 默认解析到**外网免费模型 nemotron-3-ultra-free**（prompt 外泄 + 外部依赖）→ 先钉 `"model": "cluster-local/gpt-oss"`（本地直连），**当晚用户决策"免费做默认+本地备选"后改为** **`opencode/nemotron-3.5-lightning-free`**（两站统一，实测 B 15s / A 20s 最稳；隐私纪律：敏感内容显式 -m 走本地——免费模型数据用于改进训练，官方 Privacy 节明文）；② B 站 claude settings 缺 `CLAUDE_CODE_MAX_CONTEXT_TOKENS=120000`（台账记录应有而实缺）→ 已恢复写入
+- **配置漂移 2 处（本轮发现并修复，均留 .bak）**：① A 站 opencode 无默认 `model` 键 → 默认解析到**外网免费模型 nemotron-3-ultra-free**（prompt 外泄 + 外部依赖）→ 先钉 `"model": "cluster-local/gpt-oss"`（本地直连），**当晚用户决策"免费做默认+本地备选"后改为** **`opencode/nemotron-3.5-lightning-free`**（两站统一，实测 B 15s / A 20s 最稳；隐私纪律：敏感内容显式 -m 走本地——免费模型数据用于改进训练，官方 Privacy 节明文）；② B 站 claude settings 缺 `CLAUDE_CODE_MAX_CONTEXT_TOKENS=120000`（台账记录应有而实缺）→ 已恢复写入。**现行注记（2026-09-16）**：opencode 默认模型现为 **`opencode/nemotron-3-ultra-free`**（`providers` 实测），local provider 名已非 `cluster-*` 而是 **`local`**。
 
 - **免费模型实测（Zen 网关，两站 2026-09-02）**：5/6 可用（nemotron-3-ultra-free 1M ctx / nemotron-3.5-lightning-free 262k / ling-3.0-flash-fin-free（fin 后缀，金融域定位系命名推断未经文档证实）/ mimo-v2.5-free / big-pickle stealth）；**muse-spark-contributor-free 两站均地区封锁（中国 IP）**；全免费 $0 无 key、限时提供、每日限额未文档化（非官方源称 \~100 请求/天，E3）
 
