@@ -66,10 +66,11 @@ $Script:ROUTE_TABLE = @{
     # C 站 (seaviv) 2026-09-09: gpt-oss 本地引擎已注入 8080; nemotron 模型已传待启
     'gpt-oss-c'  = @{ id = 'local/gpt-oss';                           station = 'C' }
     'nemotron-c' = @{ id = 'local/nemotron';                          station = 'C' }
-    # 2026-09-16: minimax-m2.7 / qwen3.8-flash-next (UD-IQ4_XS) 三站齐备 (C 源 -> A/B 已同步)
-    'minimax'        = @{ id = 'local/minimax-m2.7';                  station = 'C' }
-    'minimax-a'      = @{ id = 'local/minimax-m2.7';                  station = 'A' }
-    'minimax-b'      = @{ id = 'local/minimax-m2.7';                  station = 'B' }
+    # 2026-09-16: m27-q4ks (MiniMax-M2.7) / qwen3.8-flash-next UD-IQ4_XS 三站齐备 (C 源 -> A/B 已同步)
+    # ⚠ 别名必须用站上 infer-load alias 空间真值 (m27-q4ks), 不是模型技术名 (minimax-m2.7) —— 见 cluster.py ROUTE 注
+    'm27-q4ks'       = @{ id = 'local/m27-q4ks';                      station = 'C' }
+    'm27-q4ks-a'     = @{ id = 'local/m27-q4ks';                      station = 'A' }
+    'm27-q4ks-b'     = @{ id = 'local/m27-q4ks';                      station = 'B' }
     'flash-next'     = @{ id = 'local/qwen3.8-flash-next';            station = 'C' }
     'flash-next-a'   = @{ id = 'local/qwen3.8-flash-next';            station = 'A' }
     'flash-next-b'   = @{ id = 'local/qwen3.8-flash-next';            station = 'B' }
@@ -77,7 +78,7 @@ $Script:ROUTE_TABLE = @{
     'local/nemotron'              = @{ id = 'local/nemotron';              station = 'B' }
     'local/qwen'                  = @{ id = 'local/qwen';                  station = 'B' }
     'local/gpt-oss'               = @{ id = 'local/gpt-oss';               station = 'A' }
-    'local/minimax-m2.7'          = @{ id = 'local/minimax-m2.7';          station = 'C' }
+    'local/m27-q4ks'              = @{ id = 'local/m27-q4ks';              station = 'C' }
     'local/qwen3.8-flash-next'    = @{ id = 'local/qwen3.8-flash-next';    station = 'C' }
     'opencode/nemotron-3.5-lightning-free'  = @{ id = 'opencode/nemotron-3.5-lightning-free';  station = 'B' }
     'opencode/nemotron-3-ultra-free'        = @{ id = 'opencode/nemotron-3-ultra-free';        station = 'B' }
@@ -485,7 +486,7 @@ $TpBench = @{
     'local/gpt-oss' = @{ prefill = 125; decode = 50; src = 'THROUGHPUT-BASELINE#L13-14 (HIP A124/C152)' }    # gpt-oss-120b MXFP4, decode 49-53
     'local/nemotron' = @{ prefill = $null; decode = 22; src = 'THROUGHPUT-BASELINE#L15 (nemotron-120B HIP20.5)' } # decode-level only; prefill unmeasured
     # 2026-09-16 转正为派发别名后补入 (src 见 THROUGHPUT-BASELINE.md, 均为 decode-level)
-    'local/minimax-m2.7'       = @{ prefill = $null; decode = 21.5; src = 'THROUGHPUT-BASELINE#L16 (MiniMax-M2.7 UD-IQ4_XS, C 单机)' }
+    'local/m27-q4ks'           = @{ prefill = $null; decode = 21.5; src = 'THROUGHPUT-BASELINE#L16 (MiniMax-M2.7 UD-IQ4_XS, C 单机)' }
     'local/qwen3.8-flash-next' = @{ prefill = $null; decode = 19;   src = 'THROUGHPUT-BASELINE#L18 (flash-next 短ctx 19-20; 长ctx 塌缩 5.5-6.1)' }
     # deepseek-v4-flash-0731(7.9) 仍非派发别名 -> MISS here until routed via this table.
 }
@@ -1670,7 +1671,7 @@ $Script:JUDGE_TABLE = @{
     'free-1m'     = @{ type='egress';      id='opencode/nemotron-3-ultra-free'; station='B'; ctx=1000000; compliance='public,sanitized'; maxtokens=2500 }
     'main'        = @{ type='local';       id='main-opencode-cli';               station='';  ctx=1000000; compliance='all'; maxtokens=4000 }
     'commercial'  = @{ type='http';        id='commercial';                      station='';  ctx=131072;  compliance='all'; maxtokens=2500 }
-    'm27'         = @{ type='http-local';  id='cluster-m27';                     station='C'; ctx=131072;  compliance='all'; maxtokens=8000 }
+    'm27'         = @{ type='http-local';  id='local/m27-q4ks';                  station='C'; ctx=131072;  compliance='all'; maxtokens=8000 }
     'rpc-v4flash' = @{ type='http-local';  id='cluster-v4flash';                 station='C'; ctx=1000000; compliance='all'; maxtokens=8000 }
 }
 

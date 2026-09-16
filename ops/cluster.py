@@ -86,9 +86,12 @@ STATIONS = {
 }
 # 各站引擎 /health 端口 (A/B/C 均 8080; 原 C=18080 为过时值)
 STATION_PORT = {"A": 8080, "B": 8080, "C": 8080}
-ROUTE = {"gpt-oss-120b": "A", "qwen3.8-27b-mtp": "C", "minimax-m2.7": "C"}     # 其余一律 B (DEFAULT_STATION)
+ROUTE = {"gpt-oss-120b": "A", "qwen3.8-27b-mtp": "C", "m27-q4ks": "C"}     # 其余一律 B (DEFAULT_STATION)
 # 注: qwen3.8-flash-next 三站齐备 (2026-09-16) 但仍**保持默认 B** —— 不改既有路由行为;
-# 要指定站用按站路由名 qwen3.8-flash-next-{a,b,c}。minimax-m2.7 为新增, 默认归 C (源站/基线站)。
+# 要指定站用按站路由名 qwen3.8-flash-next-{a,b,c}。m27-q4ks 为新增, 默认归 C (源站/基线站)。
+# ⚠ **别名必须以站上 infer-load 的 alias 空间为准** (`infer-list` 第一列), 不能照模型技术名自造:
+#   MiniMax-M2.7 的站上规范别名是 `m27-q4ks` (infer-load 内有归一化 sed: minimax-m2.7.* -> m27-q4ks)。
+#   2026-09-16 曾误用 `minimax-m2.7` 建 conf/路由 => `infer-load minimax-m2.7` 直接 "无匹配" (回归, 当日修正)。
 
 # ── 按站路由名: 显式指明"从哪个工作站加载本地模型" ──────────────────
 # 键 = 站上真实别名 + "-" + 站小写;  值 = (station, 站上真实别名)。
@@ -115,12 +118,12 @@ STATION_ROUTES = {
     "qwen3.8-27b-mtp-c": ("C", "qwen3.8-27b-mtp"),
     "qwen3.8-flash-next-b": ("B", "qwen3.8-flash-next"),
     "davidau-q38-27b-q4k-b": ("B", "davidau-q38-27b-q4k"),
-    # 2026-09-16: minimax-m2.7 / qwen3.8-flash-next (UD-IQ4_XS) 三站齐备 (C 源 -> A/B 已同步)
+    # 2026-09-16: minimax-m2.7 (站上别名 m27-q4ks) / qwen3.8-flash-next UD-IQ4_XS 三站齐备 (C 源 -> A/B 已同步)
     "qwen3.8-flash-next-a": ("A", "qwen3.8-flash-next"),
     "qwen3.8-flash-next-c": ("C", "qwen3.8-flash-next"),
-    "minimax-m2.7-a": ("A", "minimax-m2.7"),
-    "minimax-m2.7-b": ("B", "minimax-m2.7"),
-    "minimax-m2.7-c": ("C", "minimax-m2.7"),
+    "m27-q4ks-a": ("A", "m27-q4ks"),
+    "m27-q4ks-b": ("B", "m27-q4ks"),
+    "m27-q4ks-c": ("C", "m27-q4ks"),
 }
 # 与路由表解耦: 后端是站内概念, 换后端不改 alias->station 映射。C 专属键应置于本字典尾部以保前缀匹配序
 BACKENDS = {"unsloth", "llama-rpc", "llama-single", "vllm"}   # infer-load --backend 白名单
