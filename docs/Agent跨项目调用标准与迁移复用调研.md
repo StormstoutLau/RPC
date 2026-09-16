@@ -833,6 +833,53 @@ DeepSeek 官方开源 agent harness（MIT，TypeScript/pnpm/Cordis 框架，deve
 - 已统一到三站的全局 sympy 1.14.0 / numpy 2.5.3 / scipy 1.18.1 / antlr4 4.11 / R 4.6.1（G8 收口）视作**系统基础层**，跨项目共享；项目级差异在这之上用 venv/renv 叠加，**避免回到"三站全局同步某版本"的串扰模式**。
 - Cpp_Hub 对拍的 R 依赖包（forecast 等 7 个）**装进该项目的 `renv`，不装进全局库**，这样各 R 项目可各自钉版本，对拍时 `renv::status()` 即版本真值。
 
+## 9.11 G14/G10 版本协同矩阵与升级回归调研（v3.7 增补十一：2026-09-16，E2 web 调研）
+
+> **问题（G14）**: 升级回归面未清单化——升级到某个新版本后，哪些既有行为可能被破坏、怎么一次性验证所有，当前只有"升级回归三件套"概念无定稿。**问题（G10）**: opencode 1.18.25 位置参数挂死 bug，升级时是否已修复、可否解除规避。
+> **方法**: 上游 release feed 逐版核对（E2）+ 本框架 agent 调用面（§2.1 定版 / O-25 观测 / G8 依赖 / 直连 baseURL）+ 既有回归三件套（G14）。
+> **结论先行**: **G10 维持规避**（上游截至 1.18.31 无修复记录，stdin 管道形式是唯一可靠调用形态，升级回归里钉死为"正向+负向"双用例）；**G14 落地为一版升级回归 SOP + 版本策略**（opencode 是 8 月 20+ 版的高频发布 → 锁定基线 + 小步可控升级 + 回归三件套扩展为七项）。
+
+### 9.11.1 G10 判定：位置参数 bug 上游无修复，维持规避
+
+- 当前基线三站 **opencode 1.18.25**（重装于 2026-09-14 前后）。
+- 上游发布现状（E2，2026-09-16 核对）：当前最新 **v1.18.31（2026-09-14）**；8 月 20+ 版本（1.18.5→1.18.25），9 月初 5 版（1.18.26→1.18.30）。**逐条核对 1.18.26~1.18.31 变更，无一条涉及"位置参数挂死/prompt 位置参数/stdin 输入"**——主题全为：Azure/Entra 登录、Claude thinking block 稳定性、provider header/streamed chunk timeout 默认 5 分钟（v1.18.27）、GPT-6 Astra、Cloudflare AI Gateway、config 兼容（v1.18.24/16）。
+- **结论**：位置参数挂死**没有修复证据** → 维持"**stdin 管道形式**"（`echo "<prompt>" | opencode run -m <model>`）为唯一可靠调用形态。wrapper 与既有冒烟已固化此形式，无需改。
+- **升级回归里 G10 固化为双用例**（防"将来某版本悄悄改行为"）：
+  - **正向**：stdin 管道形式能产出非空结果（正在用的路径必须保持）。
+  - **负向**：位置参数形式**仍应挂死**（若某版本突然"正常了"，是行为变更信号，需重评是否采用位置参数 + 全链重测，而非当作进步直接拥抱）。
+
+### 9.11.2 G14 版本策略：锁定基线 + 小步可控升级
+
+**上游节奏（决策输入，E2）**：opencode 月度 20+ 版、都是 fix-level（无大版本主线）；8 月主题 = provider 无 key 登录 + Cloudflare + compaction/retry 加固 + config 兼容；9 月前半月 = Claude thinking 稳定 + 5min timeout 默认。官方给 `opencode upgrade` + `opencode doctor` 两个验证命令。
+
+**对本框架的策略**：
+1. **不追最新**：opencode 是"给谁都能装的通用 CLI"，每次发布对**我们的特定调用面**（stdin 管道 / cluster-* 直连 baseURL / timeout 注入 / skills / memory）收益近乎为零，但引入回归风险。→ **锁定基线版本 + 只在"有必须修的问题"或"累积到可评估的批量"时升级**。
+2. **升级方向 = 一处试点 → 回归 → 三站铺开**：先在单站（如 A）升级跑回归，全绿再由 `agent-cli`/统一入口同步其余站，避免三站同时坏。
+3. **1.18.27 timeout 语义警示**：v1.18.27 起 provider header / streamed chunk timeout **默认 5 分钟**。本框架曾在 opencode.jsonc 显式注入 `timeout:1800000`（30min）/`chunkTimeout:600000`（10min，见 O-21/O-25）——升级后必须确认**显式值不被新默认/新逻辑覆盖**（尤其长生成卡：默认 5min 对我们本地慢模型不够用）。
+4. **claude/插件/记忆同步考虑**：claude 2.1.258 稳定、版本与 opencode 解耦；superpowers/document-skills 是本地镜像 marketplace 插件、随 marketplace 不是我方逐版升级；opencode memory 是 SQLite 数据（`memory.db`+`MEMORY.md`），升级不改 schema 则数据不动（回归里验证一次读写）。
+
+### 9.11.3 G14 升级回归 SOP（把"三件套"扩为七项可执行清单）
+
+升级单个 agent 组件（当前主要指 opencode 1.18.25→目标版）后，逐项过，**任一 FAIL 即回滚/冻结该版本**：
+
+| # | 回归项 | 判据 | 复用资产 |
+|---|---|---|---|
+| ① | **4 CLI 调用形式** | `agent-cli-smoke.sh` 4/4 PASS（往期定版实测的同一脚本） | `agent-cli-smoke.sh`（站上件，已在 station_runtime） |
+| ② | **G10 双用例** | stdin 管道非空结果（正）+ 位置参数仍挂死（负） | 手测 2 条 |
+| ③ | **provider 直连 baseURL** | `cluster.py providers` 的 `ep:` 全部以 `:8080`/引擎端口结尾、**零 `:4000`**；claude `baseURL` 不变 | 统一入口 `providers`（本轮新增维度） |
+| ④ | **timeout 注入仍生效** | opencode.jsonc 显式 `timeout`/`chunkTimeout` 仍被尊重（≥本地慢模型需要），1.18.27 默认 5min 不反向覆盖 | `cluster.py providers` + 一次长生成冒烟 |
+| ⑤ | **插件加载** | superpowers + document-skills 仍可用（`/plugin` 或技能列表非空） | TUI / `opencode agent` 列表 |
+| ⑥ | **记忆读写** | opencode `memory.db` + `MEMORY.md` 升级前后均可读写（写一条→读到→大小增长）；数据未因升级重置 | `cluster.py providers` memory 行 前后对照 |
+| ⑦ | **task 全链灰盒** | 一张最小 readonly 卡端到端 `exit 0 / ACCEPT`（覆盖 station-ready→slot→lock→run→golden→collect 全链，顺带确认 ⑤⑥ 在 wrapper 路径不破） | 既有 test-card |
+
+**基准快照（升级前记录，用于 ⑥ 对照）**：三站 opencode 版本、`providers` memory 行（db 大小/MEMORY.md 行数）、`ep:` 端点行——本轮（2026-09-16）已取：A `memory.db 77824B/MEMORY.md 88 行`、B `81920B/3 行`、C `4096B/3 行`，全部 `ep=127.0.0.1:8080`。
+
+### 9.11.4 结论与建议
+
+- **G10 关闭（维持规避）**：上游无修复 → stdin 管道唯一可靠形态；把"正向+负向双用例"固化进升级回归。
+- **G14 从"事件驱动待办"升级为"方案已定"**：版本策略（锁定+小步+试点铺开）+ 七项回归 SOP。**不新增独立脚本**（遵守 ADR-0004 D3：能复用 `agent-cli-smoke.sh` / 统一入口 `providers` / 既有 test-card 就复用），升级时照 SOP 执行 + 结果回填 OPEN-ISSUES G14。
+- **触发时机**：非"现在升级"，而是"下次决定动 opencode 版本时"按此 SOP 走；当前无必须升级的理由（1.18.25 工作正常）。
+
 ## 参考源
 
 - [agents.md](https://agents.md)（标准主页, E1 直抓 2026-09-02）
@@ -936,4 +983,12 @@ v3.6 增补（2026-09-16，单项目依赖环境隔离轮）:
 - [Python Virtual Environments in 2026: venv vs conda vs uv vs Poetry](https://tutorials.technology/tutorials/python-virtual-environments-venv-conda-uv-2026.html)（E2：venv/ uv/ conda 适用边界）
 - [venv vs virtualenv vs pipenv vs Poetry vs pipx vs uv: 2026 Decision Guide（CodeGym）](https://codegym.cc/groups/posts/python-venv-vs-uv-vs-poetry-2026)（E2：uv = 2026 默认的选型依据）
 - [uv: Compatibility with pip and pip-tools（astral 官方）](https://docs.astral.sh/uv/pip/compatibility/)（E2：uv 虚拟环境集成 + 锁文件语义）
+
+v3.7 增补（2026-09-16，G14/G10 版本协同矩阵轮）:
+
+- [opencode changelog（排华版更全）](https://www.opencode.asia/zh/changelog/) / [opencode releases（GitHub 官方 feed）](https://github.com/anomalyco/opencode/releases)（E2：逐版核对 1.18.5→1.18.31；**位置参数挂死无修复记录**；v1.18.27 起 provider header/streamed chunk timeout 默认 5 分钟）
+- [OpenCode in August: 20+ releases](https://www.opencode.asia/ja/news/opencode-august-roundup/)（E2：8 月发布主题——provider 无 key 登录/Cloudflare/compaction+retry 加固/config 兼容）
+- [OpenCode in early September: five releases](https://www.opencode.asia/ko/news/opencode-early-september-roundup/)（E2：9 月主题——Claude thinking 稳定/5min timeout 默认/GPT-6 Astra/provider 修复）
+- [opencode CLI 命令参考（runmanai）](https://opencode.runman.ai/appendix/cli.html)（E2：`opencode run` 位置参数 + stdin 管道两种官方用法并存——印证 1.18.25 位置参数挂死为 bug 而非用法错误）
+- [opencode-cli（lobehub 社区 skill）](https://lobehub.com/skills/spillwavesolutions-opencode_cli)（E2：社区同样标注位置参数为常规用法）
 
