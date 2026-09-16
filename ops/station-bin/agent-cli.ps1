@@ -51,25 +51,34 @@ $Script:RUN_TOKEN = [Guid]::NewGuid().ToString('N')
 $Script:TMP_ROOT = Join-Path $env:TEMP ("agent-cli-" + $Script:RUN_TOKEN)
 
 # ---------------- ROUTE_TABLE (BP-2 alias->full-id, T3 task uses; fixed here) ----------------
-# NOTE (ADR-0002, 2026-09-04): 'cluster-litellm/*' provider 已在 B 站 opencode.jsonc 中 baseURL
-# 直连 127.0.0.1:8080（绕开 LiteLLM 网关 :4000，key=sk-unsloth-...），语义不再经网关。id 字符串
-# 保持不变以匹配 opencode 模型 id（provider/model），仅其底层 baseURL 更改为直连。
+# NOTE (2026-09-16): provider 名已统一为 `local`（三站 opencode.jsonc 实况: 仅 local + openrouter）。
+# 旧名 'cluster-litellm/*' 已不存在 —— 沿用会让 _station_ready.sh 注入 ERR_INJECT exit 11、整条派发门挂掉。
+# 模型 id 现为 `local/<flavor>`，flavor 与 local.models 声明键一一对应（保留风味/站点语义）。
 $Script:ROUTE_TABLE = @{
     # alias -> @{ id=full-id; station=target }
-    'nemotron'   = @{ id = 'cluster-litellm/nemotron';                          station = 'B' }
-    'qwen'       = @{ id = 'cluster-litellm/qwen';                              station = 'B' }
-    'gpt-oss'    = @{ id = 'cluster-litellm/gpt-oss';                           station = 'A' }
-    'gpt-oss-20b'= @{ id = 'cluster-litellm/gpt-oss-20b';                       station = 'B' }   # O-13 sympy 收口卡 (B 站 20b, 2026-09-14)
+    'nemotron'   = @{ id = 'local/nemotron';                          station = 'B' }
+    'qwen'       = @{ id = 'local/qwen';                              station = 'B' }
+    'gpt-oss'    = @{ id = 'local/gpt-oss';                           station = 'A' }
+    'gpt-oss-20b'= @{ id = 'local/gpt-oss-20b';                       station = 'B' }   # O-13 sympy 收口卡 (B 站 20b, 2026-09-14)
     'lightning'  = @{ id = 'opencode/nemotron-3.5-lightning-free';              station = 'B' }
     'ultra'      = @{ id = 'opencode/nemotron-3-ultra-free';                    station = 'B' }
     'free-1m'    = @{ id = 'opencode/nemotron-3-ultra-free';                    station = 'B' }  # alias of ultra
     # C 站 (seaviv) 2026-09-09: gpt-oss 本地引擎已注入 8080; nemotron 模型已传待启
-    'gpt-oss-c'  = @{ id = 'cluster-litellm/gpt-oss';                           station = 'C' }
-    'nemotron-c' = @{ id = 'cluster-litellm/nemotron';                          station = 'C' }
+    'gpt-oss-c'  = @{ id = 'local/gpt-oss';                           station = 'C' }
+    'nemotron-c' = @{ id = 'local/nemotron';                          station = 'C' }
+    # 2026-09-16: minimax-m2.7 / qwen3.8-flash-next (UD-IQ4_XS) 三站齐备 (C 源 -> A/B 已同步)
+    'minimax'        = @{ id = 'local/minimax-m2.7';                  station = 'C' }
+    'minimax-a'      = @{ id = 'local/minimax-m2.7';                  station = 'A' }
+    'minimax-b'      = @{ id = 'local/minimax-m2.7';                  station = 'B' }
+    'flash-next'     = @{ id = 'local/qwen3.8-flash-next';            station = 'C' }
+    'flash-next-a'   = @{ id = 'local/qwen3.8-flash-next';            station = 'A' }
+    'flash-next-b'   = @{ id = 'local/qwen3.8-flash-next';            station = 'B' }
     # full id directly (M3 dual representation)
-    'cluster-litellm/nemotron'              = @{ id = 'cluster-litellm/nemotron';              station = 'B' }
-    'cluster-litellm/qwen'                  = @{ id = 'cluster-litellm/qwen';                  station = 'B' }
-    'cluster-litellm/gpt-oss'               = @{ id = 'cluster-litellm/gpt-oss';               station = 'A' }
+    'local/nemotron'              = @{ id = 'local/nemotron';              station = 'B' }
+    'local/qwen'                  = @{ id = 'local/qwen';                  station = 'B' }
+    'local/gpt-oss'               = @{ id = 'local/gpt-oss';               station = 'A' }
+    'local/minimax-m2.7'          = @{ id = 'local/minimax-m2.7';          station = 'C' }
+    'local/qwen3.8-flash-next'    = @{ id = 'local/qwen3.8-flash-next';    station = 'C' }
     'opencode/nemotron-3.5-lightning-free'  = @{ id = 'opencode/nemotron-3.5-lightning-free';  station = 'B' }
     'opencode/nemotron-3-ultra-free'        = @{ id = 'opencode/nemotron-3-ultra-free';        station = 'B' }
     # O-15 claude 备通道 (2026-09-12): 控制台本地执行, station 空 = 不走 ssh. cli=claude 选中本地执行器.
@@ -166,7 +175,7 @@ function Invoke-StationReady {
     # llama-server OpenAI engine lands on a RANDOM per-load port. opencode baseURL=8080
     # hit mgmt -> "Cannot connect to API".
     # Fix: run _station_ready.sh on target station -> discover engine port -> verify
-    # /v1/models+chat -> idempotently inject cluster-litellm baseURL to that port.
+    # /v1/models+chat -> idempotently inject local provider baseURL to that port.
     # (source kept ASCII-only for PS5.1 BOM safety)
     [CmdletBinding()]
     param(
@@ -473,10 +482,12 @@ function Resolve-Profile {
 # prefill omitted (null) = unmeasured -> prefill_sec treated as 0 (agent budget is decode-dominated).
 # ASCII only on purpose: Edit strips UTF-8 BOM, PS5.1 re-decode of non-ASCII comments can crash parse.
 $TpBench = @{
-    'cluster-litellm/gpt-oss' = @{ prefill = 125; decode = 50; src = 'THROUGHPUT-BASELINE#L13-14 (HIP A124/C152)' }    # gpt-oss-120b MXFP4, decode 49-53
-    'cluster-litellm/nemotron' = @{ prefill = $null; decode = 22; src = 'THROUGHPUT-BASELINE#L15 (nemotron-120B HIP20.5)' } # decode-level only; prefill unmeasured
-    # minimax-m2.7(21.5)/deepseek-v4-flash-0731(7.9)/qwen3.8-flash-next(19) have station data but are not main-dispatcher
-    # route aliases -> MISS here until they are routed via this table.
+    'local/gpt-oss' = @{ prefill = 125; decode = 50; src = 'THROUGHPUT-BASELINE#L13-14 (HIP A124/C152)' }    # gpt-oss-120b MXFP4, decode 49-53
+    'local/nemotron' = @{ prefill = $null; decode = 22; src = 'THROUGHPUT-BASELINE#L15 (nemotron-120B HIP20.5)' } # decode-level only; prefill unmeasured
+    # 2026-09-16 转正为派发别名后补入 (src 见 THROUGHPUT-BASELINE.md, 均为 decode-level)
+    'local/minimax-m2.7'       = @{ prefill = $null; decode = 21.5; src = 'THROUGHPUT-BASELINE#L16 (MiniMax-M2.7 UD-IQ4_XS, C 单机)' }
+    'local/qwen3.8-flash-next' = @{ prefill = $null; decode = 19;   src = 'THROUGHPUT-BASELINE#L18 (flash-next 短ctx 19-20; 长ctx 塌缩 5.5-6.1)' }
+    # deepseek-v4-flash-0731(7.9) 仍非派发别名 -> MISS here until routed via this table.
 }
 
 function Get-ThroughputEstimate {
@@ -754,9 +765,9 @@ function Invoke-Task {
     # O-25 P1: slot gate AFTER station-ready (engine port known), BEFORE sync/run dispatch.
     # Criteria O-08/F1: dispatch must NOT silently queue behind an occupied engine. Default reject-if-busy
     # (exit 24, clear semantics for orchestrator to redirect); --slot-allow-busy overrides.
-    # Only gates in-cluster llama engines (cluster-litellm/*); egress (opencode/*) has no /slots -> skip.
+    # Only gates in-cluster llama engines (local/*); egress (opencode/*) has no /slots -> skip.
     # na (SLOT_NA or probe failure) always allow - probe is observability, never a hard gate on infra flake.
-    if ($id -like 'cluster-litellm/*') {
+    if ($id -like 'local/*') {
         $port = 0
         if ($readyInfo -and $readyInfo['raw'] -match 'STATION_READY port=(\d+)') { $port = [int]$Matches[1] }
         if ($port -gt 0) {
@@ -822,7 +833,7 @@ function Invoke-Task {
         return 12
     }
 
-    # O-19: station env-ready gate (discover engine port + inject cluster-litellm baseURL BEFORE dispatch)
+    # O-19: station env-ready gate (discover engine port + inject local provider baseURL BEFORE dispatch)
     # (already run above as part of radical fix B - engine ctx discovery)
 
     # 3) sync source subset (never overwrite out/); target station is B (memory master) ws root
@@ -1283,7 +1294,7 @@ function Invoke-SplitTask {
     if (-not $r) { Write-Host "REJECT unknown-model ($m) exit 2 - not in route table"; return 2 }
     $id = $r['id']
     if ($sens -eq 'local-only' -and $id -match '^opencode/') { Write-Host "REJECT local-only+remote ($id) exit 4 - no override channel"; return 4 }
-    if ($id -notlike 'cluster-litellm/*') {
+    if ($id -notlike 'local/*') {
         Write-Host "SPLIT_WARN: model=$id is egress (opencode/*) - cross-station each-1 assumes per-station engines; egress has single route, fanout may not parallelize"
     }
 
@@ -1838,7 +1849,7 @@ echo "REVIEW_B64_END"
                 throw "JUDGE_UNREADY: source 5 (main opencode CLI) not installed - run: npm i -g opencode-ai, then: opencode auth login"
             }
             $m = $env:REVIEW_MAIN_MODEL
-            if (-not $m) { $m = 'cluster-litellm/nemotron' }   # in-cluster model, NOT outbound gateway (local-only safe)
+            if (-not $m) { $m = 'local/nemotron' }   # in-cluster model, NOT outbound gateway (local-only safe)
             $tf = Join-Path $env:TEMP "agent-cli-review-in-$(Get-Random).txt"
             [System.IO.File]::WriteAllText($tf, $prompt, (New-Object System.Text.UTF8Encoding $false))
             $errPath = $tf + '.err'

@@ -3,7 +3,7 @@
 # 在"运行本脚本的那台站"上执行，使 opencode 可连到该站真实的 llama-server 引擎端点。
 #   1) 发现 llama-server 引擎端口（8080 是 unsloth studio 管理端，不承载推理 → 不可用）
 #   2) 校验 /v1/models 返回模型 id + chat 往返（无鉴权）
-#   3) 幂等改写 opencode.jsonc 的 `cluster-litellm` provider baseURL -> 引擎端口
+#   3) 幂等改写 opencode.jsonc 的 `local` provider baseURL -> 引擎端口
 # 用法: bash _station_ready.sh [期望alias子串]   # 如 gpt-oss
 # 成功: 打印 STATION_READY port=.. model=.. + INJECT_OK; exit 0
 #   若引擎未加载: ERR_NO_ENGINE exit 10
@@ -51,15 +51,17 @@ CHAT=$(curl -s -m20 "http://127.0.0.1:$PORT/v1/chat/completions" \
 echo "CHAT_OK $CHAT"
 [ -n "$CHAT" ] || { echo "ERR_CHAT: 引擎 chat 无响应 (port=$PORT)"; exit 12; }
 
-# ---- [3] 幂等注入 cluster-litellm baseURL -> 引擎端口 ----
+# ---- [3] 幂等注入 local baseURL -> 引擎端口 ----
+# 2026-09-16: provider 名 `cluster-litellm` 已在三站 config 中更名/统一为 `local`
+# (三站实况: provider 仅 local + openrouter; 旧名会让本步 ERR_INJECT exit 11 -> 派发门全挂)。
 if [ ! -f "$CFG" ]; then echo "ERR_INJECT: 无 opencode config $CFG"; exit 11; fi
 python3 - "$CFG" "$PORT" <<'PY'
 import sys, re
 cfg, port = sys.argv[1], sys.argv[2]
 s = open(cfg, encoding='utf-8').read()
-m = re.search(r'\n {4}"cluster-litellm"\s*:\s*\{', s) or re.search(r'"cluster-litellm"\s*:\s*\{', s)
+m = re.search(r'\n {4}"local"\s*:\s*\{', s) or re.search(r'"local"\s*:\s*\{', s)
 if not m:
-    print("ERR_INJECT: 无 cluster-litellm provider"); sys.exit(11)
+    print("ERR_INJECT: 无 local provider"); sys.exit(11)
 start = m.end()
 rest = s[start:]
 nxt = re.search(r'\n {4}"[^"]+"\s*:\s*\{', rest)
@@ -69,7 +71,7 @@ if nxt and nxt.start() < end: end = nxt.start()
 if close and close.start() < end: end = close.start()
 block = rest[:end]
 if '"baseURL"' not in block:
-    print("ERR_INJECT: cluster-litellm 块内无 baseURL"); sys.exit(11)
+    print("ERR_INJECT: local 块内无 baseURL"); sys.exit(11)
 newblock = re.sub(r'"baseURL"\s*:\s*"[^"]*"', '"baseURL": "http://127.0.0.1:%s/v1"' % port, block, count=1)
 open(cfg, 'w', encoding='utf-8').write(s[:start] + newblock + rest[end:])
 print("INJECT_OK port=%s" % port)
