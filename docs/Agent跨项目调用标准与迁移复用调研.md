@@ -750,6 +750,55 @@ DeepSeek 官方开源 agent harness（MIT，TypeScript/pnpm/Cordis 框架，deve
 
 - **建议串行**：--attach（最小实现，独立）→ claude 路径+--continue（复用 --attach 的附件通道）→ 跨站扇出 L2（需 V2 并发骨架）→ review --peer（依赖 claude/review 命令面，D7 立项内）。
 
+## 9.10 单项目依赖环境隔离调研（v3.6 增补十：2026-09-16，E2 web 调研）
+
+> **问题（用户提）**：假设其它项目调用存在**环境冲突**，是否应采用某种**容器化/沙盒**形式，做单项目依赖环境隔离？
+> **方法**：社区 web 调研（E2，2026-09-16）+ 本框架特点（§1.1 拓扑 / 零自加载 / G8 对拍精度诉求 / agent 外壳资产）+ 前轮 G8 依赖对齐实测。
+> **结论先行**：**本项目**（自己信任的 agent + 本地模型）**不采用容器化/沙盒做常规项目隔离**；采用**语言级**依赖隔离（Python → venv/uv，R → renv），容器仅作极端兜底。理由：①威胁模型不同（社区沙箱为防"不可信 agent 越权"，本项目非安全诉求）；②容器 daemon 与"零自加载"纪律冲突；③容器会切断 agent 外壳赖以工作的 skills/凭据/记忆资产；④对拍精度用**项目 lockfile** 比容器镜像更可靠、更轻、无二进制热同步。
+
+### 9.10.1 先分清：社区 2026 主流"Agent 沙箱"防的是什么
+
+社区（Claude Code、Codex、OpenAI codex、Edera、OpenReplay、Hermes Agent 等）的沙箱叙事全部围绕**安全隔离/越权防护**：
+
+- **威胁模型 = 不可信 agent 拿到 shell 后的失控**：Claude Computer Use 提示注入被诱导下载执行二进制、OpenAI 自研 agent 越权 hack 了 HuggingFace、Anthropic 从 141,006 次 eval 里发现模型私自访问 3 家机构生产基础设施（2026-07）。
+- **核心论点（Edera/OpenReplay）**：对 coding agent **无法用 least-privilege allowlist**——它的合法行为空间本身不可枚举（一次合法任务就可能"装包/写任意路径/执行刚生成的代码"，每条看起来都像破坏性操作）。所以正确姿势**不是信任 agent，而是把环境做成"可丢弃（disposable）"**——出问题时损失一个被删的容器/沙箱，而非一套泄露的凭据。
+- **分层强度**：内建沙箱（Claude Code bubblewrap/Seatbelt、Codex sandbox）→ non-root devcontainer → microVM（gVisor/Firecracker/Kata，独立内核）。配 **文件系统 + 网络双轴**才完整（无网络隔离可外泄 SSH key；无文件系统隔离可逃逸触网）。
+
+> 这个威胁模型对**本项目不成立**：这里的 agent 是自家 opencode/claude + 三站本地模型，跑在 `~/agent-workspaces/<proj>/` 的受控 cwd 下，信任边界不同。我们的真痛点是**依赖冲突 + bit-exact 对拍漂移**（G8 版本对齐就是为了不让基准漂移），不是被诱导泄密。**防御对象不同，方案必然不同。**
+
+### 9.10.2 依赖隔离的正确粒度是"语言级"，不是"OS 级"
+
+社区 2026 在依赖工具链上的共识（CodeGym/utorials.technology/CSDN/astral 官方）：
+
+| 工具 | 定位 | 关键点 | 落本项目 |
+|---|---|---|---|
+| **venv** | Python 零依赖基线 | PEP 405，随手可用 | 每项目 `.venv` 即可，无额外安装 |
+| **uv**（2026 默认） | venv 的现代替代 | 单 Rust 二进制、10-100×、`pyproject.toml`+`uv.lock` **跨平台锁文件**、自动管理 Python 版本、`uv sync` 一键还原 | 三站 Python 3.12 已统一，`uv.lock` 即项目真值，跨站 `uv sync` 即一致 |
+| **conda/mamba** | 需非 Python 原生依赖（CUDA/编译库）时 | 二进包免编译 | 本项目已用 apt 原生解决系统库，暂不需要 |
+| **renv**（R） | R 项目版隔离 | 项目库 + `renv.lock` + 全局缓存 symlink（省磁盘）；**补上 R 天生缺的版本隔离** | **直接落到 G8 的"sessionInfo 对照 + `remotes::install_version` 钉版"，把那套手工流程自动化** |
+
+**为什么语言级优于容器镜像**（针对本框架）：
+1. **对拍精度**：内容其实从"三站全局同步某版本"变成"每个项目 lockfile 钉死——lockfile 即真值，任何站 `restore/sync` 即复原到同一版本"。比镜像更细粒度（只锁包，不锁 OS/工具链），也免去镜像构建/分发的二进制热同步。
+2. **零自加载 + 按需**：venv/renv 是**激活即用**，无常驻 daemon，不破坏"按需服务/随手即走"纪律；容器要 docker/podman 常驻 daemon，且每提一次环境要起停容器。
+3. **agent 外壳资产**：opencode/claude 在站内读 `~/.claude/skills/`、凭据、记忆层（cwd 键控）、`~/.config/opencode/`——容器化会切断或要求逐层挂载重放这些资产；依赖隔离只改 agent 执行命令的 **Python/R 解释器/PATH 指向**，外壳与资产完全不动。
+
+### 9.10.3 结论与处置
+
+**判定：不采用容器化/沙盒做常规项目依赖隔离**；采用分层方案，容器仅作极端兜底。
+
+| 层 | 方案 | 触发条件 |
+|---|---|---|
+| Python 依赖 | 每项目 `venv`（轻项目）/ `uv`（有 pyproject 的项目） | 任何跨项目 Python 冲突前的默认 |
+| R 依赖 | 每项目 `renv`（`renv.lock` 钉版） | 任何用到 R 的项目（Cpp_Hub 对拍首当其冲） |
+| 系统级/编译工具链 | 一次性 `apt`（G8 已做的模板） | 极少数、不冲突时 |
+| **容器兜底** | **Apptainer/Podman 按需单文件容器，只包"编译执行体/对拍程序"，不包 agent 外壳**，跑完即弃 | 仅当某项目确实需要 OS 级隔离（如自带独立编译链打架）——**本项目当前无此场景** |
+
+> **零自加载的硬约束再强调一次**：即便将来出现必须 OS 级隔离的场景，也**首选无 daemon 的 Apptainer（单文件，`apptainer run` 即起即弃）**，而非 Docker/Podman（后者需常驻 daemon，与"按需服务"纪律冲突）。
+
+**不阻断的日常措施（防冲突，2026-09-16 现状基础上）**：
+- 已统一到三站的全局 sympy 1.14.0 / numpy 2.5.3 / scipy 1.18.1 / antlr4 4.11 / R 4.6.1（G8 收口）视作**系统基础层**，跨项目共享；项目级差异在这之上用 venv/renv 叠加，**避免回到"三站全局同步某版本"的串扰模式**。
+- Cpp_Hub 对拍的 R 依赖包（forecast 等 7 个）**装进该项目的 `renv`，不装进全局库**，这样各 R 项目可各自钉版本，对拍时 `renv::status()` 即版本真值。
+
 ## 参考源
 
 - [agents.md](https://agents.md)（标准主页, E1 直抓 2026-09-02）
@@ -841,4 +890,16 @@ v3.4 增补（2026-09-03，dsh 逆向 + G8 定案轮）：
 - 两站实测基线（E1 2026-09-03）：Ubuntu 24.04.4 noble / Python 3.12.3 / apt 默认源 R 4.3.3 / cloud.r-project.org 与兰大镜像与 pypi 全可达
 
 - 主控站版本基线（E1）：R 4.6.1 (2026-06-24 ucrt, "Happy Hop")；Cpp\_Hub fixtures 依赖提取（forecast/rugarch/urca/ARDL/midasr/Spillover/vars）
+
+v3.6 增补（2026-09-16，单项目依赖环境隔离轮）:
+
+- [自主编码 Agent 隔离实战：Docker microVM 沙箱（掘金, 2026-08）](https://juejin.cn/post/7672229475086696488)（E2：gVisor/runsc + 三原则 + 边界探测）
+- [From a Raw Shell to a Sandboxed Coding Agent（DecodingAI, 2026-08）](https://www.decodingai.com/p/run-coding-agents-safely)（E2：agent 沙箱=执行边界；Claude/Codex 内置 jail——Seatbelt/bubblewrap）
+- [Running Coding Agents in YOLO Mode（OpenReplay, 2026-07）](https://blog.openreplay.com/coding-agents-yolo-mode/)（E2：分层隔离强度 + "least-privilege 对 agent 失效，只能做成 disposable"论点）
+- [Coding Agent on Agent-Sandbox and LangGraph（K8s agent-sandbox sig）](https://agent-sandbox.sigs.k8s.io/docs/use-cases/examples/langchain/)（E2：agent 沙箱 K8s 落地参照）
+- [Hermes Agent 容器化沙箱：终端后端可替换（2026-08）](https://blog.csdn.net/gitblog_01144/article/details/159778618)（E2：Docker/SSH/Singularity/Modal 后端切换）
+- [renv: Introduction / Package-install](https://rstudio.github.io/renv/)（E2：R 项目库 + lockfile + 全局缓存 symlink 的隔离与省盘）
+- [Python Virtual Environments in 2026: venv vs conda vs uv vs Poetry](https://tutorials.technology/tutorials/python-virtual-environments-venv-conda-uv-2026.html)（E2：venv/ uv/ conda 适用边界）
+- [venv vs virtualenv vs pipenv vs Poetry vs pipx vs uv: 2026 Decision Guide（CodeGym）](https://codegym.cc/groups/posts/python-venv-vs-uv-vs-poetry-2026)（E2：uv = 2026 默认的选型依据）
+- [uv: Compatibility with pip and pip-tools（astral 官方）](https://docs.astral.sh/uv/pip/compatibility/)（E2：uv 虚拟环境集成 + 锁文件语义）
 
