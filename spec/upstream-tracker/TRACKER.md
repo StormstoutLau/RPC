@@ -4,9 +4,9 @@
 
 id: upstream-tracker
 type: tracker
-version: 1.1
+version: 1.2
 status: active（维护中）
-date: 2026-09-08（1.1 更新 2026-09-10: #26578 实测落地；2026-09-13 核查：GLM 三线推进 #27773 41→46c / #27754 41→43c / #27332 1→2c，未合并；同日补充调研 V4-Flash 框架级 PR §1.2b，公开 API 复核状态与原台账一致，#26610 mergeable=unstable 为最可合并候选）
+date: 2026-09-08（1.1 更新 2026-09-10: #26578 实测落地；**2026-09-16 核查（API fetch 原页）**：**GLM 首选线 #27754 → 45c 且 `mergeable_state=unstable` + 当日(9/16)有活动 = 9/13 以来首个「接近可合并」信号**，但仍**未合入**；#27752/#27773/#27917 无变化（均 `dirty`）。新增 3 条 GLM 项：#28282（CUDA 长 prefill 非法访存，`bug-unconfirmed`）/#28727+#28729（indexer `soft_max gridDim.y` 溢出修复，**closed 未合并**）/#28106（`resolve_fused_ops` 校验不全，open）；**DS V4**：#26610（RPC `-sm tensor`）**9/16 仍有活动**、仍是最近可合并候选，新增 **#25452**（V4-Flash SWA KV-cache 轮换复用耗尽 → crash/stall，12 评论，**待自测甄别后端相关性**）；架构级无新 PR）
 depends: [vulkan-version-control-UPGRADE_SOP v1.0, operator-optimization-DESIGN v1.1, model-eval-MODEL-SOURCING v1.0]
 
 > **用途**: 本集群所有「上游活数据」的**单一真值台账**——llama.cpp 相关 PR/Issue 合并状态、引擎基线（各构建目录/现役实例/版本）、以及上游变动对集群的触发动作。**状态变更必须回写本表，禁止散落各处**。
@@ -22,13 +22,16 @@ depends: [vulkan-version-control-UPGRADE_SOP v1.0, operator-optimization-DESIGN 
 
 | PR/Issue | 作者 | 内容 | 状态 | 对本集群影响 | 触发动作 |
 |---|---|---|---|---|---|
-| [#27754](https://github.com/ggml-org/llama.cpp/pull/27754) | danielhanchen（unsloth） | 文本+视觉 **43 commits**（9/11 +2）；含 MTP 投机解码（16K ctx 55→77.2 t/s）；两前置 flag：`NVIDIA_TF32_OVERRIDE=0` + `-fa off` | 🔴 Open（9/13 核查，41→43 commits） | 首选候选（unsloth 官方，vision+MTP） | 合并 → 评估选向 |
-| [#27752](https://github.com/ggml-org/llama.cpp/pull/27752) | eauchs | 文本 only **11 commits**（9/13 复核未变）；KDA 线性注意力映射 kimi-linear，mHC 沿用 DSV4 | 🔴 Open（9/13 核查，11 commits 未变） | 最简文本线 | 合并 → 评估 |
-| [#27773](https://github.com/ggml-org/llama.cpp/pull/27773) | timkhronos | 文本+视觉 **46 commits**（9/12 +5，三线最活跃）；logits 对齐 HF；quantized GGUF 已发布（avar6/GLM-5.3-Flash-BF16-gguf） | 🔴 Open（9/13 核查，41→46 commits） | 视觉备选 | 合并 → 评估 |
-| [#27917](https://github.com/ggml-org/llama.cpp/pull/27917) | timkhronos | MTP draft head（NextN），31 commits，依赖 #27773，含 index_share_forward，`--spec-type draft-mtp` 启用 | 🔴 Draft（9/13 核查，31 commits 未变，head 5b8593b） | 仅随 #27773 | — |
-| [#27922](https://github.com/ggml-org/llama.cpp/issues/27922) | mirek-vl | 主线 `unknown architecture 'glm5next'` 佐证（mmproj 加载失败 + UD-Q2_K_XL 文本加载失败双证） | 🔴 Open（9/13 核查，enhancement label） | 确认主线未合 | 关闭即该来信号 |
+| [#27754](https://github.com/ggml-org/llama.cpp/pull/27754) | danielhanchen（unsloth） | 文本+视觉 **45 commits / 42 files**（9/13→9/16 **+2**）；含 MTP 投机解码（16K ctx 55→77.2 t/s）；两前置 flag：`NVIDIA_TF32_OVERRIDE=0` + `-fa off`；分支 `unslothai:glm5next/upstream` | 🟠 **Open，`mergeable_state=unstable`，9/16 有活动**（9/13 起首个「接近可合并」信号，**仍未合入**） | 首选候选（unsloth 官方，vision+MTP） | **状态转 `clean` 且获 reviewer 批准 → 立即评估选向** |
+| [#27752](https://github.com/ggml-org/llama.cpp/pull/27752) | eauchs | 文本 only **11 commits**（未变）；KDA 线性注意力映射 kimi-linear，mHC 沿用 DSV4；`mergeable_state=dirty` | 🔴 Open（9/16 复核，11c / 更新 9/11 / **dirty=有冲突**） | 最简文本线 | 合并 → 评估 |
+| [#27773](https://github.com/ggml-org/llama.cpp/pull/27773) | timkhronos | 文本+视觉 **46 commits**；logits 对齐 HF；quantized GGUF 已发布（avar6/GLM-5.3-Flash-BF16-gguf）；`mergeable_state=dirty` | 🔴 Open（9/16 复核，46c / 更新 9/12 / **dirty**） | 视觉备选 | 合并 → 评估 |
+| [#27917](https://github.com/ggml-org/llama.cpp/pull/27917) | timkhronos | MTP draft head（NextN），31 commits，依赖 #27773，含 index_share_forward，`--spec-type draft-mtp` 启用；`dirty` | 🔴 Draft（9/16 复核，31c / 更新 9/11） | 仅随 #27773 | — |
+| [#27922](https://github.com/ggml-org/llama.cpp/issues/27922) | mirek-vl | **"Feature Request: Support GLM5.3 (flash)"** —— 主线 `unknown architecture 'glm5next'` 佐证（mmproj 加载失败 + UD-Q2_K_XL 文本加载失败双证） | 🔴 Open（9/16 复核，更新 9/11） | 确认主线未合 | 关闭即该来信号 |
+| [#28282](https://github.com/ggml-org/llama.cpp/issues/28282) ⭐新 | —— | **CUDA illegal memory access on GLM-5.3-Flash 长 prefill（`-ub 2048`, Blackwell/sm_120）**；作者自述"built from PR #27754 HEAD，只能在 PR 分支上测"；label `bug-unconfirmed`，2 评论 | 🟡 Open（9/16 复核，创建 9/2 / **更新 9/15**） | **对我们无关键**（本集群 Vulkan/gfx1151，非 CUDA sm_120），但提示 **#27754 线的长 prefill 侧仍有未确认 bug** | 合并后评估时**必须压测长 prefill**，勿只看 decode |
+| [#28727](https://github.com/ggml-org/llama.cpp/pull/28727) / [#28729](https://github.com/ggml-org/llama.cpp/pull/28729) ⭐新 | AIalliAI | `glm5next: avoid soft_max gridDim.y overflow in the indexer`（同分支两次提交，45c/42 files，`mergeable=clean`） | ⚫ **Closed 未合并**（9/11）—— 该修复**未进任何线** | GLM indexer 的 soft_max 溢出问题被提出但无人承接 | 观察：若 GLM 线合并后长 prefill 有异常，先查此项 |
+| [#28106](https://github.com/ggml-org/llama.cpp/issues/28106) ⭐新 | —— | `glm5next: resolve_fused_ops validates device placement but not tensor …`（op 校验器只查设备位置、不查 tensor —— 正对应我们实测过的 HC `resolve_fused_ops` 警告路径） | 🟡 Open（创建 8/31，本次核查补录） | 解释"HC 融合警告"一类现象的上游视角 | 与 #28144（SOFT_MAX failed）同批观察 |
 
-**结论（2026-09-13 核查）**: glm5next **仍未合入 master**（#27754/#27752/#27773 三线仍 Open，无合并信号）。推进有实质变化：**#27773 41→46 commits（9/12，三线最活跃）+ #27754 41→43 commits（9/11，unsloth 首选线）+ #27332 density gate 1→2**，#27752 11 commits 未变（仅被触碰）；#27917 仍 Draft 未变。虽推进但**尚无关键合并信号** → GLM-5.3-Flash 本地部署依旧「条件未满足、维持等待」，事件驱动前置维持**三变二**不变（① 任一 PR 合并；② RPC crash 已由 #26500 修复，前置满足；③ 可选与 #26610 同窗原子升级）。 [行为快照追溯](file:///d:/RPC/spec/model-eval/FRAMEWORK-SURVEY-2026-09.md)（附录 H.4，原 docs/GLM-5.3-Flash-分布式部署调研并入）｜[模型选型](file:///d:/RPC/spec/model-eval/MODEL-SOURCING-2026-09.md) §6a
+**结论（2026-09-16 核查）**: glm5next **仍未合入 master**，但出现 **9/13 以来第一个「接近可合并」信号** —— **#27754（unsloth 首选线）45c + `mergeable_state=unstable` + 9/16 当日有活动**（此前三线全 Open 且无活动）；另两线为 46c（#27773，9/12 后未动，`dirty`）与 11c（#27752，`dirty`），#27917 仍 Draft。**新增风险面两条**：① **#28282** 报告在 **#27754 HEAD 上长 prefill（`-ub 2048`）出现 CUDA 非法访存**（`bug-unconfirmed`，非本集群后端，但说明该线**长 prefill 侧未验证**）；② 针对 GLM indexer `soft_max gridDim.y` 溢出的修复 **#28727/#28729 双双 closed 未合并**（无人承接）⇒ 若合并后长 prefill 异常，**先查此项**。**判定**：GLM-5.3-Flash 本地部署**维持等待**，事件驱动前置维持**三变二**不变（① 任一 PR 合并；② RPC crash 已由 #26500 修复，前置满足；③ 可选与 #26610 同窗原子升级），并**新增一条预警触发**：`#27754 转 clean + reviewer 批准` → 即启动评估环境准备（不必等合并）。 [行为快照追溯](file:///d:/RPC/spec/model-eval/FRAMEWORK-SURVEY-2026-09.md)（附录 H.4，原 docs/GLM-5.3-Flash-分布式部署调研并入）｜[模型选型](file:///d:/RPC/spec/model-eval/MODEL-SOURCING-2026-09.md) §6a
 
 ### 1.2 DeepSeek V4（deepseek4）算子链——Vulkan 后端
 
@@ -51,13 +54,14 @@ depends: [vulkan-version-control-UPGRADE_SOP v1.0, operator-optimization-DESIGN 
 
 > **层级界定**: 本节为「框架级」——架构/转换/分布式形态，区别于 §1.2 的 Vulkan 算子优化。直接关系到三机分布的 `-sm layer` → `-sm tensor` 演进与 V4.1 迁移。
 
-| PR | 层级 | 内容 | 状态（9/13） | 对集群影响 | 触发动作 |
+| PR | 层级 | 内容 | 状态（9/16 核查） | 对集群影响 | 触发动作 |
 |---|---|---|---|---|---|
-| [#26610](https://github.com/ggml-org/llama.cpp/pull/26610) | RPC/分布式 | RPC 层 add `-sm tensor`（全后端拉通） | 🔴 Open，**非 draft，mergeable=true/unstable，更新 9/12** — 近可合并 | **三机 tensor-split 中枢**：若合，配合 #25860/#26490 可把现役 `-sm layer` 演进到 `-sm tensor`（层均衡更细）| 合并 → 与该 PR 同窗评估是否升级（与 GLM #26610 引用同一 PR）|
-| [#25860](https://github.com/ggml-org/llama.cpp/pull/25860) | 架构/前端 | Deepseek V4: split-mode tensor | ⚪ Draft **且 mergeable=false/dirty**，更新 7/30，停滞 | 设计草案，配套 #26610 | 待其/上游转绿 |
-| [#28696](https://github.com/ggml-org/llama.cpp/pull/28696) | 转换 | convert: add DeepSeek V4.1 (DeepseekV41ForCausalLM) | ⚪ **Draft**，conversion，更新 9/12 | V4.1 新架构转换入口（9/10 发布 V4.1-Flash）| 观察（V4-Flash 上游重心已移向 V4.1）|
-| [#23122](https://github.com/ggml-org/llama.cpp/pull/23122) | 底层算子 | ggml: add DSV4 hyperconnection + KV ops (CPU) | 🔴 Open，非 draft，更新 8/1 | CPU 底层 dsv4 算子入主线 → 基线 | 合并即入基线 |
-| [#28569](https://github.com/ggml-org/llama.cpp/pull/28569) | 架构 | model: re-enable `-sm tensor` for qwen4exp | 🔴 Open，更新 9/8 | 姊妹架构 tensor-split 验证 | 观察 |
+| [#26610](https://github.com/ggml-org/llama.cpp/pull/26610) | RPC/分布式 | RPC 层 add `-sm tensor`（全后端拉通） | 🔴 Open，**非 draft，3 commits / 2 files，更新 2026-09-16（当日有活动）** — `mergeable_state` 本次读数为 `unknown`（GitHub 惰性计算，非状态回退）；**最可合并候选** | **三机 tensor-split 中枢**：若合，配合 #25860/#26490 可把现役 `-sm layer` 演进到 `-sm tensor`（层均衡更细）| 合并 → 与该 PR 同窗评估是否升级（与 GLM 侧引用同一 PR）|
+| [#25860](https://github.com/ggml-org/llama.cpp/pull/25860) | 架构/前端 | Deepseek V4: split-mode tensor | ⚪ Draft，2 commits，更新 7/30，停滞 | 设计草案，配套 #26610 | 待其/上游转绿 |
+| [#28696](https://github.com/ggml-org/llama.cpp/pull/28696) | 转换 | convert: add DeepSeek V4.1 (DeepseekV41ForCausalLM) | ⚪ **Draft**，2 commits，**更新 9/13**（9/13 台账记 9/12，有触碰） | V4.1 新架构转换入口（9/10 发布 V4.1-Flash）| 观察（V4-Flash 上游重心已移向 V4.1）|
+| [#23122](https://github.com/ggml-org/llama.cpp/pull/23122) | 底层算子 | ggml: add DSV4 hyperconnection + KV ops (CPU) | 🔴 Open，非 draft，2 commits，更新 8/1 | CPU 底层 dsv4 算子入主线 → 基线 | 合并即入基线 |
+| [#28569](https://github.com/ggml-org/llama.cpp/pull/28569) | 架构 | model: re-enable `-sm tensor` for qwen4exp | 🔴 Open，1 commit，更新 9/8 | 姊妹架构 tensor-split 验证 | 观察 |
+| [#25452](https://github.com/ggml-org/llama.cpp/issues/25452) ⭐新 | 运行时/KV | **Eval bug: DSV4-Flash churned-reuse SWA KV-cache exhaustion（crash + stall）** —— SWA（滑窗注意力）cache 在"轮换复用"路径下被耗尽，表现为崩溃与停顿；label `bug-unconfirmed,stale`，**12 评论**（社区在跟） | 🟡 Open（创建 **7/8**，**更新 9/15**） | **与本集群直接相关**：我们跑 V4-Flash 层分布长上下文，SWA cache 行为受 `-c`/ctx 与 slot 复用影响 —— 但**报告者环境为 CUDA 5 卡（非 Vulkan）**，后端相关性未定 | **待自测甄别**：复现条件（长 ctx + 多次轮换复用 + churn）落成一条对照实验；若 Vulkan 侧也复现 → 直接影响分布式长上下文可用性 |
 
 **架构核心历史（已 merged，v0.3.0/v0.4.0 基线，非待跟踪）**: DeepSeek V4 arch 支持（框架主线）、tensor-split、多序列 rollback、sparse-fa、Vision (#28154/#28133)、MTP/NextN、RPC event/async 基建。均已并入现役引擎升级链，状态见 §2.4。
 
@@ -158,6 +162,7 @@ depends: [vulkan-version-control-UPGRADE_SOP v1.0, operator-optimization-DESIGN 
 
 | 日期 | 操作 | 内容 |
 |---|---|---|
+| 2026-09-16 | **GLM-5.3-Flash + DS V4-Flash 上游状态核查（API fetch 原页，v1.2）** | **GLM**：#27754（unsloth 首选线）**43→45 commits（42 files）且 `mergeable_state=unstable` + 9/16 当日有活动** = **9/13 以来首个「接近可合并」信号**（仍未合入）；#27773 46c 未动 / #27752 11c / #27917 Draft 31c（三者均 `dirty`）；#27922 issue 仍 Open（实标题 "Feature Request: Support GLM5.3 (flash)"）。**新补录 3 条**：**#28282**（在 #27754 HEAD 上长 prefill `-ub 2048` 出现 CUDA 非法访存，`bug-unconfirmed`，更新 9/15 ⇒ 提示该线**长 prefill 侧未验证**）、**#28727 + #28729**（GLM indexer `soft_max gridDim.y` 溢出修复，**双双 closed 未合并**、无人承接）、**#28106**（`resolve_fused_ops` 只校验 device placement 不校验 tensor，8/31 创建、本次补录）。**判定**：维持等待 + **新增预警触发「#27754 转 `clean` 且 reviewer 批准 → 启动评估环境准备」**（不必等合并）+ 评估时**必须压测长 prefill**。**DS V4**：**#26610**（RPC `-sm tensor`）**9/16 仍有活动**（3 commits / 2 files；`mergeable_state` 本次惰性读作 `unknown`）⇒ 仍为**最可合并候选**；#25860 Draft 停滞（7/30）/ #28696 Draft（9/13 有触碰）/ #23122（8/1）/ #28569（9/8）均无实质变化；**新补录 #25452**（V4-Flash **SWA KV-cache 轮换复用耗尽 → crash/stall**，12 评论，创建 7/8、更新 9/15；**报告者环境为 CUDA 5 卡 ⇒ 后端相关性待自测甄别**）。**架构级无新 PR**（`deepseek4 in:title updated:>=2026-09-13` = 0） |
 | 2026-09-13 | **后端 GLM-5.3-Flash + density gate PR 状态核查（GitHub API fetch 原页）** | **glm5next 仍未合入 master**，但三线推进有实质变化：#27773（timkhronos 文本+视觉）**41→46 commits（9/12，三线最活跃）**；#27754（unsloth 首选线）**41→43 commits（9/11）**；#27332（vulkan density gate）**1→2 commits（9/9）**；#27752 11 commits 未变（仅被触碰 9/11）；#27917 仍 Draft 31 commits（head 5b8593b）；#27922 issue 仍 Open。**DSV4 算子链全 merged 不变**（#26578 9/7 / #27970 / #28133 9/2 / #28047 9/5 由 #26500 修复）。**结论**：无关键合并信号 → GLM-5.3-Flash 维持等待，事件驱动前置「三变二」不变 |
 | 2026-09-10 | **B 站 Q3.8F 两档清理：删 UD-Q4_K_XL（111.3G）+ GLM-5.3-Flash PR 状态核查** | **①B 站删除 `Qwen3.8-Flash-Next-UD-Q4_K_XL.gguf`（111,334,654,400 B / 104G 磁盘）**——该档超出单站（121G avail）安全余量（111.3G 权重 + KV 无富余，此前判定「单站无可部署」）；删除后磁盘 817G→923G 可用；保留 UD-IQ4_XS（93.7G，现役档，C→B 经 USB4 1.11GB/s 传输 + md5 三片一致）。**②GLM-5.3-Flash 五 PR fetch 原页核查（9/10）**：#27754 Open 41c 未变（前置 flag 更新：`NVIDIA_TF32_OVERRIDE=0`+`-fa off`）；#27752 Open **10→11c**（唯一变化）；#27773 Open 41c 未变；#27917 Draft 31c 未变（`--spec-type draft-mtp`）；#27922 Open（mmproj+文本双证 `unknown architecture 'glm5next'`）。**无合并信号 → GLM-5.3-Flash 维持等待** |
 | 2026-09-10 | **C 站 unsloth(HIP) 双模型实测：M2.7 + Q3.8F 均 ✅** | C 站 `~/.unsloth/llama.cpp` b10715（HIP/ROCm0，无 Vulkan）实测：**M2.7 UD-IQ4_XS（108.4G）** 加载 40s，quality 正常，**tg 24.4-24.8**（load-gate need=107 恰好过）；**Q3.8F-Next UD-IQ4_XS（93.7G）** 加载 25s，中/英/多轮无乱码，稳态 **22.6-23.2 t/s**（need=94）。**D.5 结论修正**：Q3.8F 的 HIP 乱码限 **LM Studio 内置 ROCm 引擎**（疑含 #27621 回归），**unsloth b10715 HIP 实测无 #28113 MoE 数值 bug** → C 站 Q3.8F HIP 非全坏，unsloth b10715 即回避方案。思考治理：`--reasoning-effort medium --reasoning-budget 2000` 生效（reasoning 仅 20-245 tok）。⚠️ M2.7 是 CoT 模型，max_tokens 须 > 思考长度否则 content 空。详见 [MODEL-SOURCING D.6](../model-eval/MODEL-SOURCING-2026-09.md) |
