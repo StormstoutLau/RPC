@@ -1,23 +1,23 @@
-# 分布式推理路线可行性调研：CIRU / StrixLink / Skulk（含 vLLM 多机 TP 与 AMD 官方路线）
+# 分布式推理路线可行性调研：CIRU StrixLink / Skulk（含 vLLM 多机 TP 与 AMD 官方路线）
 
-> **日期**: 2026-09-16
-> **触发**: 用户提出"当前分布式 llama 对 V4-Flash / GLM-5.3-Flash 支持力度不够"，要求评估 ① **CIRU StrixLink 部署 GLM-5.3-Flash** 与 ② **引入 Skulk 框架** 两条路线的可行性。
-> **证据等级**: E1=本轮实测/原页核实；E3=外部文档/官方站点；**E4=未确认**（明确标注，不采信）
-> **核查方式**: 定向联网检索 + fetch 官方文档原页；**不做二手转述推断**
+> **日期**: 2026-09-16（v2，同日修订：用户给出 `jcbtc/GLM5.3-Flash-CIRU-STRIX-IU4` 出处后**重新取证并推翻 v1 的"未证实"结论**）
+> **触发**: 用户提出"当前分布式 llama 对 V4-Flash / GLM-5.3-Flash 支持力度不够"，要求评估 ① **CIRU StrixLink 部署 GLM-5.3-Flash** 与 ② **引入 Skulk 框架** 的可行性。
+> **证据等级**: **E1**=本轮实测/`fetch` 原页核实；**E3**=外部文档；**E4**=未确认（明确标注，不采信）
+> **核查纪律**: 先确认**通道可达**再判定"有无"（v1 的教训见 §3）
 
 ---
 
-## 0. 结论先行
+## 0. 结论先行（v2）
 
 | 路线 | 可行性判定 | 一句话理由 |
 |---|---|---|
-| **① CIRU**（gfx1151 原生 vLLM/ROCm 发行） | 🟡 **单机可行、多机未证实** | 已确认它面向 **gfx1151 + 128GB UMA**、有 Ling-3.0-Flash 的实测战绩（0.269 → **26.23 t/s**，97.5×）；但 **GLM-5.3-Flash 的 CIRU 构建仅在一处第三方索引页出现（0 runs）**，且**未见任何多机/分布式声明** ⇒ 它解决的是"单站吞吐"，**不是**"分布式支持力度" |
-| **② StrixLink** | ⚪ **无法评估（未确认）** | 三轮定向检索 + HF API **均未命中任何**名为 StrixLink 的推理/互联项目（命中的全是 ASUS ROG Strix 主板、USB 延长器等同名无关物）⇒ **需用户提供来源**，本文不臆测 |
-| **③ Skulk** | 🟠 **可评估，但解决的不是同一问题** | 官方文档确认 **AMD Linux 支持 = `skulk-llama-server-vulkan` wheel**（我们在支持范围内）；但它**的推理后端就是 llama.cpp**（pinned llama-server，可 `SKULK_LLAMA_SERVER_BIN` 注入自有构建），vLLM 路径**仅 NVIDIA** ⇒ 它解决"多机编排/自愈/统一端点"，**不解决"Asus 上游尚未合并 glm5next"** |
-| **④ vLLM 多机 TP（Ray + 定制 RCCL + RoCE v2，kyuz0 路线）** | 🔴 **能力最匹配、但需硬件** | 这是唯一"真·多机张量并行（TP=2、~248GB 合并显存）"的成熟社区方案；**前提是 100GbE RDMA 网卡（Intel E810）+ DAC 直连**，而本集群只有 **USB4 ~9.4Gbps** 直连 ⇒ **硬件门槛** |
-| **⑤ 现状路线（llama.cpp RPC）+ 等上游** | ✅ 已跑通、且**有 AMD 官方背书** | AMD 官方 playbook《Clustering Two Ryzen AI Halos with RPC》就是这条：**llama.cpp RPC + ROCm 跑 GLM-4.7 358B 两机**；我们已用它跑通 V4-Flash（decode 14.02 t/s）。真正的瓶颈见 §2 |
+| **① CIRU StrixLink + GLM-5.3-Flash（`jcbtc/GLM5.3-Flash-CIRU-STRIX-IU4`）** | 🟢 **E1 已取证：这是"现成的双机 320B 部署包"，与本集群硬件同构度极高** | README 首句即"**320 billion parameters. Two Strix Halo PCs. Entirely local inference.**"——权重**已按 `rank-0`/`rank-1` 两机切好**（每机 ~**83.25 GiB**）、**vLLM/ROCm 10 定制运行时**、**gfx1151 专用内核**、`INSTALL-RUNTIME.sh` 自包含、**实测 decode 23.69 t/s / 402.5 prompt t/s**；**但它是 TP=2 双机方案 ⇒ 不能单机跑**，且要引入 **ROCm 10 + Python 3.14** 新栈 |
+| **② "StrixLink"** | ✅ **E1 已定位：它不是独立框架**，而是该部署包的组成部分 —— 官方 tag `ciru-strixlink` + `tools/ciru-strixlink-0.3.x-linux-amd64.tar.gz`，作用是"**配置/检查/准备两机连接**" | 关键：**前端（generation frontend, :8083）不依赖 CiruStrixLink 应用** ⇒ 我们可以**只用"两 rank + 前端"**，把 StrixLink 当诊断/连接工具，不必引入其常驻服务 |
+| **③ Skulk** | 🟠 可评估，但**不解决同一问题** | 官方原页确认 **AMD Linux = `skulk-llama-server-vulkan`**（我们在支持范围内）、引擎可注入；但**后端就是 llama.cpp** ⇒ 不改"上游未合 glm5next"的事实；且其**常驻 supervised service** 与"零自加载/看门狗禁用/唯一管理面"冲突 |
+| **④ vLLM 多机 TP（Ray + 定制 RCCL + RoCE v2）** | 🔴 能力最通用，但**需 100GbE RDMA 硬件** | 合并显存 ~248GB、RDMA 5µs 级延迟；**我们只有 USB4**。**注**：CIRU 路线在某种意义上已用 USB4 + 自有 all-reduce 实现了 TP=2（见 §2），故本条的"必须 100GbE"前提**对 CIRU 不适用** |
+| **⑤ 现状路线（llama.cpp RPC）+ 等上游** | ✅ 已跑通，**有 AMD 官方背书** | 官方 playbook《Clustering Two Ryzen AI Halos with RPC》= llama.cpp RPC + ROCm 跑 GLM-4.7 358B；但我们**只有 9/8 前构建的引擎**，glm5next 未合 |
 
-**一句话**：用户诊断的"支持力度不够"**根因在上游 PR 未合并 + 我们后端/链路的物理上限**，而不是"缺一个更好的框架"；**Skulk 能补编排、CIRU 能补单站吞吐，但都不改上游事实**；vLLM 多机 TP 才真正改能力上限，代价是 100GbE 硬件。
+**一句话（v2）**：用户诊断的"支持力度不够"**有一条现成解** —— **CIRU StrixLink 双机方案**（GLM-5.3-Flash 320B、UMA 分片权重、USB4 上自有 all-reduce、实测可用吞吐）；代价是**引入 ROCm 10/vLLM 新栈 + 需两机同时在场 + 治理接入**。Skulk 补的是编排，**不改上游事实**。
 
 ---
 
@@ -25,123 +25,179 @@
 
 引用 [upstream-tracker §1.4](../../spec/upstream-tracker/TRACKER.md) 的实测结论：
 
-1. **GLM-5.3-Flash 根本还没进 llama.cpp 主线**（glm5next 三线 Open；#27754 虽转为 `mergeable_state=unstable` 仍未合）⇒ **无论换哪个前端框架，只要引擎是 llama.cpp，就都装不了它**。
-2. **GLM-5.3 的 RPC 有已知未确认问题**（#28360，报告者第二台机器为 **GFX1151 与本集群同架构**）。
-3. **V4-Flash 的 `-sm tensor` 主体已合并（#26490，8/24）**，但**RPC 形态的 `-sm tensor` 仍待 #26610** ⇒ 我们现在只能用 `-sm layer`（粗粒度层分布）。
-4. 物理链路：三机 **USB4 直连 ~9.4 Gbps**（[strix-halo-llm-perf 实测](http://raw.githubusercontent.com/visorcraft/strix-halo-llm-perf/main/README.md)：两机 USB4 直连 ~9.4 Gbps effective）—— 这对**层分布**够用，对**张量并行**（每层都要 all-reduce）大概率不够（社区 TP 方案一律要求 100GbE RDMA，见 §4）。
+1. **GLM-5.3-Flash 尚未进 llama.cpp 主线**（glm5next 三线 Open；#27754 虽转 `mergeable_state=unstable` 仍未合）⇒ 只要引擎是 llama.cpp，就装不了它。
+2. **GLM-5.3 的 RPC 有已知未确认问题**（#28360，报告者第二台为 **GFX1151 同架构**）。
+3. **V4-Flash 的 `-sm tensor` 主体已合并（#26490，8/24）**，但 **RPC 形态待 #26610** ⇒ 现在只能用 `-sm layer`。
+4. 物理链路：三机 **USB4 直连 ~9.4 Gbps** —— 对层分布够用；**但 CIRU 的实测证明 USB4 上做 TP=2 是可行的**（用 USB4 硬件环 + DMA-BUF 自有 all-reduce，见 §2），**前提是内核支持 NHI/USB4STREAM**。
 
-> **推论**：要"对 V4/GLM 的支持力度"提升，只有三条路：**(a) 等上游合并**（最便宜）、**(b) 换单站可跑的引擎/量化档**（把"多机"变成"单站"，CIRU 属此类）、**(c) 换真正的多机 TP 栈**（vLLM+Ray+RCCL，需硬件）。
+> **推论**：提升"支持力度"的路只有三条：**(a) 等上游**；**(b) 换引擎**（CIRU=vLLM/ROCm 属此类）；**(c) 换通用多机 TP 栈**（vLLM+Ray+RCCL+RoCE，需 100GbE）。**CIRU 同时占了 (b) 且顺带给出 (c) 的 USB4 变体。**
 
 ---
 
-## 2. CIRU（gfx1151 原生 vLLM/ROCm 运行时发行）
+## 2. CIRU StrixLink —— `jcbtc/GLM5.3-Flash-CIRU-STRIX-IU4`（E1 已取证）
 
-**已确认的事实**（来源：HuggingFace 模型卡 `jcbtc/Ling-3.0-Flash-CIRU-int4-Strix-native`，经第三方索引页完整引用）：
+### 2.1 仓库事实（`hf-mirror.com` 原页，2026-09-16 实取）
+
+| 项 | 值 |
+|---|---|
+| 仓库 | `jcbtc/GLM5.3-Flash-CIRU-STRIX-IU4`（**HF**；likes **6**、downloads 0、`lastModified` **2026-09-08**、sha `93782912…`） |
+| 体量 | **103 文件 / 166.72 GiB** |
+| tags | `vllm` · `glm5_next` · `mixture-of-experts` · `rocm` · `amd` · `strix-halo` · `speculative-decoding` · `dflash2` · `custom-code` · **`ciru-strixlink`** |
+| base_model | **`zai-org/GLM-5.3-Flash`** + **`wtdcode/GLM-5.3-Flash-AWQ-W4A16`** |
+| license | `mixed-mit-apache-2.0`（有 `THIRD_PARTY_NOTICES.md` / `LICENSE_SCOPE.md` / `PUBLIC_RELEASE_CHECKLIST.md`） |
+| 权重布局 | **`rank-0/` 与 `rank-1/` 各 11 片 safetensors**（各 ~7.65 GiB×10 + 7.312 + 7.044 ≈ **83.4 GiB/机**）⇒ **已按两机切好** |
+| 运行时 | `runtime/packages/`：`vllm-0.1.0rc2.dev9+g9255fd9fb9.rocm100-cp314-cp314-linux_x86_64.whl`、`amd_aiter-0.1.0rc1` wheel、两个源码 tarball（vllm / aiter-gfx1151） |
+| 内核 | `runtime/gfx1151/*.so`（`iu4-m1` / `dense-kda` / `m4-residual` / `resident-g128` / `top8-epilogue` / `m8-align`）+ `packages/aiter-jit-gfx1151/module_aiter_core.so` ⇒ **编译好的 gfx1151 专用内核** |
+| 工具 | **`tools/ciru-strixlink-0.2.0 / 0.3.0 / 0.3.1 / 0.3.2 / 0.3.3 -linux-amd64.tar.gz`** |
+| 其它 | `config/tokenizer.json`、`assets/*.png`、`benchmarks/`、`docs/`、`runtime/generation-frontend/` |
+
+### 2.2 架构（README / `runtime/packages/README.md` 原文要点）
+
+- **两机两路张量并行（TP=2）**，两机都参与推理；**应用只看到单一端点**。
+- **通信两条路**：
+  - **Direct USB4 → NHI（Native Host Interface）**：把专用非缓存 HIP 分配导出为 **DMA-BUF 池**，经 **USB4 硬件环**交换，校验序号/epoch footer，在 GPU 上累加 BF16 分片。**实测 `[8,4096]`/64-KiB all-reduce 组件门中位 109.897–110.807 µs，对照 RCCL socket 340.904–342.745 µs（低 67.5–67.9%，bit-exact）**，每 rank 80 次交换无超时。
+  - 其它通信走**配置好的网络集合（RCCL/socket）**。
+- **生成必须经前端**：`runtime/generation-frontend/`（**FastAPI/Uvicorn，默认 `:8083`**，Apache-2.0）把**同一请求提交给两个 rank-local 的 `:8100` API**，返回 rank 0、drain rank 1。**前端可跑在任一节点，且不依赖 CiruStrixLink 应用。**
+- **CiruStrixLink 的职责**：帮助**配置/检查/准备**那条连接；可选 Launch 页可选 context profile、加载两个 rank、显示 host 级统一内存用量、报告 **Fast mode 是否真的就绪/在用**、卸载成对 rank。
+
+### 2.3 量化与质量（原文实测，WikiText 767 个匹配位置、全 154,880 词表打分）
+
+| 指标 | 官方 BF16 | CIRU STRIX IU4 |
+|---|---:|---:|
+| Perplexity | 2.1486 | **2.2612**（+**5.24%**） |
+| Top-token 一致率 | — | **91.92%** |
+| BF16 top 落在量化 top-5 / top-10 | — | **99.35%** / **99.48%** |
+| 正向 KL（均值 / 中位 / P95） | — | 0.0943 / 0.0122 / 0.5059 nats |
+
+- 权重：路由专家 **对称 4-bit + 每 128 组共享 scale**，敏感组件保高精度 ⇒ **平均 ~4.46 bits/param**（非严格 4-bit）。
+- 作者自己限定："这是**量化检查**，不是完整 WikiText 评测、不是能力评分、不是与其他量化的排名"。
+
+### 2.4 性能（原文实测，64K profile + NHI + DFlash2 k7 + prefix caching + 2,304 batch）
+
+- **402.455 prompt tokens/s**、**TTFT 5.089 s**、**decode 23.686 t/s**（不含 prefill）、**draft acceptance 56.593%**（2,048 prompt × 128 output）
+- DFlash2 = 一次提 5 个 draft token 交目标模型一起验；batch budget 2,304 为默认（8,192 / 20,480 均未改善或未能启动）
+- context profile：**1 = 64K/6 GiB KV**（低内存回退）、**2 = 128K/12 GiB KV（默认，131,200 tokens）**、**3 = 256K/8 GiB**（实验）；三者 host staging 均 8 GiB
+- `VLLM_NHI_TIMEOUT_MS` 默认 30 s（避免 rank 首次 JIT 触发 1 s 对端超时）
+
+### 2.5 硬件与软件要求（**决定可行性的核心**）
+
+| 项 | 要求 | 与本集群对照 |
+|---|---|---|
+| 机器 | **两台 Strix Halo，各 128 GiB 统一内存**，经 **USB4** 连接；GPU `gfx1151` | ✅ **完全同构**（A/B/C 均 gfx1151 + 128GB + USB4 三角直连） |
+| 软件栈 | **ROCm 10.0.0** + 自带 vLLM 运行时；PyTorch **2.13.0+rocm10.0.0**；**Python 3.14.3**；AITER `ec6b1a5d…`；**TileLang 0.1.10 + Apache TVM FFI 0.1.10（必需）** | ⚠️ **A/B 现为纯 Vulkan 路线（无 ROCm）**；C 站为 ROCm 7.2.1（**非 10**）⇒ 需新引入整套 ROCm 10 环境 |
+| 内核 | **Direct-NHI 需 USB4STREAM/NHI 支持的内核**（实测用 **NixOS + Linux 7.2.2**）；**"通用 USB4 内核不足以提供 direct-NHI 路径"** | ⚠️ 我们 Ubuntu 内核为 6.x ⇒ **大概率拿不到 110 µs 直连**，退回 **RCCL/socket 网络集合（≈341 µs）**；性能红利需打折 |
+| wheel 平台 | 构建于 **Ubuntu 24.04（glibc 2.39 / GCC 13）**，tag `cp314-cp314-linux_x86_64`，**非 manylinux**、无 host 特定 RPATH ⇒ "**Ubuntu 24.04+ 或等价兼容**" | ✅ 若站上为 Ubuntu 24.04+ 则**在目标范围内**（这半解了"非 NixOS 未测试"的顾虑）；NixOS 另提供 module |
+| 磁盘 | 每机 **~83.25 GiB 权重** + draft + runtime + 缓存（"substantial additional storage for disk caching"）；建议本地 NVMe | ⚠️ **需核三站 NVMe 余量**（今天刚做过 C→A 202 GB 传输） |
+| 内存 | 128K 默认档：**12 GiB GPU KV + 8 GiB host staging /机**；与其它应用共享同一物理内存 | ⚠️ 与现有模型驻留互斥，需走 `load-gate` |
+
+### 2.6 与既有约束的冲突与化解
+
+| 约束 | 冲突 | 化解（初步） |
+|---|---|---|
+| **ADR-0004 唯一管理面** | 新增两 rank 的 `:8100` API + `:8083` 前端（+可选 CiruStrixLink Launch 页面） | 把"两 rank + 前端"当作**一个新的引擎面**纳入统一入口（类比 `infer-load` 的既有一致性范式）；**前端不依赖 CiruStrixLink** 这点使耦合可控 |
+| **零自加载纪律** | 它自带服务安装程序（`INSTALL-RUNTIME.sh` 落 `/srv/llm/...`） | **不走它的开机自启**：由我们的入口按需拉起/停止（**比 Skulk 的常驻 supervisor 好处理**） |
+| **C 站看门狗禁用 / load-gate** | 12 GiB KV + 8 GiB staging 需并入内存预算 | 纳入 `load-gate` 的占用登记 |
+| **A/B 的 Vulkan 路线** | 需 ROCm 10 + Python 3.14 | **仅在参与该模式的机器上引入**（建议先 A+B 或 B+C 两台，第三台不动） |
+
+---
+
+## 3. "StrixLink" 的确切身份 + **v1 误判的复盘**
+
+### 3.1 身份（E1）
+
+**StrixLink 不是独立框架**，而是 CIRU 部署包的组成部分：
+
+- HF tags 明列 **`ciru-strixlink`**；
+- 包内 `tools/ciru-strixlink-0.2.0 … 0.3.3-linux-amd64.tar.gz`（5 个版本，最新 **0.3.3**）；
+- 职责（README 原文）："**CiruStrixLink helps configure, inspect, and prepare that connection**"——即**两机 USB4/NHI 连接的配置与诊断工具**（含 Launch 页：选 context profile、加载两 rank、显示 host 统一内存、报告 **Fast mode** 是否真就绪、卸载成对 rank）；
+- 外部还有 GitHub 组织 **`github.com/ciru-ai/CiruStrixLink`**（README 引用其 `docs/performance.md`），包内另有 `docs/STRIXLINK-TRANSPORT.md`。
+
+**⇒ 结论修正**：用户所说"CIRU StrixLink"= **CIRU 的 Strix Halo 双机互联/部署方案**，与"GLM-5.3-Flash 双机部署包"是同一件事的两面。
+
+### 3.2 v1 为什么判成"未确认"（方法论复盘，必须记下）
+
+- v1 依据"，三轮定向检索 + HF API **全未命中**"得出"未确认"，并写明"不臆测"。
+- **真实原因**：**主控与 B 站直连 `huggingface.co` 均超时（`WinError 10060` / `http=000`）** —— 即 **HF 在本地网络不可达**；而我的检索通道与 `WebFetch` 同样取不到该页 ⇒ **"取不到"被误读为"不存在"**。
+- **修正后的可用通道（重要运维事实）**：**站上 `hf-mirror.com` 可达（HTTP 200）**；本次全部取证均经此通道完成（`curl hf-mirror.com/api/models/...` + `/resolve/main/...`）。
+- **教训（已回写记忆）**：**判"不存在"之前，必须先证明"通道可达"**（对 HF 这类分区可达站点尤其如此）；等价于本仓既有的"判据必须能自证"纪律在**取证通道**上的推广。
+
+---
+
+## 4. Skulk（多机 AI 计算互联 fabric）—— E1 已确认
 
 | 项 | 内容 |
 |---|---|
-| 它是什么 | "**CIRU's native vLLM/ROCm runtime distribution**" —— 面向 **AMD Strix Halo `gfx1151`** 的运行时发行版：**官方 checkpoint 不改**（不重新量化/不合并/不改名）+ **pinned vLLM fork** + **ROCm 7.15 构建配方** + 在 **Radeon 8060S / 128GB UMA** 上验证过的启动档 |
-| 组成 | vLLM commit `d35eb6c` + **15-commit CIRU 分支**（净改动 6 文件 / +365 / −26）；含 `liminfei-amd` 的 **Wave32 LDS fix**（保留原作者署名）；gfx1151 Triton/HSA fault 的 opt-in attention-state merge |
-| 实测战绩（Ling-3.0-Flash） | 上游可跑基线 **0.269 t/s** → 本发行 **21.44 t/s**（target-only）/**26.23 t/s**（原生 MTP K1，acceptance 82.35%）＝ **97.55×** |
-| 关键优化（按收益排序） | ① **禁用 ROCm skinny-GEMM 在 Wave32 的病态分发**（单这一项 **28.16×**）② vLLM compile mode 3 + graphs off ③ 一致的 ROCm 7.15 / Torch 2.13 / Triton 3.8 栈 ④ W4A16 MoE expert 分配与 reduce ⑤ 多 token verifier 路由 + 原生 MTP K1 ⑥ gfx1151 专用 Triton SiLU-and-multiply kernel |
-| **GLM-5.3-Flash 构建** | ⚠️ **仅在一处第三方索引页出现**：`jcbtc/GLM5.3-Flash-CIRU-STRIX-IU4`（**Total runs: 0**）。直接 fetch 该 HF 页面**失败**，二次定向检索**无结果** ⇒ **未证实可用**（IU4 = INT4 档，具体尺寸/显存需求/是否单站可跑**均未知**） |
-| **多机/分布式** | **未声明**。模型卡明确"These are **local single-host** measurements" ⇒ **CIRU 不是分布式方案** |
+| 定位 | "interconnect fabric for multi-node AI compute"：多机组成集群、跨机搬工作量；对外**一个 OpenAI 兼容端点**（`/v1/chat/completions`） |
+| 三平面 | compute（跨机交换激活值）/ control（集群决策、任务生命周期、节点健康）/ data（结果回流） |
+| 引擎与后端 | **AMD Linux：`skulk-llama-server-vulkan` wheel**（NVIDIA 先 CUDA、失败回退 Vulkan）；macOS 走 in-process MLX；**vLLM 仅 `--with-vllm` 且仅 NVIDIA Linux**；可 `SKULK_LLAMA_SERVER_BIN` 注入自有 llama-server、`SKULK_NO_ENGINE_AUTOPROVISION=1` 关自动供给 |
+| 形态 | macOS 15+/Ubuntu-Debian 包；dashboard `:52415`；**master 选举 + 自愈 + 崩溃重启 + 重平衡**；Tailscale 远程；tracing/flight recorder |
 
-**与本集群契合度（试点成本）**
-- ✅ **C 站基本同构**：gfx1151 + 128GB UMA + **ROCm 7.x**（C 站已装 ROCm 7.2.1）⇒ CIRU 的 ROCm 7.15 栈需升级/或用自己的容器，属可控工作。
-- ✅ 走 **vLLM**（而非 llama.cpp）⇒ **绕开 glm5next 上游依赖**：**只要 CIRU 的 vLLM fork 支持该架构，就能跑 GLM-5.3-Flash** —— 这正是"支持力度不够"的一条真实出路（**换引擎**而非等上游）。
-- ⚠️ **A/B 站是 Vulkan 路线**（无 ROCm/HIP 运行链），CIRU 只在 C 站可试 ⇒ 若走此路，**C 站成唯一 GLM-5.3 承载点**（单站 128GB，是否装得下取决于 IU4 档实际大小——**待验证**）。
-- ⚠️ 治理冲突：与"零自加载纪律"和 [ADR-0004](../../adr/ADR-0004-统一管理入口为唯一管理面.md) 的统一管理面需重新对齐（新的启动/落盘形态）。
+**判断**：✅ AMD+Vulkan 在官方支持路径内；✅ 引擎可注入（理论上可喂自编译 glm5next llama-server）；❌ **不改上游事实**；⚠️ **常驻 supervised service** 与零自加载/load-gate/看门狗禁用/唯一管理面冲突 ⇒ **引入前先裁决"谁管生命周期"**。
 
-**结论**：**值得做一次单站试点**（成本可控、绕开上游依赖），但**不要把它当成"分布式方案"**。
+**与 CIRU 路线的对比（这是 v2 新增的关键判断）**：
 
----
+| 维度 | CIRU StrixLink | Skulk |
+|---|---|---|
+| 后端 | **vLLM / ROCm 10**（**绕开 glm5next 上游依赖**） | **llama.cpp / Vulkan**（仍受上游约束） |
+| 模型支持现状 | **已给出可跑的 GLM-5.3-Flash 320B 双机包**（E1） | 取决于 llama.cpp 是否合 glm5next（今日仍未合） |
+| 多机机制 | TP=2 + USB4 NHI/DMA-BUF 自有 all-reduce（实测 110 µs） | 自有 fabric + 流水式放置 |
+| 生命周期 | **前端不需常驻**（可不装其服务） | **常驻 supervisor**（与我们的纪律冲突更大） |
+| 适配工作量 | 需引入 ROCm 10 栈（两机）+ 磁盘/内核条件 | 需解决治理归属 + 仍需自编译引擎 |
 
-## 3. StrixLink —— 未确认，不予评估
-
-- 三轮定向检索（`CIRU StrixLink` / `"StrixLink" multi-node Strix Halo` / `"StrixLink" 分布式`）+ HF API 查询**全部未命中**任何相关项目。
-- 命中的同名物均为**无关**：ASUS ROG Strix 主板/笔记本、Aniston **StrixLink USB-100**（USB 3.2 延长器）、游戏攻略里的 "Shadowstrix"。
-- 因此：**本文不臆测它的形态与能力**。若用户手上有出处（GitHub / HF / Discord / 社区帖），请提供，我可按 [upstream-tracker §1.4](../../spec/upstream-tracker/TRACKER.md) 的做法**fetch 原页**后补一条正式条目。
-- 需要留意的**同族命名**：CIRU 的 GLM-5.3 构建名里就含 **STRIX**（`GLM5.3-Flash-CIRU-STRIX-IU4`）⇒ 若 "StrixLink" 是 CIRU 生态的多机组件，它应当是"CIRU 的 vLLM/ROCm + 某种跨机互联"的组合，但**当前无任何公开证据**。
+⇒ **对"GLM-5.3-Flash 分布式"这一具体目标，CIRU 路线的性价比高于 Skulk。**
 
 ---
 
-## 4. Skulk（多机 AI 计算互联 fabric）
+## 5. 另外两条（v1 保留，结论微调）
 
-**已确认的事实**（来源：官方文档站点 `foxlight-foundation.github.io/Skulk`，含 `build-and-runtime` 原页）：
+### 5.1 vLLM 多机 TP（Ray + 定制 RCCL + RoCE v2）
 
-| 项 | 内容 |
-|---|---|
-| 定位 | "**interconnect fabric for multi-node AI compute**" —— 把多台机器组成一个集群，跨机搬工作量"如同单设备"；主打**分布式推理**，对外是**一个 OpenAI 兼容端点**（`/v1/chat/completions`） |
-| 三平面 | **compute**（跨机交换模型激活值）/ **control**（集群决策、任务生命周期、节点健康）/ **data**（生成结果回流） |
-| 引擎与后端 | **AMD Linux：装 `skulk-llama-server-vulkan` wheel**（NVIDIA Linux 先是 CUDA wheel、失败回退 Vulkan）；macOS 走 in-process MLX；**vLLM 仅 `--with-vllm` 且仅 NVIDIA Linux**；可 `SKULK_LLAMA_SERVER_BIN` **注入自有 llama-server**，`SKULK_NO_ENGINE_AUTOPROVISION=1` 关自动供给 |
-| 形态 | macOS 15+/Ubuntu-Debian 包（apt/brew）；dashboard `:52415`；**master 选举 + 自愈 + 崩溃重启 + 节点离开/回归重平衡**；Tailscale 远程；tracing/flight recorder；speech 模型亦可 |
-| 分裂方式 | 自行把模型"split across as many machines as it needs"并**按流水路由**（pipeline 式），非 llama.cpp RPC 语义 |
+来源：[kyuz0/amd-strix-halo-vllm-toolboxes](https://github.com/kyuz0/amd-strix-halo-vllm-toolboxes)（含 `rdma_cluster/setup_guide.md`，Fedora 43 实测）：**vLLM（TP=2）+ Ray + 定制 gfx1151 RCCL + RoCE v2**，需 **2×100GbE RDMA NIC（Intel E810-CQDA1）+ DAC**、BIOS/内核参数一整套；收益：合并显存 **~248GB**、跨机延迟 **70-100 µs → ~5 µs**。
+**v2 微调**：CIRU 证明**在 USB4 上也能做 TP=2**（NHI 硬件环 + DMA-BUF，110 µs 组件门）⇒ "TP 必须 100GbE"**不是普适律**，而是"通用 RCCL/TCP 路径下的现实"；若走 CIRU 那套自有 all-reduce，则 100GbE 非必需（但需 NHI 内核）。
 
-**与本集群的契合/冲突**
-- ✅ **AMD Linux + Vulkan 在官方支持路径内**（正是我们的后端）。
-- ✅ **引擎可注入** ⇒ 理论上可把"我们自编译含 glm5next 的 llama-server"喂给它 → **这是把 GLM-5.3 拉上多机的唯一非等上游路径**（前提：GLM 分支在 Vulkan/gfx1151 上可用；且 #28360 的 RPC 类问题不在 Skulk 自己的通信层复现）。
-- ⚠️ **它不改上游事实**：默认引擎是 pinned llama-server；GLM-5.3 仍需自己编译分支。
-- ⚠️ **治理冲突（最需要评估的一条）**：Skulk 是**常驻 supervised service**（开机自启、崩溃自重启）—— 与本集群"**零自加载纪律**"、`load-gate` 内存闸门、[ADR-0004](../../adr/ADR-0004-统一管理入口为唯一管理面.md) 唯一管理面、以及 C 站"看门狗禁用硬规则"**直接冲突**。引入前必须解决"谁管生命周期"。
-- ⚠️ 它是**新的一层**（自带 master/placement/存储/端点）⇒ 与现有 `cluster.py` 能力重叠，需按 ADR-0004 的 D3（新增能力三条合法路径）正式裁决，不能并存两套管理面。
+### 5.2 AMD 官方 playbook（我们已在走的路线）
 
-**结论**：**可以评估，但要先答"治理归属"**；且它解决的是"多机编排与可用性"，不是"上游模型支持"。**建议作为 §5 的 B 方案试点**（用小模型先验证 Vulkan 引擎注入 + 治理边界）。
+[developer.amd.com/playbooks/clustering-rpc-server](https://developer.amd.com/playbooks/clustering-rpc-server/) = **llama.cpp RPC + ROCm 两机跑 GLM-4.7 358B**（`amd-ttm --set 120` 调 UMA、BIOS 0.5G 起步）⇒ 现路线有官方背书，**瓶颈在上游 PR 与物理链路，不在路线选择**。
 
 ---
 
-## 5. 另外两条被检索带出的、更该进评估表的路线
-
-### 5.1 vLLM 多机 TP（Ray + 定制 RCCL + RoCE v2）—— 能力最匹配，硬件是门槛
-
-来源：[kyuz0/amd-strix-halo-vllm-toolboxes](https://github.com/kyuz0/amd-strix-halo-vllm-toolboxes)（含 `rdma_cluster/setup_guide.md`，Fedora 43 实测）
-
-| 项 | 内容 |
-|---|---|
-| 架构 | **vLLM（TP=2）+ Ray（编排）+ 定制 gfx1151 RCCL（跨机张量同步）+ RoCE v2（RDMA）** |
-| 硬件要求 | **2× Strix Halo + 2× 100GbE RDMA NIC（Intel E810-CQDA1）+ DAC 直连**（Framework 主板需 x4→x16 转接）；BIOS iGPU 512MB + 内核参数（`iommu=pt pci=realloc pcie_aspm=off amdgpu.gttsize=... ttm.pages_limit=...`） |
-| 收益 | 合并显存 **~248GB**；RDMA 把跨机延迟从 **70-100 µs → ~5 µs** |
-| 本项目对照 | 我们**只有 USB4 ~9.4Gbps** 直连、无 100GbE NIC ⇒ **当前不可行**；若采纳，这是一次**硬件决策**（3 台各加 NIC + 转接 + 交换机/DAC） |
-| 关键判断 | 这是**唯一真正改变"能力上限"的路线**（TP 而非层流水），也是**唯一能同时吃 GLM-5.3/V4 大档的**（前提：vLLM 侧架构支持，与 CIRU 同源） |
-
-### 5.2 AMD 官方 playbook —— 我们已在走的路线，且有官方背书
-
-来源：[developer.amd.com/playbooks/clustering-rpc-server](https://developer.amd.com/playbooks/clustering-rpc-server/)
-
-- 官方教的就是 **llama.cpp RPC + ROCm 两机跑 GLM-4.7 358B**，含 `amd-ttm --set 120` 调 UMA、BIOS 0.5G 起步、Lemonade SDK 或源码构建。
-- ⇒ **我们的现路线与官方一致**；瓶颈不在"路线错"，而在 §1 的上游 PR 与物理链路。
-
----
-
-## 6. 建议（按性价比排序）
+## 6. 建议（v2，按性价比）
 
 | 序 | 动作 | 成本 | 收益 | 前置 |
 |---|---|---|---|---|
-| 1 | **等 + 盯 #26610 / #27754**（已在 §1.4 建预警触发） | 0 | 一次性解锁 RPC `-sm tensor` 与 glm5next | 无 |
-| 2 | **CIRU 单站试点（C 站）**：验证 gfx1151 上 vLLM/ROCm 能跑 GLM-5.3（若 `GLM5.3-Flash-CIRU-STRIX-IU4` 可获取） | 中（拉权重 + ROCm 7.15 栈） | **绕开上游依赖**，单站即得可用 GLM-5.3（吞吐见 CIRU 战绩） | 需先确认该 IU4 档的实际大小/显存需求（**未证实**） |
-| 3 | **Skulk 治理评估**（先答"谁管生命周期"再谈技术） | 小（文档 + 决策）→ 中（试点） | 多机 fabric/自愈/统一端点；引擎可注入 | ADR-0004 裁决；与"零自加载/看门狗禁用"对齐方案 |
-| 4 | **100GbE RDMA 硬件评估**（若目标是"真多机 TP 跑大档"） | 大（硬件） | 唯一改变能力上限的路线（~248GB、5µs 级同步） | 硬件预算决策 |
-| — | **StrixLink** | — | — | **需用户提供来源**（未确认，不评估） |
-
-**共同前置：任何多机 GLM-5.3 动作，都要先按 [#28360](../../spec/upstream-tracker/TRACKER.md)（同架构报告者的 RPC 问题）做复现自测。**
+| **1** | **等 + 盯 #26610 / #27754**（§1.4 已建预警触发） | 0 | 一次性解锁 RPC `-sm tensor` 与 glm5next | 无 |
+| **2** | **CIRU StrixLink 双机部署评估（A+B 或 B+C）** —— 拉取 2×83.25 GiB（**经 hf-mirror**）、铺 ROCm 10 + Python 3.14 栈、跑 `INSTALL-RUNTIME.sh`、以 `:8083` 前端接入统一入口 | 中高（两机新栈 + 磁盘 + 治理接入） | **当场得到可用的 320B GLM-5.3-Flash**（实测 decode 23.69 t/s），**且完全绕开上游 PR 等待** | ① 三站 NVMe 余量核对；② 内核是否有 USB4STREAM/NHI（否则接受 RCCL 路径性能）；③ ADR-0004 立项 |
+| **3** | **内核/NHI 前置勘查**（与 2 并行）：确认我们内核能否支持 NHI 直连；不行则评估换 NixOS/新内核的代价 | 小（勘查）→ 大（换内核） | 决定是否能拿到 110 µs 直连（即 67% 的 all-reduce 延迟红利） | 无 |
+| **4** | **Skulk 治理评估**（先答"谁管生命周期"） | 小（决策）→ 中（试点） | 多机 fabric/自愈/统一端点；可注入自有引擎 | ADR-0004 裁决 |
+| **5** | **100GbE RDMA 硬件评估** | 大（硬件） | 通用 TP 栈（Ray+RCCL+RoCE）的必备条件 | 预算决策 |
+| — | **StrixLink** | — | — | ✅ **已取证闭环**（见 §2/§3），不再是待办 |
 
 ---
 
-## 7. 待验证清单（进入评估表时随行）
+## 7. 待验证清单（v2）
 
-1. `GLM5.3-Flash-CIRU-STRIX-IU4` 是否真实可获取？体积/量化档/显存需求？（**当前 0 runs、页面不可达**）
-2. CIRU 是否有多机组件？（若用户所说 StrixLink 即此，需出处）
-3. C 站升级到 ROCm 7.15 栈的代价（现 7.2.1；A/B 为 Vulkan 无 ROCm 链）。
-4. Skulk 在 AMD Vulkan 下注入**自编译 glm5next llama-server** 是否可行（需小模型先行验证引擎注入）。
-5. Skulk 的常驻服务与本集群"零自加载/load-gate/看门狗禁用"的冲突解法。
-6. 若上 100GbE：三机 NIC + 转接 + DAC 的采购与 BIOS/内核参数变更（对照 §5.1 的 Fedora 43 配方）。
+1. **三站 NVMe 余量** vs 每机 ~83.25 GiB 权重 + draft + runtime + 缓存（C→A 刚传 202 GB）。
+2. **内核 NHI/USB4STREAM 支持**：现内核是否有 `usb4`/NHI 直通路径？（决定 110 µs 直连能否用；不能用则接受 RCCL ≈341 µs）
+3. **ROCm 10 与现有 ROCm 7.2.1 共存/升级**路径（C 站）；A/B 引入 ROCm 的最小代价。
+4. **Python 3.14 环境**（wheel 是 `cp314`）与现有栈隔离（venv/uv）。
+5. **治理接入方案**：`两个 :8100 rank + :8083 前端` 如何并入唯一管理面、如何纳入 `load-gate` 内存预算、如何保持零自加载。
+6. **NHI 不可用时的性能实测**：走 RCCL/socket 时 TP=2 在 USB4 9.4 Gbps 上的真实 decode 吞吐（对照作者 NHI 下的 23.69 t/s）。
+7. `ciru-ai/CiruStrixLink` GitHub 仓库的版本/变更节奏（判断是否值得跟）。
+8. 权重完整性校验：166.72 GiB / 103 文件的逐文件哈希（对照 HF 侧 sha 或 LFS 指针）。
 
 ---
 
 ## 8. 来源
 
-- [Skulk 官方文档（Introduction）](https://foxlight-foundation.github.io/Skulk/)｜[Source Builds And Runtime Paths（引擎供给：AMD Linux = `skulk-llama-server-vulkan`）](https://foxlight-foundation.github.io/Skulk/build-and-runtime)
-- [CIRU 运行时发行说明（Ling-3.0-Flash-CIRU-int4-Strix-native，经索引页完整引用）](https://www.toolify.ai/ai-model/jcbtc-ling-3-0-flash-ciru-int4-strix-native)（同页列出 `jcbtc/GLM5.3-Flash-CIRU-STRIX-IU4`，Total runs: 0）
-- [kyuz0/amd-strix-halo-vllm-toolboxes（vLLM+Ray+RCCL+RoCE v2 集群）](https://github.com/kyuz0/amd-strix-halo-vllm-toolboxes)｜[RDMA 集群设置指南（日文转述）](https://www.hakusoku.com/story/8163)｜[Getting Started（单机 vs RDMA 集群对照）](https://deepwiki.com/kyuz0/amd-strix-halo-vllm-toolboxes/2-getting-started)
+**一手（本轮实取）**
+- **HF 仓库原页（经 hf-mirror）**：`jcbtc/GLM5.3-Flash-CIRU-STRIX-IU4` —— `api/models/...`（元数据/tags/sha）+ `tree/main?recursive=true`（**103 文件 / 166.72 GiB / rank-0|rank-1 分片**）+ `raw/main/README.md`（320B/两机/SW 要求）+ `raw/main/runtime/packages/README.md`（版本矩阵、`INSTALL-RUNTIME.sh`、前端 `:8083`、实测性能、NixOS module）
+- [Skulk 官方文档（Introduction）](https://foxlight-foundation.github.io/Skulk/)｜[Source Builds And Runtime Paths](https://foxlight-foundation.github.io/Skulk/build-and-runtime)
+- [kyuz0/amd-strix-halo-vllm-toolboxes](https://github.com/kyuz0/amd-strix-halo-vllm-toolboxes)｜[Getting Started（单机 vs RDMA）](https://deepwiki.com/kyuz0/amd-strix-halo-vllm-toolboxes/2-getting-started)
 - [AMD 官方 playbook: Clustering Two Ryzen AI Halos with RPC](https://developer.amd.com/playbooks/clustering-rpc-server/)
-- [strix-halo-llm-perf（USB4 ~9.4 Gbps 实测 + 分布式 RPC 结果）](http://raw.githubusercontent.com/visorcraft/strix-halo-llm-perf/main/README.md)
-- 本仓：[upstream-tracker §1.4](../../spec/upstream-tracker/TRACKER.md)｜[ADR-0004](../../adr/ADR-0004-统一管理入口为唯一管理面.md)
+- [strix-halo-llm-perf（USB4 ~9.4 Gbps 实测）](http://raw.githubusercontent.com/visorcraft/strix-halo-llm-perf/main/README.md)
+
+**二手（仅作旁证）**
+- [CIRU 运行时发行说明索引页（Ling-3.0-Flash-CIRU-int4-Strix-native）](https://www.toolify.ai/ai-model/jcbtc-ling-3-0-flash-ciru-int4-strix-native)
+
+**本仓**
+- [upstream-tracker §1.4/§1.5](../../spec/upstream-tracker/TRACKER.md)｜[ADR-0004](../../adr/ADR-0004-统一管理入口为唯一管理面.md)
