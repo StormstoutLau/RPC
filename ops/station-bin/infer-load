@@ -20,13 +20,32 @@ done
 
 log() { echo "[infer-load] $(date '+%H:%M:%S') $*"; }
 
-# ---- [1] 解析 alias (唯一前缀匹配) ----
-MATCHES=$(find -L /data/models/gguf -mindepth 2 -maxdepth 2 -type d 2>/dev/null | \
-  sed 's|/data/models/gguf/[^/]*/||; s|-GGUF$||' | tr 'A-Z' 'a-z' | sed 's/^minimax-m2.7.*/m27-q4ks/' | grep "^${PREFIX}" | sort -u)
-N=$(echo "$MATCHES" | grep -c .)
-if [ "$N" -eq 0 ]; then echo "ERROR: 无匹配 '$PREFIX' (infer-list 查看)"; exit 1; fi
-if [ "$N" -gt 1 ]; then echo "ERROR: 前缀歧义 ($N 匹配):"; echo "$MATCHES"; exit 1; fi
-ALIAS="$MATCHES"
+# ---- [1] 解析 alias (前缀匹配, **精确匹配优先**) ----
+# 2026-09-16 修 (两个缺陷):
+#   ① 原实现只有前缀匹配 => 传**精确别名**也被判歧义。实测 `grep "^gpt-oss-120b"` 同时命中
+#      gpt-oss-120b 与 gpt-oss-120b-fable-5-distilled => `load gpt-oss-120b-b` 直接 exit 1。
+#   ② PREFIX 未转义 => `.` 是正则通配, `qwen3.8` 会命中 `qwen3x8` (误配)。
+#   修法: 候选集全列出 -> 精确相等者直接胜出 -> 否则才走唯一前缀; 前缀比较用 shell `case` 按**字面**串。
+ALL_ALIASES=$(find -L /data/models/gguf -mindepth 2 -maxdepth 2 -type d 2>/dev/null | \
+  sed 's|/data/models/gguf/[^/]*/||; s|-GGUF$||' | tr 'A-Z' 'a-z' | sed 's/^minimax-m2.7.*/m27-q4ks/' | sort -u)
+LOWER=$(printf '%s' "$PREFIX" | tr 'A-Z' 'a-z')
+EXACT=""; PFX=""
+while IFS= read -r _a; do
+  [ -z "$_a" ] && continue
+  if [ "$_a" = "$LOWER" ]; then EXACT="$_a"; break; fi
+  case "$_a" in "$LOWER"*) PFX="${PFX}${_a}
+";; esac
+done <<ALIAS_EOF
+$ALL_ALIASES
+ALIAS_EOF
+if [ -n "$EXACT" ]; then
+  ALIAS="$EXACT"
+else
+  N=$(printf '%s' "$PFX" | grep -c .)
+  if [ "$N" -eq 0 ]; then echo "ERROR: 无匹配 '$PREFIX' (infer-list 查看)"; exit 1; fi
+  if [ "$N" -gt 1 ]; then echo "ERROR: 前缀歧义 ($N 匹配):"; printf '%s\n' "$PFX"; exit 1; fi
+  ALIAS=$(printf '%s' "$PFX" | head -1)
+fi
 
 # ---- [2] 定位模型文件 + 生成 conf (若缺) ----
 CONF="/etc/llama-instances/${ALIAS}.env"
