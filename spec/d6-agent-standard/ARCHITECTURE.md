@@ -69,8 +69,8 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0002]
 | M2 task | 全链编排：sync→lock→run→collect→unlock      | 任务卡/命令行参数                | .agent-run.json + out/ 产物        | M1,M3,M4,M5 |
 | M3 router | 模型→站映射 + 三档敏感路由 + 拒绝规则 + sanitized scrubber + **复杂度路由（Resolve-Profile）** | model, sensitivity, cli, complexity, taskType | 目标站+调用参数 + 推理参数档（context/max_output/thinking/flavor） | ROUTE_TABLE(编译进代码) |
 | M4 lock/state | flock 获取/释放 + 状态机（孤儿检测）             | 工作区路径                    | 锁句柄 / .agent-state.json          | ssh        |
-| M5 preflight+collect | **Preflight**（Assert-AgentOutWritable 探针，失败 exit 12）+ **collect**（out/ 整包回收 + git diff 拉回 + ledger 先行 + collectOk 保护） | 工作区路径 + projRoot | 主控站 <proj>/agent-out/<ts>/ + agent-runs.log 一行 | tar+scp    |
-| 契约层    | .agent-run.json 归一（哈希三字段 + 观测字段）      | 执行结果 + 时间戳               | run.json                          | Write-RunJson |
+| M5 preflight+collect | **Preflight**（Assert-AgentOutWritable 探针，失败 exit 12）+ **collect**（逐件回收证据 + ledger 先行 + collectOk 保护 + **失败时保留 TEMP 件并打印 `EVIDENCE_LEFT_IN_TEMP=`**；2026-09-16 ADR-0005：5 个小件**合批单连接**回收） | 工作区路径 + projRoot | 主控站 <proj>/agent-out/<ts>/（**9 件**，见 §6 表）+ agent-runs.log 一行 | scp + 合批 base64 |
+| 契约层    | .agent-run.json 归一（哈希三字段 + `accept_golden.sha256/base` + 观测字段；**实现为内联**，无独立 `Write-RunJson`） | 执行结果 + 时间戳               | run.json                          | 内联于 Invoke-Task / Invoke-Task-Claude |
 
 **代码结构**（单文件幂等锚点，实施以 IMPLEMENTATION §3 为准，此处仅列边界）：
 - `Invoke-RemoteScript`：唯一 ssh 出口，本地生成 `/tmp/agent-cli-run-<ts>.sh` → scp → `ssh bash`，杜绝 PowerShell 引号展开
@@ -150,9 +150,10 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0002]
 | 类型       | 位置/文件                           | 关键字段                                                    |
 | -------- | ------------------------------ | ------------------------------------------------------ |
 | 任务卡     | <proj>/task-*.md（随 sync 进工作区）     | proj/task/model/sensitivity/readonly/timeout_s/accept + complexity/task-type（§6.4） |
-| 契约归一    | <proj>/agent-out/<ts>/.agent-run.json | 哈希三字段(prompt_sha256/content_digest/attach) + queue_s/run_s + readonly + profile(§6.4) + collect(ok/failed) + accept.passed |
+| 契约归一    | <proj>/agent-out/<ts>/.agent-run.json | 哈希三字段(prompt_sha256/content_digest/attach) + queue_s/run_s + readonly + profile(§6.4) + collect(ok/failed) + accept{cmd,passed} + **accept_golden{cmd,passed,source,hidden_from_model,sha256,base}**（后两项 2026-09-16 ADR-0005 增） |
+| **证据件**（2026-09-16 ADR-0005） | <proj>/agent-out/<ts>/ | `agent-output.txt` / `accept-output.txt` / `accept-golden-output.txt` + **`judgment-record.txt`（远端 `.meta` 原文）/ `progress-trace.txt`（节拍原文）/ `prompt.txt`（输入全文）/ `accept-cmds.txt` / `golden-cmd.txt`**（claude 备路另有 `stderr.txt`）—— 使验收结论**可复核**而非"wrapper 转述"；由此获得两条自证能力：`sha256(prompt.txt) == prompt_sha256`、`accept_golden.sha256 == 仓库 golden 源哈希` |
 | 状态机     | <proj>/.agent-state.json           | state{ running/done/failed/orphaned } + pid + ts_start       |
-| 台账      | 主控站 <proj>/agent-runs.log          | 观测累计（G13），一行/run                                      |
+| 台账      | 主控站 `ops/station-bin/agent-runs.log`（**非** `<proj>/`，2026-09-16 订正） | 观测累计（G13），一行/run；⚠ opencode 路径的 `queue_s/run_s` 目前**硬编码 0**（缺口）；⚠ 无 diff 证据 ⇒ "readonly 未越界"暂无载体（缺口） |
 
 **观测语义**（P2-1 修复后）：`queue_s` = 获锁→模型启动前（锁等待+入队）；`run_s` = 模型启动→完成（生成墙钟）。A8b 实测 QUEUE_S=2 / RUN_S=31。
 

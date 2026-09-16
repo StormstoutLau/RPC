@@ -242,6 +242,10 @@ if ($goldenActive) {
     passed     = ($accept_golden_ok -eq 1)
     source     = 'golden'
     hidden_from_model = $true        # 不变式 1 扩展语义（golden 内容未入 prompt）
+    sha256     = $goldenSha          # 2026-09-16 (ADR-0005 D3): 当次注入的权威 checksum
+    base       = $goldenBase         #   此前只在主控变量 + 远端脚本字面量里 ⇒ 事后无法回答"跑的是不是这份"。
+                                     #   只记于此、不另立 .sha256 文件（避免第二定义点）；与不变式 5 不冲突——
+                                     #   不变式 5 约束的是**远端可见面**，而 run.json 在主控侧、模型不可见。
   }
 }
 ```
