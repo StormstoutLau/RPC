@@ -181,4 +181,23 @@ upstream: \[ADR-0002]
 1. **可用性缺口**：既定策略（手册 `§2a.4` 铁律 3：默认免费档省本地算力 + 敏感内容显式 `-m` 本地）本身合理，但缺兜底 → 已用 `oCrun`（三站 `/usr/local/bin/ocrun`，超时+自动切档链：免费档 → OpenRouter 自持档 → 本地）补齐。
 2. **合规缺口**：opencode 侧**无 local-only 技术门禁**，`Invoke-Router rule B` 不覆盖其自身请求；与 D4「egress 仅 public/sanitized」的一致性**依赖使用者自觉**。另注：免费档官方 Privacy 明文说明数据用于改进训练，风险高于普通付费 egress。**待后续加门禁**。
 
+**免费档每日计数（2026-09-16，G13/O-07 扩展）**
+
+**问题（用户）**：OpenRouter 当前 20 请求/分、最高 1000 请求/日，可否建立"免费额度每日计数机制"。
+
+**调研（E2，2026-09-16）——先厘清两个出站源**：`opencode/*` 免费档走 **opencode 官方 zen**（`api.opencode.ai`+`zen/v1`，无 API 可查额度）；而 **OpenRouter**（`openrouter.ai`，本框架 `openrouter` provider / review commercial / egress 探针）是独立 egress 源。用户问的是 OpenRouter。
+
+**OpenRouter 免费档限额（官方限制页 + 社区，2026）**：
+- **20 请求/分**（固定，充值不升）；**每日 50（从未充≥$10）/ 1000（曾累计充≥$10，一次性解锁永久生效）**。
+- 429 响应带 `X-RateLimit-*` 头（服务器真值）；**429/失败请求仍计入每日配额**；**跨 key 全局治理**（多建 key 不能绕过）。
+- **关键：OpenRouter 不提供"免费请求剩余数"的可查询 API** —— `GET /api/v1/key` 的 `usage` 是 **credits 用量**（免费档恒 0），不反映免费请求数。官方"检查限额"指引实际只覆盖 credits/402。
+
+**结论：可以建，但只能"本地自建"计数**（无服务器剩余 API）：
+- 统一入口 `egress` 增强：读 `GET /api/v1/key` 的 **`is_free_tier`**（True→日限额 50 / False→1000），并显示**主控本地每日计数**（`.egress_daily.json`，UTC 日滚动归零）+ 达 80% 预警。
+- 写入手 `_egress_bump()`：由真正发 OpenRouter 免费请求的调用方（`opencode -m openrouter/...` / review 免费源）在发请求前自增。
+- **实证（2026-09-16）**：主控 + A/B/C 四端 `tier=paid`（`is_free_tier=false`）→ **本账户已曾充 ≥$10，免费档日限额 = 1000/天**；四端同账户（`label` 一致）印证跨 key 全局治理。
+- **诚实披露边界**：本地计数覆盖"主控侧入口能感知"的请求（wrapper/egress/review），**人手动 TUI 直调不在此计数** → 与 429 的 `X-RateLimit-*` 头交叉校准为准。
+
+**区别于 zen（OP-07 原对象）**：zen 免费档无额度 API，"~100/天"未文档化，只能"本地计数 + 429 事件驱动"，O-07 维持该语义。
+
 详见 [2026-09-14_暴露问题调研.md](../docs/research/2026-09-14_暴露问题调研.md)（含方法论教训：P1/P2 初稿结论均因**未先检索既有记档**而出错）。

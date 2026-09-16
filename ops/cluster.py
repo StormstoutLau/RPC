@@ -71,6 +71,7 @@ import re
 import time
 import json
 import socket
+import datetime
 import subprocess
 import threading
 from pathlib import Path
@@ -958,8 +959,10 @@ def _parse_egress(body: str) -> dict:
         d = (json.loads(body) or {}).get("data") or {}
     except Exception:
         return {}
+    # is_free_tier: True=从未充≥$10 → 免费档日限额 50; False=曾充≥$10 → 1000 (一次性解锁永久生效)
     return {"usage": d.get("usage"), "remaining": d.get("limit_remaining"),
-            "limit": d.get("limit"), "label": _mask_key(str(d.get("label", "")))}
+            "limit": d.get("limit"), "is_free_tier": d.get("is_free_tier"),
+            "label": _mask_key(str(d.get("label", "")))}
 
 
 def _egress_cmd(keyexpr: str) -> str:
@@ -967,6 +970,54 @@ def _egress_cmd(keyexpr: str) -> str:
             "if [ -z \"$K\" ]; then echo 'NO_KEY'; else "
             f"curl -4 -s -m 12 -w '{EGRESS_SEP}http=%{{http_code}} t=%{{time_total}}' "
             f"-H \"Authorization: Bearer $K\" {EGRESS_URL}; fi")
+
+
+# ── OpenRouter 免费档每日计数 (2026-09-16, G13/O-07 扩展) ──────────
+# 社区/官方实况: OpenRouter **不提供"免费请求剩余数"的可查询 API** —— GET /api/v1/key 的
+# usage 是 **credits 用量** (免费档恒 0), 不反映免费请求数。免费档限额是 20 请求/分 且
+# 每日 50 (从未充≥$10) / 1000 (曾累计充≥$10, is_free_tier=false, 一次性解锁永久生效)。
+# 429 响应带 X-RateLimit-* 头 (服务器真值), 429/失败仍计入每日配额, 且跨 key 全局治理。
+# 故"每日计数"**只能本地自建**: 主控侧一个当日累计文件, 由真正的调用方 (opencode openrouter
+# provider / review --model 免费源) 在发请求时 bump; 本入口 `egress` 读 + 展示 + 按档位预警。
+# 诚实披露: 这是"主控侧已记录/能覆盖"的请求数, 非 OpenRouter 服务器全量 (人手动 TUI 调用不在此计数)。
+EGRESS_DAILY_FILE = Path(__file__).resolve().parent.parent / "ops" / ".egress_daily.json"
+FREE_QUOTA_PAID = 1000   # is_free_tier=False (曾充≥$10) → 1000/天
+FREE_QUOTA_FREE = 50     # is_free_tier=True  (从未充值)   → 50/天
+FREE_ALERT_RATIO = 0.8
+
+
+def _egress_daily() -> dict:
+    """读主控本地每日计数文件; 跨 UTC 日自动归零。返回 {"date","count"}。"""
+    today = datetime.date.today().strftime("%Y-%m-%d")
+    try:
+        d = json.loads(EGRESS_DAILY_FILE.read_text(encoding="utf-8")) or {}
+    except Exception:
+        d = {}
+    if d.get("date") != today:
+        d = {"date": today, "count": 0}
+    return d
+
+
+def _egress_bump(n: int = 1) -> dict:
+    """++今日 openrouter 免费请求计数 (由真正发生请求的调用方在发请求时调用)。"""
+    d = _egress_daily()
+    d["count"] = int(d.get("count", 0)) + n
+    _egress_save(d)
+    return d
+
+
+def _egress_save(d: dict) -> None:
+    try:
+        EGRESS_DAILY_FILE.write_text(json.dumps(d), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _free_quota(is_free_tier):
+    """按 key 档位给免费档日限额。is_free_tier 未知时取保守档 50。"""
+    if is_free_tier is False:
+        return FREE_QUOTA_PAID
+    return FREE_QUOTA_FREE
 
 
 def probe_egress_station(st: str) -> dict:
@@ -1041,10 +1092,23 @@ def cmd_egress() -> int:
         if r.get("http") == "200":
             bal = info.get("remaining")
             bal = "无限额" if bal is None else f"余 {bal}"
+            ft = "free" if info.get("is_free_tier") is not False else "paid"
             print(f"{name:4s} : OK    http=200  {r.get('time','')}s  "
-                  f"用量 {info.get('usage')} / {bal}")
+                  f"用量 {info.get('usage')} / {bal}  tier={ft}")
         else:
             print(f"{name:4s} : FAIL  http={r.get('http')}  {(r.get('note') or '')[:70]}")
+
+    # OpenRouter 免费档每日计数 (2026-09-16): 本地自建, 非服务器剩余 (官方无此 API)。
+    ft = (res.get("主控", {}).get("info") or {}).get("is_free_tier")
+    q = _free_quota(ft)
+    d = _egress_daily()
+    used = int(d.get("count", 0))
+    ratio = used / q if q else 0
+    warn = " ⚠ 已达阈值80%, 建议降级本地档" if ratio >= FREE_ALERT_RATIO else ""
+    print()
+    print(f"[egress] 免费档日限额 {used}/{q} ({('曾充≥$10' if ft is False else '无充值')}档) · 20 请求/分 fixed{warn}")
+    print("         计数 = 主控侧已记录 egress 免费请求 (本地自建; OpenRouter 无免费请求剩余 API)")
+    print("         ▸ 调用方发请求前自增: _egress_bump(); 429 响应头 X-RateLimit-* 为服务器真值校准")
     print()
     print("[egress] 注: `:free` 档模型受 agentic-harness 门禁, 裸 API 调用返回 403;")
     print("         须经 claude code / opencode 等 harness 调用 (见 ADR-0003)。")
