@@ -617,7 +617,7 @@ limit: { context: J.context_length ?? Y?.limit.context ?? 0,
 
 | G | 缺口（§6/§9.5） | 当前填补 | 对应 | 判定 |
 |---|---|---|---|---|
-| G1 | agent-cli wrapper 未实现 | `agent-cli.ps1` 全命令面落地：`workspace/task/collect/review/route/lock/split/attach` + claude 路径 + `--continue` + 续接循环 + golden/strong-accept | O-01/02/12/15/16/24/26 | ✅ **闭环** |
+| G1 | agent-cli wrapper 未实现 | `agent-cli.ps1` 全命令面落地：`workspace/task/collect/review/route/lock/split/attach` + claude 路径 + `--continue` + 续接循环 + golden/strong-accept。**2026-09-16 补**：曾因三站 config provider 改名（`cluster-litellm`→`local`）而**派发门实际不可用**（`_station_ready.sh` 注入 `ERR_INJECT exit 11`）；已修（资产跟随现状 + `local.models` 声明多模型），并以 `TASK_DONE exit=0` 端到端复证 | O-01/02/12/15/16/24/26 · 09-16 漂移修复 | ✅ **闭环（含 09-16 漂移修复复证）** |
 | G2 | 工作区规范未实测（AGENTS.md 薄壳/claude 遮蔽/codex-memory cwd 键控） | 工作区机制大量耗时实测（跨站同步、动态作用域根因 O-20、ctx 服务端根因 O-23、中文路径 O-06、XDG 记忆隔离 O-09）；codex-memory→实为 **opencode 自带 memory**（本轮实测三站 memory.db+MEMORY.md） | O-06/09/19/20/23 + 09-16 providers memory 维度 | 🔵 **基本覆盖**；AGENTS.md 薄壳/遮蔽专项未单列，随试点自然带出 |
 | G3 | ad-hoc 笔记无隔离 | wrapper `[proj:]` 前缀（§4.1）+ XDG per-task 隔离（O-09 isolate-xdg） | O-09 | 🔵 **已定案** |
 | G4 | 大项目同步量 | `.agentsync` 排除生效（Paper 5.6GB→7.0MB，项目级覆盖已在 §3 风险台账记✅）+ 200MB 预警语义 | §3 风险台账 | ✅ **闭环** |
@@ -626,7 +626,7 @@ limit: { context: J.context_length ?? Y?.limit.context ?? 0,
 | G7 | trae 派发对接（五层循环 2→3） | 任务卡=接口语义已立；trae 对接整体拨 D7 | O-16（--peer 同拨 D7） | ⏳ **保留（D7）** |
 | G8 | 站上无 Mathematica / R | **G8 方案定案 + 三站补装完成（2026-09-16）**：sympy 1.14.0 / antlr4 4.11 / scipy 1.18.1 / R 4.6.1（CRAN noble-cran40 对齐主控）；`parse_latex` 功能级验证通过 | O-13 + 09-16 收口；ADR-0004 | 🔵 **主体闭环**；**R 依赖包（forecast 等 7）待办：走 Cpp_Hub 项目 `renv` 不装全局库** |
 | G9 | 重资产预置 | `.agentsync` 排除 + 站上 tar 预置；Cpp_Hub 试点已用（O-13 预置 R/sympy 真卡全链） | O-13 | ✅ **闭环** |
-| G10 | opencode 位置参数 bug（1.18.25） | wrapper 已规避（stdin 管道形式）；升级窗口回归验证 | 与 G14 合并 | 🔵 **已规避**（升级回归触发时复查） |
+| G10 | opencode 位置参数 bug（1.18.25） | wrapper 已规避（stdin 管道形式）；**双用例已落地**（`agent-cli-smoke.sh`：正向 stdin 管道应出 OK / 负向位置参数**应仍挂死**，若意外成功= 上游行为变更信号）；上游至 1.18.31 无修复记录（[Agent调研 §9.11](../../docs/Agent跨项目调用标准与迁移复用调研.md)） | 与 G14 合并 | ✅ **已规避 + 双用例固化**（升级窗口按 §9.11 回归） |
 | G11 | **并发与互斥** | **层2锁激活**（readonly→`flock -s` 共享 / write→`flock -n` 排它）+ **slot 门**（busy 默认 exit 24 reject，`--slot-allow-busy` 放行）+ **O-18 铁律**（跨站各1，勿同站叠） | O-08/17/18/25 | ✅ **闭环** |
 | G12 | 失败恢复 / 续跑未定义 | **`--continue` 续接循环**（首跑被超时杀→续跑拿独立预算）+ 失败终态 `failed`+`REVIEW_NEEDED`（不静默 done）+ timeout 语义保持 | O-24 P0-① / O-21③ | ✅ **闭环** |
 | G13 | 成本/额度观测（zen 限额无预警） | **O-25 吞吐基准 + .progress 打点 + 预算预估**（HIT 才给 / MISS 不打荒 / TIMEOUT-WARN）；zen 限额 429→exit 7 定义置位；**OpenRouter 免费档每日计数已落地（2026-09-16）**——统一入口 `egress` 读 `is_free_tier` 定档位（实证 paid→1000/天）+ 本地自建 `.egress_daily.json` 计数 + 80% 预警（详见 [ADR-0003 §免费档每日计数](../../adr/ADR-0003-OpenRouter密钥与egress路由管理.md)；本地计数为主、429 `X-RateLimit-*` 头校准） | O-07/25 + 09-15 入口 + 09-16 egress | 🔵 **主体落地**；O-07（zen）仍待真实触发（事件驱动，不可预约） |

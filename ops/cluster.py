@@ -86,7 +86,9 @@ STATIONS = {
 }
 # 各站引擎 /health 端口 (A/B/C 均 8080; 原 C=18080 为过时值)
 STATION_PORT = {"A": 8080, "B": 8080, "C": 8080}
-ROUTE = {"gpt-oss-120b": "A", "qwen3.8-27b-mtp": "C"}     # 其余一律 B (DEFAULT_STATION)
+ROUTE = {"gpt-oss-120b": "A", "qwen3.8-27b-mtp": "C", "minimax-m2.7": "C"}     # 其余一律 B (DEFAULT_STATION)
+# 注: qwen3.8-flash-next 三站齐备 (2026-09-16) 但仍**保持默认 B** —— 不改既有路由行为;
+# 要指定站用按站路由名 qwen3.8-flash-next-{a,b,c}。minimax-m2.7 为新增, 默认归 C (源站/基线站)。
 
 # ── 按站路由名: 显式指明"从哪个工作站加载本地模型" ──────────────────
 # 键 = 站上真实别名 + "-" + 站小写;  值 = (station, 站上真实别名)。
@@ -113,6 +115,12 @@ STATION_ROUTES = {
     "qwen3.8-27b-mtp-c": ("C", "qwen3.8-27b-mtp"),
     "qwen3.8-flash-next-b": ("B", "qwen3.8-flash-next"),
     "davidau-q38-27b-q4k-b": ("B", "davidau-q38-27b-q4k"),
+    # 2026-09-16: minimax-m2.7 / qwen3.8-flash-next (UD-IQ4_XS) 三站齐备 (C 源 -> A/B 已同步)
+    "qwen3.8-flash-next-a": ("A", "qwen3.8-flash-next"),
+    "qwen3.8-flash-next-c": ("C", "qwen3.8-flash-next"),
+    "minimax-m2.7-a": ("A", "minimax-m2.7"),
+    "minimax-m2.7-b": ("B", "minimax-m2.7"),
+    "minimax-m2.7-c": ("C", "minimax-m2.7"),
 }
 # 与路由表解耦: 后端是站内概念, 换后端不改 alias->station 映射。C 专属键应置于本字典尾部以保前缀匹配序
 BACKENDS = {"unsloth", "llama-rpc", "llama-single", "vllm"}   # infer-load --backend 白名单
@@ -124,8 +132,9 @@ DEFAULT_STATION = "B"
 # qwen3.8-flash-next 已移出 (2026-09-15): 它是单机量化加载模型, 用 STATION_ROUTES 的
 # qwen3.8-flash-next-b 走 B 站本地加载, 不再经 RPC 双机通道。
 RPC_MODELS = {"deepseek-v4-flash-0731", "gpt-oss-120b-fable-5-distilled"}
-# LiteLLM 网关服务 :4000 已退役 (2026-09-13): ADR-0002 决策 C 后常用链路经 "cluster-litellm" provider
-# 直连各站引擎端口, 不经网关; 网关已无活依赖。故移除 LITELLM_BASE / KEY_FILE / read_key 及 status/e2e 对网关的硬依赖。
+# LiteLLM 网关服务 :4000 已退役 (2026-09-13): ADR-0002 决策 C 后链路一律直连各站引擎端口。
+# 2026-09-16: opencode provider 名统一为 `local`（三站实况仅 local + openrouter）；旧名 "cluster-litellm" 已不存在。
+# 网关已无活依赖。故移除 LITELLM_BASE / KEY_FILE / read_key 及 status/e2e 对网关的硬依赖。
 HTML_OUT = Path(__file__).parent / "cluster_status.html"
 SSH_TIMEOUT = 8
 

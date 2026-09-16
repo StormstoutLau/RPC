@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # ============================================================================
-# agent-cli-smoke.sh — 4 个 agent CLI 冒烟测试 (主控站 Git Bash 发起)
-# 目的: 验证 B-claude / B-opencode / A-claude / A-opencode 及主控站 ssh 调度链路
+# agent-cli-smoke.sh — agent CLI 冒烟测试 (主控站 Git Bash 发起)
+# 目的: 验证 C/B/A 三站各自的 claude + opencode, 及主控站 ssh 调度链路
 # 调用形式 (2026-09-02 实测定版, 勿改):
 #   claude:    timeout N claude -p '<prompt>' < /dev/null   (stdin 必须显式关闭)
 #   opencode:  echo '<prompt>' | timeout N opencode run -m <provider/model>
-#              (1.18.25 位置参数形式挂死, 只能用 stdin 管道形式)
-# 前置: 两站模型已加载 (B: nemotron / A: gpt-oss-120b); 未加载时报 SKIP 不算 FAIL
+#              (1.18.25 位置参数形式挂死, 只能用 stdin 管道形式 —— 见下方 G10 负向用例)
+# 模型 id (2026-09-16 起): provider 统一为 `local`, 即 local/<flavor> (旧名 cluster-litellm/* 已不存在)
+# 前置: 各站模型已加载 (B: nemotron / A: gpt-oss-120b / C: gpt-oss-120b); 未加载时报 SKIP 不算 FAIL
 # 用法: bash agent-cli-smoke.sh          # 全量
 #       bash agent-cli-smoke.sh B        # 仅 B 站
 #       bash agent-cli-smoke.sh A        # 仅 A 站
+#       bash agent-cli-smoke.sh C        # 仅 C 站
 # 退出码: 0 = 全 PASS/SKIP; 1 = 有 FAIL
 # ============================================================================
 set -u
@@ -46,10 +48,10 @@ REMOTE
     else
       report B-claude FAIL "$OUT"
     fi
-    # B-opencode: LiteLLM→nemotron, stdin 管道形式
+    # B-opencode: local/nemotron (直连本机引擎), stdin 管道形式
     OUT=$(ssh "$HOST_B" 'bash -s' <<'REMOTE' 2>/dev/null
 cd /tmp
-out=$(echo 'reply with exactly: OK' | timeout 180 opencode run -m cluster-litellm/nemotron 2>/dev/null | tail -1)
+out=$(echo 'reply with exactly: OK' | timeout 180 opencode run -m local/nemotron 2>/dev/null | tail -1)
 echo "OUT=$out"
 REMOTE
 )
@@ -85,10 +87,10 @@ REMOTE
     else
       report A-claude FAIL "$OUT"
     fi
-    # A-opencode: cluster-litellm/gpt-oss (经 B 网关 USB4); 默认模型应已钉本地 cluster-local/gpt-oss
+    # A-opencode: local/gpt-oss (直连 A 本机引擎)
     OUT=$(ssh "$HOST_A" 'bash -s' <<'REMOTE' 2>/dev/null
 cd /tmp
-out=$(echo 'reply with exactly: OK' | timeout 180 opencode run -m cluster-litellm/gpt-oss 2>/dev/null | tail -1)
+out=$(echo 'reply with exactly: OK' | timeout 180 opencode run -m local/gpt-oss 2>/dev/null | tail -1)
 echo "OUT=$out"
 REMOTE
 )
@@ -96,6 +98,68 @@ REMOTE
       report A-opencode PASS "$OUT"
     else
       report A-opencode FAIL "$OUT"
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------- C 站
+if [ "$SCOPE" = "ALL" ] || [ "$SCOPE" = "C" ]; then
+  HOST_C=scott-lau@192.168.1.37
+  LOADED=$(ssh -o ConnectTimeout=10 "$HOST_C" "pgrep -c -f llama-server" 2>/dev/null || echo 0)
+  if [ "${LOADED:-0}" -lt 1 ]; then
+    report C-backend SKIP "llama-server 未运行, 先 cluster.py load gpt-oss-c"
+  else
+    # C-claude: 直连 C 本机 llama-server(8080), 同 A 形态
+    OUT=$(ssh "$HOST_C" 'bash -s' <<'REMOTE' 2>/dev/null
+cd /tmp
+out=/tmp/smoke-claude-$$.out
+s=$(date +%s)
+timeout 240 claude -p 'reply with exactly: OK' < /dev/null > "$out" 2>/dev/null
+code=$?
+e=$(date +%s)
+echo "EXIT=$code DUR=$((e-s))s OUT=$(cat "$out" | head -1)"
+rm -f "$out"
+REMOTE
+)
+    if echo "$OUT" | grep -q 'EXIT=0 DUR=.* OUT=OK'; then
+      report C-claude PASS "$OUT"
+    else
+      report C-claude FAIL "$OUT"
+    fi
+    # C-opencode: local/gpt-oss (直连本机引擎), stdin 管道形式
+    OUT=$(ssh "$HOST_C" 'bash -s' <<'REMOTE' 2>/dev/null
+cd /tmp
+out=$(echo 'reply with exactly: OK' | timeout 180 opencode run -m local/gpt-oss 2>/dev/null | tail -1)
+echo "OUT=$out"
+REMOTE
+)
+    if echo "$OUT" | grep -q 'OUT=OK'; then
+      report C-opencode PASS "$OUT"
+    else
+      report C-opencode FAIL "$OUT"
+    fi
+  fi
+fi
+
+# ------------------------------------------------- G10 负向用例 (期望"仍挂死")
+# 1.18.25 位置参数形式挂死; 上游至 1.18.31 无修复记录 (Agent调研 §9.11)。
+# 本用例是"期望失败"型: 位置参数形式**不该**返回 OK。若某版本开始返回 OK => 上游行为变更信号,
+# 需重评(全链重测)而非当作进步直接拥抱。
+if [ "$SCOPE" = "ALL" ] || [ "$SCOPE" = "B" ]; then
+  G10B=$(ssh -o ConnectTimeout=10 scott-lau@scott-lau-GTR-Pro.local "pgrep -c -f llama-server" 2>/dev/null || echo 0)
+  if [ "${G10B:-0}" -lt 1 ]; then
+    report g10-positional SKIP "B backend 未加载 (未加载时位置参数必然失败, 测不出真假)"
+  else
+    OUT=$(ssh scott-lau@scott-lau-GTR-Pro.local 'bash -s' <<'REMOTE' 2>/dev/null
+cd /tmp
+out=$(timeout 25 opencode run -m local/nemotron 'reply with exactly: OK' 2>/dev/null | tail -1)
+echo "OUT=$out"
+REMOTE
+)
+    if echo "$OUT" | grep -q 'OUT=OK'; then
+      report g10-positional FAIL "位置参数形式意外成功 -> 上游行为已变, 需重评: $OUT"
+    else
+      report g10-positional PASS "位置参数仍挂死(符合预期)"
     fi
   fi
 fi

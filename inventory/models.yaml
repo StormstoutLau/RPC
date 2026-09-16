@@ -22,7 +22,7 @@
 #   stations 与 conf 不一致 = 已知漂移, 记在文件末尾 known_issues
 # ============================================================================
 version: 1
-updated: 2026-09-14
+updated: 2026-09-16
 
 models:
   - alias: gpt-oss-120b
@@ -71,8 +71,9 @@ models:
   - alias: qwen3.8-flash-next
     engine_id: lmstudio-community/Qwen3.8-Flash-Next-GGUF
     quant: UD-IQ4_XS
-    stations: [B]
-    conf: [B]
+    stations: [A, B, C]
+    conf: [A, B, C]
+    route: B
     note: |
       2026-09-14: conf 的 MODEL_PATH 原指向 /data/models/gguf/misc/Qwen3.8-Flash-Next/
       (该目录**根本不存在**), 已修正为实际权重:
@@ -80,6 +81,22 @@ models:
       Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf (三片齐全, 约 93.7GB)。
       2026-09-15: 已移出 cluster.py 的 RPC_MODELS —— 单机量化加载, 用按站路由名
       `qwen3.8-flash-next-b` 走 B 站本地加载, 不再经 RPC 双机通道。
+      2026-09-16: C 源已同步到 A (B 原本就有) -> 三站齐备; 补 A/C 的 conf;
+      新增按站路由 qwen3.8-flash-next-{a,b,c}; opencode 侧 id = local/qwen3.8-flash-next。
+      解码基线 短 ctx 19-20 / 长 ctx 塌缩 5.5-6.1 (THROUGHPUT-BASELINE#L18, HIP 实测)。
+
+  - alias: minimax-m2.7
+    engine_id: lmstudio-community/MiniMax-M2.7-GGUF
+    quant: UD-IQ4_XS
+    stations: [A, B, C]
+    conf: [A, B, C]
+    route: C
+    note: |
+      2026-09-16 新增: C 站为源, 同步到 A (B 原本就有)。四片 UD-IQ4_XS, 约 108.4GB,
+      A 与 C 逐字节一致 (rsync -a 校验)。三站 conf 均为初值 (CTX=131072 / N_CPU_MOE=8),
+      待 load-mem-gate + 实测校准。
+      新增按站路由 minimax-m2.7-{a,b,c}; opencode 侧 id = local/minimax-m2.7。
+      解码基线 21.5 t/s (THROUGHPUT-BASELINE#L16, C 站单机实测)。
 
   - alias: qwen2.5-7b-instruct
     engine_id: lmstudio-community/Qwen2.5-7B-Instruct-GGUF
@@ -145,5 +162,5 @@ known_issues:
   - "2026-09-14 已处置两处坏 conf: `glm-5.3-flash` 的 conf 已移除 (权重目录 unsloth/ 不存在); `qwen3.8-flash-next` 的 MODEL_PATH 已修正为实际权重路径"
   - "B 站 conf 与**模型库(infer-list 反映磁盘 gguf)** 不一致: conf-only = {davidau-q38-27b-q4k}; model-only = {qwen2.5-7b-instruct, qwen3-coder-next, all-minilm-l6-v2-embedding}"
   - "`nodes` 不属该漂移 —— 它是 non_model_conf (RPC 节点清单), 已单列"
-  - "A 站 conf 只有 1 个 (gpt-oss-120b), 而模型库有 3 个 —— 缺 deepseek-v4-flash-0731 与 nvidia-nemotron-3-super-120b-a12b 的 conf"
+  - "A 站 conf 2026-09-14 时只有 1 个 (gpt-oss-120b); 2026-09-16 补入 qwen3.8-flash-next 与 minimax-m2.7, 并已有 nvidia-nemotron-3-super-120b-a12b —— 仍缺 deepseek-v4-flash-0731 的 conf"
   - "cluster.py ROUTE 的键曾是 `qwen3.8-27b` (与站上别名 `qwen3.8-27b-mtp` 不一致) —— 已于 2026-09-14 修复, 并由 aliases 断言 + stations 断言的 conf 存在性双向护栏"
