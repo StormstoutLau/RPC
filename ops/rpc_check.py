@@ -1137,9 +1137,15 @@ STATION_CMD = (
     "for P in $(grep -o '{file:[^}]*}' ~/.config/opencode/opencode.jsonc 2>/dev/null | sed 's/{file://;s/}//'); do "
     "Q=$(echo \"$P\" | sed \"s|~|$HOME|\"); "
     "if [ -s \"$Q\" ]; then echo \"ocfile=OK:$(basename \"$Q\")\"; else echo \"ocfile=BAD:$P\"; fi; done; "
-    "CK=$(cat ~/.config/rpc/claude.key 2>/dev/null | tr -d '\\n'); "
+    # 2026-09-16 (A) 判据升级: 原为「claude.key vs unsloth.key 两个文件互相比较」。实测该判据
+    # 背后藏着结构缺陷 —— claude.key 是引擎 key 的第二份拷贝而**没有任何写入方** (infer-load
+    # 每次加载只重铸落盘 unsloth.key), 于是它必然陈旧: C 站遗留脱敏占位串, A/B 只是靠人工
+    # 同步过一次才对上, 且**下次加载即变黄**。改为比较「apiKeyHelper 的实际输出 vs 同站引擎
+    # key」—— 这才是功能判据 (claude 真正拿到的 key), 且单一真值就是 unsloth.key。
+    # helper 不可用时输出 SKIP (该情形已由上面 helper=EMPTY/MISSING/NOEXEC 报出, 不重复告警)。
     "UK=$(cat ~/.config/rpc/unsloth.key 2>/dev/null | tr -d '\\n'); "
-    "if [ -n \"$CK\" ] && [ \"$CK\" = \"$UK\" ]; then echo 'claudekey=SAME_AS_UNSLOTH'; "
+    "if [ -z \"$OUT\" ]; then echo 'claudekey=SKIP_NO_HELPER'; "
+    "elif [ \"$OUT\" = \"$UK\" ]; then echo 'claudekey=HELPER_EQ_UNSLOTH'; "
     "else echo 'claudekey=DIFFERS'; fi"
 )
 # 刻意不取 infer-list: (1) 它自身约 10s+, 三站并行也要 30s+ (实测全量从 31s 涨到 60s);
@@ -1269,7 +1275,7 @@ def check_stations(ctx):
                 warn.append(f"{st} 站 {alias}.env 无 MODEL_PATH, 且未登记为 non_model_conf")
 
     # (f) 凭据引用完整性 —— settings.json 的 apiKeyHelper / opencode 的 {file:...}
-    #     必须"引用得到、非空、可执行"; 以及 claude.key 是否与同站引擎 key 一致。
+    #     必须"引用得到、非空、可执行"; 以及 claude helper 的输出是否等于同站引擎 key。
     for st in reach:
         for line in (live[st].get("cred") or "").splitlines():
             line = line.strip()
@@ -1283,10 +1289,13 @@ def check_stations(ctx):
                 if not v.startswith("OK:"):
                     detail.append(f"{st} 站 opencode provider 引用的凭据文件不可用 ({v}) "
                                   f"—— 不存在或为空")
-            elif line.startswith("claudekey=") and line.split("=", 1)[1] != "SAME_AS_UNSLOTH":
-                warn.append(f"{st} 站 claude.key 与同站 unsloth.key 不一致 —— "
-                            f"A/B 站二者相同 (claude 走本地 :8080, 用引擎 key); "
-                            f"C 站是 15B 占位串 'sk-local-noauth…', 是否有意待确认")
+            elif line.startswith("claudekey="):
+                # 2026-09-16 (A): 判据改为「helper 输出 == 同站 unsloth.key」。SKIP_NO_HELPER
+                # 不在此告警 (helper 自身的问题已由上面 helper= 行报出)。
+                if line.split("=", 1)[1] == "DIFFERS":
+                    warn.append(f"{st} 站 claude apiKeyHelper 的输出与同站引擎 key "
+                                f"(~/.config/rpc/unsloth.key) 不一致 —— claude 走本地 :8080, "
+                                f"必须与 opencode 用同一份引擎 key; 站上跑一次 infer-load 会重铸该 key")
 
     # (g) 站上监听端口 vs 分配表 (P1-4 占用对账)
     #     方向一 (FAIL): 站上在听、端口 < EPHEMERAL_MIN、且分配表里没有它 →
