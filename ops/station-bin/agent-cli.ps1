@@ -1760,7 +1760,19 @@ function ConvertFrom-JudgeOutput {
 
 function Invoke-JudgeHttp {
     # OpenAI-compatible /v1 chat completion; temperature=0; returns visible message.content
+    # 硬限速 (2026-09-16, ADR-0003): OpenRouter free 档 20 请求/分 (RPM) 且 429/失败仍计入配额。
+    #  - RPM gate: 令牌桶=最小 3s 间隔 (20/分), 同进程多次调用限速 (仅本函数=review commercial 单一出口)
+    #  - 429 退避: 指数 1s/2s 后重试, 第三次仍 429 才 throw
     param([string]$base, [string]$key, [string]$model, [string]$prompt, [int]$timeoutS, [int]$maxTokens = 2500)
+    # RPM 20 gate (min 3s between judge http posts)
+    if ($null -eq $Script:JudgeHttpLast) { $Script:JudgeHttpLast = [DateTime]::MinValue }
+    if ($Script:JudgeHttpLast -ne [DateTime]::MinValue) {
+        $elapsed = (Get-Date) - $Script:JudgeHttpLast
+        $wait = 3.0 - $elapsed.TotalSeconds
+        if ($wait -gt 0) { Start-Sleep -Milliseconds ([int]($wait * 1000)) }
+    }
+    $Script:JudgeHttpLast = Get-Date
+
     $headers = @{ 'Content-Type' = 'application/json' }
     if ($key) { $headers['Authorization'] = "Bearer $key" }
     $payload = @{
@@ -1769,14 +1781,28 @@ function Invoke-JudgeHttp {
         temperature = 0.0
         max_tokens = $maxTokens
     } | ConvertTo-Json -Depth 6
-    try {
-        $resp = Invoke-RestMethod -Uri "$base/chat/completions" -Method Post `
-            -Headers $headers -Body $payload -TimeoutSec $timeoutS
-        return [string]$resp.choices[0].message.content
-    }
-    catch {
-        if ($_.Exception.Message -match 'timed out|could not be resolved|connect|inet') { throw "NETFAIL: judge http: $($_.Exception.Message)" }
-        throw "JUDGE_HTTP_FAIL: $($_.Exception.Message)"
+    $attempt = 0
+    while ($true) {
+        $attempt++
+        try {
+            $r = Invoke-WebRequest -Uri "$base/chat/completions" -Method Post `
+                -Headers $headers -Body $payload -TimeoutSec $timeoutS -UseBasicParsing
+            $obj = $r.Content | ConvertFrom-Json
+            return [string]$obj.choices[0].message.content
+        }
+        catch {
+            $code = 0
+            if ($_.Exception.Response) { try { $code = [int]$_.Exception.Response.StatusCode } catch { $code = 0 } }
+            if ($code -eq 429 -and $attempt -lt 3) {
+                Start-Sleep -Seconds ([math]::Pow(2, $attempt - 1))   # 1s, 2s exponential backoff
+                Write-Host "RPM_429_BACKOFF: attempt $attempt (429 rate-limit, backing off)"
+                continue
+            }
+            if ($_.Exception.Message -match 'timed out|could not be resolved|connect|inet') {
+                throw "NETFAIL: judge http: $($_.Exception.Message)"
+            }
+            throw "JUDGE_HTTP_FAIL: $($_.Exception.Message)"
+        }
     }
 }
 
