@@ -216,3 +216,34 @@ upstream: \[ADR-0002]
 - 测试桩局限：BaseHTTPRequestHandler 首连传输层不完整（一条 `NETFAIL`）且只 serve 3 次（`timeout`）——均测试桩问题，真实 OpenRouter 429 是标准 HTTP 响应、走正确退避路径。
 
 详见 [2026-09-14_暴露问题调研.md](../docs/research/2026-09-14_暴露问题调研.md)（含方法论教训：P1/P2 初稿结论均因**未先检索既有记档**而出错）。
+
+---
+
+## 凭据单一真值修正（2026-09-16）
+
+**触发**：全量门禁 `stations` 黄灯明细为 **B、C 两站** `claude.key` 与同站 `unsloth.key` 不一致（该告警此前被我误读为"C 站独有" —— 旧告警文案把 C 站情形**硬编码**进了消息体，B 站的同类告警看起来一模一样；文案缺陷已一并修掉）。
+
+**根因（与 D1 的"单一真值"原则冲突的具体形态）**：`claude.key` 是**引擎 key 的第二份拷贝**，而它**没有任何写入方** ——
+
+| 文件 | 写入方 | 性质 |
+|---|---|---|
+| `~/.config/rpc/unsloth.key` | `infer-load`（每次 studio 加载**重铸**） | 站内产物，单一真值 |
+| `~/.config/rpc/claude.key` | **无** | 拷贝；只能靠人工同步，必然陈旧 |
+| `~/.config/rpc/claude-key.sh` | 主控正本 + `secrets push` | 取 key 脚本（原为 `cat claude.key`） |
+
+实测两种陈旧形态都出现了：C 站是 09-14 密钥脱敏遗留的占位串（`sk-local-****` / `sk-unsloth-****`），B 站是"加载后 `unsloth.key` 变新、`claude.key` 仍旧"。**结论：这不是"C 站占位串是否有意"的问题（09-14 记为待确认项），而是结构缺陷 —— 任何一次 `infer-load` 都会使该站在下轮变黄。**
+
+**决策**
+
+| # | 决定 | 理由 |
+|---|---|---|
+| 1 | `claude-key.sh` 改为 `cat "$HOME/.config/rpc/unsloth.key"`，**`claude.key` 全量退役**（三站 + 正本） | claude 与 opencode 共用同一份引擎 key，消除第二定义点（与本仓既有纪律"抄一份就是第二个定义点"一致） |
+| 2 | 门禁判据升级：`claude.key` vs `unsloth.key` **两文件互比** → **「apiKeyHelper 的实际输出 == 同站 `unsloth.key`」** | ① 旧判据测的是"两个文件"，新判据测的是"claude 真正拿到的 key"（功能判据）；② helper 不可用时输出 `SKIP`（由既有 `helper=` 行报出），不重复告警；③ 判据**不因构造而恒真** —— 仍能抓到"绕过 `infer-load` 手动改 key" |
+| 3 | **不改 D1**（正本兜底保留），但补一条必需步骤：**`secrets push` 前必须先把站上真 key 回写正本** | `unsloth.key` 每次加载重铸 ⇒ 正本必然陈旧 ⇒ 直接 push 会**用旧 key 覆盖站上真 key**、打断该站 opencode/claude（本次执行时发现的真陷阱） |
+| 4 | 否决备选"让 `infer-load` 同时写两个文件" | 留双份拷贝；且判据随即变成构造上恒真（失去绊线作用） |
+
+**验收**：三站 helper 输出长度 == 各站 `unsloth.key`（A 43 / B 44 / C 44）；三站 `claude.key` 已不存在；正本 vs 站上逐一 MATCH；**门禁 `stations` 凭据告警清零**（仅余 `inventory/plugins.yaml` 已登记的 A 站插件 `known_drift`）；三站 `infer-unload` OK。
+
+**新增登记（未处置，见 [OPEN-ISSUES §6](../spec/d6-agent-standard/OPEN-ISSUES.md)）**：① `infer-load` 把 API key 明文写进站上日志（`~/.unsloth/run-<alias>.log`），待改掩码；② 上述 push 覆盖危害目前靠人工纪律兜住，可考虑加门禁断言（"站上 `unsloth.key` ≠ 正本 ⇒ WARN"）。
+
+**落地件**：`ops/rpc_check.py`（`[cred]` 探针 + `stations` 判据 + 告警文案）、`secrets/stations/{A,B,C}/claude-key.sh`（46B / LF）、`secrets/stations/{A,B,C}/claude.key`（删除）、[DEVELOPMENT-LOG 2026-09-16 ⑨](../spec/d6-agent-standard/DEVELOPMENT-LOG.md)、[密钥轮换清单现状注记](../docs/security/2026-09-13_密钥轮换清单.md)。
