@@ -1119,15 +1119,43 @@ exit `$RC
 
     # 6) collect: pull out/.meta + out/.agent-output.txt + out/.accept-output.txt, compute content_digest (M1)
     $outTxt = Join-Path $env:TEMP "agent-cli-out-$ts.txt"
-    $metaTxt = Join-Path $env:TEMP "agent-cli-meta-$ts.txt"
     $accTxt = Join-Path $env:TEMP "agent-cli-accept-$ts.txt"
     $accGoldTxt = Join-Path $env:TEMP "agent-cli-accept-golden-$ts.txt"   # O-12 M4 P2-2: golden output pulled (contract observable)
+    # ADR-0005 阶段0 (2026-09-16) 证据回收闭环 —— **5 个小文本件合批单连接回收**。
+    #   为什么合批: 实测 Win32-OpenSSH 9.5p1 每次连接 14-17s, 且 ControlMaster 不可用
+    #   (getsockname failed: Not a socket) ⇒ 逐个 scp 会把 collect 从 5 次连接抬到 8 次(+50s/run)。
+    #   通道: 一条 ssh 跑 `tar|base64`, 文本通道沿用本文件既有手法($promptB64/$ACCEPT_B64),
+    #   避免"二进制过 PowerShell 重定向被改写"。
+    #   回收物: .meta(判据原始记录) / .prompt.txt(输入全文) / .progress(节拍原文)
+    #           / .accept-cmds.txt / .golden-cmd.txt —— 这 5 件此前**从不回收**。
+    $evDir = Join-Path $env:TEMP "agent-cli-ev-$ts"
+    $metaTxt = Join-Path $evDir '.meta'
+    $promptTxt = Join-Path $evDir '.prompt.txt'
+    $progressTxt = Join-Path $evDir '.progress'
+    $accCmdTxt = Join-Path $evDir '.accept-cmds.txt'
+    $goldCmdTxt = Join-Path $evDir '.golden-cmd.txt'
     scp -q -o ConnectTimeout=10 "${hostName}:$W/out/.agent-output.txt" "$outTxt" 2>$null
-    scp -q -o ConnectTimeout=10 "${hostName}:$W/out/.meta" "$metaTxt" 2>$null
     if ($accept.Count -gt 0) { scp -q -o ConnectTimeout=10 "${hostName}:$W/out/.accept-output.txt" "$accTxt" 2>$null }
-    # O-25 P0-②: pull live-progress sample (byte-growth trace) alongside other run artifacts.
-    $progressTxt = Join-Path $env:TEMP "agent-cli-progress-$ts.txt"
-    if (Test-Path $env:TEMP) { try { scp -q -o ConnectTimeout=10 "${hostName}:$W/out/.progress" "$progressTxt" 2>$null } catch {} }
+    try {
+        # 逐件 `marker + base64`（**刻意不用 tar**）: Windows 侧 GNU tar 对 `C:\...` 会按 host:path 去连
+        #   "C" 主机(需 --force-local), 而 --force-local 又不认反斜杠路径 —— 两坑皆实测踩到。base64
+        #   文本通道是本文件既有手法, 且全程不经过本机原生工具的参数解析。
+        $evNames = @('.meta', '.prompt.txt', '.progress', '.accept-cmds.txt', '.golden-cmd.txt')
+        $evCmd = (($evNames | ForEach-Object { "if [ -f $W/out/$_ ]; then echo FILE:$_ ; base64 -w0 $W/out/$_ ; echo ; fi" }) -join ' ; ')
+        $evRaw = @(& ssh -o ConnectTimeout=10 $hostName $evCmd 2>$null)
+        $evBuf = @{}; $evCur = ''
+        foreach ($ln in $evRaw) {
+            $t = "$ln".Trim()
+            if ($t -like 'FILE:*') { $evCur = $t.Substring(5); $evBuf[$evCur] = '' }
+            elseif ($evCur -and $t) { $evBuf[$evCur] += $t }
+        }
+        foreach ($n in $evNames) {
+            if ($evBuf[$n]) {
+                if (-not (Test-Path $evDir)) { New-Item -ItemType Directory -Path $evDir -Force | Out-Null }
+                [IO.File]::WriteAllBytes((Join-Path $evDir $n), [Convert]::FromBase64String($evBuf[$n]))
+            }
+        }
+    } catch { Write-Host "EVIDENCE_PULL_WARN: $($_.Exception.Message)" }
     # O-12 M4 P2-2: golden output pulled; TAMPERED path does NOT create the file -> scp NativeCommandError under
     # EAP=Stop would pollute exit (V0 real-run finding 2026-09-09) -> silent catch (missing file is expected there)
     if ($goldenActive) {
@@ -1229,6 +1257,11 @@ exit `$RC
             passed = ($accept_golden_ok -eq 1)
             source = 'golden'
             hidden_from_model = $true        # inv 1 extension: golden content never entered prompt
+            # ADR-0005 D3 (2026-09-16): 当次注入的权威 checksum **只记于此** —— 此前只在主控变量+远端
+            #   脚本字面量里, 事后无法回答"这次跑的是不是我期望的那份 golden"。不另立 .sha256 文件
+            #   (避免第二定义点); 复验时用 `echo "<sha>  <base>" | sha256sum -c` 动态生成即可。
+            sha256 = $goldenSha
+            base = $goldenBase
         }
     }
     if ($collectOk) {
@@ -1238,12 +1271,29 @@ exit `$RC
             if (Test-Path $outTxt) { Move-Item $outTxt (Join-Path $runDir 'agent-output.txt') -Force }
             if (Test-Path $accTxt) { Move-Item $accTxt (Join-Path $runDir 'accept-output.txt') -Force }
             if (Test-Path $accGoldTxt) { Move-Item $accGoldTxt (Join-Path $runDir 'accept-golden-output.txt') -Force }   # O-12 M4 P2-2
+            # ADR-0005 D1/D2/D4a (2026-09-16) 证据回收闭环: 判据记录 / 节拍原文 / 输入全文 / 命令清单
+            #   一并归 runDir(**原文照收**, 不改写不规范); Move 即同时完成 TEMP 清理(D4a)。
+            if (Test-Path $metaTxt) { Move-Item $metaTxt (Join-Path $runDir 'judgment-record.txt') -Force }
+            if (Test-Path $progressTxt) { Move-Item $progressTxt (Join-Path $runDir 'progress-trace.txt') -Force }
+            if (Test-Path $promptTxt) { Move-Item $promptTxt (Join-Path $runDir 'prompt.txt') -Force }
+            if ($accCmdTxt -and (Test-Path $accCmdTxt)) { Move-Item $accCmdTxt (Join-Path $runDir 'accept-cmds.txt') -Force }
+            if ($goldCmdTxt -and (Test-Path $goldCmdTxt)) { Move-Item $goldCmdTxt (Join-Path $runDir 'golden-cmd.txt') -Force }
+            # D4a: 合批暂存目录(5 个小件已 Move 走)一并清掉, 不留 TEMP 残留
+            if (Test-Path $evDir) { Remove-Item $evDir -Recurse -Force -ErrorAction SilentlyContinue }
             Remove-Item (Join-Path $projRoot 'agent-out\.agent-run.json') -ErrorAction SilentlyContinue
         }
         catch {
             $collectOk = $false
             Write-Host "COLLECT_FAIL: agent-out write failed: $($_.Exception.Message)"
         }
+    }
+    # ADR-0005 D4c (2026-09-16): collect 失败时**不得清理** —— 归档路径已失效, 此时清掉就是
+    #   "既没归档又被删"。保留原地的证据并打印可寻路径(可 grep)。注: 本分支无法低成本端到端
+    #   验证(派发前的 Assert-AgentOutWritable 探针会先拦住多数情形), 属代码走查, 见 ADR 后果段。
+    if (-not $collectOk) {
+        $left = @(@($outTxt, $metaTxt, $promptTxt, $accTxt, $accCmdTxt, $accGoldTxt, $goldCmdTxt, $progressTxt) |
+                  Where-Object { $_ -and (Test-Path $_) })
+        if ($left.Count -gt 0) { Write-Host "EVIDENCE_LEFT_IN_TEMP=$($left -join ';')" }
     }
 
     # (ledger already written above, before collect - G13/O-04)
@@ -1624,7 +1674,8 @@ function Invoke-Task-Claude {
         collect = if ($collectOk) { 'ok' } else { 'failed' }
     }
     if ($goldenActive) {
-        $run['accept_golden'] = [ordered]@{ cmd = @($g.cmd); passed = ($acceptGoldenOk -eq 1); source = 'golden'; hidden_from_model = $true }
+        $run['accept_golden'] = [ordered]@{ cmd = @($g.cmd); passed = ($acceptGoldenOk -eq 1); source = 'golden'; hidden_from_model = $true
+                                            sha256 = $goldenSha; base = $goldenBase }   # ADR-0005 D3: 当次权威 checksum 只记于此
     }
     if ($collectOk) {
         try {
@@ -1632,8 +1683,16 @@ function Invoke-Task-Claude {
             if (Test-Path $outTxt) { Copy-Item $outTxt (Join-Path $runDir 'agent-output.txt') -Force }
             if (Test-Path $accTxt) { Copy-Item $accTxt (Join-Path $runDir 'accept-output.txt') -Force }
             if ($goldenActive -and (Test-Path $accGoldTxt)) { Copy-Item $accGoldTxt (Join-Path $runDir 'accept-golden-output.txt') -Force }
+            # ADR-0005 D1 (2026-09-16) 证据回收闭环(本地备路): prompt 全文 + stderr 归 runDir ——
+            #   本路的 prompt/stderr 是主控本地 scratch 里的件, 此前同样不归档(出 bug 时无从复核)。
+            if (Test-Path $promptIn) { Copy-Item $promptIn (Join-Path $runDir 'prompt.txt') -Force }
+            if (Test-Path $errTxt) { Copy-Item $errTxt (Join-Path $runDir 'stderr.txt') -Force }
         } catch { $collectOk = $false; Write-Host "COLLECT_FAIL: $($_.Exception.Message)" }
     }
+    # ADR-0005 D4a/D4c (2026-09-16): **归档成功才清理** scratch(本路原为 Copy-Item, scratch 此前永不
+    #   清理); 失败则保留并打印可寻路径 —— 不得"既没归档又被删"。
+    if ($collectOk) { try { Remove-Item $scratch -Recurse -Force -ErrorAction SilentlyContinue } catch {} }
+    else { Write-Host "EVIDENCE_LEFT_IN_SCRATCH=$scratch" }
 
     Write-Host "TASK_DONE dir=$runDir exit=$finalCode cli=claude prompt_sha256=sha256:$promptSha"
     Write-Host "ledger+=$line"
