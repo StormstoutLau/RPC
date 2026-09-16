@@ -1,85 +1,74 @@
 #!/bin/bash
-# _station_ready.sh — D6 站环境就绪步骤（最小落地，O-19）
-# 在"运行本脚本的那台站"上执行，使 opencode 可连到该站真实的 llama-server 引擎端点。
-#   1) 发现 llama-server 引擎端口（8080 是 unsloth studio 管理端，不承载推理 → 不可用）
-#   2) 校验 /v1/models 返回模型 id + chat 往返（无鉴权）
-#   3) 幂等改写 opencode.jsonc 的 `local` provider baseURL -> 引擎端口
-# 用法: bash _station_ready.sh [期望alias子串]   # 如 gpt-oss
-# 成功: 打印 STATION_READY port=.. model=.. + INJECT_OK; exit 0
-#   若引擎未加载: ERR_NO_ENGINE exit 10
-#   若注入失败:   ERR_INJECT exit 11
+# _station_ready.sh — D6 站环境就绪步骤 (O-19; C2 简化 2026-09-16)
+# 在"运行本脚本的那台站"上执行, 使调用方确知该站引擎面就绪。
+#
+# 2026-09-16 (C2) 变更 —— 为什么不再注入:
+#   · 引擎面 = unsloth studio 的**固定 8080** (实测提供 OpenAI /v1 + Anthropic /v1/messages +
+#     Responses 三协议, 带 key 即可用; 内层 llama-server 端口随机且**不可指定** ——
+#     `unsloth studio run` 把 --host/--port 列为 managed flag 拒收)。
+#   · 旧实现在此**就地改写** opencode.jsonc 的 local.baseURL ⇒ 任务后留下死端口、三站 config
+#     漂移 (门禁 stations 断言转红)、且只治 opencode 一支 (claude 走 settings.json 无人纠正)。
+#   · 现改为: 端口固定 8080 (opencode/claude 的 baseURL 本就是它), **唯一需要保持新鲜的是
+#     studio 每次加载重铸的 key** —— 由 infer-load 落盘到 ~/.config/rpc/unsloth.key
+#     (opencode 的 {file:} 与 claude 的 apiKeyHelper 都读它)。故本脚本**不再写任何配置**。
+#   · 端口发现整段删除: 裸 llama-server 已不是引擎面, 其 /slots 在 C2 形态下也不反映忙态
+#     (slot-gate 已改走 /api/inference/active-generations)。
+# 用法: bash _station_ready.sh [期望alias子串]
+# 成功: STATION_READY port=8080 model=.. (+ENGINE_CTX/CHAT_OK) exit 0
+#   引擎未加载或无响应: ERR_NO_ENGINE exit 10;  chat 往返失败: ERR_CHAT exit 12
 set -uo pipefail
 ALIAS="${1:-}"
-CFG="$HOME/.config/opencode/opencode.jsonc"
+PORT=8080
+KEYF="$HOME/.config/rpc/unsloth.key"
+K=""
+[ -f "$KEYF" ] && K=$(tr -d '[:space:]' < "$KEYF" 2>/dev/null)
 
-# ---- [1] 发现引擎端口（仅 llama-server，非 unsloth studio）----
-# 兼容三种 ss 输出绑定形态：127.0.0.1:PORT / 0.0.0.0:PORT / [::]:PORT（A 站 gpt-oss 用
-# 127.0.0.1, B 站 qwen --host 0.0.0.0）；取端口数字段。
-PORT=""; MODEL_ID=""
-for p in $(ss -tlnp 2>/dev/null | grep 'llama-server' | grep -oE '(127\.0\.0\.1|0\.0\.0\.0|\[::\]):[0-9]+' | grep -oE '[0-9]+$' | sort -un); do
-  M=$(curl -s -m4 "http://127.0.0.1:$p/v1/models" 2>/dev/null | grep -oE '"id":"[^"]+"' | head -1 | cut -d'"' -f4)
-  if [ -n "$M" ]; then PORT="$p"; MODEL_ID="$M"; break; fi
-done
-if [ -z "$PORT" ]; then
-  echo "ERR_NO_ENGINE: 无 llama-server 引擎端口 (模型未加载? 先 load-mem-gate + infer-load)"
+# ---- [1] 就绪: /v1/models ----
+if [ -n "$K" ]; then
+  MODELS=$(curl -s -m5 -H "Authorization: Bearer $K" "http://127.0.0.1:$PORT/v1/models" 2>/dev/null)
+else
+  MODELS=$(curl -s -m5 "http://127.0.0.1:$PORT/v1/models" 2>/dev/null)
+fi
+MODEL_ID=$(printf '%s' "$MODELS" | grep -oE '"id":"[^"]+"' | head -1 | cut -d'"' -f4)
+if [ -z "$MODEL_ID" ]; then
+  echo "ERR_NO_ENGINE: :$PORT /v1/models 无响应 (模型未加载? 或 key 未落盘 —— 见 infer-load)"
   exit 10
 fi
-
-# ---- [2a] /v1/models 校验 ----
 echo "STATION_READY port=$PORT model=$MODEL_ID"
 if [ -n "$ALIAS" ]; then
   if echo "$MODEL_ID" | grep -qi "$ALIAS"; then echo "MODEL_MATCH alias=$ALIAS ok"; else echo "WARN_MODEL_MISMATCH: 期望 $ALIAS, 实际 $MODEL_ID (利用现状继续)"; fi
 fi
 
-# ---- [2c] 引擎 ctx 探测 (radical fix B: engine ctx = source of truth) ----
-# Extreme: read n_ctx from /props (llama-server); empty on non-llama engines -> leave unset.
-ENGINE_CTX=""
-for ep in /props /slots; do
-  V=$(curl -s -m4 "http://127.0.0.1:$PORT$ep" 2>/dev/null | grep -oE '"n_ctx":\s*[0-9]+' | grep -oE '[0-9]+$' | head -1)
-  if [ -n "$V" ]; then ENGINE_CTX="$V"; break; fi
-done
-if [ -n "$ENGINE_CTX" ]; then
-  echo "ENGINE_CTX=$ENGINE_CTX"
+# ---- [2] 引擎 ctx (radical fix B: engine ctx = source of truth) ----
+if [ -n "$K" ]; then
+  V=$(curl -s -m5 -H "Authorization: Bearer $K" "http://127.0.0.1:$PORT/props" 2>/dev/null | grep -oE '"n_ctx":[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | head -1)
 else
-  echo "WARN_ENGINE_CTX_NA"   # 非 llama-server 引擎或无 n_ctx，走 classic 逻辑(不 clamp)
+  V=$(curl -s -m5 "http://127.0.0.1:$PORT/props" 2>/dev/null | grep -oE '"n_ctx":[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | head -1)
+fi
+if [ -n "$V" ]; then
+  echo "ENGINE_CTX=$V"
+else
+  echo "WARN_ENGINE_CTX_NA"
 fi
 
-# ---- [2b] chat 往返校验 ----
-CHAT=$(curl -s -m20 "http://127.0.0.1:$PORT/v1/chat/completions" \
-  --data-raw '{"model":"'$MODEL_ID'","messages":[{"role":"user","content":"say OK"}],"max_tokens":8}' 2>/dev/null \
-  | grep -oE '"content":"[^"]*"' | head -1)
-echo "CHAT_OK $CHAT"
-[ -n "$CHAT" ] || { echo "ERR_CHAT: 引擎 chat 无响应 (port=$PORT)"; exit 12; }
-
-# ---- [3] 幂等注入 local baseURL -> 引擎端口 ----
-# 2026-09-16: provider 名 `cluster-litellm` 已在三站 config 中更名/统一为 `local`
-# (三站实况: provider 仅 local + openrouter; 旧名会让本步 ERR_INJECT exit 11 -> 派发门全挂)。
-if [ ! -f "$CFG" ]; then echo "ERR_INJECT: 无 opencode config $CFG"; exit 11; fi
-python3 - "$CFG" "$PORT" <<'PY'
-import sys, re
-cfg, port = sys.argv[1], sys.argv[2]
-s = open(cfg, encoding='utf-8').read()
-m = re.search(r'\n {4}"local"\s*:\s*\{', s) or re.search(r'"local"\s*:\s*\{', s)
-if not m:
-    print("ERR_INJECT: 无 local provider"); sys.exit(11)
-start = m.end()
-rest = s[start:]
-nxt = re.search(r'\n {4}"[^"]+"\s*:\s*\{', rest)
-close = re.search(r'\n {2}\}', rest)
-end = len(rest)
-if nxt and nxt.start() < end: end = nxt.start()
-if close and close.start() < end: end = close.start()
-block = rest[:end]
-if '"baseURL"' not in block:
-    print("ERR_INJECT: local 块内无 baseURL"); sys.exit(11)
-newblock = re.sub(r'"baseURL"\s*:\s*"[^"]*"', '"baseURL": "http://127.0.0.1:%s/v1"' % port, block, count=1)
-open(cfg, 'w', encoding='utf-8').write(s[:start] + newblock + rest[end:])
-print("INJECT_OK port=%s" % port)
-PY
-rc=$?
-[ $rc -eq 0 ] || exit 11
-
-# ---- [4] 注入后复核：baseURL 已指向引擎端口 ----
-grep -q "127.0.0.1:$PORT/v1" "$CFG" || { echo "ERR_INJECT_VERIFY: 复核失败"; exit 11; }
-echo "INJECT_VERIFY_OK -> $PORT"
+# ---- [3] chat 往返 ----
+# 判据 = 响应含 "choices" (请求被引擎受理并完成), **不看 content 是否非空**:
+# reasoning 模型在 max_tokens 小时会把配额全花在 thinking 上 -> content 缺省/为空
+# (2026-09-16 实测 gpt-oss-20b: max_tokens=8 时无 content 字段)。原实现以 content 判 => 假失败。
+D='{"model":"x","messages":[{"role":"user","content":"say OK"}],"max_tokens":64}'
+# ⚠ 必须显式 -H "Content-Type: application/json": 缺它 curl 默认按 form-urlencoded 发,
+#   引擎侧 Pydantic 会报 "body: Input should be a valid dictionary" (2026-09-16 实测踩到)。
+#   旧实现也缺此头 —— 其 CHAT_OK 实为**假阳性** (匹配到的 "content":"" 来自非正常响应)。
+if [ -n "$K" ]; then
+  RESP=$(curl -s -m60 -H "Content-Type: application/json" -H "Authorization: Bearer $K" "http://127.0.0.1:$PORT/v1/chat/completions" --data-raw "$D" 2>/dev/null)
+else
+  RESP=$(curl -s -m60 -H "Content-Type: application/json" "http://127.0.0.1:$PORT/v1/chat/completions" --data-raw "$D" 2>/dev/null)
+fi
+if printf '%s' "$RESP" | grep -q '"choices"'; then
+  echo "CHAT_OK choices=1"
+else
+  echo "ERR_CHAT: 引擎 chat 无响应 (port=$PORT) resp=$(printf '%s' "$RESP" | head -c 120)"
+  exit 12
+fi
+echo "READY_OK port=$PORT (C2: 端口固定 8080, 本脚本不改写任何配置)"
 echo "--DONE--"

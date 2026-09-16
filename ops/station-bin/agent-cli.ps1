@@ -175,8 +175,10 @@ function Invoke-StationReady {
     # Root cause was port-topology drift: 8080 = unsloth studio (mgmt, auth) while the
     # llama-server OpenAI engine lands on a RANDOM per-load port. opencode baseURL=8080
     # hit mgmt -> "Cannot connect to API".
-    # Fix: run _station_ready.sh on target station -> discover engine port -> verify
-    # /v1/models+chat -> idempotently inject local provider baseURL to that port.
+    # C2 (2026-09-16): 引擎面固定 unsloth studio :8080 (OpenAI + Anthropic + Responses 三协议),
+    # _station_ready.sh 只做**就绪校验**, 不再改写任何配置 (旧实现就地改写 local.baseURL
+    # => 任务后留下死端口 + 三站 config 漂移 + 门禁 stations 转红)。
+    # 密钥新鲜度由 infer-load 落盘 ~/.config/rpc/unsloth.key 保证。
     # (source kept ASCII-only for PS5.1 BOM safety)
     [CmdletBinding()]
     param(
@@ -205,7 +207,7 @@ function Invoke-StationReady {
         if ($joined -match 'ERR_NO_ENGINE') { throw "STATION_NOT_READY: engine not loaded ($HostName) - run load-mem-gate + infer-load first" }
         throw "STATION_NOT_READY: inject failed rc=$code ($HostName)"
     }
-    if ($joined -notmatch 'INJECT_OK' -or $joined -notmatch 'STATION_READY port=') { throw "STATION_NOT_READY: injection not confirmed ($HostName)" }
+    if ($joined -notmatch 'STATION_READY port=' -or $joined -notmatch 'CHAT_OK') { throw "STATION_NOT_READY: readiness not confirmed ($HostName)" }
     # radical fix B: surface real engine n_ctx (if present) so caller clamps profile.context
     $ctx = 0
     if ($joined -match 'ENGINE_CTX=(\d+)') { $ctx = [int]$Matches[1] }

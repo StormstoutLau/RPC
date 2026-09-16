@@ -232,6 +232,15 @@ if [ "$BACKEND" = "unsloth" ]; then
   log "unsloth 实际端口: ${ACT_PORT}"
   # 解析 API Key (unsloth 每次重启重铸; /v1/models 需认证)
   UN_KEY=$(grep -oE "sk-unsloth-[a-f0-9]+" "$UN_LOG" | tail -1)
+  # C2 (2026-09-16): 把 studio 本次重铸的 key 落盘。引擎面固定 :8080 后, opencode 的
+  # {file:~/.config/rpc/unsloth.key} 与 claude 的 apiKeyHelper 都读它 —— 这是"端口固定"之后
+  # 唯一需要每次刷新的东西, 也是 claude 路径此前坏掉的**真因** (key 陈旧, 不是端口不对)。
+  if [ -n "$UN_KEY" ]; then
+    mkdir -p "$HOME/.config/rpc"
+    printf '%s\n' "$UN_KEY" > "$HOME/.config/rpc/unsloth.key"
+    chmod 600 "$HOME/.config/rpc/unsloth.key"
+    log "API Key 已落盘 -> ~/.config/rpc/unsloth.key"
+  fi
   # 等就绪: /v1/models (unsloth, 带认证) 确认模型可服务
   for i in $(seq 1 120); do
     if [ -n "$UN_KEY" ]; then
