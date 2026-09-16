@@ -645,5 +645,8 @@ limit: { context: J.context_length ?? Y?.limit.context ?? 0,
 | G7 / O-16 `--peer` 站间互审 / trae 派发 | D6 一期 review ring 已覆盖单机，站间互审拨 D7 | D7 立项 |
 | G8 R 依赖包（forecast/rugarch/urca/ARDL/midasr/Spillover/vars） | **走 Cpp_Hub 项目 `renv`**（不可装三站全局, 防版本漂移, §9.10 选型） | Cpp_Hub 基准对拍试点 |
 | 记忆协同"待核"收尾 | 09-16 已下结论：三站 opencode memory 独立、无跨站共享（站内记忆+任务卡交接）——**该项本身已闭合**，仅留"是否要跨站记忆共享"作为设计取舍（当前不引） | 需求显现时才评 |
+| **`_agent-cli-bom.ps1` = `agent-cli.ps1` 的整份过期副本**（仍含旧名 `cluster-litellm`） | **09-16 新登记**：属 D4 定义的「**并列入口**」而非"站上运行时件" ⇒ 按 D5 先确认无人引用再清理。同批死代码：`_btest.sh` / `_opencode_bump.py` / `_aic.sh` 等仍引用旧 provider 名，并入下一批清减 | 下一批清减（已回写 [ADR-0004 第五批](../../adr/ADR-0004-统一管理入口为唯一管理面.md)） |
+| **G10「位置参数必挂死」的确定性存疑（我写入的负向用例可能 flaky）** | **09-16 新登记**：`ocrun` 头注记其 **2026-09-14 复测未能复现该铁律**（位置参数 4/4 成功、管道形式 2/4 成功，两者都呈间歇性慢），与本轮我观测到的"位置参数无输出"**相反** ⇒ 我上批写入 `agent-cli-smoke.sh` 的 G10 负向用例**可能是 flaky 测试**，需重评。**纪律**：不可把间歇现象断言为确定行为 | 下次 smoke 回归时重评（⇒ 可能的处置：负向用例降级为"观测记录"而非"断言"） |
+| **`cpphub-001` 卡与 `PROJECTS` 映射不一致（重跑必 golden FAIL）** | **09-16 新登记，用户裁定「暂不动，仅登记」**：该卡 golden（`ops/station-bin/golden/cpphub_golden.py`）断言 `src/因子计算_核心.cpp`（= `spec/d6-agent-standard/Cpp_Hub` 轻量样本结构），但 `PROJECTS['Cpp_Hub']` 自 `cc3b75c`（09-14）已改指 `F:\Cpp_Hub`（结构为 `include/cpphub/core/math.hpp`），且 wrapper **无 per-card 源目录覆盖键**（sync 源严格取 `PROJECTS[$proj]`）⇒ 今天重跑该卡必报"缺少 src/因子计算_核心.cpp"。真源卡是 `cpphub-beta`。**注意**：同日的 gitlink 吸收（A1）把该样本转为普通文件入库，**样本仍在**，缺的是"卡→源目录"的对应关系 | 暂不动（用户裁定）；将来需要复跑 cpphub-001 时再选：标为"样本专用历史卡"或给 wrapper 加 per-card 源目录覆盖键（属新能力，须走 ADR-0004 D3） |
 
-> **台账维护规则回归**: 本表是 D6 未决问题唯一总账；上表"真实剩余 open"5 项之外均为已闭环/已覆盖，若未来 OPEN-ISSUES 快照提到"G 清单未闭合"应能溯源到这 5 项 + 对应 G 编号。
+> **台账维护规则回归**: 本表是 D6 未决问题唯一总账；上表"真实剩余 open"**8 项**（含 2026-09-16 新登记的三项：`_agent-cli-bom.ps1`、G10 负向用例 flaky、`cpphub-001` 卡与 PROJECTS 映射不一致）之外均为已闭环/已覆盖，若未来 OPEN-ISSUES 快照提到"G 清单未闭合"应能溯源到这 8 项 + 对应 G 编号。（另：同日已处置的 Cpp_Hub 假子模块/unmapped gitlink 属**已闭环**，见 [DEVELOPMENT-LOG 2026-09-16 ⑧](DEVELOPMENT-LOG.md)）
