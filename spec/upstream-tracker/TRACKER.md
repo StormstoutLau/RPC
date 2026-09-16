@@ -4,9 +4,9 @@
 
 id: upstream-tracker
 type: tracker
-version: 1.2
+version: 1.3
 status: active（维护中）
-date: 2026-09-08（1.1 更新 2026-09-10: #26578 实测落地；**2026-09-16 核查（API fetch 原页）**：**GLM 首选线 #27754 → 45c 且 `mergeable_state=unstable` + 当日(9/16)有活动 = 9/13 以来首个「接近可合并」信号**，但仍**未合入**；#27752/#27773/#27917 无变化（均 `dirty`）。新增 3 条 GLM 项：#28282（CUDA 长 prefill 非法访存，`bug-unconfirmed`）/#28727+#28729（indexer `soft_max gridDim.y` 溢出修复，**closed 未合并**）/#28106（`resolve_fused_ops` 校验不全，open）；**DS V4**：#26610（RPC `-sm tensor`）**9/16 仍有活动**、仍是最近可合并候选，新增 **#25452**（V4-Flash SWA KV-cache 轮换复用耗尽 → crash/stall，12 评论，**待自测甄别后端相关性**）；架构级无新 PR）
+date: 2026-09-08（**1.3 更新 2026-09-16：新增 §1.4「分布式推理相关 PR 集中索引」** —— 用户指出"V4-Flash 与 GLM-5.3-Flash 需要关注分布式推理相关 PR"，核查发现 **V4 侧已有层级标注（§1.2b）、GLM 侧散落未标注**，且两模型均缺 4 条关键条目；本次集中补录 **#26490（V4 `-sm tensor` 主体，已 merged 8/24，现役引擎已含）/ #27825（HIP AllReduce，merged 9/15，现役不含）/ #28360（GLM-5.3 的 RPC issue，报告者第二机为 **GFX1151 同架构**）/ #27311（调度器 UMA ring buffer，活跃）**，并把 #28047/#26500、#26610、#26384、#27964 一并纳入。1.2 更新 2026-09-16: GLM 首选线 #27754 → 45c 且 `mergeable_state=unstable` + 当日有活动 = 9/13 以来首个「接近可合并」信号，仍未合入；新增 #28282/#28727+#28729/#28106；DS V4 新增 #25452，架构级无新 PR。1.1 更新 2026-09-10: #26578 实测落地）
 depends: [vulkan-version-control-UPGRADE_SOP v1.0, operator-optimization-DESIGN v1.1, model-eval-MODEL-SOURCING v1.0]
 
 > **用途**: 本集群所有「上游活数据」的**单一真值台账**——llama.cpp 相关 PR/Issue 合并状态、引擎基线（各构建目录/现役实例/版本）、以及上游变动对集群的触发动作。**状态变更必须回写本表，禁止散落各处**。
@@ -33,6 +33,8 @@ depends: [vulkan-version-control-UPGRADE_SOP v1.0, operator-optimization-DESIGN 
 
 **结论（2026-09-16 核查）**: glm5next **仍未合入 master**，但出现 **9/13 以来第一个「接近可合并」信号** —— **#27754（unsloth 首选线）45c + `mergeable_state=unstable` + 9/16 当日有活动**（此前三线全 Open 且无活动）；另两线为 46c（#27773，9/12 后未动，`dirty`）与 11c（#27752，`dirty`），#27917 仍 Draft。**新增风险面两条**：① **#28282** 报告在 **#27754 HEAD 上长 prefill（`-ub 2048`）出现 CUDA 非法访存**（`bug-unconfirmed`，非本集群后端，但说明该线**长 prefill 侧未验证**）；② 针对 GLM indexer `soft_max gridDim.y` 溢出的修复 **#28727/#28729 双双 closed 未合并**（无人承接）⇒ 若合并后长 prefill 异常，**先查此项**。**判定**：GLM-5.3-Flash 本地部署**维持等待**，事件驱动前置维持**三变二**不变（① 任一 PR 合并；② RPC crash 已由 #26500 修复，前置满足；③ 可选与 #26610 同窗原子升级），并**新增一条预警触发**：`#27754 转 clean + reviewer 批准` → 即启动评估环境准备（不必等合并）。 [行为快照追溯](file:///d:/RPC/spec/model-eval/FRAMEWORK-SURVEY-2026-09.md)（附录 H.4，原 docs/GLM-5.3-Flash-分布式部署调研并入）｜[模型选型](file:///d:/RPC/spec/model-eval/MODEL-SOURCING-2026-09.md) §6a
 
+> **分布式相关性标注（2026-09-16 补）**：GLM-5.3-Flash 的分布式相关条目**此前散落在 §1.2 的 #28047 与上面结论文字里、表格内无显式标注**（本次核查发现）。现已集中到 **§1.4「分布式推理相关 PR 集中索引」**；其中最直接的一条是 **#28360**（GLM-5.3-Flash 的 RPC issue，**报告者第二台机器为 Strix Halo / GFX1151 —— 与本集群 A/B/C 同架构**）。⇒ 合并任一线后、上分布式前，先按该 issue 条件做前置自测。
+
 ### 1.2 DeepSeek V4（deepseek4）算子链——Vulkan 后端
 
 | PR/Release | 内容 | 状态 | 集群影响 |
@@ -52,7 +54,7 @@ depends: [vulkan-version-control-UPGRADE_SOP v1.0, operator-optimization-DESIGN 
 
 ### 1.2b DeepSeek V4-Flash 框架级 PR（open，2026-09-13 补充调研）
 
-> **层级界定**: 本节为「框架级」——架构/转换/分布式形态，区别于 §1.2 的 Vulkan 算子优化。直接关系到三机分布的 `-sm layer` → `-sm tensor` 演进与 V4.1 迁移。
+> **层级界定**: 本节为「框架级」——架构/转换/分布式形态，区别于 §1.2 的 Vulkan 算子优化。直接关系到三机分布的 `-sm layer` → `-sm tensor` 演进与 V4.1 迁移。**分布式相关条目已集中索引于 §1.4**（含每条"现役引擎是否已含"的判定）。
 
 | PR | 层级 | 内容 | 状态（9/16 核查） | 对集群影响 | 触发动作 |
 |---|---|---|---|---|---|
@@ -73,6 +75,25 @@ depends: [vulkan-version-control-UPGRADE_SOP v1.0, operator-optimization-DESIGN 
 |---|---|---|
 | ~~[#27332](https://github.com/ggml-org/llama.cpp/pull/27332)~~ | ~~MoE decode 密度门~~（已并入 §1.2 详列） | ⚠️ Open（9/13 核查，1→2 commits，见上） |
 | [#27554](https://github.com/ggml-org/llama.cpp/pull/27554) | mmq 大 tile（dense prefill 1.76×） | ❌ Closed；方向由 [#27553](https://github.com/ggml-org/llama.cpp/issues/27553) 承接 |
+
+### 1.4 分布式推理相关 PR（集中索引，2026-09-16 新增）
+
+> **为什么单列**: 用户 2026-09-16 指出「V4-Flash 与 GLM-5.3-Flash 需要关注**分布式推理相关 PR**」。核查结论：**V4 侧此前已有标注**（§1.2b 的「层级」列 + §1.2 的 v0.3.0 / #28047 行），**GLM 侧则散落在 §1.2 的 #28047 与 §1.1 结论文字里、表格内无标注**；且两模型**均缺 4 条关键条目**（本次补录，行首标 ⭐）。本节作为**跨模型的单一入口**：既收模型专属项，也收**两模型共用的分布式基建**。
+
+| PR/Issue | 归属 | 主题 | 内容/证据 | 状态（9/16 核查） | 对本集群影响与触发动作 |
+|---|---|---|---|---|---|
+| [#26490](https://github.com/ggml-org/llama.cpp/pull/26490) ⭐ | DS V4-Flash | 架构/分布式 | **Deepseek 4: `-sm tensor`**（am17an；8 commits / 7 files；分支 `am17an:dsv4-sm-tensor`） | ✅ **Merged 2026-08-24** | **重要澄清**：V4 的 `-sm tensor` **主体早已入主线，且现役引擎（master-91f6a6cf，9/10 构建）已含** ⇒ "单机/多进程 `-sm tensor`" 已具备；**缺的只是 RPC 多机形态（#26610）**。此前台账仅在 §1.2b"配合 #25860/#26490"里提及、未标 merged |
+| [#27825](https://github.com/ggml-org/llama.cpp/pull/27825) ⭐ | 共用基建（**C 站直接相关**） | ROCm/通信原语 | **HIP: Enable AllReduce for ROCm**（1 commit / 3 files） | ✅ **Merged 2026-09-15** —— **现役引擎不含**（9/10 构建） | **AllReduce 是张量并行的通信原语**；C 站为 HIP/ROCm ⇒ 若将来走 `-sm tensor` + ROCm，这是**前置**。触发：**下次引擎升级纳入**（与 #26610 评估同窗） |
+| [#26610](https://github.com/ggml-org/llama.cpp/pull/26610) | 两模型共用 | RPC/分布式 | RPC 层 add `-sm tensor`（全后端拉通） | 🔴 Open，非 draft，3 commits / 2 files，**9/16 有活动** | **三机 tensor-split 中枢**：只有它合并，`-sm tensor` 才在 **RPC** 上可用（#26490 只解决非 RPC 路径） | 合并 → 与 GLM/V4 同窗评估升级（详见 §1.2b） |
+| [#28047](https://github.com/ggml-org/llama.cpp/issues/28047) / [#26500](https://github.com/ggml-org/llama.cpp/pull/26500) | GLM-5.3（+ V4-Pro）分布式前置 | RPC/修复 | RPC ≥2 worker 下 V4-Pro/**GLM-5.3** 确定性 crash（split scheduler 发错 worker）→ 由 #26500 修复 | ✅ Closed 9/5 / **#26500 Merged 8/30（现役已含）** | **GLM-5.3 分布式禁用的前置已解除** = §1.1 结论「三变二」的第②条。触发：**已满足** |
+| [#28360](https://github.com/ggml-org/llama.cpp/issues/28360) ⭐ | **GLM-5.3** | RPC/运行时 | **Eval bug: RPC Issue in add GLM-5.3-Flash (GLM5-Next) support - #27773**；报告者两机 = **4×9060XT(GFX1200) + Strix-Halo(GFX1151)**，走 RPC | 🟡 **Open**（创建/更新 9/4，1 评论，`bug-unconfirmed`） | **最直接的一条**：报告者第二台就是 **gfx1151（与本集群同架构）**，且明确挂在 #27773 线上 ⇒ GLM-5.3 走 RPC 存在**已知未确认问题**。触发：**合并任一线后、上分布式前，先按该 issue 条件做前置自测** |
+| [#27311](https://github.com/ggml-org/llama.cpp/pull/27311) ⭐ | 共用基建（**UMA**） | 调度器 | **Scheduler UMA ring buffer**（+ sanitizer 加固与调度修复；**49 评论、9/16 仍活跃**） | 🟡 Open（8/18 创建，**更新 9/16**） | 本集群是 **UMA（Strix Halo 统一内存）** 且跑 RPC ⇒ 调度器输入张量 ring buffer 与我们的形态**直接相关**（可能关联"长跑稳定 / 内存行为"）。触发：合并 → 评估 |
+| [#26384](https://github.com/ggml-org/llama.cpp/issues/26384) | DS V4-Flash（分布式健壮性） | RPC/健壮性 | deepseek_v4 over RPC（2 节点，Thunderbolt）：输出退化为 `====` → worker 侧图失败**直接杀掉整个 server**，原文注明 **"RPC has no error recovery"** | ⚫ Closed（`stale`；7/31 创建、9/14 更新） | **通用风险认知**：RPC 无错误恢复 ⇒ 三机形态下 **worker 故障会连带 head 全挂**（与本集群 2026-09-08 两次 kernel panic 经验同族）。触发：已记入风险认知，非动作项 |
+| [#27964](https://github.com/ggml-org/llama.cpp/issues/27964) | `-sm tensor` 风险观察 | 运行时 | Qwen3.8-Flash-Next：`--split-mode tensor` 在 CUDA 双卡上 **abort（`SPLIT_AXIS_UNKNOWN`）** | 🟡 Open（8/29 创建，更新 9/16） | `-sm tensor` 在**其他架构上仍有失败案例**（姊妹架构 qwen4exp / qwen3.8）⇒ 我们启用前**必须先做形态验证**。触发：纳入 `-sm tensor` 验证清单 |
+
+**低相关存档**：[#26906](https://github.com/ggml-org/llama.cpp/issues/26906)（"model stop answering after some hours of work"，`stale`）—— 报告环境为 **CPU 双机、无 GPU**，与本集群形态不符，仅存档不动作。
+
+**§1.4 判定（2026-09-16）**：分布式路径上**真正的两个闸门**是 ① **#26610**（RPC `-sm tensor`，仍 Open，但 9/16 有活动）与 ② **GLM 侧的 #28360**（同架构报告者的 RPC 问题，未确认）。V4 侧的 `-sm tensor` 主体（#26490）与 RPC crash 修复（#26500）**均已在现役引擎内**；C 站 HIP 侧的 AllReduce（#27825，9/15 合并）**尚未入现役**，若走 ROCm 张量并行需随下次升级纳入。
 
 ***
 
@@ -162,6 +183,7 @@ depends: [vulkan-version-control-UPGRADE_SOP v1.0, operator-optimization-DESIGN 
 
 | 日期 | 操作 | 内容 |
 |---|---|---|
+| 2026-09-16 | **新增 §1.4「分布式推理相关 PR 集中索引」（v1.3）** | 用户指出"V4-Flash 与 GLM-5.3-Flash 需要关注**分布式推理相关 PR**" ⇒ 核查发现：**V4 侧此前已有标注**（§1.2b 的「层级」列 + §1.2 行），**GLM 侧未标注**（散落在 §1.2 的 #28047 与 §1.1 结论文字里），且**两模型均缺 4 条关键条目**。集中补录 **#26490**（**V4 `-sm tensor` 主体，Merged 8/24** ⇒ 现役引擎已含；澄清"非 RPC 路径的 `-sm tensor` 早已可用，缺的只是 RPC 形态"）、**#27825**（**HIP AllReduce**，Merged 9/15，**现役不含** —— C 站 ROCm 张量并行的通信原语前置）、**#28360**（**GLM-5.3 的 RPC issue**，报告者第二机为 **GFX1151 同架构**，Open）、**#27311**（调度器 **UMA ring buffer**，49 评论、9/16 活跃）；并把 #28047/#26500（GLM 分布式前置已解除）、#26610（RPC `-sm tensor` 中枢）、#26384（**"RPC has no error recovery"**）、#27964（`-sm tensor` 在 Qwen 侧 `SPLIT_AXIS_UNKNOWN` abort）一并纳入；#26906 标低相关存档。**判定：两个真闸门 = #26610 与 #28360**。同时在 §1.1 结论、§1.2b 层级界定处加"分布式相关性"指针 |
 | 2026-09-16 | **GLM-5.3-Flash + DS V4-Flash 上游状态核查（API fetch 原页，v1.2）** | **GLM**：#27754（unsloth 首选线）**43→45 commits（42 files）且 `mergeable_state=unstable` + 9/16 当日有活动** = **9/13 以来首个「接近可合并」信号**（仍未合入）；#27773 46c 未动 / #27752 11c / #27917 Draft 31c（三者均 `dirty`）；#27922 issue 仍 Open（实标题 "Feature Request: Support GLM5.3 (flash)"）。**新补录 3 条**：**#28282**（在 #27754 HEAD 上长 prefill `-ub 2048` 出现 CUDA 非法访存，`bug-unconfirmed`，更新 9/15 ⇒ 提示该线**长 prefill 侧未验证**）、**#28727 + #28729**（GLM indexer `soft_max gridDim.y` 溢出修复，**双双 closed 未合并**、无人承接）、**#28106**（`resolve_fused_ops` 只校验 device placement 不校验 tensor，8/31 创建、本次补录）。**判定**：维持等待 + **新增预警触发「#27754 转 `clean` 且 reviewer 批准 → 启动评估环境准备」**（不必等合并）+ 评估时**必须压测长 prefill**。**DS V4**：**#26610**（RPC `-sm tensor`）**9/16 仍有活动**（3 commits / 2 files；`mergeable_state` 本次惰性读作 `unknown`）⇒ 仍为**最可合并候选**；#25860 Draft 停滞（7/30）/ #28696 Draft（9/13 有触碰）/ #23122（8/1）/ #28569（9/8）均无实质变化；**新补录 #25452**（V4-Flash **SWA KV-cache 轮换复用耗尽 → crash/stall**，12 评论，创建 7/8、更新 9/15；**报告者环境为 CUDA 5 卡 ⇒ 后端相关性待自测甄别**）。**架构级无新 PR**（`deepseek4 in:title updated:>=2026-09-13` = 0） |
 | 2026-09-13 | **后端 GLM-5.3-Flash + density gate PR 状态核查（GitHub API fetch 原页）** | **glm5next 仍未合入 master**，但三线推进有实质变化：#27773（timkhronos 文本+视觉）**41→46 commits（9/12，三线最活跃）**；#27754（unsloth 首选线）**41→43 commits（9/11）**；#27332（vulkan density gate）**1→2 commits（9/9）**；#27752 11 commits 未变（仅被触碰 9/11）；#27917 仍 Draft 31 commits（head 5b8593b）；#27922 issue 仍 Open。**DSV4 算子链全 merged 不变**（#26578 9/7 / #27970 / #28133 9/2 / #28047 9/5 由 #26500 修复）。**结论**：无关键合并信号 → GLM-5.3-Flash 维持等待，事件驱动前置「三变二」不变 |
 | 2026-09-10 | **B 站 Q3.8F 两档清理：删 UD-Q4_K_XL（111.3G）+ GLM-5.3-Flash PR 状态核查** | **①B 站删除 `Qwen3.8-Flash-Next-UD-Q4_K_XL.gguf`（111,334,654,400 B / 104G 磁盘）**——该档超出单站（121G avail）安全余量（111.3G 权重 + KV 无富余，此前判定「单站无可部署」）；删除后磁盘 817G→923G 可用；保留 UD-IQ4_XS（93.7G，现役档，C→B 经 USB4 1.11GB/s 传输 + md5 三片一致）。**②GLM-5.3-Flash 五 PR fetch 原页核查（9/10）**：#27754 Open 41c 未变（前置 flag 更新：`NVIDIA_TF32_OVERRIDE=0`+`-fa off`）；#27752 Open **10→11c**（唯一变化）；#27773 Open 41c 未变；#27917 Draft 31c 未变（`--spec-type draft-mtp`）；#27922 Open（mmproj+文本双证 `unknown architecture 'glm5next'`）。**无合并信号 → GLM-5.3-Flash 维持等待** |
