@@ -47,6 +47,8 @@ def _collect_status():
     并行说明 (2026-09-14, 修 CHECKLIST F19): 复用 cluster 里**已并行**的
     collect_frames() / collect_status(), 而不是逐站串行调用 (原实现为
     3×probe_frames + 3×probe_station 串行 = 9 次 ssh, 实测 129.6s)。
+    2026-09-16 (ADR-0006): 那次修复只治了"串行 + 每进程一次解析"; 现在 A/B 的 host
+    已绑定 LAN IPv4 (cluster.STATIONS), 解析成本根本身消失 ⇒ 本页也不再受该因素影响。
     """
     fd = cluster.collect_frames()      # 三站并行
     st_status = cluster.collect_status(with_list=False)   # 三站并行; 跳过慢的 infer-list

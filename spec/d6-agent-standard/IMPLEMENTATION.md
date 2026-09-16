@@ -111,7 +111,8 @@ agent-cli.ps1
 ### T3：M2 task 全链 + M5 collect
 
 - Invoke-Task：sync→lock→run→collect→unlock 串联 + 远端执行体（timeout 包裹 + stdin 管道 + queue_s/run_s 时间戳）
-- Write-RunJson：DESIGN §6.2 schema 落 out/.agent-run.json（S4 容错）。**契约哈希三字段（M1，不变式 5 落地）**：主控站计算 `prompt_sha256`（消毒后终版 prompt）+ `attach`（每个附件路径+sha256 对）+ 远端回收后计算 `content_digest`（agent 输出全文 sha256）——三字段任一为空即验收失败（A11 判据含此项）
+- Write-RunJson（**实际实现为内联**——见 §3.1 两处构造点：`Invoke-Task` / `Invoke-Task-Claude`）→ 落**主控站** `<proj>/agent-out/<ts>/.agent-run.json`（S4 容错）。**契约哈希三字段（M1，不变式 5 落地）**：主控站计算 `prompt_sha256`（消毒后终版 prompt）+ `attach` + 远端回收后计算 `content_digest`（agent 输出全文 sha256）——三字段任一为空即验收失败（A11 判据含此项）。
+  ⚠ **两处已订正（2026-09-16）**：① `attach` 实际只存**附件 basename 列表、无 sha256**（与本节 v1 声明不符，已登记 OPEN-ISSUES 缺口）；② **ADR-0005 另增** `accept_golden.sha256`/`base` 两个契约键，并把 6 类证据件收进 runDir（`judgment-record.txt`/`progress-trace.txt`/`prompt.txt`/`accept-cmds.txt`/`golden-cmd.txt` + claude 备路 `stderr.txt`）——完整清单见 [ARCHITECTURE.md](ARCHITECTURE.md) §6 表
 - **--attach 传输（M4）**：attach 文件随 Invoke-Task 前置的附加 sync 传站——独立 tar 打包（不做 .agentsync 过滤，但限单文件 ≤50MB）→ scp 至工作区 `.attach/<ts>/` → prompt 中引用相对路径 `.attach/<ts>/<file>`；task 结束后 .attach/ 随 collect 一并回收，工作区不留副本
 - Invoke-Collect：out/ tar+scp 拉回 `<proj>\agent-out\<ts>\`
 - 台账 agent-runs.log 追加（CSV 一行：ts,proj,model,sens,exit,run_s,queue_s）
