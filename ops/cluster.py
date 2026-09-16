@@ -789,7 +789,13 @@ PROVIDERS_PROBE = (
     # 用 printf 前置换行: 部分配置文件无尾换行, 直接 echo marker 会被粘到上一行末尾
     "printf '\\n### opencode\\n'; " + MASK_SED + " " + OPC_CONF + " 2>/dev/null; "
     "printf '\\n### claude\\n'; " + MASK_SED + " " + CLD_CONF + " 2>/dev/null; "
-    "printf '\\n### hermes\\n'; test -f ~/.hermes/config.yaml && echo present || echo absent"
+    "printf '\\n### hermes\\n'; test -f ~/.hermes/config.yaml && echo present || echo absent; "
+    # 记忆协同层 (2026-09-16 增补): opencode 自带 memory (MEMORY.md + SQLite), 非独立 codex-memory 命令
+    # 判据: memory.db 存在 + 大小 + MEMORY.md 行数。--wal/--shm 为连接态伴生文件, 一并列示(说明此刻有 opencode 会话在写)。
+    "printf '\\n### mem\\n'; "
+    "ls -la ~/.local/share/opencode/memory.db* 2>/dev/null | awk '{print $5\"\\t\"$NF}'; "
+    "echo -n 'MEMORY.md lines: '; wc -l < ~/.local/share/opencode/memories/MEMORY.md 2>/dev/null || echo '—'; "
+    "echo -n 'summary lines: '; wc -l < ~/.local/share/opencode/memories/memory_summary.md 2>/dev/null || echo '—'"
 )
 
 
@@ -800,6 +806,23 @@ def _api_key_form(prov: dict) -> str:
     if v.startswith("{file:") or v.startswith("{env:"):
         return "ref"
     return "PLAIN"
+
+
+def _ep_form(prov: dict) -> str:
+    """opencode provider 端点形态: 网关(:4000) vs 直连引擎端口。2026-09-16。
+    判据: 只认 options.baseURL 里的端口; 无 baseURL(如 openrouter 外呼)返回原 URL(缩略)。"""
+    url = str((prov.get("options") or {}).get("baseURL", ""))
+    if not url:
+        return "—"
+    if ":4000" in url:
+        return "⚠ 网关:4000(已退役, 应直连)"
+    if url.startswith("http://"):
+        # 缩略: 只留 host:port, 省得 k8s/pod 路径刷屏
+        try:
+            return url.split("//")[1].split("/")[0]
+        except Exception:
+            return url
+    return url
 
 
 def _claude_forms(cl: dict) -> dict:
@@ -843,6 +866,8 @@ def probe_providers(st: str) -> dict:
         res["opencode"] = {
             "model": oc.get("model", "(未设)"),
             "providers": {k: _api_key_form(v or {}) for k, v in providers.items()},
+            # 端点形态 (2026-09-16): 判断是否仍过 :4000 网关, 还是已改直连引擎端口
+            "eps": {k: _ep_form(v or {}) for k, v in providers.items()},
         }
     except Exception as e:
         res["opencode"] = {"error": f"parse: {type(e).__name__}"}
@@ -852,6 +877,7 @@ def probe_providers(st: str) -> dict:
     except Exception as e:
         res["claude"] = {"error": f"parse: {type(e).__name__}"}
     res["hermes"] = (blocks.get("hermes", ["absent"]) or ["absent"])[0].strip()
+    res["mem"] = blocks.get("mem") or []   # 记忆协同层 (memory.db + MEMORY.md), 2026-09-16
     return res
 
 
@@ -874,16 +900,28 @@ def cmd_providers() -> int:
         else:
             print(f"    opencode : 默认模型 {oc.get('model')}")
             for name, form in (oc.get("providers") or {}).items():
+                ep = (oc.get("eps") or {}).get(name, "")
                 flag = "  ← 明文!" if form == "PLAIN" else ""
-                print(f"               {name:18s} key:{form}{flag}")
+                print(f"               {name:18s} key:{form:5s} ep:{ep}{flag}")
         cl = d.get("claude", {})
         if cl.get("error"):
             print(f"    claude   : {cl['error']}")
         else:
             flag = "  ← 明文!" if cl.get("token_form") == "PLAIN" else ""
+            bu = cl.get("base_url") or "—"
+            g = "  ⚠ 网关:4000!" if ":4000" in str(bu) else ""
             print(f"    claude   : 模型 {cl.get('model')}; apiKeyHelper {cl.get('helper')}; "
-                  f"env token {cl.get('token_form')}{flag}; modelOverrides {cl.get('overrides')}")
+                  f"env token {cl.get('token_form')}{flag}; modelOverrides {cl.get('overrides')}"
+                  f"; baseURL {bu}{g}")
         print(f"    hermes   : config.yaml {d.get('hermes')}")
+        # 记忆协同层 (2026-09-16)
+        mem = d.get("mem") or []
+        if mem:
+            print("    memory   : opencode 记忆库（见下）")
+            for ln in mem:
+                print(f"               {ln}")
+        else:
+            print("    memory   : — (未发现 opencode memory)")
         print()
 
     # 漂移检测: 默认模型 / provider 集合
