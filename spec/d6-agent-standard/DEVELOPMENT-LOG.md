@@ -74,8 +74,22 @@ upstream: \[d6-agent-standard-.* 全量文档]
   **执行**：正本 3 个 `claude-key.sh` 改写（46B / LF / 逐字节自校）+ 删除 3 份 `claude.key` 正本 → C 站**真跑一次 `cluster.py load qwen3.8-27b-mtp`** 铸真 key（`sk-unsloth-<32hex>`，33s 就绪）→ **回写 B/C 站真 key 到主控正本** → `secrets push`（A 4 / B 3 / C 3，幂等）→ `rm` 三站遗留 `claude.key`（**`push` 是增量的、不剪枝**，必须显式删）→ 卸载 C 恢复状态。
   ⚠ **过程中发现一个真陷阱（我原定顺序差点踩）**：`secrets` 只有 `status|scan|push`（**单向下发、无回写**），而站上 `unsloth.key` 是**每次加载重铸**的 ⇒ 直接 `push` 会用正本里的陈旧 key **覆盖站上真 key**，把该站 opencode/claude 打断。正确顺序只能是「站上取真值 → **先回写正本** → 再 push 才幂等」，本次据此先回写了 B/C 两个站。
   **验收**：① 三站 helper 输出长度与各站 `unsloth.key` 一致（A 43 / B 44 / C 44）；② 三站 `claude.key` 已不存在，落点收敛（A = helper+openrouter+rpc+unsloth；B/C = helper+openrouter+unsloth）；③ 正本 vs 站上逐一 MATCH；④ **全量门禁 `stations` 凭据告警清零**（明细仅剩 A 站 `claude-plugins-official`，属 `inventory/plugins.yaml` 早已登记的 `known_drift`，非本次范围）；⑤ 三站 `infer-unload` OK。
-  **两处新增登记（见 [OPEN-ISSUES](OPEN-ISSUES.md)）**：① **`infer-load` 把 API key 明文打进日志**（`[infer-load] API Key: sk-unsloth-…`，日志落 `~/.unsloth/run-<alias>.log`）—— 卫生缺陷，与框架"脱敏"纪律不符，待改为掩码/只写长度；② **`secrets push` 的正本陈旧覆盖危害**（上述陷阱）目前靠"加载后先回写正本"的人工纪律兜住，可考虑加门禁断言（"站上 `unsloth.key` ≠ 正本 ⇒ WARN"）。
+  **两处新增登记（见 [OPEN-ISSUES](OPEN-ISSUES.md)）**：① **`infer-load` 的 key 明文输出** —— 原记为"写进站上日志"，**表述有误，已在 ⑩ 更正**：该行 `log` 只打 **stdout**（进调用方控制台/会话 transcript），而站上日志里的 key 是 **studio 自己**写的、且 `infer-load` 正是从该日志 grep 取 key；真实暴露面比原记大得多（含审计盲区），见 ⑩；② **`secrets push` 的正本陈旧覆盖危害**（上述陷阱）目前靠"加载后先回写正本"的人工纪律兜住，可考虑加门禁断言（"站上 `unsloth.key` ≠ 正本 ⇒ WARN"）。
   关联: O-16、ADR-0003 D1（正本兜底为已定案，本次不改设计，只补"回写"这一必需步骤）。
+
+- **⑩ unsloth studio 日志的明文面收敛（审计盲区补齐 + 权限收紧 + 存量脱敏）**:
+  **触发**：用户要求"对 ⑨ 登记的两点（文档明文/掩码写法、`infer-load` 的 key）调研是否需要修"。取证后**更正 ⑨ 的错误表述并扩大范围**。
+  **取证的六条事实（全部实测）**：① `log()` 只 `echo` 到 **stdout**，不写文件（[infer-load:21](../../ops/station-bin/infer-load#L21)）⇒ 我方那行的暴露面是控制台/transcript，**不是**站上日志；② **studio 自己把 key 写进 `~/.unsloth/run-<alias>.log`，每次加载 4 处**（`infer-load` 正是 `grep -oE "sk-unsloth-…" "$UN_LOG"` 从它**取**key ⇒ "日志含 key"是**设计使然、消除不掉**）；③ 权限：`~/.unsloth` = **775**、`run-*.log` = **664** ⇒ **组与其他用户可读**；④ 存量累积无上限：A 站 **15 份**（含 2 份 `.pre-repro-*` 副本）、B 4 份、C 2 份 ⇒ 合计 **21 份日志 / 68 处明文 / 16 个历史 key 值**；⑤ **最关键**：`cluster.py secrets scan` 只探 `~/.config/rpc` + `opencode.jsonc` + `settings.json` 及备份，**从不看 `~/.unsloth/*.log`** ⇒ 这 68 处明文**在框架明文巡检的视野之外**（09-14 那轮"明文面收敛"未覆盖，现有门禁也永远发现不了）；⑥ 严重度不夸大：key 是 studio **每次加载重铸**的本地引擎令牌（仅绑 `127.0.0.1`）⇒ 历史值多已随实例销毁失效，真风险是"当前运行实例那把是活的 + 任何 `$HOME` 级备份会外流 + 审计盲区本身"。
+  **决策（用户拍板全套 a+b+c+d+e）**：
+  | 项 | 动作 | 落点 |
+  |---|---|---|
+  | a | 我方那行改**掩码**：`log "API Key: $UN_KEY"` → `log "API Key ok (len=… sha8=…)"` | `infer-load`（保留"同一把 key"的可关联性，不泄露材料） |
+  | b | **权限收紧**（新加载 + 存量）：目录 `700`、日志 `600`；由 `infer-load` 每次加载强制 | `infer-load` 新增 2 行 chmod |
+  | c | **存量就地脱敏**：`sed` 把日志里的 key 掩成 `sk-<prefix>-****` | 三站 21 份日志（**不留含 key 的备份** —— 备份会重建泄露面；改为"临时件+行数/命中数双校验+替换"，逐份校验通过才落盘） |
+  | d | **补审计视野**：`stations` 门禁的 `[cred]` 探针新增 `unslothlog=dirperm/files/withkeys/loose`，判据落在**权限**（目录须 700、日志须 600）而非"含不含 key"（后者无法消除） | [rpc_check.py](../../ops/rpc_check.py) |
+  | e | 补登「已知剩余明文面」 | [密钥轮换清单](../../docs/security/2026-09-13_密钥轮换清单.md) |
+  **执行与验收**：① 三站备份原件 → scp → `sudo install -m 755` ⇒ 三站 sha 一致 `8155968d…`、`bash -n` OK；② 站上 21 份日志脱敏 ⇒ `withkeys 0`、行数逐份不变（校验不通过即 SKIP，未发生）；③ 目录 700 / 日志 600 ⇒ `loose 0`；④ **端到端实跑**（`infer-load` 在加载路径上，不能只靠 `bash -n`）：C 站 `load qwen3.8-27b-mtp` ⇒ `API Key ok (len=43 sha8=9de8ff4d)`（**输出已无明文**）+ `dir=700 / log=600`，随后卸载 C；⑤ **负向自证**：把 C 站目录改 755 + 一份日志改 644 ⇒ 门禁**确实报出**两条（"`~/.unsloth` 权限 755 (应 700)"、"1 份 run-*.log 权限非 600"），恢复后复跑无误报；⑥ 全量门禁 **13 绿 / 1 黄 / 0 红**（余黄灯仍是 `inventory` 已登记的 A 站插件 `known_drift`）；⑦ 新 key 按 ⑨ 的纪律**先回写主控正本**。
+  **① 那一项的结论（文档掩码写法）**：**不改判据逻辑**，只在 `secrets` 检查的处置建议里补一句"文档引用样串/占位串请掩码为 `sk-xxx-****`" —— 把这条纪律**绑定到门禁输出**上，而不是只留在记忆里（同一坑曾在一次提交内踩两次）。
 
 ### 2026-09-15 — 管理面清减四批 + 文档漂移门禁日
 

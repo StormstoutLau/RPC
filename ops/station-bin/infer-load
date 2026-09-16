@@ -230,6 +230,12 @@ if [ "$BACKEND" = "unsloth" ]; then
     sleep 3
   done
   log "unsloth 实际端口: ${ACT_PORT}"
+  # (b) 权限收紧 (2026-09-16): studio 把引擎 key 明文写进 $UN_LOG (实测每次 4 处), 而默认
+  # umask 022 下是 775 目录 / 664 日志 ⇒ **组与其他用户可读**, 且历史日志无限累积 (实测三站曾
+  # 累积 16 个历史 key / 64 处明文)。"日志含 key"是设计使然(上面正是从日志 grep 取 key), 消除
+  # 不掉, 故只能收紧权限: 目录 700 + 日志 600。
+  chmod 700 "$HOME/.unsloth" 2>/dev/null || true
+  [ -f "$UN_LOG" ] && chmod 600 "$UN_LOG" 2>/dev/null || true
   # 解析 API Key (unsloth 每次重启重铸; /v1/models 需认证)
   UN_KEY=$(grep -oE "sk-unsloth-[a-f0-9]+" "$UN_LOG" | tail -1)
   # C2 (2026-09-16): 把 studio 本次重铸的 key 落盘。引擎面固定 :8080 后, opencode 的
@@ -250,7 +256,10 @@ if [ "$BACKEND" = "unsloth" ]; then
     fi
     if [ $? -eq 0 ]; then
       log "READY ✓ :${ACT_PORT} (unsloth ${ALIAS})"
-      [ -n "$UN_KEY" ] && log "API Key: $UN_KEY"
+      # 2026-09-16 (a): 原为 `log "API Key: $UN_KEY"` —— 会把引擎 key 明文带进调用方 stdout
+      # (cluster.py load / 会话 transcript / 任何 CI 控制台日志)。改为只打长度 + sha8 指纹,
+      # 保留"同一把 key"的可关联性而不泄露材料。
+      [ -n "$UN_KEY" ] && log "API Key ok (len=${#UN_KEY} sha8=$(printf '%s' "$UN_KEY" | sha256sum | cut -c1-8))"
       exit 0
     fi
     sleep 3

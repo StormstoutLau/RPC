@@ -244,6 +244,8 @@ upstream: \[ADR-0002]
 
 **验收**：三站 helper 输出长度 == 各站 `unsloth.key`（A 43 / B 44 / C 44）；三站 `claude.key` 已不存在；正本 vs 站上逐一 MATCH；**门禁 `stations` 凭据告警清零**（仅余 `inventory/plugins.yaml` 已登记的 A 站插件 `known_drift`）；三站 `infer-unload` OK。
 
-**新增登记（未处置，见 [OPEN-ISSUES §6](../spec/d6-agent-standard/OPEN-ISSUES.md)）**：① `infer-load` 把 API key 明文写进站上日志（`~/.unsloth/run-<alias>.log`），待改掩码；② 上述 push 覆盖危害目前靠人工纪律兜住，可考虑加门禁断言（"站上 `unsloth.key` ≠ 正本 ⇒ WARN"）。
+**studio 日志的明文面（②，同日闭环）**：`~/.unsloth/run-<alias>.log` 是**引擎 key 的第三个明文落点**，且此前**完全不在审计视野内**（`secrets scan` 只探 `~/.config/rpc` 与两份配置及备份）。实测：studio **每次加载写 key 4 处**、权限 **775 目录 / 664 日志**（组与其他用户可读）、三站累积 **21 份 / 68 处明文 / 16 个历史 key 值**（含 `.pre-repro-*` 副本）。**关键判断**：该日志含 key 是**设计使然**（`infer-load` 正是从它 grep 取 key）⇒ 消除不掉，**故判据只能落在权限上**（目录 700 / 日志 600），而非"含不含 key"。处置：`infer-load` 输出改掩码 + 每次加载强制 chmod + 存量 21 份就地脱敏 + `stations` 门禁补 `unslothlog` 探针（判权限，含负向自证）+ 补登明文面表。详见 [DEVELOPMENT-LOG 2026-09-16 ⑩](../spec/d6-agent-standard/DEVELOPMENT-LOG.md)。
 
-**落地件**：`ops/rpc_check.py`（`[cred]` 探针 + `stations` 判据 + 告警文案）、`secrets/stations/{A,B,C}/claude-key.sh`（46B / LF）、`secrets/stations/{A,B,C}/claude.key`（删除）、[DEVELOPMENT-LOG 2026-09-16 ⑨](../spec/d6-agent-standard/DEVELOPMENT-LOG.md)、[密钥轮换清单现状注记](../docs/security/2026-09-13_密钥轮换清单.md)。
+**仍待处置（1 项，见 [OPEN-ISSUES §6](../spec/d6-agent-standard/OPEN-ISSUES.md)）**：`secrets push` 的正本陈旧覆盖危害目前靠人工纪律兜住（"加载后先回写正本"），可考虑加门禁断言（"站上 `unsloth.key` ≠ 同站正本 ⇒ WARN"）或给 `secrets` 增 `pull` 动作。
+
+**落地件**：`ops/rpc_check.py`（`[cred]` 探针 + `stations` 判据 + 告警文案 + `secrets` 处置建议补掩码写法）、`ops/station-bin/infer-load`（输出掩码 + 每次加载强制 `chmod 700 ~/.unsloth` / `600 run-*.log`；三站已 `sudo install -m 755` 部署，sha `8155968d…`）、`secrets/stations/{A,B,C}/claude-key.sh`（46B / LF）、`secrets/stations/{A,B,C}/claude.key`（删除）、[DEVELOPMENT-LOG 2026-09-16 ⑨⑩](../spec/d6-agent-standard/DEVELOPMENT-LOG.md)、[密钥轮换清单现状注记](../docs/security/2026-09-13_密钥轮换清单.md)。
