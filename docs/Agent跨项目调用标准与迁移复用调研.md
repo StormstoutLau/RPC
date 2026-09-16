@@ -33,15 +33,25 @@ upstream: D5 Agent 生态升级（已 verified 2026-09-02）; 调研 §4.2 五�
 > `CLAUDE_CODE_DISABLE_TOOLS=1` 纯文本模式（C-claude 文本任务）。`agent-cli-smoke.sh` 是**主控发起**
 > （主控 `ssh` + 远端脚本落盘），C 站无独立副本，靠 `_station_ready.sh` 自发现端口。
 >
+> **✅ 全直连现状（2026-09-16 统一入口实测，修正上方"A/B 过 :4000"的过时暗示）**：
+> `cluster.py providers` 实测三站 —— opencode 各 provider `ep=127.0.0.1:8080`、claude `baseURL=http://127.0.0.1:8080`，
+> **三站零 `:4000`**。**当前三站统一为"直连本机引擎端口"，无任何链路经网关**（网关 09-13 退役，ADR-0002）。
+> 故 "A/B 混合 / C 直连" 的区分**已失效**——现在 A/B/C 全直连。§2.1 定版表本身仍是 09-02 史实（当时 A/B 确经 `:4000`），
+> 阅读时以上一句"全直连现状"为准。
+>
 > **CLI 定版的 C 站实测（档案，非本轮重测，未起引擎）**：09-09 已过 —— C-opencode `OPENCODE-NEM-OK`、
 > C-claude（settings 指 127.0.0.1:8080）`end_turn ✅`（[手册 §2a](../docs/三机推理集群使用手册.md) /
 > [双端点调研](../docs/双端点部署与opencode混合框架调研.md) 留存）。C 站 station_runtime 工具链 11/11 已装
 > （infer-load/unload/llama-serve-instance/load-gate/…，[station-c/DEPLOYMENT §4 O3](../spec/station-c/DEPLOYMENT.md)）。
-> **待核实一项**：§2 记 B-opencode 有 `codex-memory 0.6.5`，但 09-16 `command -v codex-memory` 三站均未命中
-> （可能为 opencode 插件/非独立命令，记忆协同层三站现状待查）。
+> **记忆协同层已落定（2026-09-16 统一入口实测）**：§2 记的 `codex-memory 0.6.5`（B 站 opencode）当前**不是独立命令**，
+> 三站 `command -v codex-memory` 均未命中；实际在用的是 **opencode 自带 memory**（`~/.local/share/opencode/memory.db`
+> + `memories/MEMORY.md` + `memory_summary.md`）。`cluster.py providers` 现带 `memory` 行：三站记忆库都在——
+> A 最饱满（MEMORY.md 88 行 / summary 51 行），B/C 有库但 MEMORY.md 近空（3 行，内容在 `-wal` 待合并；B wal 4.1MB、
+> C wal 185KB，说明三站 opencode 会话中记忆走 SQLite WAL，会话结束才合并回 MEMORY.md）。三站记忆协同 = **同款 opencode memory 机制**，
+> 未发现跨站记忆同步/共享（仍是"站内记忆，站间靠任务卡交接"）。
 >
-> **当前（2026-09-16）"现状基线"连读** = §2 两站定版表（史实，A/B 过网关）+ 本文段 1.1（C 站纯直连）+
-> 段 3（网关已退役，`cluster-litellm` 名保留但 baseURL=引擎端口）。三者拼出三站统一的**直连本机引擎**调用面。
+> **当前（2026-09-16）"现状基线"连读** = §2 两站定版表（史实）+ 本文段 1.1（C 站）+
+> 上方"全直连现状" + 段 3（网关已退役）。四者拼出三站统一的**直连本机引擎**调用面。
 >
 > **2. 跨站链路已换代**：§9.9.3 所述「B `ssh -NL 18081` → A:8080 隧道」**已弃用** —— 现行做法是
 > `agent-cli … --RemoteHost <站>`（每站独立子进程 + 站内 `_station_ready.sh` 自发现引擎端口）；
