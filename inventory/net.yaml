@@ -74,3 +74,32 @@ routes:
 cross_checks:
   - {from: A, to: 10.10.11.3, why: "A→C 的 B-C 段地址; 走主路由(经 C 直连)应通"}
   - {from: C, to: 10.10.10.1, why: "C→A 的 A-B 段地址; 2026-09-15 曾因缺回程路由 100% 丢包"}
+
+# ── LAN 管理面 (ssh/scp 控制面真值) — ADR-0006, 2026-09-16 ────────
+# 为什么单列一段: 上面三段是 USB4 直连数据面, 而**控制面(ssh/scp)走的是 LAN** —— 两者的
+# 地址、接口、稳定性都不同源, 真值此前只存在于 master 的 ~/.ssh/config 与操作者记忆里。
+#
+# 问题(2026-09-16 实测): 主控是 Windows, 解析 `*.local` 需 **16-17s** 且**只返回公网 IPv6**
+# (2409:8a20:...) ⇒ ① 每次 ssh/scp 白付 16s (agent-cli 每个 task run 有 10-20 次连接);
+# ② 控制面**不在局域网内**, 而是经 ISP IPv6 绕行(站上 $SSH_CONNECTION 实测证实)。
+# 处置: master 侧 ~/.ssh/config 用 `HostName` 把名字绑定到下表 IPv4 (+ AddressFamily inet),
+# cluster.py 的 STATIONS 亦改用下表地址。实测 16.2s → 0.18s (约 90x)。
+# 同源先例(非新理念): cluster.py 的 C 站条目早已"保持 IPv4 规避 paramiko/IPv6";
+# 09-15 优化方案 §对端寻址 亦得出同一结论("`.local` → 管理网 IP")。
+#
+# 门禁怎么用它 (ops/rpc_check.py 的 stations 断言子项 h, quick 内, 纯本地无网络开销):
+#   `ssh -G <名>` 的 hostname **必须 == 下表 ip** ⇒ 不符即 FAIL 并提示更新本表与 ~/.ssh/config。
+#   即"IP 绑定对 DHCP 的脆弱性"被转成一条可检出的红灯, 而不是"ssh 连不上"的谜题。
+lan:
+  stations:
+    - {station: A, host: scott-lau-NEX.local,     ip: 192.168.1.33, iface: enp195s0}
+    - {station: B, host: scott-lau-GTR-Pro.local, ip: 192.168.1.32, iface: enp193s0}
+    - {station: C, host: null,                    ip: 192.168.1.37, iface: null, note: "一直以 IPv4 直连, 无名别名"}
+  master: {ip: 192.168.1.36, iface: WLAN, note: "主控站; ssh -G 的 hostname 即绑定目标"}
+  dhcp: |
+    A/B 的 LAN 地址是 **DHCP 租约** (`ip -4 -o addr` 显示 scope global dynamic, valid_lft ~14.5h,
+    网关 192.168.1.1)。⇒ 建议在路由器按 MAC 做 DHCP 保留(固定 .32/.33/.37)以进一步稳定;
+    未做保留时靠上面那条门禁断言兜住漂移。
+  measured_by: "2026-09-16 实测: ip -4 -o addr / 站上 $SSH_CONNECTION / Dns.GetHostAddresses / Stopwatch 计时"
+
+# 维护约定: 改任何一站的 LAN 地址 => 同步改 ①本段 ②master 的 ~/.ssh/config ③cluster.py 的 STATIONS

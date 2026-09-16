@@ -1178,6 +1178,22 @@ def _parse_sections(out):
     return {k: "\n".join(v).strip() for k, v in sec.items()}
 
 
+def _ssh_g_hostname(alias):
+    """`ssh -G <别名>` 的 hostname 字段 (**纯本地展开, 不建连**)。ssh 不可用返回 None。
+
+    用于 ADR-0006 的 LAN 绑定对账: 名字是否仍被绑定到 net.yaml 登记的 LAN IPv4。
+    """
+    try:
+        r = subprocess.run(["ssh", "-G", alias], capture_output=True, text=True,
+                           timeout=20, encoding="utf-8", errors="replace")
+    except Exception:
+        return None
+    for line in (r.stdout or "").splitlines():
+        if line.lower().startswith("hostname "):
+            return line.split(None, 1)[1].strip()
+    return None
+
+
 def check_stations(ctx):
     sys.path.insert(0, str(ROOT / "ops"))
     try:
@@ -1447,6 +1463,28 @@ def check_stations(ctx):
                 else:
                     detail.append(f"{st} 站 {iid} ({it.get('purpose', '?')}) "
                                   f"实得 {got!r} · 基线 {it.get('expect')!r} · 差异 {diff[1]}")
+
+    # (h) LAN 传输面绑定 (ADR-0006) —— master 侧 `ssh -G <名>` 的 hostname 必须 == net.yaml 的 lan 段真值。
+    #     为什么放这里: 这是"控制面走哪条路"的唯一可断言点, 造价近 0 (纯本地展开, 不建连),
+    #     却能把"DHCP 漂移 ⇒ 走公网 IPv6 + 每次多付 ~16s + 最终连不上"变成一条明确的 FAIL。
+    try:
+        lan_doc = (_net_doc() or {}).get("lan") or {}
+    except Exception as e:
+        lan_doc = {}
+        warn.append(f"net.yaml 解析失败, LAN 绑定对账跳过 —— {type(e).__name__}: {str(e)[:120]}")
+    for ent in (lan_doc.get("stations") or []):
+        if not isinstance(ent, dict):
+            continue
+        alias, want = ent.get("host"), ent.get("ip")
+        if not alias or not want:
+            continue                    # 仅以 IP 直连的站(如 C) 无别名, 跳过
+        got = _ssh_g_hostname(alias)
+        if got is None:
+            warn.append(f"`ssh -G {alias}` 不可用 —— 无法核对 LAN 绑定 (该名应绑定到 {want})")
+        elif got != want:
+            detail.append(f"{alias} 的 ssh 绑定 hostname={got}, 而 net.yaml lan 段登记 {want} "
+                          f"—— DHCP 可能已漂移, 请同步更新 ~/.ssh/config 与 net.yaml 的 lan 段; "
+                          f"不更新则连该站要走公网 IPv6 且每次多付 ~16s")
 
     if unreachable:
         info.insert(0, f"站点不可达 (未计入判定): {', '.join(unreachable)}")

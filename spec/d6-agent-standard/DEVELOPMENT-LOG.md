@@ -118,6 +118,14 @@ upstream: \[d6-agent-standard-.* 全量文档]
   **顺带测出的框架级问题（已登记）**：**每次 ssh/scp 建连 14-17s**（5 次采样；`inet` 仅省 3s、与 GSSAPI 无关、**ControlMaster 在 Win32-OpenSSH 9.5p1 不可用**）⇒ 这促成了 D4d"合批回收"：collect 连接数 8→4，**耗时 115s → 49s（省 66s/run）**；单次 task run 墙钟约 420s（其中模型运行仅 21-53s，其余是连接与 213M sync）。
   关联: ADR-0005、[OPEN-ISSUES](OPEN-ISSUES.md)（阶段 1/2/3 待做）、[调研文档 §7.1](../../docs/research/2026-09-16_任务卡证据流可重放性调研.md)。
 
+- **⑭ 控制面传输绑定 LAN IPv4（[ADR-0006](../../adr/ADR-0006-控制面传输绑定LAN_IPv4.md)）—— 单次 task run 421s → 48.5s**:
+  **触发**：⑬ 落档时顺带测出的"框架级：每次 ssh/scp 建连 14-17s"（[OPEN-ISSUES](OPEN-ISSUES.md)），用户裁定"先做"。
+  **根因（实测，非推断）**：不是 sshd/`UseDNS`/GSSAPI，而是**主控（Windows）解析 `*.local` 需 16-17s 且只返回公网 IPv6**（`Dns.GetHostAddresses` = 17,016ms，结果仅 `2409:8a20:…`）；站上 `echo $SSH_CONNECTION` 证实**控制面实际经 ISP IPv6 绕行、不在局域网内**。`ControlMaster` 在 Win32-OpenSSH 9.5p1 **不可用**（`getsockname failed: Not a socket`）。**同源先例两处**：[cluster.py:160-175](../../ops/cluster.py#L160-L175) 早已诊断为 F19（`/api/status` 129.6s 根因）并只对长驻 web 进程做进程内缓存；[cluster.py:89](../../ops/cluster.py#L89) 的 C 站条目早已"保持 IPv4 规避 paramiko/IPv6"。
+  **改了什么**：① `~/.ssh/config`（机器级，备份 `config.bak-20260916` 228B）—— A/B 名字保留为别名但 `HostName` 绑定 LAN IPv4、三个 IP 加身份块（否则用户名退化为本机 `peng` ⇒ **挂起 >90s 等 stdin**，实测踩到）、全部 `AddressFamily inet`；② [cluster.py](../../ops/cluster.py) `STATIONS` 的 A/B 改 LAN IPv4；③ [net.yaml](../../inventory/net.yaml) 新增 `lan:` 段（LAN 管理面真值 + DHCP 现状 + 测量方式 + 维护约定）；④ [rpc_check.py](../../ops/rpc_check.py) `stations` 断言新增 **(h)** 防漂移子项（`ssh -G <名>` 的 hostname 必须 == net.yaml 登记 IP，纯本地无网络开销）。
+  **验收**：`ssh -G` 三行正确（含 `addressfamily inet`）；**按名 16,200ms → 169/199/182/171ms（≈90×）**；三站 `$SSH_CONNECTION` 均回到 `192.168.1.36 → 192.168.1.x:22`（改前 A/B 为公网 IPv6）；**门禁 (h) 负向自证**（把 net.yaml 的 B 站 IP 改成 `.99` ⇒ `[FAIL] stations` + 漂移提示 + 退出码 1 阻断，还原后恢复）；`usb4` 断言 PASS（net.yaml 仍可解析）；**端到端真跑：单次 task run 421s → 48.5s（8.7×）**，其中 `RUN_S=38s` 是模型本身 ⇒ **框架开销 ~383s → ~10s**；产物 9 件齐全 + 三项自证全 PASS + `%TEMP%` 0 残留。
+  **顺带登记 1 项**：ssh/scp 调用点仍未统一加 `-o BatchMode=yes`（把"卡住"变"快速失败"）；建议（可选加固）路由器按 MAC 做 DHCP 保留。
+  关联: [ADR-0006](../../adr/ADR-0006-控制面传输绑定LAN_IPv4.md)、[OPEN-ISSUES](OPEN-ISSUES.md)（该项闭环）、[ADR-0005](../../adr/ADR-0005-任务卡证据回收闭环.md)（其 D4d"合批回收"是本问题的第一层缓解）。
+
 ### 2026-09-15 — 管理面清减四批 + 文档漂移门禁日
 
 > 补记（同 09-16 回填）。决策依据全文见 [ADR-0004 第一~四批](../../adr/ADR-0004-统一管理入口为唯一管理面.md)。
