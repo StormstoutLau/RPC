@@ -19,6 +19,30 @@ upstream: D5 Agent 生态升级（已 verified 2026-09-02）; 调研 §4.2 五�
 > A = `Cpp_Hub, paper, v0probe-a` ／ B = `Cpp_Hub, paper, v0probe` ／ **C = `paper`**。
 > ⇒ 下文所有「两站」读作「A/B 历史基线」，第三站（seaviv, 192.168.1.37）按同一标准套用。
 >
+> **1.1 C 站现状基线 = §2 / §2.1「CLI 定版实测」在 C 站的落地（2026-09-16 无引擎取证 + 09-09 冒烟档案）**：
+>
+> **装置同型号同路由**：C-claude **2.1.258** + C-opencode **1.18.25**（= A/B 同版）。实测 C 站配置（只读，未起引擎）：
+> - C-claude `~/.claude/settings.json`：`ANTHROPIC_BASE_URL=127.0.0.1:8080`、`CLAUDE_CODE_MAX_CONTEXT_TOKENS=120000`、
+>   `apiKeyHelper=~/.config/rpc/claude-key.sh`，插件 `superpowers` + `document-skills`（本地镜像）——**与 §2.1 B-claude 同款装置**，唯路由是**直连本机引擎**而非 `:4000` 网关；
+> - C-opencode `~/.config/opencode/opencode.jsonc`：provider 含 `cluster-*` 直连 `127.0.0.1:8080`（无网关），
+>   模型 `nemotron-3-super-120b-a12b` / `gpt-oss` 同档；skills user 12 / oc 4（与 A/B 同构）。
+>
+> **§2.1 定版表是"直连/过网关"混合，C 站是纯直连形态**——`cluster-litellm`/`:4000` 在 C 站**无对应**，
+> C 站一律 `baseURL = 本机引擎端口`（由 `_station_ready.sh` 探测后幂等注入，与上文段 3 一致）。定版表的
+> **四条调用铁律对 C 站同判据适用**：`< /dev/null`（claude）、stdin 管道形式（opencode）、
+> `CLAUDE_CODE_DISABLE_TOOLS=1` 纯文本模式（C-claude 文本任务）。`agent-cli-smoke.sh` 是**主控发起**
+> （主控 `ssh` + 远端脚本落盘），C 站无独立副本，靠 `_station_ready.sh` 自发现端口。
+>
+> **CLI 定版的 C 站实测（档案，非本轮重测，未起引擎）**：09-09 已过 —— C-opencode `OPENCODE-NEM-OK`、
+> C-claude（settings 指 127.0.0.1:8080）`end_turn ✅`（[手册 §2a](../docs/三机推理集群使用手册.md) /
+> [双端点调研](../docs/双端点部署与opencode混合框架调研.md) 留存）。C 站 station_runtime 工具链 11/11 已装
+> （infer-load/unload/llama-serve-instance/load-gate/…，[station-c/DEPLOYMENT §4 O3](../spec/station-c/DEPLOYMENT.md)）。
+> **待核实一项**：§2 记 B-opencode 有 `codex-memory 0.6.5`，但 09-16 `command -v codex-memory` 三站均未命中
+> （可能为 opencode 插件/非独立命令，记忆协同层三站现状待查）。
+>
+> **当前（2026-09-16）"现状基线"连读** = §2 两站定版表（史实，A/B 过网关）+ 本文段 1.1（C 站纯直连）+
+> 段 3（网关已退役，`cluster-litellm` 名保留但 baseURL=引擎端口）。三者拼出三站统一的**直连本机引擎**调用面。
+>
 > **2. 跨站链路已换代**：§9.9.3 所述「B `ssh -NL 18081` → A:8080 隧道」**已弃用** —— 现行做法是
 > `agent-cli … --RemoteHost <站>`（每站独立子进程 + 站内 `_station_ready.sh` 自发现引擎端口）；
 > `_bs2_fanout.py` / `_bs2_cross.py` 已按 ADR-0004 清减删除；B 站 18081 现被 conf `davidau-q38-27b-q4k` 占用。
