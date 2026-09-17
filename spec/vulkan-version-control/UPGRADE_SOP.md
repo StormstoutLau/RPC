@@ -85,7 +85,17 @@ python ops/cluster.py versions      # 三站引擎指纹 + MANIFEST 全量 md5su
 # 保留最近 2 个版本目录（<ver> + 9859），更旧的删除
 sudo rm -rf /opt/llama.cpp-<旧旧版本>
 # 更新 提速调研报告.md / 分布式推理.md 的版本记录
+# 收尾必跑: 门禁 backend 断言会核「回滚基线 9859 三站在位 + /opt 后端 = Vulkan + 单站引擎 = HIP」
+python ops/rpc_check.py --only backend     # 或 ops\rpc.ps1 check -Only backend
 ```
+
+> **回滚基线由门禁守护（2026-09-17 起）**：`ops/rpc_check.py` 的 `backend` 断言核
+> 「三站 `/opt/llama.cpp-9859` 在位」。**此前无任何门禁覆盖这件事**，实测 **C 站曾整份缺失 9859**
+> 而门禁全绿 —— 即"C 站无法按本 SOP 回滚"这件事长期不可见。现已补回（从 A 站 tar 分发，
+> 包 md5 + 清单 hash + MANIFEST 61/61 三重校验）并由断言守住。
+> 同批清减：三站 `/opt/llama.cpp-master-d2e206c4`（v0.3.0，非回滚目标、零活引用）已删除
+> 并 tar 备份到 `/data/backup/llama-cleanup-20260917/` ⇒ 三站 `/opt` 现均恰为**规则要求的 2 个目录**
+> （现役 symlink + 9859）。
 
 **回滚**（分钟级，I5 不变式保障旧目录仍在）：
 ```bash

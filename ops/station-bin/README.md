@@ -18,8 +18,9 @@
 ## 两站一致性
 
 修改后核对：`md5sum /usr/local/bin/<file>`（两站必须一致）。
-当前（2026-09-15，**三站一致**）：infer-load `fb7df75c...`、infer-unload `6ff2a3b3...`、llama-serve-instance `0cf134f6...`。
+当前（2026-09-17，**三站一致**）：infer-load `e474b761...`、infer-unload `6ff2a3b3...`、llama-serve-instance `0cf134f6...`。
 （下表 2026-09-04 的旧值已作废，保留仅为历史：infer-load `229c1328...`(B)/`09e8b60e...`(A)、infer-unload `dc948d63...`、infer-list `5b6d40fc...`。）
+（infer-load `e474b761` = 2026-09-17 遗留 1+2 修复版：头部注释改为实测口径 + **移除 `LLAMA_SERVER_PATH` 注入**；前一版 `d57a9021...` 已备份为 `/usr/local/bin/infer-load.bak-20260917-llamaserverpath`。详见 [TRACKER §2.6](../../spec/upstream-tracker/TRACKER.md)。）
 
 ## 空闲 TTL 自动卸载（2026-09-15, P2-5，**默认关**）
 
@@ -65,7 +66,8 @@
 
 ## unsloth 改造记录（2026-09-04）
 
-- **默认后端 unsloth**：infer-load 默认 `unsloth studio run`（KV q8_0，引擎=LLAMA_SERVER_PATH，端口按 conf 若占用自动+1 并日志标注实际端口），健康检查解析 API Key 后带认证 `/v1/models`。
+- **默认后端 unsloth**：infer-load 默认 `unsloth studio run`（KV q8_0，**引擎 = studio 自带 `~/.unsloth/llama.cpp/llama-server`（HIP/ROCm，`--device ROCm0`）**，端口按 conf 若占用自动+1 并日志标注实际端口），健康检查解析 API Key 后带认证 `/v1/models`。
+  > 2026-09-17 订正：原文写"引擎=LLAMA_SERVER_PATH"**与实测不符**（该变量的缺省值指向 9/8 已清除的 `~/llama.cpp-vulkan-b10715`）；其注入已于本日移除。详见 [TRACKER §2.6](../../spec/upstream-tracker/TRACKER.md)。
 - **回退**：`--backend llama-single|llama-rpc|vllm` 走原 systemd llama-server 路径。
 - **infer-unload**：补充 `pkill -9 -f "[u]nsloth studio run"` 清理 unsloth 实例。
 - **infer-list**：建议后端列默认 unsloth（embedding=llama-emb / AWQ=vllm 除外）。
