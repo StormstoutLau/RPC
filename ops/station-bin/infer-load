@@ -1,6 +1,13 @@
 #!/bin/bash
 # infer-load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm] [--port N] [--ctx N] [--threads N]
-# 默认后端 = unsloth (unsloth studio run 加载, 引擎=LLAMA_SERVER_PATH 指向的 llama-server)
+# 默认后端 = unsloth (unsloth studio run 加载)
+#   引擎真身 (2026-09-17 实测订正): studio 自带 ~/.unsloth/llama.cpp/llama-server
+#     -> ~/.unsloth/llama.cpp/build/bin/llama-server (HIP/ROCm, 0.3.0-dev b10715 / commit 92cedc867)
+#   ⚠ 原文写"引擎 = LLAMA_SERVER_PATH 指向的 llama-server" —— 与实测不符: 该变量的缺省值曾指向
+#     ~/llama.cpp-vulkan-b10715/llama-server (该目录已于 2026-09-08 清除), 属悬空配置。
+#     studio 的解析顺序 (studio/backend/core/inference/llama_cpp.py:7558) 为:
+#       LLAMA_SERVER_PATH -> UNSLOTH_LLAMA_CPP_PATH -> studio 自定义路径设置 -> ~/.unsloth/llama.cpp/...
+#     故本脚本**不再注入**该变量, 让 studio 用自带引擎; 需要自定义引擎时由调用方显式 export。
 # 旧后端 llama-rpc/llama-single/vllm 保留 (systemd llama-server 路径), 可用 --backend 显式回退
 # 首次加载自动生成默认 conf (打印路径)
 set -uo pipefail
@@ -209,7 +216,11 @@ fi
 # ---- [6a] unsloth 后端 (默认) ----
 if [ "$BACKEND" = "unsloth" ]; then
   log "unsloth 后端: 起 unsloth studio gpt-oss(${ALIAS}) port ${PORT_NUM} ctx ${CTX:-32768}..."
-  export LLAMA_SERVER_PATH="${LLAMA_SERVER_PATH:-/home/scott-lau/llama.cpp-vulkan-b10715/llama-server}"
+  # 2026-09-17 (遗留清理): 原此处为
+  #   export LLAMA_SERVER_PATH="${LLAMA_SERVER_PATH:-/home/scott-lau/llama.cpp-vulkan-b10715/llama-server}"
+  # 该缺省路径的目录已于 2026-09-08 清除, 且 A/B 站 .bashrc/.profile 也 export 了同一死路径
+  # => 典型"pin 到不存在路径": studio 会静默落到自带引擎(故当时无可见故障), 但一旦有人重建该目录,
+  #    A/B(有 profile export)与 C(无)会**静默分叉**到不同引擎。故不再注入; 调用方仍可显式 export 覆盖。
   # O-25 在线实测顺带修复(2026-09-12): unsloth llama.cpp 已从 Vulkan 切 ROCm 后端,
   # 设备名 Vulkan0 -> ROCm0 (6 台 AMD 8060S 均实测 `--list-devices` = ROCm0)。硬编码 Vulkan0 会导致必然加载失败。
   # 允许 env INFER_DEVICE 覆盖(如未来回退 vllm/其它设备名)。

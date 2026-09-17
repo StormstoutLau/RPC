@@ -1818,6 +1818,115 @@ def check_engine(ctx):
     return "PASS", note, info
 
 
+# ── 引擎后端 + 回滚基线 (2026-09-17 新增) ───────────────────────────
+# 为什么必须有这条: 原 14 项里**没有任何一项判定"HIP 还是 Vulkan"** —— `engine` 只查进程
+#   残留/内存, `stations` 只对账 conf/端口/凭据/插件。后果**已经发生过**: 台账 §1 的
+#   "对本集群影响"曾整片按"本集群 = Vulkan / 无 ROCm"写错, 而门禁 13 绿照过
+#   (2026-09-17 订正, 见 TRACKER §2.6)。
+# 判据(全部可机械判定, 不需要人读; 且都落到**二进制**而非配置文本):
+#   (a) 三站 studio 自带引擎在位, 且 ldd 含 libggml-hip         <- 默认单站加载路径的后端
+#   (b) 三站 /opt 的 llama-server 与 ggml-rpc-server 均含 libggml-vulkan <- 分布式路径后端
+#   (c) 三站 studio 自带 ROCm 运行时版本串一致                  <- 防 studio 静默换 SDK 致三站分叉
+#   (d) 三站回滚基线 /opt/llama.cpp-9859 在位                   <- UPGRADE_SOP §6 要求(实测 C 站曾缺失)
+_BACKEND_CMD = (
+    "echo '===STUDIO==='; "
+    "B=\"$HOME/.unsloth/llama.cpp/build/bin/llama-server\"; "
+    "if [ -x \"$B\" ]; then "
+    "echo 'studio_exe=yes'; "
+    "printf 'studio_ggml=%s\\n' \"$(ldd \"$B\" 2>/dev/null | grep -oE 'libggml-(hip|vulkan|cpu)[.]so' | sort -u | tr '\\n' ',')\"; "
+    "printf 'studio_rocm=%s\\n' \"$(ls -1 \"$HOME/.unsloth/llama.cpp/build/bin\" 2>/dev/null | grep -oE 'libamdhip64[.]so[.][0-9][0-9.]*' | sort -uV | tail -1)\"; "
+    "else echo 'studio_exe=no'; fi; "
+    "echo '===OPT==='; "
+    "printf 'opt_link=%s\\n' \"$(basename \"$(readlink -f /opt/llama.cpp 2>/dev/null)\")\"; "
+    "for n in llama-server ggml-rpc-server; do "
+    "P=\"/opt/llama.cpp/$n\"; "
+    "if [ -x \"$P\" ]; then "
+    "printf 'opt_%s=%s\\n' \"$n\" \"$(ldd \"$P\" 2>/dev/null | grep -oE 'libggml-(hip|vulkan)[.]so' | sort -u | tr '\\n' ',')\"; "
+    "else printf 'opt_%s=missing\\n' \"$n\"; fi; "
+    "done; "
+    "echo '===ROLLBACK==='; "
+    "printf 'rollback=%s\\n' \"$(ls -d /opt/llama.cpp-9859 2>/dev/null || echo missing)\""
+)
+_EXPECT_STUDIO_BACKEND = "libggml-hip.so"      # 默认单站加载 = HIP/ROCm
+_EXPECT_DIST_BACKEND = "libggml-vulkan.so"     # 分布式 / RPC = Vulkan
+
+
+def check_backend(ctx):
+    """引擎后端(默认单站=HIP / 分布式=Vulkan) + 三站同构 + 回滚基线在位。"""
+    sys.path.insert(0, str(ROOT / "ops"))
+    try:
+        import cluster
+    except Exception as e:
+        return ("WARN", f"无法导入 cluster.py ({type(e).__name__}) — 该项需 paramiko; "
+                        f"请用装有 paramiko 的 Python 运行", [])
+
+    detail, warn, info = [], [], []
+    per = {}
+    for st in ("A", "B", "C"):
+        ok, out = cluster.ssh_run(st, _BACKEND_CMD, timeout=60)
+        if not ok:
+            detail.append(f"{st} 站不可达/采集失败: {out}")
+            continue
+        d = {}
+        for line in (out or "").splitlines():
+            if "=" in line and not line.startswith("==="):
+                k, _, v = line.partition("=")
+                d[k.strip()] = v.strip()
+        # 采集成功但关键字段全缺 = 解析失败, 不能当"没问题"
+        if not d.get("studio_exe") and not d.get("opt_link"):
+            detail.append(f"{st} 站采集输出无法解析 (不做判定): {(out or '')[:120]!r}")
+            continue
+        per[st] = d
+
+    rocm = {}
+    for st, d in per.items():
+        s_ggml = d.get("studio_ggml", "")
+        if d.get("studio_exe") != "yes":
+            detail.append(f"{st} 站 **默认单站引擎缺失**: ~/.unsloth/llama.cpp/build/bin/llama-server "
+                          f"不可执行 —— `infer-load`(缺省 backend=unsloth) 会直接加载失败")
+        elif _EXPECT_STUDIO_BACKEND not in s_ggml:
+            detail.append(f"{st} 站 默认单站引擎**后端不是 HIP**: ldd=[{s_ggml}] "
+                          f"(期望含 {_EXPECT_STUDIO_BACKEND}) —— 单站路径实际后端已变, "
+                          f"台账 §2.6 的后端矩阵必须同步")
+        else:
+            info.append(f"{st} 站 默认单站 = HIP ✓ ({s_ggml.strip(',')})")
+        rocm[st] = d.get("studio_rocm", "")
+        for n in ("llama-server", "ggml-rpc-server"):
+            v = d.get(f"opt_{n}", "")
+            if v in ("", "missing"):
+                detail.append(f"{st} 站 /opt/llama.cpp/{n} 不可执行 —— 分布式路径缺件")
+            elif _EXPECT_DIST_BACKEND not in v:
+                detail.append(f"{st} 站 /opt/llama.cpp/{n} **后端不是 Vulkan**: ldd=[{v}] "
+                              f"(期望含 {_EXPECT_DIST_BACKEND})")
+        rb = d.get("rollback", "")
+        if not rb or rb == "missing":
+            detail.append(f"{st} 站 **回滚基线缺失** /opt/llama.cpp-9859 —— UPGRADE_SOP §6 要求"
+                          f"保留 `<现役>` + `9859` 两个版本目录以支持分钟级回滚")
+        else:
+            info.append(f"{st} 站 回滚基线在位 ({rb})")
+
+    # (c) 三站 studio ROCm 运行时一致 —— 取不到时**不判**(取不到 ≠ 不存在), 显式告警
+    vals = sorted({v for v in rocm.values() if v})
+    if len(vals) > 1:
+        detail.append("三站 studio 自带 ROCm 运行时**不一致**: "
+                      + " / ".join(f"{s}={rocm[s]}" for s in sorted(rocm))
+                      + " —— 三站可能跑在**不同 HIP 版本**上 (studio 静默换 SDK)")
+    elif len(vals) == 1:
+        info.append(f"三站 studio ROCm 运行时一致 ({vals[0]})")
+    else:
+        warn.append("三站均未取到 studio 自带 ROCm 版本串 —— 不做一致性判定 (取不到 ≠ 不存在)")
+
+    if not per:
+        return "FAIL", "后端: 三站均采集失败", detail
+    tip = vals[0] if len(vals) == 1 else " / ".join(f"{s}:{rocm.get(s) or '?'}" for s in sorted(rocm))
+    note = f"后端: 可达 {len(per)}/3 站 · 单站=HIP / 分布式=Vulkan · ROCm {tip}"
+    if detail:
+        return "FAIL", note, info + detail + [f"(WARN) {w}" for w in warn]
+    if warn:
+        return "WARN", note, info + warn
+    return "PASS", note, info
+
+
 def check_models(ctx):
     """模型库完整性: 孤儿(物理库有/聚合视图无) + 断链(软链目标不存在)。"""
     sys.path.insert(0, str(ROOT / "ops"))
@@ -1886,6 +1995,11 @@ CHECKS = [
             "loadavg>8 等负载回落再加载"},
     {"id": "engine", "title": "引擎态与残留", "fn": check_engine, "quick": False,
      "fix": "残留用 infer-unload 或清 llama/rpc 进程; 端口在听但 RSS 异常需查进程归属"},
+    {"id": "backend", "title": "引擎后端与回滚基线", "fn": check_backend, "quick": False,
+     "fix": "默认单站引擎=HIP、分布式(/opt)=Vulkan 是本集群的**既定形态**; 后端变了先查是谁改的 "
+            "(studio 自更新 / UPGRADE_SOP 升级 / 有人换构建) 再决定是否改期望值, 并把台账 §2.6 "
+            "的后端矩阵同步; 回滚基线缺失 => 从同版本站 tar 分发补回 "
+            "(UPGRADE_SOP §6: 保留 `<现役>` + `9859` 两个版本目录以支持分钟级回滚)"},
     {"id": "models", "title": "模型库完整性", "fn": check_models, "quick": False,
      "fix": "孤儿 `cluster.py models link --go`; 断链 `cluster.py models prune --go`"},
     {"id": "stations", "title": "三站实况对账", "fn": check_stations, "quick": False,

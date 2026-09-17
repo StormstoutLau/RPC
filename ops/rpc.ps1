@@ -3,7 +3,7 @@
 # 目标: 人只需要记一条命令 —— `ops\rpc.ps1 check`
 # 设计背景见 docs/research/2026-09-14_暴露问题调研.md (CI/CD 与流水线分析)
 #
-#   ops\rpc.ps1 check              # 全量健康引擎 (12 项: 本地 7 + 三站 5, 红黄绿 + 处置建议)
+#   ops\rpc.ps1 check              # 全量健康引擎 (15 项: 本地 9 + 三站 6, 红黄绿 + 处置建议)
 #   ops\rpc.ps1 check -Quick       # 本地快检 (pre-commit 用)
 #   ops\rpc.ps1 check -List        # 只列断言清单
 #   ops\rpc.ps1 install-hooks      # 安装/更新 pre-commit + pre-push 门禁 (幂等)
@@ -52,7 +52,7 @@ function Show-Usage {
     Write-Host @'
 rpc 统一入口 (P0)
 
-  ops\rpc.ps1 check             全量健康引擎 (12 项: 本地 7 + 三站 5, 红黄绿 + 处置建议)
+  ops\rpc.ps1 check             全量健康引擎 (15 项: 本地 9 + 三站 6, 红黄绿 + 处置建议)
   ops\rpc.ps1 check -Quick      本地快检 (pre-commit 门禁用, 不含三站比对)
   ops\rpc.ps1 check -Only <ids> 只跑指定断言, 逗号分隔 (见 -List)
   ops\rpc.ps1 check -List       列出全部断言 (含每项的处置建议)
