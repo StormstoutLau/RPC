@@ -78,6 +78,7 @@ function Install-HookEntry {
         '#!/bin/sh',
         "# rpc 统一校验门禁 ($Name) — 由 ops/rpc.ps1 install-hooks 生成, 请勿手改",
         '# pre-commit = 本地快检; pre-push = 全量 (明文+语法+三站配置比对+站上实况对账)',
+        '# 先 best-effort 入 agent 证据链 (2026-09-17): 失败**不阻断**, 但未入链会由 evidence 断言以 WARN 报出',
         'ROOT=$(git rev-parse --show-toplevel) || exit 0',
         'cd "$ROOT" || exit 0',
         "PY='$pyUnix'",
@@ -85,6 +86,7 @@ function Install-HookEntry {
         '  echo "[rpc-check] 未找到 Python ($PY), 门禁放行 — 见 ops/rpc.ps1 install-hooks"',
         '  exit 0',
         'fi',
+        '"$PY" ops/cluster.py agent chain >/dev/null 2>&1 || true',
         "exec `"`$PY`" ops/rpc_check.py $RunArgs"
     )
     $text = ($lines -join "`n") + "`n"

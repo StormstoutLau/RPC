@@ -1628,6 +1628,62 @@ def _net_doc():
     return yaml.safe_load(INVENTORY_NET.read_text(encoding="utf-8")) or {}
 
 
+# ── 断言: agent 证据链 (2026-09-17, spec/d6-agent-standard/evidence-chain/) ──
+# 为什么门禁要管: 证据链的价值在**被日常撞见** —— 只靠"人工想起跑 agent verify",
+#   归档被改动可以长期无人察觉(与本仓"判据必须自证不静默降级"同一纪律)。
+# 严重度**刻意分开**(要紧):
+#   · verify 报 issues (digest_mismatch / chain_break / cold_mismatch / anchor_mismatch /
+#     run_dir_missing / recipe_mismatch) = **证据被改或链被重写** ⇒ FAIL。
+#   · "有 run 未入链" = **覆盖缺口, 不是篡改** ⇒ WARN。否则每次派发后提交都被阻断,
+#     这类判据会因噪声被整体忽略(doclinks "判不准的不进门禁" 同一条理由)。
+def check_evidence(ctx):
+    sys.path.insert(0, str(ROOT / "ops"))
+    try:
+        import cluster
+    except Exception as e:
+        return "WARN", f"cluster.py 无法导入 ({type(e).__name__}) — 证据链断言跳过", []
+    try:
+        r = cluster.agent_chain_verify()
+    except Exception as e:
+        return "FAIL", f"证据链复验异常: {type(e).__name__}: {e}", []
+    if r.get("note"):
+        return "WARN", f"证据链不可用: {r['note']}", []
+    issues = r.get("issues") or []
+    un = r.get("unchained") or []
+    details = []
+    for x in issues:
+        k, loc = x.get("kind"), f"{x.get('proj')}/{x.get('run_id')}"
+        if k == "digest_mismatch":
+            details.append(f"[{x['index']}] {loc} digest 不符, 变了: "
+                           f"{', '.join(x.get('files_changed') or []) or '(未知)'}")
+        elif k == "chain_break":
+            details.append(f"[{x['index']}] {loc} prev 链不闭合 (此条起不可信)")
+        elif k == "run_dir_missing":
+            details.append(f"[{x['index']}] {loc} 归档目录不在了")
+        elif k == "recipe_mismatch":
+            details.append(f"[{x['index']}] {loc} recipe 不符 (链={x.get('got')} 代码={x.get('expect')})")
+        elif k == "anchor_mismatch":
+            details.append(f"外部锚与链不符: {', '.join(x.get('diff') or []) or '(未列出)'}")
+        elif k == "anchor_unreadable":
+            details.append("外部锚不可读 archive/evidence-chain/ANCHOR.txt")
+        elif k == "cold_mismatch":
+            details.append(f"冷路径与链不符 (冷={x.get('cold_n')} 链={x.get('chain_n')})")
+        else:
+            details.append(str(x))
+    note = (f"证据链: {r.get('entries', 0)} 条 · 未入链 {len(un)} · "
+            f"锚{'在' if r.get('anchor_present') else '缺'}")
+    if issues:
+        return "FAIL", note, details
+    if un or not r.get("anchor_present"):
+        if not r.get("anchor_present"):
+            details.append("外部锚未建立 → `cluster.py agent chain` 生成, 提交并 push 到 origin")
+        if un:
+            details.append(f"{len(un)} 个 run 未入链 → `cluster.py agent chain` 补录 "
+                           f"(首例: {un[0]})")
+        return "WARN", note, details
+    return "PASS", note, []
+
+
 def check_usb4(ctx):
     """USB4 三角环链路: 地址/MTU/接口状态 + 六向直连 + 主备回程路由 + 跨段生效性。"""
     if not INVENTORY_NET.is_file():
@@ -1987,6 +2043,10 @@ CHECKS = [
      "fix": "impact.yaml 登记的 consumer 路径不存在 —— 修正路径或删掉该条"},
     {"id": "aliases", "title": "别名解析契约", "fn": check_aliases, "quick": True,
      "fix": "以站上 conf 为准改 cluster.py 的 ROUTE/RPC_MODELS/STATION_ROUTES"},
+    {"id": "evidence", "title": "agent 证据链", "fn": check_evidence, "quick": True,
+     "fix": "digest/链/锚不符 = 归档证据或链被改动 ⇒ FAIL —— 用 `cluster.py agent verify` 定位到条与件, "
+            "再追查改动来源(别急着 `--reanchor`, 那是把信号抹平); 有 run 未入链只是**覆盖缺口** ⇒ WARN, "
+            "跑 `cluster.py agent chain` 补录(钩子已自动入链, 出现未入链说明钩子没跑或被 --no-verify 绕过)"},
     {"id": "usb4", "title": "USB4 三角环链路", "fn": check_usb4, "quick": False,
      "fix": "地址/路由不符 => 对照 inventory/net.yaml 与归档 §6.3/§6.6; "
             "链路不通 => 先查 BIOS USB4 安全等级与是否冷启动(归档 §6.5)"},

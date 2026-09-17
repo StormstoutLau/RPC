@@ -16,7 +16,7 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
     python ops/cluster.py flow [list|<name>] [--plan|--go] [args...]        # 声明式流程 (步骤→判据→台账)
     python ops/cluster.py reqlog {sample|summary|tail|path} [--minutes N]   # 引擎请求/token 统计 (站上采样)
     python ops/cluster.py ttl {status|check|enable|disable} [--ttl N] [--dry-run] [--go]  # 空闲 TTL 自动卸载 (默认关)
-    python ops/cluster.py agent {runs|live|tail} [--limit N] [--station X] [--json]  # agent 任务进度/吞吐 (只读)
+    python ops/cluster.py agent {runs|live|tail|chain|verify} [--limit N] [--station X] [--json]  # agent 任务进度/吞吐 + 证据链
 
 子命令:
     status   三站 llama /health + 当前加载实例 + 引擎清单一屏聚合
@@ -3070,6 +3070,31 @@ AGENT_WS = "$HOME/agent-workspaces"
 AGENT_BEAT_STALE_S = 60          # 节拍 5s 一次; 超 60s 未更新 ⇒ 疑似卡死 (O-25 的"黑盒"信号)
 AGENT_STATUS_BY_CODE = {0: "completed", 6: "timeout", 24: "slot-rejected"}
 
+# ── 证据链 (2026-09-17, spec/d6-agent-standard/evidence-chain/DESIGN.md) ──
+# 目的: 把"归档证据事后被无痕改动"变成"断链在首个 diff 处可定位"。
+# **不是防篡改**: 不防 T3 (执行站+主控全泄露), 不防"提前不记录", 不证 judgement 级真伪。
+# 语义: `prev` 链接的是**入链顺序** (append-only 日志序), 不是 ts 序 —— 扫描补录时
+#   按 ts 排候选, 但插入次序即链接次序; 故 ts 交错的并发派发不会破坏链。
+AGENT_CHAIN = Path(__file__).resolve().parent / "station-bin" / "agent-chain.json"
+# 冷路径 (外置链头): 与链文件异目录, 两者不一致即"链被全量回改"。注意**非跨机**,
+#   真正的跨信任域锚需人工/外部介质固化 —— 见 DESIGN §3 诚实边界。
+AGENT_CHAIN_COLD = Path(__file__).resolve().parent.parent / "archive" / "evidence-chain" / "agent-chain.json"
+# 外部锚 (2026-09-17 遗留#3): 一页纯文本, 钉住**链文件字节** ⇒ 与链形成两级:
+#   ANCHOR 钉链文件 → 链钉归档证据。理由: 链文件本身若被整体重写, 单看链自洽;
+#   锚把它压成一个可提交/可推送的短指纹, 由 **git origin (GitHub)** 充当跨信任域见证。
+#   ⚠ 强度诚实: 需 `git push` 到 origin 才成立; 持推送凭据者可改写 ⇒ 仅"公开仓库/多副本见证"级,
+#   不是密码学不可否认 (见 evidence-chain/DESIGN.md §3)。
+AGENT_CHAIN_ANCHOR = AGENT_CHAIN_COLD.parent / "ANCHOR.txt"
+AGENT_DIGEST_RECIPE = "v1"
+# 入 digest 的回收件 (与 agent-cli.ps1 collect 段 Move 后的名字一致):
+#   · .agent-run.json    = 主控写的终态契约 (含 accept_golden.sha256 ⇒ "当次注入的是哪份 golden")
+#   · judgment-record.txt= 远端 .meta (builder 自述) —— **入链不等于可信**, 只保证"回收后未被改"
+#   说明: DESIGN §2.2 曾把"goldenSha 只在内存、无法异地重算"列为关键实现坑; ADR-0005 已把它
+#   落进 .agent-run.json, 故此处**只哈希该文件字节**即覆盖之 —— 不另抽 golden_sha 字段,
+#   避免同一事实两个定义点 (抽出来也永远与文件哈希同涨同落, 是冗余)。
+AGENT_EVIDENCE_FILES = (".agent-run.json", "judgment-record.txt", "agent-output.txt",
+                        "accept-output.txt", "accept-golden-output.txt", "prompt.txt")
+
 
 def _dw(s) -> int:
     """终端显示宽度 —— CJK 占 2 格。不这样算, 中英混排的表头永远对不上 (实测)。"""
@@ -3172,6 +3197,200 @@ def _agent_detail(roots: dict, proj: str, ts: str) -> dict:
             "usage_total_tokens": (j.get("usage") or {}).get("total_tokens")}
 
 
+# ── 证据链: 计算 / 追加 / 复验 (全部**主控侧只读站外**, 不碰任何站) ──
+
+def _sha256_file(p: Path) -> str:
+    """文件**字节** sha256 (二进制读 —— Windows 下 text 模式会把 \\n 翻成 \\r\\n, 哈希即错)。"""
+    h = hashlib.sha256()
+    with p.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 16), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _run_digest(run_dir: Path) -> dict:
+    """按 recipe v1 算 run_digest —— 纯本地重算, 不触站。
+
+    recipe v1: sha256( "v1\\n" + 逐件 "name:hex|-\\n" )
+    缺件记 `-`: 老 run / collect 部分失败属正常, **不等于篡改** (故不能拿"缺件"当告警)。
+    改 recipe 必须同步 bump AGENT_DIGEST_RECIPE, 否则历史条目全部误判断链。
+    """
+    lines, files = [], {}
+    for name in AGENT_EVIDENCE_FILES:
+        p = run_dir / name
+        hx = _sha256_file(p) if p.is_file() else "-"
+        files[name] = hx
+        lines.append(f"{name}:{hx}")
+    blob = (AGENT_DIGEST_RECIPE + "\n" + "\n".join(lines) + "\n").encode("utf-8")
+    return {"digest": hashlib.sha256(blob).hexdigest(), "files": files}
+
+
+def _chain_load(p: Path) -> dict:
+    """读链 (缺文件/坏文件一律返回空链骨架 —— 不抛, 让调用方按"空"处理)。"""
+    try:
+        j = json.loads(p.read_text(encoding="utf-8-sig", errors="replace"))
+        if isinstance(j, dict) and isinstance(j.get("entries"), list):
+            j.setdefault("version", 1)
+            j.setdefault("recipe", AGENT_DIGEST_RECIPE)
+            return j
+    except Exception:
+        pass
+    return {"version": 1, "recipe": AGENT_DIGEST_RECIPE, "entries": []}
+
+
+def _chain_runs(roots: dict) -> list:
+    """扫全部 proj 的 agent-out/*/ → [(ts, proj, run_dir)], 按 (ts, proj) 稳定排序。"""
+    out = []
+    for proj, root in sorted(roots.items()):
+        d = root / "agent-out"
+        if not d.is_dir():
+            continue
+        for sub in d.iterdir():
+            if sub.is_dir() and (sub / ".agent-run.json").is_file():
+                out.append((sub.name, proj, sub))
+    out.sort(key=lambda x: (x[0], x[1]))
+    return out
+
+
+def _anchor_write(chain: dict) -> None:
+    """把链状态压成**外部锚** (纯文本, 一页, 可提交/推送)。
+
+    锚钉的是**链文件字节** (chain_sha256) ⇒ 链被整体重写也会露馅; 链本身钉归档证据 ⇒ 两级。
+    """
+    head = chain.get("head") or {}
+    lines = [
+        "# agent 证据链外部锚 — 由 `cluster.py agent chain` 生成, 请勿手改",
+        "# 用途: 提交并 push 到 git origin ⇒ 链被整体重写时此锚不符 (跨信任域见证)",
+        "# 校验: python ops/cluster.py agent verify    (判据 kind=anchor_mismatch)",
+        "# ⚠ 强度诚实: 仅当已 push 且历史被他人见证时成立; 持推送凭据者可改写 — 非密码学不可否认",
+        f"entries={len(chain['entries'])}",
+        f"head_run={(head.get('proj') + '/' + head.get('run_id')) if head else '-'}",
+        f"head_digest={head.get('digest') or '-'}",
+        f"chain_sha256={_sha256_file(AGENT_CHAIN)}",
+        f"cold_sha256={_sha256_file(AGENT_CHAIN_COLD) if AGENT_CHAIN_COLD.is_file() else '-'}",
+        f"recipe={AGENT_DIGEST_RECIPE}",
+        f"generated_at={time.strftime('%Y-%m-%dT%H:%M:%S')}",
+    ]
+    AGENT_CHAIN_ANCHOR.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _anchor_check(chain: dict) -> list:
+    """比对外部锚。**缺锚返回空** (未建锚≠篡改, 由 verify 另行提示建锚)。"""
+    if not AGENT_CHAIN_ANCHOR.is_file():
+        return []
+    got = {}
+    try:
+        for ln in AGENT_CHAIN_ANCHOR.read_text(encoding="utf-8", errors="replace").splitlines():
+            if "=" in ln and not ln.lstrip().startswith("#"):
+                k, v = ln.split("=", 1)
+                got[k.strip()] = v.strip()
+    except OSError:
+        return [{"kind": "anchor_unreadable"}]
+    head = chain.get("head") or {}
+    cold_sha = _sha256_file(AGENT_CHAIN_COLD) if AGENT_CHAIN_COLD.is_file() else "-"
+    diff = []
+    if got.get("entries") != str(len(chain["entries"])):
+        diff.append(f"条数(锚={got.get('entries')} 链={len(chain['entries'])})")
+    if got.get("head_digest") != (head.get("digest") or "-"):
+        diff.append("head_digest")
+    if got.get("chain_sha256") != _sha256_file(AGENT_CHAIN):
+        diff.append("chain_sha256(链文件字节已变)")
+    if got.get("cold_sha256") != cold_sha:
+        diff.append("cold_sha256(冷路径字节已变)")
+    if got.get("recipe") not in (None, AGENT_DIGEST_RECIPE):
+        diff.append(f"recipe(锚={got.get('recipe')})")
+    return [{"kind": "anchor_mismatch", "diff": diff}] if diff else []
+
+
+def agent_chain_append(reanchor: bool = False) -> dict:
+    """把**尚未入链**的 run 补进链 (幂等: 重复跑不产生新条目), 并镜像冷路径。
+
+    prev 链接的是**入链次序**(append-only 日志序) —— 故 ts 交错的并发派发不会破坏链。
+    返回 {"added": [...], "total": N, "chain": <path>} ; 只读 run 目录, 不写任何站。
+    """
+    roots, note = _agent_proj_roots()
+    if not roots:
+        return {"added": [], "total": 0, "error": note or "PROJECTS 解析为空"}
+    chain = _chain_load(AGENT_CHAIN)
+    seen = {(e.get("proj"), e.get("run_id")) for e in chain["entries"]}
+    prev = chain["entries"][-1]["digest"] if chain["entries"] else "-"
+    added = []
+    for ts, proj, run_dir in _chain_runs(roots):
+        if (proj, ts) in seen:
+            continue
+        rd = _run_digest(run_dir)
+        chain["entries"].append({
+            "proj": proj, "run_id": ts, "digest": rd["digest"], "prev": prev,
+            "files": rd["files"], "recipe": AGENT_DIGEST_RECIPE,
+            "chained_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        prev = rd["digest"]
+        added.append({"proj": proj, "run_id": ts, "digest": rd["digest"][:16]})
+    if added:
+        chain["head"] = {"proj": chain["entries"][-1]["proj"],
+                         "run_id": chain["entries"][-1]["run_id"],
+                         "digest": chain["entries"][-1]["digest"]}
+        blob = json.dumps(chain, ensure_ascii=False, indent=1)
+        AGENT_CHAIN.write_text(blob, encoding="utf-8")
+        try:
+            AGENT_CHAIN_COLD.parent.mkdir(parents=True, exist_ok=True)
+            AGENT_CHAIN_COLD.write_text(blob, encoding="utf-8")
+        except OSError as e:
+            added.append({"error": f"冷路径镜像失败: {e.__class__.__name__}"})
+    # 锚写不写 —— 语义要紧: 新增条目必然重写; 锚**缺失**时补建(首次); 其余一律不动。
+    #   锚与链不符 = 篡改信号, 绝不在 `chain` 里静默"修复"它 (要重锚须显式 --reanchor), 否则
+    #   攻击者重写链后跑一次 chain 就把痕迹抹平了。
+    anchor_stale = bool(added) or reanchor or not AGENT_CHAIN_ANCHOR.is_file()
+    if anchor_stale:
+        try:
+            AGENT_CHAIN_ANCHOR.parent.mkdir(parents=True, exist_ok=True)
+            _anchor_write(chain)
+        except OSError as e:
+            added.append({"error": f"锚写入失败: {e.__class__.__name__}"})
+    return {"added": added, "total": len(chain["entries"]), "chain": str(AGENT_CHAIN),
+            "anchor": str(AGENT_CHAIN_ANCHOR), "anchor_written": anchor_stale}
+
+
+def agent_chain_verify() -> dict:
+    """复验: ①逐条重算 digest 比链 ②prev 链闭合 ③冷路径链头一致。
+
+    输出 gap 表 (issues), 不打分 —— 评分归评审环, 这里只报"哪条、哪个文件、差在哪"。
+    """
+    roots, note = _agent_proj_roots()
+    chain = _chain_load(AGENT_CHAIN)
+    issues, prev = [], "-"
+    for i, e in enumerate(chain["entries"]):
+        proj, ts = e.get("proj"), e.get("run_id")
+        tag = {"index": i, "proj": proj, "run_id": ts}
+        if e.get("prev") != prev:
+            issues.append(dict(tag, kind="chain_break", expect=prev, got=e.get("prev")))
+        if e.get("recipe") != AGENT_DIGEST_RECIPE:
+            issues.append(dict(tag, kind="recipe_mismatch", expect=AGENT_DIGEST_RECIPE, got=e.get("recipe")))
+        root = roots.get(proj)
+        run_dir = (root / "agent-out" / ts) if root and ts else None
+        if not run_dir or not run_dir.is_dir():
+            issues.append(dict(tag, kind="run_dir_missing"))
+        else:
+            rd = _run_digest(run_dir)
+            if rd["digest"] != e.get("digest"):
+                old = e.get("files") or {}
+                issues.append(dict(tag, kind="digest_mismatch",
+                                   files_changed=sorted(k for k in rd["files"] if rd["files"][k] != old.get(k)),
+                                   expect=(e.get("digest") or "")[:16], got=rd["digest"][:16]))
+        prev = e.get("digest")
+    cold = _chain_load(AGENT_CHAIN_COLD)
+    if [x.get("digest") for x in cold["entries"]] != [x.get("digest") for x in chain["entries"]]:
+        issues.append({"kind": "cold_mismatch",
+                       "cold_n": len(cold["entries"]), "chain_n": len(chain["entries"])})
+    issues += _anchor_check(chain)
+    # 未入链 = **覆盖缺口, 不是篡改** ⇒ 单列一类, 供门禁降级为 WARN (见 rpc_check.check_evidence)
+    seen = {(e.get("proj"), e.get("run_id")) for e in chain["entries"]}
+    unchained = sorted(f"{p}/{t}" for t, p, _ in _chain_runs(roots) if (p, t) not in seen)
+    return {"entries": len(chain["entries"]), "issues": issues, "unchained": unchained,
+            "anchor": str(AGENT_CHAIN_ANCHOR), "anchor_present": AGENT_CHAIN_ANCHOR.is_file(),
+            "head": chain.get("head"), "note": note}
+
+
 def _agent_beat(st: str) -> list:
     """扫一站运行中节拍。**只读**: 遍历站上既有 .progress, 不写任何东西, 不装采集器。"""
     cmd = ("for d in " + AGENT_WS + "/*/out; do "
@@ -3253,14 +3472,18 @@ def agent_ledger_freshness(rows) -> dict:
 
 
 def cmd_agent(argv) -> int:
-    """cluster.py agent {runs|live|tail} [--limit N] [--station A|B|C] [--json]
+    """cluster.py agent {runs|live|tail|chain|verify} [--limit N] [--station A|B|C] [--json] [--reanchor]
 
     P0 只读视图: `runs`=派发台账尾 N 条(join run.json 详情) / `live`=三站运行中节拍 /
     `tail`=台账原始行。**只读, 无副作用**; 口径与判据见 spec/agent-observability/。
+    证据链 (spec/d6-agent-standard/evidence-chain/): `chain`=把未入链的 run 补进链(幂等,
+    写链 + 冷路径镜像 + 外部锚 ANCHOR.txt; `--reanchor` 才强制重锚) / `verify`=复验
+    (重算 digest + 验 prev 链 + 比冷路径与外部锚; 只读)。门禁第 15 项 `evidence` 自动覆盖。
     """
     act = (argv[0] if argv else "runs").lower()
-    if act not in ("runs", "live", "tail"):
-        print("用法: cluster.py agent {runs|live|tail} [--limit N] [--station A|B|C] [--json]")
+    if act not in ("runs", "live", "tail", "chain", "verify"):
+        print("用法: cluster.py agent {runs|live|tail|chain|verify} [--limit N] [--station A|B|C] "
+              "[--json] [chain 可加 --reanchor]")
         return 1
     limit, only, as_json = 20, None, ("--json" in argv)
     i = 1
@@ -3282,6 +3505,79 @@ def cmd_agent(argv) -> int:
         print(f"未知站 '{only}' (可选: {', '.join(STATIONS)})")
         return 1
     stations = [only] if only else ["A", "B", "C"]
+
+    if act == "chain":
+        r = agent_chain_append(reanchor=("--reanchor" in argv))
+        if as_json:
+            print(json.dumps(r, ensure_ascii=False))
+            return 0
+        if r.get("error"):
+            print(f"证据链: 不可用 —— {r['error']}")
+            return 1
+        print("=== 证据链追加 (幂等; 只写主控侧, 不触站) ===")
+        if r["added"]:
+            for a in r["added"]:
+                if a.get("error"):
+                    print(f"  ⚠ {a['error']}")
+                else:
+                    print(f"  + {a['proj']:<10} {a['run_id']}  digest={a['digest']}")
+        else:
+            print("  (无新增 —— 全部 run 已在链上)")
+        print(f"\n  链长={r['total']} · {r['chain']}")
+        print(f"  外部锚={'已更新' if r.get('anchor_written') else '未动(已是最新)'} · {r.get('anchor')}")
+        print("  判据: 本命令**唯一**写动作为链文件+冷路径镜像+外部锚; run 目录一律只读。")
+        if not r.get("anchor_written") and not (r.get("added") or []):
+            print("  提示: 锚与链**不符**时本命令刻意不动锚(避免抹掉篡改信号); 确要重锚用 --reanchor。")
+        return 0
+
+    if act == "verify":
+        r = agent_chain_verify()
+        if as_json:
+            print(json.dumps(r, ensure_ascii=False))
+            return 0 if not r["issues"] else 1
+        print("=== 证据链复验 (重算 digest + prev 链 + 冷路径) ===")
+        if r.get("note"):
+            print(f"  ⚠ {r['note']}")
+        if r["entries"] == 0:
+            print("  (链为空 —— 先跑 `agent chain` 建立基线)")
+            return 0
+        if not r["issues"]:
+            h = r.get("head") or {}
+            print(f"  PASS · {r['entries']} 条全绿")
+            print(f"  head={h.get('proj')}/{h.get('run_id')} digest={(h.get('digest') or '')[:16]}")
+        else:
+            print(f"  FAIL · {len(r['issues'])} 项 (链长 {r['entries']})")
+            for x in r["issues"]:
+                k = x.get("kind")
+                loc = f"{x.get('proj')}/{x.get('run_id')}" if x.get("kind") not in ("cold_mismatch",) else "-"
+                if k == "digest_mismatch":
+                    print(f"  ✗ [{x['index']}] {loc} digest_mismatch 变了: {', '.join(x['files_changed']) or '(未知)'}"
+                          f"  expect={x['expect']} got={x['got']}")
+                elif k == "chain_break":
+                    print(f"  ✗ [{x['index']}] {loc} chain_break  expect={str(x['expect'])[:16]} got={str(x['got'])[:16]}")
+                elif k == "run_dir_missing":
+                    print(f"  ✗ [{x['index']}] {loc} run_dir_missing (归档目录不在了)")
+                elif k == "recipe_mismatch":
+                    print(f"  ✗ [{x['index']}] {loc} recipe_mismatch expect={x['expect']} got={x['got']}")
+                elif k == "anchor_mismatch":
+                    print(f"  ✗ 外部锚 anchor_mismatch 与链不符: {', '.join(x.get('diff') or []) or '(未列出)'}")
+                elif k == "anchor_unreadable":
+                    print("  ✗ 外部锚不可读 (ANCHOR.txt)")
+                else:
+                    print(f"  ✗ {k}  cold_n={x.get('cold_n')} chain_n={x.get('chain_n')}")
+        if r.get("unchained"):
+            n = len(r["unchained"])
+            print(f"  ▲ 覆盖缺口: {n} 个 run **尚未入链** (不是篡改, 但此期间改动不可验) "
+                  f"→ 跑 `cluster.py agent chain` 补录")
+            for u in r["unchained"][:5]:
+                print(f"      · {u}")
+            if n > 5:
+                print(f"      · …另有 {n - 5} 个")
+        if not r.get("anchor_present"):
+            print("  ▲ 外部锚未建立 (ANCHOR.txt 缺失) → 跑 `cluster.py agent chain` 生成后提交并 push 到 origin")
+        print("\n  口径: 本命令能判'链内记录与当前归档字节是否一致'。**不能**判 judgement 级真伪"
+              "(判据真的跑过且结果真为 0), 也不防 T3 —— 见 evidence-chain/DESIGN.md §6。")
+        return 0 if not r["issues"] else 1
 
     if act == "live":
         beats = agent_live(stations)

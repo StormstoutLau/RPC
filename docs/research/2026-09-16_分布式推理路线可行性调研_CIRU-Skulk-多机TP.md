@@ -301,3 +301,37 @@
 | 5 | **用容器隔离而非宿主安装** | 🔵 备选 | 官方/社区事实标准（kyuz0 toolbox 同时提供 6.4.4 与 7-nightlies）；与"唯一管理面 + 零自加载"纪律的兼容性需另行评估 |
 
 > **本文档 9.x 的状态标记**：`✅ 已证实` / `❌ 未找到证据` / `⚠️ 仅二手` / `🔵 备选方案` / **未执行**（§9.5 只是设计）。凡本节未标注为"已证实"的，**引用前必须自查**。
+
+### 9.7 三站统一装系统 ROCm：遮蔽判据探测（2026-09-17，零风险，未装任何东西）
+
+**背景**：用户开放三选一「三站统一安装系统 ROCm / 移除 B 站 ROCm / 维持现状」，倾向**统一安装**，要求先做版本选型与装前零风险遮蔽判据。目的地重新定位为「补齐 B/C 本地 HIP 构建能力 + 消 `amdgpu-install` 三站漂移」（§9 已登记：A `6.4.60401` / B `6.3.60303` / C `30.30.1.0` 7.x 时代）。
+
+**① 系统 ROCm 现状取证（本轮实测，覆盖 §9.4 表）**：
+- **A 站**：有系统 ROCm `6.4.1`（`/opt/rocm` → `/opt/rocm-6.4.1`，SONAME `so.6`，完整 dev 栈 rocm-dev/hip-dev/rocblas/miopen/rccl…）；`libamdhip64.so.6`。
+- **B/C 站**：无系统 ROCm（`/opt/rocm` 不存在、dpkg 零 rocm/hip 包）。
+- **三站 bundled 推理运行时**：`~/.unsloth/llama.cpp/build/bin/` 自带 HIP `7.16.26332`（`libamdhip64.so.7`），**三站同构、均靠 RPATH=`$ORIGIN` 自洽**。
+- **A 站系统 ROCm 进程级引用审计（判据先行，非臆测）**：全 `/proc/<pid>/maps` 扫 `/opt/rocm` = **零命中**；现役推理进程（llama-server/vllm/unsloth）当前 A 站未跑；`infer-load`/systemd/`/etc` 反查仅注释文本提及 rocm，**无任何运行时依赖** ⇒ **A 站 6.4.1 是可安全移除的闲置系统 ROCm，但对「统一安装」方向无冲突（装 7.14 后可与 6.4.1 并存）**。
+
+**② 官方版本矩阵（2026-09-17 fetch 原页，覆盖 §9.1）**：
+- **ROCm 7.14.0（2026-07-16）**：兼容矩阵**正式列出 gfx1151 = Ryzen AI Max+ 395（Radeon 8060S）、RDNA 3.5、Ubuntu 24.04.4 (HWE kernel 6.17)** ✅；TheRock 模块化架构（`rocm-hip-sdk` 可择装），release 重点 AI inference + vLLM 0.23 + ROCprofiler-SDK。
+- **ROCm 6.4.4（Ryzen APU Linux）**：gfx1151 为「**初始支持 / Preview**」，PyTorch 仅 `2.8 + 3.12` 一档，Ubuntu 24.04.3 初步支持 ⇒ **官方定位为试水，非生产级**。
+- **选型结论**：统一目标 = **7.14.0**（非 6.4.4）。理由：① gfx1151 正式支持 vs Preview；② TheRock 模块化 footprint 可控；③ bundled 已是 `so.7` 同代，装 7.14 不引入 SONAME 代差。
+
+**③ 遮蔽判据探测（本轮实测，三站一致）**：
+- bundled `llama-server` `RUNPATH = [$ORIGIN]`（readelf -d 三站同值）。
+- `ldd` 对其运行时依赖 `libamdhip64.so.7` / `libggml-hip.so.0` / `libhipblas.so.3` 全命中 bundled `$ORIGIN` 同目录。
+- **结论：`$ORIGIN` 解析先于 `ldconfig` 缓存 ⇒ 即便未来装 7.14 把 `so.7` 注册进 `ldconfig`，bundled 推理仍绝对优先，无遮蔽、无抢占。** A 站现有 `so.6` 与 bundled `so.7` 不同 SONAME，天然不冲突。
+- **判定：装 7.14.0 对现役推理路径零风险。**
+
+**遗留（未执行，待裁决后进入设计）**：三站统一装 7.14.0 的完整执行设计（装 `rocm-hip-sdk` 模块 + `--no-dkms` + `amdgpu-install` 三站版本 pin + 备份/回滚 + 装后遮蔽自证判据）。当前仅完成零风险判据探测与取证。
+
+### 9.7-纠偏 版本号更正（2026-09-17，同一会话追加）
+
+> **§9.7 上文「统一目标 7.14.0」需更正为 7.2.4**。理由（判据先行，非臆测）：
+
+- `curl https://repo.radeon.com/rocm/apt/` **实测无 `7.14.0` 目录**；6.x/7.x 现最高 = **7.2.4**，`latest/dists/noble/Release` 亦为 **7.2.4** ⇒ **apt 仓库可安装的最新版本 = 7.2.4**。
+- §9.7 上文引的「7.14.0 兼容矩阵列 gfx1151」是**官方产品/release 版本号**，与 **apt 仓库版本段**是两套不同命名（官方 docs-7.14.0 vs repos `rocm/apt/7.2.x`）。**官方 docs-7.2 native_linux 矩阵（本轮单独 fetch）正式列 gfx1151**（Ryzen AI Max+ 395/Radeon 8060S/RDNA 3.5/U24.04）⇒ 7.2 本身即官方正式支持，无需追高到不存在的 7.14。
+- **前置探测实测（2026-09-17）**：A 实装 rocm-core `6.4.1`（`so.6`）；B/C 无系统 ROCm；三站 source 段 A `6.4.1`/B `6.3.3`/C `7.2.1`（C 需 pin 到 7.2.4）；网络可达 `repo.radeon.com` 200。
+- **统一目标定案 = 7.2.4**（`rocm-hip-sdk` + `--no-dkms` + `--rocmrelease 7.2.4`）。遮蔽判据（§9.7-③，`$ORIGIN` 优先）与版本号无关，**不因本次更正而失效**。
+- **方法论沉淀**：安装目标的**版本号必须以 apt 仓库真实存在为准，官方产品号 ≠ apt 版本段**；起设计前应 `curl` 仓库根目录清单确认该版本目录存在，避免 pin 到不存在的版本导致安装失败。
+- 完整执行设计已落 `spec/rocm-migration/DESIGN.md`（含 8 项验收清单）；TRACKER 变更日志 v2.1。**下一步**：3.0 前置 `apt-cache policy rocm-core` 确认真实候选，待裁决进入实际安装。
