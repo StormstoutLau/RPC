@@ -1204,7 +1204,12 @@ exit `$RC
     #     sandbox-safe). Run ledger before any agent-out write so a collect crash (startup-
     #     injected sandbox whitelist w/o D:\Paper\agent-out) never loses the run record.
     $ledger = 'd:\RPC\ops\station-bin\agent-runs.log'
-    $line = "$ts,$proj,$id,$sens,$code,0,0"
+    # 批B / 缺口6 (2026-09-18): 原为硬编码 `0,0` ⇒ 台账 queue_s/run_s **恒 0**, 与 run.json
+    #   和 .meta 直接矛盾(已被 ADR-0007 阶段 0.5 夹具当场复现: 台账 `0,0` 而 .meta=QUEUE_S=2/RUN_S=19)。
+    #   `$queue_s/$run_s` 在上方 meta 解析段(L1165-1183)已就绪; META_STALE 时二者已被主动归零,
+    #   故与 run.json 的取值保持一致。**注**: claude 本地备路**不在本修范围** —— 其 .meta 本就写
+    #   QUEUE_S=0(本地执行无远端队列), 台账/run.json 同为 0, 自洽。
+    $line = "$ts,$proj,$id,$sens,$code,$queue_s,$run_s"
     try { Add-Content -Path $ledger -Value $line -Encoding utf8; $ledgerOk = $true }
     catch { $ledgerOk = $false; Write-Host "LEDGER_WARN: $($_.Exception.Message)" }
 
