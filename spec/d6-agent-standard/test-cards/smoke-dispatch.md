@@ -11,6 +11,15 @@ accept:
 accept-golden:
   source: ops/station-bin/golden/smoke_dispatch_golden.sh
   cmd: bash .golden/smoke_dispatch_golden.sh
+evidence-manifest:
+  version: 1
+  subjects:
+    - name: agent-output
+      path: agent-output.txt
+      digest: sha256
+    - name: judgment-record
+      path: judgment-record.txt
+      digest: sha256
 ---
 ## 任务描述
 

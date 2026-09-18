@@ -614,6 +614,11 @@ function Get-FrontMatter {
     # task description. Dispatcher splits master card into N sub-cards (one per shard) and fans
     # them across stations (cross-station each 1). Only valid for readable (readonly) big tasks.
     $h['decompose'] = @()
+    # ADR-0007 阶段 1 (2026-09-18): evidence-manifest —— 卡声明"该产出哪些证据 + 怎么验"。
+    #   形状借 in-toto Statement (subjects: name + path|collect + digest), **不自创语义**。
+    #   本阶段只做"声明 + 落 run.json"(原文照收, 不规范化 —— ADR-0005 D2 纪律); 复验侧
+    #   由复验器按 run.json 声明的 subjects 走 recipe v2 (recipe 已按条目分派, 无需重建链)。
+    $h['evidence-manifest'] = @{ version = ''; subjects = @() }
     $inFreq = $false; $bodyRead = $false; $curKey = ''
     $bodyLines = @()
     $lines = [System.IO.File]::ReadAllLines($Path, [System.Text.UTF8Encoding]::new($false))
@@ -630,6 +635,22 @@ function Get-FrontMatter {
         # and be dropped by the whitelist gate - P2-1/IMPLEMENTATION §3.1).
         elseif ($inFreq -and $curKey -eq 'accept-golden' -and $l -match '^\s{2,}(source|cmd)\s*:\s*(.+)$') {
             $h['accept-golden'][$matches[1].ToLower()] = $matches[2].Trim()
+        }
+        # ADR-0007 阶段 1: evidence-manifest 三级嵌套。**必须整体排在通用键正则之前** ——
+        #   通用分支 `^\s*([A-Za-z_\-]+)\s*:` 允许前导空白, 且 `evidence-manifest` 含 `-` 亦在其
+        #   字符类内 ⇒ 若落到通用分支, 会因 ContainsKey 命中而 `$h[$k] = $v`(**空串覆盖**整个
+        #   哈希表)。与 accept-golden 嵌套键当年踩的是同一个坑(P2-1/IMPLEMENTATION §3.1)。
+        elseif ($inFreq -and $l -match '^\s*evidence-manifest\s*:\s*$') { $curKey = 'evm' }
+        elseif ($inFreq -and $curKey -eq 'evm' -and $l -match '^\s{2,}version\s*:\s*(.+)$') {
+            $h['evidence-manifest']['version'] = $matches[1].Trim()
+        }
+        elseif ($inFreq -and $curKey -eq 'evm' -and $l -match '^\s{2,}subjects\s*:\s*$') { $curKey = 'evm-subjects' }
+        elseif ($inFreq -and $curKey -eq 'evm-subjects' -and $l -match '^\s*-\s*name\s*:\s*(.+)$') {
+            $h['evidence-manifest']['subjects'] += @{ name = $matches[1].Trim(); path = ''; collect = ''; digest = '' }
+        }
+        elseif ($inFreq -and $curKey -eq 'evm-subjects' -and $l -match '^\s{2,}(path|collect|digest)\s*:\s*(.+)$') {
+            $subs = $h['evidence-manifest']['subjects']
+            if ($subs.Count -gt 0) { $subs[$subs.Count - 1][$matches[1].ToLower()] = $matches[2].Trim() }
         }
         elseif ($inFreq -and $l -match '^\s*([A-Za-z_\-]+)\s*:\s*(.*)$') {
             $k = $matches[1].ToLower(); $v = $matches[2].Trim()
@@ -1260,6 +1281,17 @@ exit `$RC
                               flavor=$prof.flavor; source=$prof.source }
         accept = [ordered]@{ cmd = $accept; passed = $acceptPassed }
         collect = if ($collectOk) { 'ok' } else { 'failed' }
+    }
+    # ADR-0007 阶段 1: evidence-manifest **原文照收**落 run.json。**仅当卡声明了非空 subjects
+    #   才落此键** —— 与 accept_golden 同例, 保持老 run.json 形状不变(向后兼容)。复验侧据此
+    #   走 recipe v2(按 run 声明件集), 故该键是"per-run 件集"的唯一真值来源。
+    $evm = $fm['evidence-manifest']
+    if ($evm -and @($evm['subjects']).Count -gt 0) {
+        $run['evidence_manifest'] = [ordered]@{
+            version  = $evm['version']
+            subjects = @($evm['subjects'] | ForEach-Object {
+                [ordered]@{ name = $_.name; path = $_.path; collect = $_.collect; digest = $_.digest } })
+        }
     }
     # O-12 M4: accept_golden contract field (only when golden active; optional key, backward compatible)
     if ($goldenActive) {
