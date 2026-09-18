@@ -2,10 +2,10 @@
 # 用途: 提交并 push 到 git origin ⇒ 链被整体重写时此锚不符 (跨信任域见证)
 # 校验: python ops/cluster.py agent verify    (判据 kind=anchor_mismatch)
 # ⚠ 强度诚实: 仅当已 push 且历史被他人见证时成立; 持推送凭据者可改写 — 非密码学不可否认
-entries=84
-head_run=paper/202609181934560158
-head_digest=7f1902bab5afd2b00986c4348ee1383eb0f3a488bf070fe747eafa37e74147b6
-chain_sha256=64d1d182635d4c7099184b30ec0560970016012cf504161157f1d5704d92b28e
-cold_sha256=64d1d182635d4c7099184b30ec0560970016012cf504161157f1d5704d92b28e
+entries=86
+head_run=paper/202609182314143434
+head_digest=7f4741f0c6802b799cb2cbe93575381c03e8afea9bd88fc397ab89a5007491c8
+chain_sha256=b34a3fee24fc456433ec75f698ce57516c9f234ba148f0641d9048dd3e277a03
+cold_sha256=b34a3fee24fc456433ec75f698ce57516c9f234ba148f0641d9048dd3e277a03
 recipe=v1
-generated_at=2026-09-18T19:35:56
+generated_at=2026-09-18T23:14:38
