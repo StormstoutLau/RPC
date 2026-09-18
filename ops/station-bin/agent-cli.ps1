@@ -653,9 +653,11 @@ function Get-FrontMatter {
         }
         elseif ($inFreq -and $curKey -eq 'evm' -and $l -match '^\s{2,}subjects\s*:\s*$') { $curKey = 'evm-subjects' }
         elseif ($inFreq -and $curKey -eq 'evm-subjects' -and $l -match '^\s*-\s*name\s*:\s*(.+)$') {
-            $h['evidence-manifest']['subjects'] += @{ name = $matches[1].Trim(); path = ''; collect = ''; digest = '' }
+            # ADR-0007 3-b-2 (2026-09-18): subject 增 `ephemeral`(设计性临时产物) —— 见代码内注释
+            #   与 ADR-0007「3-b-2 本体」: 它把"产物在站上 /tmp、设计上就不进 runDir"与"件丢了"分开。
+            $h['evidence-manifest']['subjects'] += @{ name = $matches[1].Trim(); path = ''; collect = ''; digest = ''; ephemeral = $false }
         }
-        elseif ($inFreq -and $curKey -eq 'evm-subjects' -and $l -match '^\s{2,}(path|collect|digest)\s*:\s*(.+)$') {
+        elseif ($inFreq -and $curKey -eq 'evm-subjects' -and $l -match '^\s{2,}(path|collect|digest|ephemeral)\s*:\s*(.+)$') {
             $subs = $h['evidence-manifest']['subjects']
             if ($subs.Count -gt 0) { $subs[$subs.Count - 1][$matches[1].ToLower()] = $matches[2].Trim() }
         }
@@ -685,6 +687,8 @@ function Get-FrontMatter {
     if ($h['readonly'] -eq 'true') { $h['readonly'] = $true } else { $h['readonly'] = $false }
     # O-09 isolate-xdg: 并行写任务各自 XDG_DATA_HOME 隔离 opencode.db, 消除同站并发写锁串行化.
     if ($h['isolate-xdg'] -eq 'true') { $h['isolate-xdg'] = $true } else { $h['isolate-xdg'] = $false }
+    # ADR-0007 3-b-2: subject 级 `ephemeral` 归一为布尔(与 readonly/isolate-xdg 同法, 不用字符串真值)
+    foreach ($s in @($h['evidence-manifest']['subjects'])) { $s['ephemeral'] = ("$($s['ephemeral'])" -eq 'true') }
     $ts = 0
     if (-not [int]::TryParse([string]$h['timeout_s'], [ref]$ts) -or $ts -le 0) { $ts = 900 }
     $h['timeout_s'] = $ts
@@ -1540,7 +1544,8 @@ exit `$RC
         $run['evidence_manifest'] = [ordered]@{
             version  = $evm['version']
             subjects = @($evm['subjects'] | ForEach-Object {
-                [ordered]@{ name = $_.name; path = $_.path; collect = $_.collect; digest = $_.digest } })
+                [ordered]@{ name = $_.name; path = $_.path; collect = $_.collect; digest = $_.digest
+                            ephemeral = [bool]$_.ephemeral } })
         }
     }
     # O-12 M4: accept_golden contract field (only when golden active; optional key, backward compatible)

@@ -3774,7 +3774,7 @@ def agent_ledger_freshness(rows) -> dict:
     return {"label": newest.get("label"), "age_s": int(time.time() - t)}
 
 
-def agent_audit(limit: int = 0) -> dict:
+def agent_audit(limit: int = 0, save: bool = False) -> dict:
     """阶段 3-a (ADR-0007): **证据可复现性审计** → 机器可判 gap 表（advisory）。
 
     与 `verify` 的**分工**（刻意分清，否则两套判据会互相污染）:
@@ -3786,9 +3786,11 @@ def agent_audit(limit: int = 0) -> dict:
     逐 subject 的 readiness（机器可判字段）:
       path 型   → 归档件在 + 摘要命中 ⇒ `offline-ok`（可离线按件复算）
                   归档件缺            ⇒ `missing-artifact`
-                  摘要不符            ⇒ `digest-mismatch`（**责任归 verify**：那是篡改/损坏轴）
       collect 型 → 框架**从不执行**声明的命令（ADR-0007 缺口 4/5 已记）⇒ 一律 `declared-not-executed`，
                   并按**约定名** `<name>.txt` 看归档件: 在 ⇒ `+artifact-by-convention` / 缺 ⇒ `+no-artifact`
+      **ephemeral** → 卡声明 `ephemeral: true` 且归档件不在 ⇒ **`artifact-ephemeral-by-design`**：
+                  "产物在站上临时目录、设计上就不进 runDir"（Cpp_Hub 型任务：工作目录在站上 `/tmp`）
+                  ⇒ **不是缺口**，但**也不计入可离线复算**（单列，否则覆盖率会虚高）
       其他       → runDir 里存在但**未被任何 subject 的 path 覆盖**的非隐藏件 ⇒ `undeclared-evidence`
     """
     roots, _note = _agent_proj_roots()
@@ -3796,7 +3798,7 @@ def agent_audit(limit: int = 0) -> dict:
     if limit and limit > 0:
         runs = runs[-limit:]
     out_runs, gaps = [], []
-    n_sub = n_offline = n_collect = n_undecl = n_runs_v2 = 0
+    n_sub = n_offline = n_collect = n_undecl = n_runs_v2 = n_ephemeral = 0
     for ts, proj, run_dir in runs:
         label = f"{proj}/{ts}"
         jp = run_dir / ".agent-run.json"
@@ -3822,7 +3824,12 @@ def agent_audit(limit: int = 0) -> dict:
             if path:
                 covered.add(path)
             hx = files.get(name)
-            if coll:
+            eph = bool(s.get("ephemeral"))
+            if eph and not exists:
+                # 设计性临时产物: 卡已声明 ⇒ **不是缺口**(与 missing-artifact 严格区分), 但单列、不计入可离线复算
+                rdy = "artifact-ephemeral-by-design" + ("(collect 未执行)" if coll else "")
+                n_ephemeral += 1
+            elif coll:
                 rdy = "declared-not-executed+" + ("artifact-by-convention" if exists else "no-artifact")
                 n_collect += 1
                 gaps.append(f"{label}: subject '{name}' 声明了 collect 命令但**从未执行**"
@@ -3860,17 +3867,47 @@ def agent_audit(limit: int = 0) -> dict:
             gaps.append(f"{label}: 已归档但未被任何 subject 覆盖: {', '.join(undecl)}")
         out_runs.append({"label": label, "recipe": recipe, "declared": len(subs),
                          "offline_ok": sum(1 for x in subjects if x["readiness"] == "offline-ok"),
-                         "collect": sum(1 for x in subjects if x["mode"] == "collect"),
+                         "not_exec": sum(1 for x in subjects if x["readiness"].startswith("declared-not-executed")),
+                         "ephemeral": sum(1 for x in subjects if x["readiness"].startswith("artifact-ephemeral")),
                          "subjects": subjects, "undeclared": undecl})
     coverage = [
-        f"可离线复算: {n_offline}/{n_sub} 条声明（其余为 collect 型/缺件/摘要不符）",
+        f"可离线复算: {n_offline}/{n_sub} 条声明（其余为 collect 型/缺件/设计性临时）",
         f"collect 型（声明了命令但从未执行）: {n_collect} 条",
+        f"**设计性临时产物**（卡声明 ephemeral ⇒ 产物不进 runDir）: {n_ephemeral} 条"
+        f" —— 不计入缺口, 也**不计入可离线复算**(否则覆盖率虚高)",
         f"已归档但未声明: {n_undecl} 件",
         f"有 manifest 的 run: {n_runs_v2}/{len(out_runs)}",
     ]
-    return {"runs": out_runs, "coverage": coverage, "gaps": gaps,
-            "totals": {"runs": len(out_runs), "subjects": n_sub, "offline_ok": n_offline,
-                       "collect": n_collect, "undeclared": n_undecl, "runs_v2": n_runs_v2}}
+    out = {"runs": out_runs, "coverage": coverage, "gaps": gaps,
+           "totals": {"runs": len(out_runs), "subjects": n_sub, "offline_ok": n_offline,
+                      "collect": n_collect, "undeclared": n_undecl, "runs_v2": n_runs_v2,
+                      "ephemeral": n_ephemeral}}
+    if save:
+        # 落库**第一层**(3-b-2 定案): 机器产物落**项目侧** `<projRoot>/agent-out/_audits/<ts>.json`
+        #   —— 与 runDir 同级、名字不以数字开头 ⇒ `_chain_runs` 不会把它当 run, **不碰链**;
+        #   **绝不写仓库**(红线: 每个 run 都入仓会污染仓库并逼每次提交; 只有校准报告才入仓)。
+        stamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+        saved = []
+        by_proj = {}
+        for x in out_runs:
+            by_proj.setdefault(x["label"].split("/")[0], []).append(x)
+        for proj, rows in by_proj.items():
+            root = roots.get(proj)
+            if not root:
+                continue
+            rel = [g for g in gaps if g.startswith(f"{proj}/")]
+            d = root / "agent-out" / "_audits"
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+                fp = d / f"{stamp}-audit.json"
+                fp.write_text(json.dumps({"ts": stamp, "proj": proj, "coverage": coverage,
+                                          "gaps": rel, "runs": rows}, ensure_ascii=False, indent=2),
+                              encoding="utf-8")
+                saved.append(str(fp))
+            except OSError as e:
+                print(f"  (落库失败 {proj}: {e.__class__.__name__})")
+        out["saved"] = saved
+    return out
 
 
 # ── 阶段 3-b: 异基座 judge 的 **A/A 基线 + 顺序对调** 校准 (ADR-0007) ──────────────
@@ -3882,6 +3919,8 @@ AGENT_AUDIT_JUDGE_RULE = """你是**证据可复现性审计员**。给你一次
   一条 subject 声明**可独立复现**当且仅当：它是 path 型 **且** 该归档件存在 **且** 非空（字节 > 0）。
   其余一律是**缺口（REAL）** —— 含 collect 型（其声明的命令从未执行, 只有约定名产物 ⇒ 不可独立复现）、
   件缺失、件为空、既无 path 也无 collect。
+  **唯一的例外**：条目标了 `ephemeral=是`（卡声明"产物在站上临时目录, **设计上不进 runDir**"）且件不在
+    ⇒ **不算缺口, 输出 FALSE**（设计使然, 不是丢失）。
   信息不足（如"存在=未知"）⇒ **UNSURE**。
 只输出逐行 `ITEM <序号>: <REAL|FALSE|UNSURE>`；不要解释、不要多余文字。
 
@@ -3896,6 +3935,7 @@ AGENT_AUDIT_JUDGE_RULE_B = """任务：复核"证据可复现性"条目。逐条
   · 其它情况都算**缺口** ⇒ 输出 REAL。例如：collect 型（声明了命令却没执行过）、文件不存在、文件 0 字节、
     未给出 path 也没给出 collect。
   · 若关键信息没给全（比如"存在=未知"）⇒ 输出 UNSURE（宁弃权不猜）。
+  · 例外：若条目写明 `ephemeral=是`（设计性临时产物、产物不进 runDir）且件不在 ⇒ 不是缺口 ⇒ FALSE。
 格式：逐行 `ITEM <序号>: <REAL|FALSE|UNSURE>`，无其它内容。
 
 事实：
@@ -3961,6 +4001,18 @@ def _audit_judge_items(audit: dict) -> list:
         #   若它按提示里写明的判据判(0 字节 ⇒ REAL / 件在且非空 ⇒ FALSE) ⇒ 才是真的独立复核。
         ("subject 'ledger-extra' | 类型=path | 归档件 ledger-extra.txt | 存在=是 | 字节=0 | 机器层判定=offline-ok", "REAL"),
         ("subject 'diff-full' | 类型=path | 归档件 diff-full.txt | 存在=是 | 字节=1024 | 机器层判定=missing-artifact", "FALSE"),
+        # ── 项目边界样本（3-b-2 定案：题集常数化 ~16 条，按**判据形状**覆盖各项目实际形态）──
+        #   ① Cpp_Hub 型: 产物在站上 /tmp, 卡声明 ephemeral ⇒ **新 readiness 类**(不是缺口)
+        ("subject 'ctest-log' | 类型=collect | ephemeral=是 | 归档件 ctest-log.txt | 存在=否"
+         " | 机器层判定=artifact-ephemeral-by-design", "FALSE"),
+        #   ② Cpp_Hub 型: 结果块(大文本, 由模型自报 commit/test_total) —— 仍按 path 判据
+        ("subject 'm4-result-block' | 类型=path | 归档件 agent-output.txt | 存在=是 | 字节=21823", "FALSE"),
+        #   ③ Paper 型: index.db 大二进制 + **0 字节**(空件不满足"非空")
+        ("subject 'index-db' | 类型=path | 归档件 index.db | 存在=是 | 字节=0", "REAL"),
+        #   ④ Paper 型: 中文路径件(编码边界) + 缺失
+        ("subject '模块图' | 类型=path | 归档件 模块图.md | 存在=否", "REAL"),
+        #   ⑤ Auto_Prover 型: 证明日志(长文本) + 存在未知 ⇒ 应弃权
+        ("subject 'lake-build-log' | 类型=path | 归档件 lake-build.log | 存在=未知", "UNSURE"),
     ]
     return items
 
@@ -3977,7 +4029,7 @@ def _parse_verdicts(text: str, n_items: int) -> list:
     return got
 
 
-def agent_audit_judge(audit: dict, max_tokens: int = 400, rounds: int = 3) -> dict:
+def agent_audit_judge(audit: dict, max_tokens: int = 400, rounds: int = 3, save: bool = False) -> dict:
     """A/A 基线（同题集连判两次）+ 顺序对调（第三次把题序整体倒过来）⇒ 三个数:
 
       - **A/A 一致率**: 第 1、2 轮同序 ⇒ 该 judge 的**自一致**(噪声底)
@@ -4014,11 +4066,42 @@ def agent_audit_judge(audit: dict, max_tokens: int = 400, rounds: int = 3) -> di
     used = sum(1 for i in range(n) if r1[i] == "UNSURE") + sum(1 for i in range(n) if r2[i] == "UNSURE")
     rows = [{"idx": i + 1, "fact": items[i][0][:70], "expect": items[i][1],
              "aa_1": r1[i], "aa_2": r2[i], "swap": r3[i], "para": r4[i]} for i in range(n)]
-    return {"station": st, "port": port, "judge_model": ident, "items": rows,
-            "aa_agree": f"{aa}/{n}", "swap_flip": f"{flip}/{n}", "paraphrase_agree": f"{para}/{n}",
-            "rule_agree": f"r1 {agree[0]}/{n} · r2 {agree[1]}/{n} · r3(倒序) {agree[2]}/{n} · r4(改写) {agree[3]}/{n}",
-            "unsure_total": used,
-            "note": "advisory: 本命令只测量 judge 可靠性, 不改门禁"}
+    res = {"station": st, "port": port, "judge_model": ident, "items": rows,
+           "aa_agree": f"{aa}/{n}", "swap_flip": f"{flip}/{n}", "paraphrase_agree": f"{para}/{n}",
+           "rule_agree": f"r1 {agree[0]}/{n} · r2 {agree[1]}/{n} · r3(倒序) {agree[2]}/{n} · r4(改写) {agree[3]}/{n}",
+           "unsure_total": used,
+           "note": "advisory: 本命令只测量 judge 可靠性, 不改门禁"}
+    if save:
+        # 落库**第二层**(3-b-2 定案): **校准报告**入仓 `spec/d6-agent-standard/evidence-chain/audits/`。
+        #   与第一层的分工: 这是一次"里程碑结论"(人可读、可被 ADR 引用、随代码评审走);
+        #   而每次 `audit` 的机器产物**只落项目侧**(红线: 每 run 入仓会污染仓库)。
+        stamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+        d = (Path(__file__).resolve().parent.parent / "spec" / "d6-agent-standard"
+             / "evidence-chain" / "audits")
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            (d / f"AUDIT-JUDGE-{stamp}.json").write_text(
+                json.dumps(dict(res, ts=stamp), ensure_ascii=False, indent=2), encoding="utf-8")
+            md = [f"# 阶段 3-b 校准报告（{stamp}）", "",
+                  "> 由 `python ops/cluster.py agent audit-judge --save` 生成（advisory：只测量 judge 可靠性，不改门禁）。", "",
+                  f"- judge 引擎：`{st}:{port}` · 模型：`{ident or '(未报)'}`（**取真值**，跨家族要求见 ADR-0007）",
+                  f"- 题集：**{n}** 条（构造校准集 + 项目边界样本）",
+                  f"- **A/A 一致 {res['aa_agree']}** · **序翻转 {res['swap_flip']}** · "
+                  f"**措辞扰动一致 {res['paraphrase_agree']}**",
+                  f"- 与判据一致：{res['rule_agree']} · UNSURE(r1+r2) {used}", "",
+                  "| # | 期望 | 第1轮 | 第2轮 | 倒序 | 改写 | 事实 |", "|---|---|---|---|---|---|---|"]
+            for x in rows:
+                md.append(f"| {x['idx']} | {x['expect']} | {x['aa_1']} | {x['aa_2']} | {x['swap']} | "
+                          f"{x['para']} | {x['fact'].replace('|', '\\|')} |")
+            md += ["", "## 判读", "",
+                   "- **A/A** = 确定性（噪声底）· **序翻转** = position bias · **措辞扰动** = 稳健性（temp=0 下 A/A 测不到的那半）",
+                   "- 题集内**故意**放了机器标签与判据相反的条目 ⇒ 可辨 judge 是**复核**还是**复读**",
+                   "- **诚实边界**：题面是结构化元数据（非杂乱材料）⇒ 只证明「能稳定执行写明的判据」；单 judge、单轮 ⇒ 下限证据", ""]
+            (d / f"AUDIT-JUDGE-{stamp}.md").write_text("\n".join(md), encoding="utf-8")
+            res["saved"] = [str(d / f"AUDIT-JUDGE-{stamp}.md"), str(d / f"AUDIT-JUDGE-{stamp}.json")]
+        except OSError as e:
+            print(f"  (校准报告入仓失败: {e.__class__.__name__})")
+    return res
 
 
 def cmd_agent(argv) -> int:
@@ -4031,15 +4114,17 @@ def cmd_agent(argv) -> int:
     (重算 digest + 验 prev 链 + 比冷路径与外部锚; 只读)。门禁第 15 项 `evidence` 自动覆盖。
     `audit`=**可复现性审计**(阶段 3-a, ADR-0007): 逐 subject 判"能否被独立复现、卡在哪",
     输出**机器可判 gap 表**(advisory, **不进 FAIL 集**); 与 verify 分工: verify 管"是否被改",
-    audit 管"是否可重放"。只读, 不触站。
+    audit 管"是否可重放"。只读, 不触站。`--save` 落**项目侧** `<proj>/agent-out/_audits/<ts>.json`
+    (与 runDir 同级、**不碰链**; 红线: 机器产物**不入仓**)。
     `audit-judge`=**阶段 3-b 校准**(advisory): 用**在服务引擎**(宜为**跨家族**模型, 如 qwen3.8-27b-mtp)
-    对 3-a 的条目判两次(A/A 噪声底) + 倒序再判一次(position bias) ⇒ 只**测量** judge 可靠性,
-    不改门禁、不写 run 目录。**先量噪声底再决定要不要把异基座审计做成常跑**。
+    对 3-a 的条目判两次(A/A 噪声底) + 倒序再判一次(position bias) + 判据改写版一次(稳健性) ⇒
+    只**测量** judge 可靠性, 不改门禁、不写 run 目录。`--save` 把**校准报告**入仓
+    `spec/d6-agent-standard/evidence-chain/audits/`(第二层: 只有里程碑结论入仓)。
     """
     act = (argv[0] if argv else "runs").lower()
     if act not in ("runs", "live", "tail", "chain", "verify", "audit", "audit-judge"):
         print("用法: cluster.py agent {runs|live|tail|chain|verify|audit|audit-judge} [--limit N] "
-              "[--station A|B|C] [--json] [chain 可加 --reanchor]")
+              "[--station A|B|C] [--json] [--save] [chain 可加 --reanchor]")
         return 1
     limit, only, as_json = 20, None, ("--json" in argv)
     i = 1
@@ -4087,7 +4172,7 @@ def cmd_agent(argv) -> int:
         return 0
 
     if act == "audit":
-        r = agent_audit(limit=(limit if "--limit" in argv else 0))
+        r = agent_audit(limit=(limit if "--limit" in argv else 0), save=("--save" in argv))
         if as_json:
             print(json.dumps(r, ensure_ascii=False))
             return 0
@@ -4097,11 +4182,15 @@ def cmd_agent(argv) -> int:
             print(f"  · {c}")
         print()
         cols = [(28, "run", 0), (6, "recipe", 0), (6, "声明", 1), (8, "可离线", 1),
-                (8, "collect", 1), (8, "未声明", 1)]
+                (8, "未执行", 1), (6, "临时", 1), (8, "未声明", 1)]
         print("  " + " ".join(_pad(t, w, bool(rg)) for w, t, rg in cols))
         print("  " + "-" * (sum(w for w, _, _ in cols) + len(cols) - 1))
         for x in r["runs"][-10:]:
-            row = [x["label"], x["recipe"], x["declared"], x["offline_ok"], x["collect"], len(x["undeclared"])]
+            # 注意: "未执行"按 readiness 计(与覆盖率的 collect 行**同一口径**), 不按 mode 计 ——
+            #   否则同一份输出里会同时出现"collect 1"(表) 与 "collect 型 0 条"(覆盖率)两种互相矛盾的数
+            #   (本轮实测踩到, 已统一)。
+            row = [x["label"], x["recipe"], x["declared"], x["offline_ok"], x["not_exec"],
+                   x["ephemeral"], len(x["undeclared"])]
             print("  " + " ".join(_pad(v, w, bool(rg)) for v, (w, _, rg) in zip(row, cols)))
         if len(r["runs"]) > 10:
             print(f"  …另有 {len(r['runs']) - 10} 个 run（--limit 或 --json 查看）")
@@ -4113,6 +4202,9 @@ def cmd_agent(argv) -> int:
                 print(f"      · …另有 {len(r['gaps']) - 10} 条")
         else:
             print("\n  ✓ gap 表为空（每条声明都可离线复现, 且无未声明归档件）")
+        if r.get("saved"):
+            # 落库第一层: 机器产物只落**项目侧**; 仓库侧只收"校准报告"(audit-judge --save)
+            print("  已落库(项目侧 _audits/): " + " · ".join(r["saved"]))
         return 0
 
     if act == "audit-judge":
@@ -4124,7 +4216,7 @@ def cmd_agent(argv) -> int:
             except (ValueError, IndexError):
                 print("--max-tokens 需要整数")
                 return 1
-        r = agent_audit_judge(a, max_tokens=mt)
+        r = agent_audit_judge(a, max_tokens=mt, save=("--save" in argv))
         if as_json:
             print(json.dumps(r, ensure_ascii=False))
             return 0 if not r.get("error") else 1
@@ -4141,6 +4233,8 @@ def cmd_agent(argv) -> int:
                   f"{x['para']:<8} {x['fact']}")
         print("\n  判读: A/A=确定性(噪声底) · 序翻转=position bias · 措辞扰动=**稳健性**(A/A 测不到的那半) ·")
         print("        与判据一致=是否真按判据判(对照项故意让机器标签与判据相反 ⇒ 可辨'复核'vs'复读')。")
+        if r.get("saved"):
+            print("  校准报告已入仓(第二层): " + " · ".join(r["saved"]))
         return 0
 
     if act == "verify":

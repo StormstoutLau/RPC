@@ -50,6 +50,10 @@ evidence-manifest:
     - name: workspace-diff
       path: workspace-diff.txt
       digest: sha256
+    - name: station-tmp-log
+      collect: "tail -5 /tmp/rpc-smoke.log"
+      ephemeral: true
+      digest: sha256
 ---
 ## 任务描述
 
