@@ -1650,6 +1650,8 @@ def check_evidence(ctx):
         return "WARN", f"证据链不可用: {r['note']}", []
     issues = r.get("issues") or []
     un = r.get("unchained") or []
+    gaps = r.get("gaps") or []
+    notes = r.get("notes") or []
     details = []
     for x in issues:
         k, loc = x.get("kind"), f"{x.get('proj')}/{x.get('run_id')}"
@@ -1662,6 +1664,8 @@ def check_evidence(ctx):
             details.append(f"[{x['index']}] {loc} 归档目录不在了")
         elif k == "recipe_mismatch":
             details.append(f"[{x['index']}] {loc} recipe 不符 (链={x.get('got')} 代码={x.get('expect')})")
+        elif k in ("verdict_mismatch", "golden_identity"):
+            details.append(f"[{x['index']}] {x.get('detail')}")
         elif k == "anchor_mismatch":
             details.append(f"外部锚与链不符: {', '.join(x.get('diff') or []) or '(未列出)'}")
         elif k == "anchor_unreadable":
@@ -1670,18 +1674,23 @@ def check_evidence(ctx):
             details.append(f"冷路径与链不符 (冷={x.get('cold_n')} 链={x.get('chain_n')})")
         else:
             details.append(str(x))
+    cov = " · ".join(c.split(":")[0] + " " + c.split(":")[1].split("可判")[0].strip()
+                     for c in (r.get("coverage") or []) if ":" in c)
     note = (f"证据链: {r.get('entries', 0)} 条 · 未入链 {len(un)} · "
-            f"锚{'在' if r.get('anchor_present') else '缺'}")
+            f"锚{'在' if r.get('anchor_present') else '缺'}" + (f" · {cov}" if cov else ""))
     if issues:
         return "FAIL", note, details
-    if un or not r.get("anchor_present"):
+    if gaps or not r.get("anchor_present"):
         if not r.get("anchor_present"):
             details.append("外部锚未建立 → `cluster.py agent chain` 生成, 提交并 push 到 origin")
-        if un:
-            details.append(f"{len(un)} 个 run 未入链 → `cluster.py agent chain` 补录 "
-                           f"(首例: {un[0]})")
+        for g in gaps[:6]:
+            details.append(g)
+        if len(gaps) > 6:
+            details.append(f"…另有 {len(gaps) - 6} 项覆盖缺口/不可判 (见 `cluster.py agent verify`)")
         return "WARN", note, details
-    return "PASS", note, []
+    for nt in notes[:3]:
+        details.append(f"(info, 不告警) {nt}")
+    return "PASS", note, details
 
 
 def check_usb4(ctx):

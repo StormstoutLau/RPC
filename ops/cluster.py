@@ -3302,6 +3302,146 @@ def _anchor_check(chain: dict) -> list:
     return [{"kind": "anchor_mismatch", "diff": diff}] if diff else []
 
 
+# ── 批 A 判据 (2026-09-17, ADR-0007 D4 三层严重度) ──
+#   A1 verdict-chain   : judgment-record.txt(.meta) ↔ .agent-run.json 逐项一致
+#   A2 golden-identity : run.json.accept_golden.base/sha256 ↔ 仓库 golden 源
+# 分层纪律 (ADR-0007 D4): 篡改/损坏 ⇒ issues(FAIL) ; 覆盖缺口 ⇒ gaps(WARN) ; 合法演进 ⇒ notes(info)
+#   **判据必须从代码语义推导, 不能凭想象** —— 下面两处映射/容忍均来自实测:
+#
+# ① TASK_RC → run.json `exit_code` 的**允许集**。依据 [agent-cli.ps1:1200-1201]:
+#      `$codeReal = $code; if ($code -eq 9) { $code = 1 }` ⇒ 远端 9(**验收/金标准失败**)
+#      在 run.json 里被映射成 1, **原始 9 只留在 .meta** —— 这正是 ADR-0005 归档它的价值
+#      (`$codeReal` 赋值后全仓无引用 = 事实上的死变量 ⇒ 原始码从 run.json 侧**不可恢复**)。
+#      9 允许 {1,9}: 兼容 claude 备路是否做同一映射的未定情形 —— **宁少报不误报**。
+_VERDICT_RC_MAP = {0: {0}, 6: {6}, 9: {1, 9}, 24: {24}}
+
+
+def _meta_parse(p: Path) -> dict:
+    """解析 `KEY=VALUE` 行 (原文照收件的读取, **不做规范化**)。"""
+    d = {}
+    try:
+        for ln in p.read_text(encoding="utf-8", errors="replace").splitlines():
+            if "=" in ln and not ln.lstrip().startswith("#"):
+                k, v = ln.split("=", 1)
+                d[k.strip()] = v.strip()
+    except OSError:
+        return {}
+    return d
+
+
+def _tri(v):
+    """'1'→True / '0'→False / 其余→None(=不可判, 跳过该字段而非判失败)。"""
+    return True if v == "1" else (False if v == "0" else None)
+
+
+def _verdict_check(run_dir: Path, ts: str, label: str) -> tuple:
+    """A1: `.meta` ↔ run.json 一致性。→ (issues, gaps, judged_bool)
+
+    ⚠ **`ts` 与 `label` 必须分开**: `TASK_ID` 比对的对手是 run 的**裸时间戳**(= 目录名),
+      而消息里要显示 `proj/ts`。二者混用会让 `TASK_ID != label` 恒真 ⇒ **判据静默降级为
+      "全部上一轮残留"**(2026-09-17 实测踩到, 覆盖率假报 0/67)。
+
+    分层依据 (为什么这样切, 而非一律 FAIL):
+      · 两份都是**已归档件** ⇒ 不一致 = 其中之一被改过 ⇒ **FAIL**(verdict_mismatch)
+      · `.meta` 属**上一轮残留**(TASK_ID≠ts, O-22 已知情形) ⇒ 不是篡改 ⇒ **gap**
+        (此时 run.json 侧已被主动归零, 比对必然假阳性 ⇒ 必须先剔除)
+      · 缺 `.meta` = 早于 ADR-0005 ⇒ **gap 且**不计入判据覆盖率, 由调用方聚合为一行
+      · `accept.passed is None`(卡无 accept 判据) / 非 0-1 值 ⇒ **跳过该字段**
+    """
+    mp, jp = run_dir / "judgment-record.txt", run_dir / ".agent-run.json"
+    if not mp.is_file():
+        return [], [f"{label}:not_applicable"], False
+    try:
+        j = json.loads(jp.read_text(encoding="utf-8-sig", errors="replace"))
+    except Exception:
+        return [f"{label}: .agent-run.json 不可解析, 无法比对"], [], False
+    meta = _meta_parse(mp)
+    if not meta:
+        return [], [f"{label}: judgment-record 无可解析键 ⇒ verdict 不可判"], False
+    tid = meta.get("TASK_ID")
+    if tid and tid != ts:
+        return [], [f"{label}: 判据记录属**上一轮残留** (TASK_ID={tid}, O-22) ⇒ 本轮 verdict 不可复核"], False
+    bad, judged = [], 0
+
+    def cmp(label_, mv, jv):
+        nonlocal judged
+        if mv is None or jv is None:
+            return
+        judged += 1
+        if mv != jv:
+            bad.append(f"{label}: {label_} 不一致 (meta={mv} run.json={jv})")
+
+    rc = meta.get("TASK_RC")
+    if rc is not None and rc.lstrip("-").isdigit():
+        rci = int(rc)
+        allowed = _VERDICT_RC_MAP.get(rci, {rci})
+        judged += 1
+        if j.get("exit_code") not in allowed:
+            bad.append(f"{label}: TASK_RC={rci} 但 run.json exit_code={j.get('exit_code')} "
+                       f"(依映射允许 {sorted(allowed)})")
+    cmp("ACCEPT_OK↔accept.passed", _tri(meta.get("ACCEPT_OK")), (j.get("accept") or {}).get("passed"))
+    ag = j.get("accept_golden")
+    if isinstance(ag, dict):
+        cmp("ACCEPT_GOLDEN_OK↔accept_golden.passed", _tri(meta.get("ACCEPT_GOLDEN_OK")), ag.get("passed"))
+    for mk, jk in (("QUEUE_S", "queue_s"), ("RUN_S", "run_s")):
+        mv = meta.get(mk)
+        if mv is not None and mv.lstrip("-").isdigit():
+            cmp(f"{mk}↔{jk}", int(mv), j.get(jk))
+    return bad, [], judged > 0
+
+
+_GOLDEN_INDEX = None
+
+
+def _golden_index() -> dict:
+    """basename → [路径]，**全仓一次**索引。含被 .gitignore 的 `tmp/`(夹具常驻那里)。
+
+    只按 basename 检索 —— 因 run.json **只记 base、不记路径**(与缺口 5「attach 只存 basename」同族)。
+    """
+    global _GOLDEN_INDEX
+    if _GOLDEN_INDEX is None:
+        idx = {}
+        root = Path(__file__).resolve().parent.parent
+        skip = {".git", "node_modules", "__pycache__", ".venv", ".mypy_cache"}
+        for dp, dns, fns in os.walk(root):
+            dns[:] = [d for d in dns if d not in skip]
+            for fn in fns:
+                idx.setdefault(fn, []).append(Path(dp) / fn)
+        _GOLDEN_INDEX = idx
+    return _GOLDEN_INDEX
+
+
+def _golden_identity_check(run_dir: Path, label: str) -> tuple:
+    """A2: 当次注入的 golden ↔ 其**仓库源**。→ (issues, gaps, judged_bool)
+
+    ⚠ **本判据永不 FAIL**: golden 会**合法演进**(改判据脚本是正常开发行为),
+      "哈希不同" 与 "被篡改" 在此**不可区分** ⇒ 一律 info/gap, 需人判 (ADR-0007 D4)。
+    """
+    try:
+        j = json.loads((run_dir / ".agent-run.json").read_text(encoding="utf-8-sig", errors="replace"))
+    except Exception:
+        return [], [], False
+    g = j.get("accept_golden")
+    if not isinstance(g, dict) or not g:
+        return [], [], False                     # 非 golden 卡 ⇒ 本判据不适用(不计覆盖率)
+    base, sha = (g.get("base") or "").strip(), (g.get("sha256") or "").strip()
+    if not base or not sha:
+        return [], [f"{label}: accept_golden 无 base/sha256 (ADR-0005 前) ⇒ golden 身份不可判"], False
+    cands = _golden_index().get(base, [])
+    if not cands:
+        return [], [f"{label}: golden 源 '{base}' 已不在仓库 ⇒ 不可判 (**不判为篡改**)"], True
+    if len(cands) > 20:                          # 同名过多则不逐个哈希(防拖慢门禁), 报不可判
+        return [], [f"{label}: golden 名 '{base}' 全仓有 {len(cands)} 个同名 ⇒ 歧义不可判"], True
+    for c in cands:
+        try:
+            if _sha256_file(c) == sha:
+                return [], [], True              # 命中仓库源 ⇒ 身份一致
+        except OSError:
+            continue
+    return [], [f"{label}: golden '{base}' 在仓库存在但哈希**已变** (当次 {sha[:12]}…) "
+                f"⇒ 合法演进或篡改, **需人判**"], True
+
+
 def agent_chain_append(reanchor: bool = False) -> dict:
     """把**尚未入链**的 run 补进链 (幂等: 重复跑不产生新条目), 并镜像冷路径。
 
@@ -3352,13 +3492,18 @@ def agent_chain_append(reanchor: bool = False) -> dict:
 
 
 def agent_chain_verify() -> dict:
-    """复验: ①逐条重算 digest 比链 ②prev 链闭合 ③冷路径链头一致。
+    """复验: ①逐条重算 digest 比链 ②prev 链闭合 ③冷路径/外部锚一致 ④A1 verdict-chain ⑤A2 golden-identity。
 
-    输出 gap 表 (issues), 不打分 —— 评分归评审环, 这里只报"哪条、哪个文件、差在哪"。
+    输出 **gap 表**(不打分 —— 评分归评审环), 并按 ADR-0007 D4 分三层返回:
+      · `issues` = 篡改/损坏 ⇒ 门禁 FAIL
+      · `gaps`   = 覆盖缺口/不可判 ⇒ 门禁 WARN
+      · `notes`  = 合法演进(如 golden 已变更) ⇒ 仅供参考, **不告警**
     """
     roots, note = _agent_proj_roots()
     chain = _chain_load(AGENT_CHAIN)
     issues, prev = [], "-"
+    v_gaps, v_notes = [], []
+    v_na, v_judged, g_na, g_judged = 0, 0, 0, 0
     for i, e in enumerate(chain["entries"]):
         proj, ts = e.get("proj"), e.get("run_id")
         tag = {"index": i, "proj": proj, "run_id": ts}
@@ -3377,16 +3522,45 @@ def agent_chain_verify() -> dict:
                 issues.append(dict(tag, kind="digest_mismatch",
                                    files_changed=sorted(k for k in rd["files"] if rd["files"][k] != old.get(k)),
                                    expect=(e.get("digest") or "")[:16], got=rd["digest"][:16]))
+            # ── A1/A2 (批 A) ── 只在 run_dir 可达时判 (ts 是裸时间戳, label 仅用于显示)
+            lbl = f"{proj}/{ts}"
+            v_bad, v_gap, v_ok = _verdict_check(run_dir, ts, lbl)
+            for b in v_bad:
+                issues.append(dict(tag, kind="verdict_mismatch", detail=b))
+            if not v_ok and v_gap and v_gap[0].endswith(":not_applicable"):
+                v_na += 1                      # 早于 ADR-0005 的老 run: 只计覆盖率, 不逐个报(防噪声)
+            else:
+                v_gaps += v_gap
+                v_judged += 1 if v_ok else 0
+            g_bad, g_gap, g_ok = _golden_identity_check(run_dir, lbl)
+            for b in g_bad:
+                issues.append(dict(tag, kind="golden_identity", detail=b))
+            if not g_ok and g_gap:
+                if "ADR-0005 前" in g_gap[0]:
+                    g_na += 1                  # 同上: 老 run 只计覆盖率
+                else:
+                    v_gaps += g_gap
+            elif g_ok:
+                g_judged += 1
+                v_notes += g_gap               # 可判但"哈希已变/源已不在" ⇒ notes(info), 不告警
         prev = e.get("digest")
     cold = _chain_load(AGENT_CHAIN_COLD)
     if [x.get("digest") for x in cold["entries"]] != [x.get("digest") for x in chain["entries"]]:
         issues.append({"kind": "cold_mismatch",
                        "cold_n": len(cold["entries"]), "chain_n": len(chain["entries"])})
     issues += _anchor_check(chain)
-    # 未入链 = **覆盖缺口, 不是篡改** ⇒ 单列一类, 供门禁降级为 WARN (见 rpc_check.check_evidence)
+    # 未入链 = **覆盖缺口, 不是篡改** ⇒ gaps(WARN), 见 rpc_check.check_evidence
     seen = {(e.get("proj"), e.get("run_id")) for e in chain["entries"]}
     unchained = sorted(f"{p}/{t}" for t, p, _ in _chain_runs(roots) if (p, t) not in seen)
-    return {"entries": len(chain["entries"]), "issues": issues, "unchained": unchained,
+    n = len(chain["entries"])
+    coverage = [
+        f"A1 verdict-chain: {v_judged}/{n} 可判" + (f" ({v_na} 个早于 ADR-0005 无 judgment-record)" if v_na else ""),
+        f"A2 golden-identity: {g_judged}/{n} 可判" + (f" ({g_na} 个早于 ADR-0005 无 base/sha256)" if g_na else ""),
+    ]
+    gaps = list(v_gaps) + ([f"未入链 {len(unchained)} 个: {', '.join(unchained[:3])}"
+                            + ("…" if len(unchained) > 3 else "")] if unchained else [])
+    return {"entries": n, "issues": issues, "gaps": gaps, "notes": v_notes,
+            "unchained": unchained, "coverage": coverage,
             "anchor": str(AGENT_CHAIN_ANCHOR), "anchor_present": AGENT_CHAIN_ANCHOR.is_file(),
             "head": chain.get("head"), "note": note}
 
@@ -3535,21 +3709,23 @@ def cmd_agent(argv) -> int:
         if as_json:
             print(json.dumps(r, ensure_ascii=False))
             return 0 if not r["issues"] else 1
-        print("=== 证据链复验 (重算 digest + prev 链 + 冷路径) ===")
+        print("=== 证据链复验 (digest + prev 链 + 冷路径 + 外部锚 + A1 verdict + A2 golden) ===")
         if r.get("note"):
             print(f"  ⚠ {r['note']}")
         if r["entries"] == 0:
             print("  (链为空 —— 先跑 `agent chain` 建立基线)")
             return 0
+        for c in (r.get("coverage") or []):
+            print(f"  · {c}")
         if not r["issues"]:
             h = r.get("head") or {}
-            print(f"  PASS · {r['entries']} 条全绿")
+            print(f"  PASS · {r['entries']} 条全绿 (末条 head)")
             print(f"  head={h.get('proj')}/{h.get('run_id')} digest={(h.get('digest') or '')[:16]}")
         else:
             print(f"  FAIL · {len(r['issues'])} 项 (链长 {r['entries']})")
             for x in r["issues"]:
                 k = x.get("kind")
-                loc = f"{x.get('proj')}/{x.get('run_id')}" if x.get("kind") not in ("cold_mismatch",) else "-"
+                loc = f"{x.get('proj')}/{x.get('run_id')}" if x.get("index") is not None else "-"
                 if k == "digest_mismatch":
                     print(f"  ✗ [{x['index']}] {loc} digest_mismatch 变了: {', '.join(x['files_changed']) or '(未知)'}"
                           f"  expect={x['expect']} got={x['got']}")
@@ -3559,24 +3735,28 @@ def cmd_agent(argv) -> int:
                     print(f"  ✗ [{x['index']}] {loc} run_dir_missing (归档目录不在了)")
                 elif k == "recipe_mismatch":
                     print(f"  ✗ [{x['index']}] {loc} recipe_mismatch expect={x['expect']} got={x['got']}")
+                elif k in ("verdict_mismatch", "golden_identity"):
+                    print(f"  ✗ [{x['index']}] {loc} {k}: {x.get('detail')}")
                 elif k == "anchor_mismatch":
                     print(f"  ✗ 外部锚 anchor_mismatch 与链不符: {', '.join(x.get('diff') or []) or '(未列出)'}")
                 elif k == "anchor_unreadable":
                     print("  ✗ 外部锚不可读 (ANCHOR.txt)")
                 else:
                     print(f"  ✗ {k}  cold_n={x.get('cold_n')} chain_n={x.get('chain_n')}")
-        if r.get("unchained"):
-            n = len(r["unchained"])
-            print(f"  ▲ 覆盖缺口: {n} 个 run **尚未入链** (不是篡改, 但此期间改动不可验) "
-                  f"→ 跑 `cluster.py agent chain` 补录")
-            for u in r["unchained"][:5]:
-                print(f"      · {u}")
-            if n > 5:
-                print(f"      · …另有 {n - 5} 个")
+        if r.get("gaps"):
+            print(f"  ▲ 覆盖缺口 / 不可判 {len(r['gaps'])} 项 (**不是篡改**):")
+            for g in r["gaps"][:8]:
+                print(f"      · {g}")
+            if len(r["gaps"]) > 8:
+                print(f"      · …另有 {len(r['gaps']) - 8} 项")
+        if r.get("notes"):
+            print(f"  ℹ 合法演进类 {len(r['notes'])} 项 (**不告警**, 供人判):")
+            for nt in r["notes"][:5]:
+                print(f"      · {nt}")
         if not r.get("anchor_present"):
             print("  ▲ 外部锚未建立 (ANCHOR.txt 缺失) → 跑 `cluster.py agent chain` 生成后提交并 push 到 origin")
-        print("\n  口径: 本命令能判'链内记录与当前归档字节是否一致'。**不能**判 judgement 级真伪"
-              "(判据真的跑过且结果真为 0), 也不防 T3 —— 见 evidence-chain/DESIGN.md §6。")
+        print("\n  口径: 本命令可判'链内记录与归档字节是否一致'(防篡改) + '两份归档件是否自洽'(防转述失真)。"
+              "**不能**判 judgement 级真伪(判据真的跑过且结果真为 0), 也不防 T3 —— 见 evidence-chain/DESIGN.md §6。")
         return 0 if not r["issues"] else 1
 
     if act == "live":
