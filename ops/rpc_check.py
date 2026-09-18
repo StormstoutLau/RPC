@@ -1662,8 +1662,9 @@ def check_evidence(ctx):
             details.append(f"[{x['index']}] {loc} prev 链不闭合 (此条起不可信)")
         elif k == "run_dir_missing":
             details.append(f"[{x['index']}] {loc} 归档目录不在了")
-        elif k == "recipe_mismatch":
-            details.append(f"[{x['index']}] {loc} recipe 不符 (链={x.get('got')} 代码={x.get('expect')})")
+        elif k == "recipe_unknown":
+            details.append(f"[{x['index']}] {loc} recipe **不可验** (链={x.get('got')} 本工具知 "
+                           f"{x.get('expect')}) —— 工具比链旧, 不得当作通过")
         elif k in ("verdict_mismatch", "golden_identity"):
             details.append(f"[{x['index']}] {x.get('detail')}")
         elif k == "anchor_mismatch":

@@ -3085,7 +3085,15 @@ AGENT_CHAIN_COLD = Path(__file__).resolve().parent.parent / "archive" / "evidenc
 #   ⚠ 强度诚实: 需 `git push` 到 origin 才成立; 持推送凭据者可改写 ⇒ 仅"公开仓库/多副本见证"级,
 #   不是密码学不可否认 (见 evidence-chain/DESIGN.md §3)。
 AGENT_CHAIN_ANCHOR = AGENT_CHAIN_COLD.parent / "ANCHOR.txt"
+# recipe 版本 —— **按条目分派**，不是全局单值 (2026-09-18, ADR-0007 阶段 1 架构半):
+#   每条链目自带 `recipe`; 复验器**按该条目的 recipe** 重算 digest ⇒ 新增 recipe(如把
+#   `workspace-diff` 等新证据纳入) **不会**让历史条目误判断链 ⇒ **无需重建链(重新基线化)**。
+#   这是缺口 4 的前置: 原设计"加件即 bump 全局 recipe"会强制作废全部历史并重新基线化
+#   (等于把当时字节洗白, 丢掉此前篡改的可检测性) —— 故先做按条目分派。
+#   新增 recipe 的纪律: ① 入 `AGENT_DIGEST_RECIPES` 才可被复验; ② 未知 recipe = **不可验**
+#   ⇒ 报 recipe_unknown 且 FAIL (不得静默跳过 —— 那会让"工具比链旧"变成静默通过)。
 AGENT_DIGEST_RECIPE = "v1"
+AGENT_DIGEST_RECIPES = ("v1",)
 # 入 digest 的回收件 (与 agent-cli.ps1 collect 段 Move 后的名字一致):
 #   · .agent-run.json    = 主控写的终态契约 (含 accept_golden.sha256 ⇒ "当次注入的是哪份 golden")
 #   · judgment-record.txt= 远端 .meta (builder 自述) —— **入链不等于可信**, 只保证"回收后未被改"
@@ -3208,20 +3216,22 @@ def _sha256_file(p: Path) -> str:
     return h.hexdigest()
 
 
-def _run_digest(run_dir: Path) -> dict:
-    """按 recipe v1 算 run_digest —— 纯本地重算, 不触站。
+def _run_digest(run_dir: Path, recipe: str = AGENT_DIGEST_RECIPE):
+    """按 `recipe` 算 run_digest —— 纯本地重算, 不触站。未知 recipe 返回 None (**不可验**)。
 
-    recipe v1: sha256( "v1\\n" + 逐件 "name:hex|-\\n" )
+    recipe v1: sha256( "v1\\n" + 逐件 "name:hex|-\\n" )   ← 固定 6 件(AGENT_EVIDENCE_FILES)
     缺件记 `-`: 老 run / collect 部分失败属正常, **不等于篡改** (故不能拿"缺件"当告警)。
-    改 recipe 必须同步 bump AGENT_DIGEST_RECIPE, 否则历史条目全部误判断链。
+    新 recipe 应在此分派, 并登记进 AGENT_DIGEST_RECIPES; **条目各按自己的 recipe 复验**。
     """
+    if recipe not in AGENT_DIGEST_RECIPES:
+        return None
     lines, files = [], {}
     for name in AGENT_EVIDENCE_FILES:
         p = run_dir / name
         hx = _sha256_file(p) if p.is_file() else "-"
         files[name] = hx
         lines.append(f"{name}:{hx}")
-    blob = (AGENT_DIGEST_RECIPE + "\n" + "\n".join(lines) + "\n").encode("utf-8")
+    blob = (recipe + "\n" + "\n".join(lines) + "\n").encode("utf-8")
     return {"digest": hashlib.sha256(blob).hexdigest(), "files": files}
 
 
@@ -3509,14 +3519,16 @@ def agent_chain_verify() -> dict:
         tag = {"index": i, "proj": proj, "run_id": ts}
         if e.get("prev") != prev:
             issues.append(dict(tag, kind="chain_break", expect=prev, got=e.get("prev")))
-        if e.get("recipe") != AGENT_DIGEST_RECIPE:
-            issues.append(dict(tag, kind="recipe_mismatch", expect=AGENT_DIGEST_RECIPE, got=e.get("recipe")))
+        rec = e.get("recipe")
         root = roots.get(proj)
         run_dir = (root / "agent-out" / ts) if root and ts else None
-        if not run_dir or not run_dir.is_dir():
+        # recipe 按条目分派: 未知 recipe = **不可验** ⇒ FAIL (不得静默跳过)
+        if rec not in AGENT_DIGEST_RECIPES:
+            issues.append(dict(tag, kind="recipe_unknown", got=rec, expect=list(AGENT_DIGEST_RECIPES)))
+        elif not run_dir or not run_dir.is_dir():
             issues.append(dict(tag, kind="run_dir_missing"))
         else:
-            rd = _run_digest(run_dir)
+            rd = _run_digest(run_dir, rec)
             if rd["digest"] != e.get("digest"):
                 old = e.get("files") or {}
                 issues.append(dict(tag, kind="digest_mismatch",
@@ -3733,8 +3745,9 @@ def cmd_agent(argv) -> int:
                     print(f"  ✗ [{x['index']}] {loc} chain_break  expect={str(x['expect'])[:16]} got={str(x['got'])[:16]}")
                 elif k == "run_dir_missing":
                     print(f"  ✗ [{x['index']}] {loc} run_dir_missing (归档目录不在了)")
-                elif k == "recipe_mismatch":
-                    print(f"  ✗ [{x['index']}] {loc} recipe_mismatch expect={x['expect']} got={x['got']}")
+                elif k == "recipe_unknown":
+                    print(f"  ✗ [{x['index']}] {loc} recipe 不可验 (链={x['got']} 本工具知 {x['expect']})"
+                          f" —— 工具比链旧, **不得当作通过**")
                 elif k in ("verdict_mismatch", "golden_identity"):
                     print(f"  ✗ [{x['index']}] {loc} {k}: {x.get('detail')}")
                 elif k == "anchor_mismatch":
