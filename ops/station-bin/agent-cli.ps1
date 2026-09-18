@@ -618,7 +618,13 @@ function Get-FrontMatter {
     $bodyLines = @()
     $lines = [System.IO.File]::ReadAllLines($Path, [System.Text.UTF8Encoding]::new($false))
     foreach ($l in $lines) {
-        if ($l.Trim() -eq '---') { if (-not $inFreq) { $inFreq = $true; continue } else { $inFreq = $false; $bodyRead = $true; continue } }
+        # 缺口10 修复 (2026-09-18): 围栏判据加 `-not $bodyRead` 守卫。
+        #   原判据"遇 `---` 即翻转"⇒ 正文里的 markdown 分隔线把 inFreq 翻回 true, 其后**正文行**
+        #   若形如 `key: value` 且命中已知键, 会被 `$h[$k] = $v` **静默覆盖**已解析的 front-matter
+        #   (实测能被覆盖的含 `readonly`/`task`/`model` —— 卡正文可静默改写卡契约)。
+        #   `$bodyRead` 一旦置真即表示 front-matter 已闭合, 此后任何 `---` 都只是正文。
+        #   回归用例: _fm_golden_test.ps1 的 fence 四例。
+        if (-not $bodyRead -and $l.Trim() -eq '---') { if (-not $inFreq) { $inFreq = $true; continue } else { $inFreq = $false; $bodyRead = $true; continue } }
         # O-12 M1: nested source/cmd under accept-golden MUST be matched BEFORE the top-level regex
         # (`\s*` allows leading whitespace, so indented `  source:` would hit the generic key branch
         # and be dropped by the whitelist gate - P2-1/IMPLEMENTATION §3.1).

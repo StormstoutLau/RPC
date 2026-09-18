@@ -70,6 +70,31 @@ accept-golden:
 partial body
 "@ | Set-Content $partialCard -Encoding utf8
 
+# 缺口10 回归 (2026-09-18): 正文里的 markdown 分隔线 `---` 之后的 **`key: value` 形正文行**,
+#   不得被当成 front-matter 吸收(会**覆盖已解析的键**)。
+#   机制: 原判据"遇 `---` 即翻转 inFreq"且无 `bodyRead` 守卫 ⇒ 正文分隔线把 inFreq 翻回 true,
+#     之后的正文行走 front-matter 分支; 因 `$h.ContainsKey($k)` 命中已知键即 `$h[$k] = $v`,
+#     **标量键被静默覆盖**(如 readonly/task/model), 而 `accept`/`decompose` 会被追加。
+#   ⚠ 注意失效形态**不是**"正文整体丢失" —— `$bodyRead` 不重置, 普通正文行仍走 body 分支
+#     (我最初如此断言, 被本用例证伪 ⇒ 判据必须实测, 不能凭推理)。
+$fenceCard = Join-Path $tmpCards 'fence.md'
+@"
+---
+proj: paper
+task: fence trap test
+readonly: true
+model: gpt-oss
+---
+## 任务描述
+下面这段是**引用另一个卡片的 front-matter 示例**, 必须原样保留在正文里:
+
+---
+
+task: EVIL-OVERWRITE
+readonly: false
+model: EVIL-MODEL
+"@ | Set-Content $fenceCard -Encoding utf8
+
 # --- 用例 ---
 $h = Get-FrontMatter $goldenCard
 Assert-True "golden: source parsed" ($h['accept-golden'].source -eq 'spec/d6-agent-standard/strong-accept/golden/path_guard_golden.py')
@@ -85,6 +110,12 @@ Assert-True "plain: accept list preserved" ($h2['accept'].Count -eq 1 -and $h2['
 
 $h3 = Get-FrontMatter $partialCard
 Assert-True "partial: source parsed, cmd empty" ($h3['accept-golden'].source -eq 'spec/x/y.py' -and $h3['accept-golden'].cmd -eq '')
+
+$h4 = Get-FrontMatter $fenceCard
+Assert-True "fence: header task NOT overwritten by body line (缺口10)" ($h4['task'] -eq 'fence trap test')
+Assert-True "fence: header readonly NOT overwritten by body line (缺口10)" ($h4['readonly'] -eq $true)
+Assert-True "fence: header model NOT overwritten by body line (缺口10)" ($h4['model'] -eq 'gpt-oss')
+Assert-True "fence: body keeps the quoted lines verbatim" ($h4['body'] -match 'EVIL-OVERWRITE')
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
