@@ -761,6 +761,68 @@ function Get-Sha256Lines([string[]]$lines) {
     return (Get-Sha256Text $blob)
 }
 
+function Get-FrameworkSubjects($accept, [bool]$goldenActive) {
+    # ADR-0007 路B (2026-09-18): **框架固定件基线** —— 每次派发都由本文件归档、与卡无关的件。
+    # 为什么需要它(实测): 84 个 run 里只有 13 个带 evidence_manifest, 且**全部来自夹具卡**
+    #   ⇒ 71 个(84%)真实工作 run 是 recipe v1 = **零声明** ⇒ 可重放性判据对真实语料整段不可判。
+    #   而"每张卡都声明全部证据件"确实能修, 但会让 12 件框架件在每张卡里重复 —— 实测夹具卡
+    #   `smoke-dispatch.md` 13 条声明里有 12 条是框架件, 只有 `station-tmp-log` 是卡特有。
+    # ⇒ 把框架件提到**产出方**声明一次; 卡只声明**卡特有件**(站上临时采集物等)。
+    # 单一真值(要紧, 别误读): 清单在**产出方**(此处), 复验侧 `cluster.py agent_audit` 的 undeclared
+    #   判据仍**动态枚举 runDir**、只与 run.json 记录的声明比对 ⇒ **审计侧不新增硬编码清单** ——
+    #   cluster.py 那条"不维护第二份框架件清单"的纪律**不破**: 清单全局只此一份, 且由产出方持有。
+    # 反例警戒(实测, 否则基线自己变成噪声源): 基线只能列**该次派发必产出**的件 ——
+    #   `accept-output/accept-golden-output` 在无 accept/golden 的 run 上实测**不存在**
+    #   (run `202609181751581972` = 无 front-matter 卡, 该两件 0/1 存在) ⇒ 若无条件列入,
+    #   每个这类 run 都会假报 `missing-artifact`, 把缺口判据变成天天红的东西。
+    $list = @(
+        @{ name = 'agent-output';    path = 'agent-output.txt' }
+        @{ name = 'judgment-record'; path = 'judgment-record.txt' }
+        @{ name = 'prompt';          path = 'prompt.txt' }
+        @{ name = 'accept-cmds';     path = 'accept-cmds.txt' }
+        @{ name = 'golden-cmd';      path = 'golden-cmd.txt' }
+        @{ name = 'progress-trace';  path = 'progress-trace.txt' }
+        @{ name = 'session-meta';    path = 'session-meta.txt' }
+        @{ name = 'attach-manifest'; path = 'attach-manifest.txt' }
+        @{ name = 'workspace-diff';  path = 'workspace-diff.txt' }
+        @{ name = 'card';            path = 'card.md' }
+    )
+    $hasAccept = $false
+    foreach ($a in @($accept)) { if ("$a".Trim()) { $hasAccept = $true } }
+    if ($hasAccept) { $list += @{ name = 'accept-output'; path = 'accept-output.txt' } }
+    if ($goldenActive) { $list += @{ name = 'accept-golden-output'; path = 'accept-golden-output.txt' } }
+    return $list
+}
+
+function Merge-EvidenceSubjects($cardSubjects, $accept, [bool]$goldenActive) {
+    # 合并: **基线在前、卡声明在后**, 同 path(collect 型按同 name)**以先到者为准**。
+    #   去重的理由: 夹具卡里还留着历史遗留的框架件声明(逐卡手写时代的产物), 不去重就会双份
+    #   ⇒ 链上同一件出现两次、audit 的 covered 集合语义含糊。去重后**改卡与否都不影响结论**。
+    #   归一: 每项补齐 name/path/collect/digest/ephemeral 五键(与 run.json 发射形状一致),
+    #   免得下游按 subject 取键时遇到缺键(PS 哈希表缺键取值为 $null, 会静默传播)。
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+    $out = New-Object System.Collections.ArrayList
+    foreach ($s in @(Get-FrameworkSubjects $accept $goldenActive) + @($cardSubjects)) {
+        if ($null -eq $s) { continue }
+        $p = ([string]$s['path']).Trim()
+        $n = ([string]$s['name']).Trim()
+        if (-not $n) { continue }
+        $key = if ($p) { "path:$p" } else { "name:$n" }
+        if (-not $seen.Add($key)) { continue }
+        $d = ([string]$s['digest']).Trim()
+        if (-not $d) { $d = 'sha256' }
+        $out.Add([ordered]@{ name = $n; path = $p; collect = ([string]$s['collect']).Trim()
+                             digest = $d; ephemeral = [bool]$s['ephemeral'] }) | Out-Null
+    }
+    # 返回**扁平**数组。⚠ 别在这里用 `Write-Output -NoEnumerate`(首版就这么写的, 实测踩到):
+    #   函数输出集合**本身**就会把结果包成数组 ⇒ 再加 `-NoEnumerate` 得到的是
+    #   "1 元素数组、其唯一元素才是真数组" ⇒ 调用方 `.Count` **恒为 1**; 更阴的是
+    #   `$_.path` 在数组上走**成员枚举**, 于是 `Where-Object { $_.path -eq 'x' }` 会对整个
+    #   内层数组判真 ⇒ 断言**假 PASS**(与"恒真判据"同族: 判了, 但判的不是你以为的东西)。
+    #   单元素退化问题由调用方 `@(...)` 兜底, 不在被调方解决。
+    return $out.ToArray()
+}
+
 function Get-NumOr([string]$s, [double]$def) {
     # ADR-0007 缺口 8: 站上遥测文件的**容错取数** —— 只在形如数字时才转, 否则取默认值。
     #   为什么不用 `[int]$x`: 字段缺失/被截断时会**抛异常**, 而遥测不该影响任务结论(只该显式降级)。
@@ -1536,17 +1598,21 @@ exit `$RC
         accept = [ordered]@{ cmd = $accept; passed = $acceptPassed }
         collect = if ($collectOk) { 'ok' } else { 'failed' }
     }
-    # ADR-0007 阶段 1: evidence-manifest **原文照收**落 run.json。**仅当卡声明了非空 subjects
-    #   才落此键** —— 与 accept_golden 同例, 保持老 run.json 形状不变(向后兼容)。复验侧据此
-    #   走 recipe v2(按 run 声明件集), 故该键是"per-run 件集"的唯一真值来源。
+    # ADR-0007 阶段 1 + 路B(2026-09-18): evidence-manifest 落 run.json。
+    #   阶段1 时是"卡声明什么就照收什么"; 路B 改为**框架基线合并** ——
+    #   框架固定件由 `Get-FrameworkSubjects`(产出方)声明一次, 卡只声明卡特有件。
+    #   ⇒ **卡不写 manifest 也能得到 v2**(逐件被链钉住), 这正是把 71 个 v1 真实 run 拉进
+    #     可重放性判定面的手段; 写了 manifest 的卡与基线**去重合并**(见 Merge-EvidenceSubjects)。
+    #   ⚠ 后果(刻意接受): 新 run **一律带此键** ⇒ 一律走 recipe v2。老 run.json 形状不受影响
+    #     (历史条目自带 recipe, 按条目分派 ⇒ 无需重建链, 见 cluster.py 的 recipe 分派注释)。
+    #   仍保留"非空才落"的守卫: 若某天基线被清空, 宁可退回 v1 也不要落一个空 subjects
+    #     (空 subjects + recipe v2 = `_run_digest` 返回 None ⇒ verify 报 manifest_missing FAIL)。
     $evm = $fm['evidence-manifest']
-    if ($evm -and @($evm['subjects']).Count -gt 0) {
-        $run['evidence_manifest'] = [ordered]@{
-            version  = $evm['version']
-            subjects = @($evm['subjects'] | ForEach-Object {
-                [ordered]@{ name = $_.name; path = $_.path; collect = $_.collect; digest = $_.digest
-                            ephemeral = [bool]$_.ephemeral } })
-        }
+    $mergedSubjects = @(Merge-EvidenceSubjects @($evm['subjects']) $accept $goldenActive)
+    if ($mergedSubjects.Count -gt 0) {
+        $mergedVer = "$($evm['version'])".Trim()
+        if (-not $mergedVer) { $mergedVer = '1' }   # 卡未写 version ⇒ 取 1(基线 = 框架件, 与阶段1 同代)
+        $run['evidence_manifest'] = [ordered]@{ version = $mergedVer; subjects = $mergedSubjects }
     }
     # O-12 M4: accept_golden contract field (only when golden active; optional key, backward compatible)
     if ($goldenActive) {

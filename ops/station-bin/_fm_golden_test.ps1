@@ -23,6 +23,15 @@ Write-Host "DEBUG fn found=$([bool]$fn)"
 if (-not $fn) { throw 'Get-FrontMatter not found in agent-cli.ps1' }
 Invoke-Expression $fn.Extent.Text   # 定义函数到当前会话
 
+# --- ADR-0007 路B: 一并提取框架基线两函数 ---
+# 它们是**纯函数**(只吃 $accept/$goldenActive/卡 subjects, 不碰站、不碰文件系统)
+# ⇒ 可离线单测; 这正是"派发路径改动"能被验证而不用每次都真派发的关键。
+foreach ($nm in @('Get-FrameworkSubjects', 'Merge-EvidenceSubjects')) {
+    $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
+    if (-not $f) { throw "$nm not found in agent-cli.ps1" }
+    Invoke-Expression $f.Extent.Text
+}
+
 $pass = 0; $fail = 0
 function Assert-True($name, $cond) {
     if ($cond) { $script:pass++; Write-Host "PASS  $name" }
@@ -162,6 +171,44 @@ Assert-True "evm: ephemeral true on subject[2]" ($ev['subjects'][2]['ephemeral']
 Assert-True "evm: ephemeral default false on subject[0]/[1]" ($ev['subjects'][0]['ephemeral'] -eq $false -and $ev['subjects'][1]['ephemeral'] -eq $false)
 # 3-b-2: manifest 块内注释行被忽略(不影响其后的 subject 解析)
 Assert-True "evm: subject after in-block comment parsed" ($ev['subjects'][3]['name'] -eq 'after-comment' -and $ev['subjects'][3]['path'] -eq 'after-comment.txt')
+
+# --- ADR-0007 路B: 框架固定件基线 + 合并 (纯函数, 无需真派发即可验证) ---
+$b0 = @(Get-FrameworkSubjects @() $false)
+$n0 = @($b0 | ForEach-Object { $_.name })
+Assert-True "baseline: 无 accept 无 golden => 10 件" ($b0.Count -eq 10)
+Assert-True "baseline: 含 judgment-record/prompt/workspace-diff/card" (
+    ($n0 -contains 'judgment-record') -and ($n0 -contains 'prompt') -and
+    ($n0 -contains 'workspace-diff') -and ($n0 -contains 'card'))
+# 这条是**负向自证**: 实测无 accept 的 run 上该两件不存在 ⇒ 基线若无条件列入, 每个这类 run
+#   都会假报 missing-artifact(把缺口判据变成噪声) ⇒ 必须**不**列入。
+Assert-True "baseline: 无 accept => 不含 accept-output(否则每 run 假报缺件)" (-not ($n0 -contains 'accept-output'))
+
+$b1 = @(Get-FrameworkSubjects @('echo ok') $true)
+$n1 = @($b1 | ForEach-Object { $_.name })
+Assert-True "baseline: 有 accept+golden => 12 件" ($b1.Count -eq 12)
+Assert-True "baseline: 有 accept+golden => 含 accept-output/accept-golden-output" (
+    ($n1 -contains 'accept-output') -and ($n1 -contains 'accept-golden-output'))
+
+# 合并: 卡里历史遗留的框架件声明必须与基线**去重**(否则同一件在链上出现两次)
+$cardSubs = @(
+    @{ name = 'prompt'; path = 'prompt.txt'; digest = 'sha256'; collect = ''; ephemeral = $false }
+    @{ name = 'station-tmp-log'; path = ''; collect = 'tail -5 /tmp/x.log'; digest = 'sha256'; ephemeral = $true }
+)
+$mg = @(Merge-EvidenceSubjects $cardSubs @() $false)
+# 10(基线) + 2(卡声明) - 1(其中 prompt 与基线同 path, 去重) = 11
+Assert-True "merge: 基线10 + 卡声明2 - 重复1 = 11" ($mg.Count -eq 11)
+Assert-True "merge: 卡声明与基线同 path 只出现一次" ((@($mg | Where-Object { $_.path -eq 'prompt.txt' })).Count -eq 1)
+$tmp = @($mg | Where-Object { $_.name -eq 'station-tmp-log' })
+Assert-True "merge: 卡特有 subject 保留(collect/ephemeral 未丢)" (
+    $tmp.Count -eq 1 -and $tmp[0].collect -eq 'tail -5 /tmp/x.log' -and $tmp[0].ephemeral -eq $true)
+Assert-True "merge: 五键齐备(免得下游取键得 null 静默传播)" (
+    (@($mg | Where-Object { -not ($_.Contains('name') -and $_.Contains('path') -and
+                                $_.Contains('collect') -and $_.Contains('digest') -and
+                                $_.Contains('ephemeral')) })).Count -eq 0)
+
+# 路B 的核心目的: **无 manifest 的卡**(= 71 个真实 run 的来源)也能拿到非空声明 ⇒ 不再是 recipe v1
+$m0 = @(Merge-EvidenceSubjects @() @() $false)
+Assert-True "merge: 空卡仍得 10 件(=> 不再退化为 recipe v1)" ($m0.Count -eq 10)
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
