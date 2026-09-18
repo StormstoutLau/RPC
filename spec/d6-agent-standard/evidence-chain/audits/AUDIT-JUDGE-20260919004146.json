@@ -1,0 +1,166 @@
+{
+  "station": "C",
+  "port": 18080,
+  "judge_model": "Qwen3.8-27B-MTP-Q8_0.gguf",
+  "items": [
+    {
+      "idx": 1,
+      "fact": "[真实语料] paper/202609181118164876: subject 'workspace-diff' 声明了 collect ",
+      "expect": "REAL",
+      "aa_1": "REAL",
+      "aa_2": "REAL",
+      "swap": "REAL",
+      "para": "REAL"
+    },
+    {
+      "idx": 2,
+      "fact": "[真实语料] paper/202609181119254134: subject 'workspace-diff' 声明了 collect ",
+      "expect": "REAL",
+      "aa_1": "REAL",
+      "aa_2": "REAL",
+      "swap": "REAL",
+      "para": "REAL"
+    },
+    {
+      "idx": 3,
+      "fact": "subject 'prompt' | 类型=path | 归档件 prompt.txt | 存在=是 | 字节=1389 | 机器层判定=o",
+      "expect": "FALSE",
+      "aa_1": "FALSE",
+      "aa_2": "FALSE",
+      "swap": "FALSE",
+      "para": "FALSE"
+    },
+    {
+      "idx": 4,
+      "fact": "subject 'workspace-diff' | 类型=collect | 约定名件 workspace-diff.txt | 存在=是",
+      "expect": "REAL",
+      "aa_1": "REAL",
+      "aa_2": "REAL",
+      "swap": "REAL",
+      "para": "REAL"
+    },
+    {
+      "idx": 5,
+      "fact": "subject 'judgment-record' | 类型=path | 归档件 judgment-record.txt | 存在=否 |",
+      "expect": "REAL",
+      "aa_1": "REAL",
+      "aa_2": "REAL",
+      "swap": "REAL",
+      "para": "REAL"
+    },
+    {
+      "idx": 6,
+      "fact": "subject 'attach-manifest' | 类型=collect | 约定名件 attach-manifest.txt | 存在",
+      "expect": "REAL",
+      "aa_1": "REAL",
+      "aa_2": "REAL",
+      "swap": "REAL",
+      "para": "REAL"
+    },
+    {
+      "idx": 7,
+      "fact": "subject 'mystery' | 类型=— | 既无 path 也无 collect | 机器层判定=no-path-no-colle",
+      "expect": "REAL",
+      "aa_1": "REAL",
+      "aa_2": "REAL",
+      "swap": "REAL",
+      "para": "REAL"
+    },
+    {
+      "idx": 8,
+      "fact": "subject 'session-meta' | 类型=path | 归档件 session-meta.txt | 存在=未知 | 机器层判",
+      "expect": "UNSURE",
+      "aa_1": "UNSURE",
+      "aa_2": "UNSURE",
+      "swap": "UNSURE",
+      "para": "UNSURE"
+    },
+    {
+      "idx": 9,
+      "fact": "subject 'agent-output' | 类型=path | 归档件 agent-output.txt | 存在=是 | 字节=51",
+      "expect": "FALSE",
+      "aa_1": "FALSE",
+      "aa_2": "FALSE",
+      "swap": "FALSE",
+      "para": "FALSE"
+    },
+    {
+      "idx": 10,
+      "fact": "subject 'ledger-extra' | 类型=path | 归档件 ledger-extra.txt | 存在=是 | 字节=0 ",
+      "expect": "REAL",
+      "aa_1": "REAL",
+      "aa_2": "REAL",
+      "swap": "REAL",
+      "para": "REAL"
+    },
+    {
+      "idx": 11,
+      "fact": "subject 'diff-full' | 类型=path | 归档件 diff-full.txt | 存在=是 | 字节=1024 | 机",
+      "expect": "FALSE",
+      "aa_1": "FALSE",
+      "aa_2": "FALSE",
+      "swap": "FALSE",
+      "para": "FALSE"
+    },
+    {
+      "idx": 12,
+      "fact": "subject 'ctest-log' | 类型=collect | ephemeral=是 | 归档件 ctest-log.txt | 存",
+      "expect": "FALSE",
+      "aa_1": "FALSE",
+      "aa_2": "FALSE",
+      "swap": "FALSE",
+      "para": "FALSE"
+    },
+    {
+      "idx": 13,
+      "fact": "subject 'm4-result-block' | 类型=path | 归档件 agent-output.txt | 存在=是 | 字节",
+      "expect": "FALSE",
+      "aa_1": "FALSE",
+      "aa_2": "FALSE",
+      "swap": "FALSE",
+      "para": "FALSE"
+    },
+    {
+      "idx": 14,
+      "fact": "subject 'index-db' | 类型=path | 归档件 index.db | 存在=是 | 字节=0",
+      "expect": "REAL",
+      "aa_1": "REAL",
+      "aa_2": "REAL",
+      "swap": "REAL",
+      "para": "REAL"
+    },
+    {
+      "idx": 15,
+      "fact": "subject '模块图' | 类型=path | 归档件 模块图.md | 存在=否",
+      "expect": "REAL",
+      "aa_1": "REAL",
+      "aa_2": "REAL",
+      "swap": "REAL",
+      "para": "REAL"
+    },
+    {
+      "idx": 16,
+      "fact": "subject 'lake-build-log' | 类型=path | 归档件 lake-build.log | 存在=未知",
+      "expect": "UNSURE",
+      "aa_1": "UNSURE",
+      "aa_2": "UNSURE",
+      "swap": "UNSURE",
+      "para": "UNSURE"
+    }
+  ],
+  "aa_agree": "16/16",
+  "swap_flip": "0/16",
+  "paraphrase_agree": "16/16",
+  "rule_agree": "r1 16/16 · r2 16/16 · r3(倒序) 16/16 · r4(改写) 16/16",
+  "unsure_total": 4,
+  "n_real": 2,
+  "calib": {
+    "rule_sha256": "36d2d55837fcae853edcde7ace67e608eb6960a577e0934da844c9af97572473",
+    "rule_b_sha256": "2592049ed4140ce93ae2e092c3ecb3cb3fb7b92f8250fd3cd13a4c45084a3730",
+    "items_sha256": "dae7755f6a04a7b44ea6aefea3df60fe4cb5edce040b375f2525906a30e143da",
+    "items_n": 14,
+    "calib_sha256": "2f1781f6ee49499ce385fc1cea2819484a69538809034ecc3e245ab4512c4366"
+  },
+  "note": "advisory: 本命令只测量 judge 可靠性, 不改门禁",
+  "ts": "20260919004146"
+}

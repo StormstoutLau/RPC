@@ -1646,7 +1646,10 @@ exit `$RC
             if (Test-Path $promptTxt) { Move-Item $promptTxt (Join-Path $runDir 'prompt.txt') -Force | Out-Null }
             if ($accCmdTxt -and (Test-Path $accCmdTxt)) { Move-Item $accCmdTxt (Join-Path $runDir 'accept-cmds.txt') -Force | Out-Null }
             if ($goldCmdTxt -and (Test-Path $goldCmdTxt)) { Move-Item $goldCmdTxt (Join-Path $runDir 'golden-cmd.txt') -Force | Out-Null }
-            # ADR-0007 缺口 4: readonly 卡的"未越界"载体(缺件时不动 —— 非 readonly 卡本就没有)
+            # ADR-0007 缺口 4: readonly 卡的"未越界"载体 —— console 侧**有则收**(缺件时不动)。
+            # ⚠ 原注释写"非 readonly 卡本就没有", **与实测不符**(2026-09-18 复核): 以缺口 4 落地界
+            #   `202609181119254134` 划开, 界之后 **13/13** 个 run 全带该件(含 10 个非 readonly,
+            #   零例外) ⇒ 站上是**无条件产出**的。不要用它反推 readonly(判 readonly 看 run.json)。
             $wdSrc = Join-Path $evDir '.workspace-diff.txt'
             if (Test-Path $wdSrc) { Move-Item $wdSrc (Join-Path $runDir 'workspace-diff.txt') -Force | Out-Null }
             # ADR-0007 缺口 5: 附件清单原件(逐文件 `<sha>  <relpath>`) —— **下钻**用(是"哪份附件里的哪个
