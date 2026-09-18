@@ -124,7 +124,12 @@ function Invoke-RemoteScript {
     )
     if (-not (Test-RemoteReach $HostName)) {
         # ssh reach failure -> retry once (inv 7 gate-cache: network-only retry per DESIGN §4.5/F7)
-        Write-Output '[retry] remote reach failed, retry once'
+        # ⚠ 归零纪律 (2026-09-18 实测事故): 本函数**只有 `$code` 能进管道** —— 任何 Write-Output /
+        #   未被 `Out-Null` 吸收的 cmdlet 输出都会**混进返回值**, 使调用方拿到数组。实测: 环境层的
+        #   `Remove-Item` 包装器在"回收站失败"时向管道吐 `$null` ⇒ 远端 rc 变成 `[null,0]` ⇒
+        #   run.json `exit_code` 变数组 + `status` 误判 failed + 复验器 TypeError 崩掉(整条链判据消失)。
+        #   故本函数内**一律 Write-Host**(通知) + 对可产出输出的 cmdlet 加 `| Out-Null`。
+        Write-Host '[retry] remote reach failed, retry once'
         Start-Sleep -Seconds 2
     }
     if (-not (Test-RemoteReach $HostName)) { throw "NETFAIL: remote unreachable: $HostName (ensure station online)" }
@@ -166,7 +171,9 @@ function Invoke-RemoteScript {
         }
     }
     foreach ($ln in $sshOut) { Write-Host $ln }   # stream remote stdout to console, NOT into return value
-    Remove-Item $localPath -ErrorAction SilentlyContinue
+    # `| Out-Null` 是**承重**的(2026-09-18 实测): 本函数**只有 `$code` 能进管道** —— 环境层的
+    #   `Remove-Item` 包装器在"回收站失败"时会向管道吐 `$null`, 使返回值变数组、污染契约字段。
+    Remove-Item $localPath -ErrorAction SilentlyContinue | Out-Null
     return $code
 }
 
@@ -189,7 +196,7 @@ function Invoke-StationReady {
     $local = 'D:\RPC\ops\station-bin\_station_ready.sh'
     $tmp = Join-Path $Script:TMP_ROOT '_station_ready.sh'
     New-Item -ItemType Directory -Path $Script:TMP_ROOT -Force | Out-Null
-    Copy-Item $local $tmp -Force
+    Copy-Item $local $tmp -Force | Out-Null   # ⚠ 归零纪律: 本函数返回哈希表, 非返回值输出必须吸收(见 Invoke-RemoteScript 注)
     scp -q -o ConnectTimeout=10 $tmp "${HostName}:/tmp/_station_ready.sh"
     if ($LASTEXITCODE -ne 0) { throw "NETFAIL: scp _station_ready.sh failed" }
     $arg = if ($Alias) { " '$Alias'" } else { '' }
@@ -230,7 +237,7 @@ function Invoke-SlotGate {
     if (-not (Test-RemoteReach $HostName)) { return $na }
     $tmp = Join-Path $Script:TMP_ROOT '_slot_gate.sh'
     New-Item -ItemType Directory -Path $Script:TMP_ROOT -Force | Out-Null
-    Copy-Item 'D:\RPC\ops\station-bin\_slot_gate.sh' $tmp -Force
+    Copy-Item 'D:\RPC\ops\station-bin\_slot_gate.sh' $tmp -Force | Out-Null   # ⚠ 归零纪律(见 Invoke-RemoteScript 注)
     scp -q -o ConnectTimeout=10 $tmp "${HostName}:/tmp/_slot_gate.sh"
     if ($LASTEXITCODE -ne 0) { return $na }
     try {
@@ -694,6 +701,16 @@ function Get-Sha256Text([string]$text) {
     return (($bytes | ForEach-Object { $_.ToString('x2') }) -join '')
 }
 
+function Get-Sha256Lines([string[]]$lines) {
+    # ADR-0007 缺口 5: 附件摘要 —— 对已(按相对路径)排序的 `relpath:sha256` 行做整体哈希。
+    #   目录附件用**树摘要**; 单文件附件只有一行 ⇒ 摘要即该文件哈希的再哈希(仍可判断"是否被换")。
+    #   **单一实现点在本文件**(console)。复验侧刻意**不重算** —— 重算会引入第二实现点, 而原始件
+    #   (`attach-manifest.txt`)本身未被链钉住 ⇒ 重算也判不出篡改, 故不做(见 Invoke-Task 内注释)。
+    $blob = ''
+    if ($lines -and @($lines).Count -gt 0) { $blob = (@($lines) -join "`n") + "`n" }
+    return (Get-Sha256Text $blob)
+}
+
 function Invoke-Scrubber {
     # D6 audit P1 (2026-09-03): regex-only sanitizer for sensitivity=sanitized (IMPL T2 scope).
     # Patterns: api keys (sk-...), emails, windows absolute paths. Runs on console BEFORE
@@ -878,12 +895,20 @@ function Invoke-Task {
     # 3b) attachments (O-01): scp each attachment -> workspace .attach/ (only-if-local isolates console reads;
     #      .attach/ excluded from sync so it stays one-way in; agent reads by relative path in prompt refs)
     $attachNames = @()
+    # ADR-0007 缺口 5: 附件身份 —— 除名字外还记**源路径**与**种类**(file/dir), 供 run.json 落
+    #   每件摘要(kind 在该 .ps1 内是已知的; 从远端清单反推种类会多一个推断点)。
+    $attachSrc = @{}; $attachKind = @{}
     if ($attach.Count -gt 0) {
         # remote .attach/ once; files/dirs scp per attachment below
         $body = @"
 set -eu
 W="$Script:WORKSPACE_ROOT/$proj"
-mkdir -p "`$W/.attach"
+# ADR-0007 缺口 5 实测发现(2026-09-18): `.attach/` **从不回收** —— 站上实测残留着 09-05/09-12 五次派发的
+#   附件(fileA.md/fileB.txt/inbox.txt/_o11_src.txt/_o26_src.txt + docs/emptydir/), 与 IMPLEMENTATION
+#   "`.attach/` 生命周期=单次 task(结束即回收)" 的声明**正相反**。后果有二: ①**污染本次附件摘要**
+#   (上一轮的旧文件混进本次 digest ⇒ 摘要看着正常但内容不是本次注入的); ②agent 可能读到残留件。
+#   ⇒ 改为**派发前清空**(等价于所声明的语义, 且不必依赖"collect 回收"那一步)。
+rm -rf "`$W/.attach" && mkdir -p "`$W/.attach"
 "@
         Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-attach-mkdir.sh"
         foreach ($a in $attach) {
@@ -905,6 +930,10 @@ mkdir -p "`$W/.attach/$name"
             }
             if ($LASTEXITCODE -ne 0) { Write-Host "NETFAIL: attach scp failed: $a"; return 5 }
             $attachNames += $name
+            $attachKind[$name] = if ($isDir) { 'dir' } else { 'file' }
+            $srcAbs = $a
+            try { $srcAbs = (Resolve-Path -LiteralPath $a -EA Stop).Path } catch { }
+            $attachSrc[$name] = $srcAbs
             Write-Host "ATTACH_OK: $a -> workspace $proj/.attach/$name"
         }
     }
@@ -1072,6 +1101,14 @@ sample_progress() {
 }
 sample_progress &
 SPID=`$!
+# ADR-0007 缺口 5: 附件"注入字节"的**原始证据** —— 站上逐文件 `sha256sum`(`<hex>  <relpath>`)。
+#   必须在 agent 运行**之前**采样(故在 marker 之前): 记的是"注入的字节", 而非 agent 可能改写后的。
+#   与主控侧对**源文件**的独立哈希互为**跨信任域交叉验证**(e2e 据此自证"记录属实")。
+: > "`$W/out/.attach-manifest.txt"
+if [ -d "`$W/.attach" ]; then
+  ( cd "`$W/.attach" && find . -type f -printf '%P\n' 2>/dev/null | LC_ALL=C sort | xargs -r sha256sum ) > "`$W/out/.attach-manifest.txt" 2>/dev/null || true
+fi
+echo "ATTACH_MANIFEST_LINES=`$(wc -l < "`$W/out/.attach-manifest.txt" 2>/dev/null || echo 0)"
 # ADR-0007 缺口 4: agent 运行**窗口起点**标记 —— 必须在 agent 运行前创建, 否则窗口错位、
 #   diff 恒空。后续用 `find -newer` 列出本窗口内被改动的文件(与 git 无关: 实测工作区非
 #   git 仓库, git diff 会静默返回空 = 假的"未越界")。
@@ -1183,7 +1220,9 @@ exit `$RC
         #   文本通道是本文件既有手法, 且全程不经过本机原生工具的参数解析。
         # ADR-0007 缺口 4: 增 `.workspace-diff.txt`(readonly 卡的"未越界"载体) 入合批通道。
         #   远端已由 `find -newer .run-marker` 产出(见 body 内的采集段); 缺件时下面 else 分支跳过。
-        $evNames = @('.meta', '.prompt.txt', '.progress', '.accept-cmds.txt', '.golden-cmd.txt', '.workspace-diff.txt')
+        # ADR-0007 缺口 5: 增 `.attach-manifest.txt`(附件**注入字节**的逐文件哈希; 无附件时为**空件**,
+        #   仍会发 marker ⇒ 靠下面的**存在性**判定归档, 不靠真值判定)。
+        $evNames = @('.meta', '.prompt.txt', '.progress', '.accept-cmds.txt', '.golden-cmd.txt', '.workspace-diff.txt', '.attach-manifest.txt')
         $evCmd = (($evNames | ForEach-Object { "if [ -f $W/out/$_ ]; then echo FILE:$_ ; base64 -w0 $W/out/$_ ; echo ; fi" }) -join ' ; ')
         $evRaw = @(& ssh -o ConnectTimeout=10 $hostName $evCmd 2>$null)
         $evBuf = @{}; $evCur = ''
@@ -1247,6 +1286,49 @@ exit `$RC
     $codeReal = $code
     if ($code -eq 9) { $code = 1 }  # map accept-gate failure to generic failed for shell return
 
+    # ADR-0007 缺口 5 (2026-09-18): **附件身份** —— 把"当次注入的字节"钉进 run.json。
+    #   真值来源 = 站上产的 `out/.attach-manifest.txt`(逐文件 `<sha>  <relpath>`; 在 agent 运行**前**采样,
+    #   故记的是"注入的字节"而非 agent 可能改写后的)。摘要由**本侧**计算(单一实现点 Get-Sha256Lines);
+    #   复验侧刻意**不重算** —— 重算会引入第二实现点, 而原始件 `attach-manifest.txt` 本身**未被链钉住**
+    #   ⇒ 重算也判不出篡改。落进 run.json 后**自动被链钉住**(`.agent-run.json` 在件集内) ⇒
+    #   事后想换附件摘要必撞 `digest_mismatch`; 这正是"补哈希"的收益所在。
+    #   ⚠ **形状变更**: **有附件的新 run** ⇒ `attach` = 对象数组; 老 run 与 claude 备路仍为**名字数组**。
+    $attachEntries = @()
+    if ($attachNames.Count -gt 0) {
+        $amPath = Join-Path $evDir '.attach-manifest.txt'
+        $amMissing = -not (Test-Path $amPath)
+        if ($amMissing) {
+            Write-Host "ATTACH_MANIFEST_ABSENT: 站上无附件清单(回收缺口) ⇒ 本次附件摘要**不可判**, 记空串(不静默当作通过)"
+        }
+        $amLines = @()
+        if (-not $amMissing) { $amLines = @(Get-Content $amPath -Encoding UTF8 | Where-Object { "$_".Trim() }) }
+        $grp = @{}
+        foreach ($ln in $amLines) {
+            # GNU sha256sum 输出 `<hex>  <relpath>`(文件名含换行/反斜杠时行首带 `\`, 见其 --help)
+            if ("$ln" -match '^\\?([0-9a-fA-F]{64})\s+\*?(.+)$') {
+                $h = $matches[1].ToLower(); $rel = "$($matches[2])".Trim()
+                $top = ($rel -split '/')[0]                 # 首段路径 = 附件名(`docs/inner.txt` -> `docs`)
+                if (-not $grp.ContainsKey($top)) { $grp[$top] = New-Object System.Collections.ArrayList }
+                [void]$grp[$top].Add("$rel`:$h")
+            }
+        }
+        $orphan = @($grp.Keys | Where-Object { $attachNames -notcontains $_ })
+        if ($orphan.Count -gt 0) { Write-Host "ATTACH_MANIFEST_UNEXPECTED: 站上 .attach/ 含未发送条目: $($orphan -join ', ')" }
+        foreach ($n in $attachNames) {
+            # 组缺失**不报错**: 空目录附件本就没有行 ⇒ files=0 且摘要 = 空行集摘要(确定性)。
+            $ls = @(); if ($grp.ContainsKey($n)) { $ls = @($grp[$n]) }
+            $sha = ''
+            if (-not $amMissing) { $sha = Get-Sha256Lines $ls }
+            $attachEntries += [ordered]@{
+                name   = $n
+                src    = "$($attachSrc[$n])"
+                kind   = if ($attachKind[$n]) { $attachKind[$n] } else { 'file' }
+                files  = $ls.Count
+                sha256 = $sha
+            }
+        }
+    }
+
     # 8) ledger line FIRST (G13) -- fixed to sandbox-writable d:\RPC zone (O-04: projRoot not
     #     sandbox-safe). Run ledger before any agent-out write so a collect crash (startup-
     #     injected sandbox whitelist w/o D:\Paper\agent-out) never loses the run record.
@@ -1257,7 +1339,7 @@ exit `$RC
     #   故与 run.json 的取值保持一致。**注**: claude 本地备路**不在本修范围** —— 其 .meta 本就写
     #   QUEUE_S=0(本地执行无远端队列), 台账/run.json 同为 0, 自洽。
     $line = "$ts,$proj,$id,$sens,$code,$queue_s,$run_s"
-    try { Add-Content -Path $ledger -Value $line -Encoding utf8; $ledgerOk = $true }
+    try { Add-Content -Path $ledger -Value $line -Encoding utf8 | Out-Null; $ledgerOk = $true }
     catch { $ledgerOk = $false; Write-Host "LEDGER_WARN: $($_.Exception.Message)" }
 
     # 7) .agent-run.json under <proj>/agent-out/<ts>/ (DESIGN §6.2)
@@ -1295,7 +1377,9 @@ exit `$RC
         timestamp_start = ''
         timestamp_end = ''
         prompt_sha256 = "sha256:$promptSha"
-        attach = $attachNames
+        # ADR-0007 缺口 5: 有附件时为**对象数组** {name,src,kind,files,sha256}(摘要源于站上清单);
+        #   无附件时 `[]`(与老形状一致)。消费方需按"对象数组 / 名字数组"两种形状处理(见 ARCHITECTURE §6)。
+        attach = $attachEntries
         profile = [ordered]@{ name=$prof.profile; context=$prof.context; max_output=$prof.max_output;
                               thinking=$prof.thinking; template=$prof.template; reasoning_format=$prof.reasoning_format;
                               flavor=$prof.flavor; source=$prof.source }
@@ -1329,24 +1413,33 @@ exit `$RC
     }
     if ($collectOk) {
         try {
+            # ⚠ **归零纪律**(2026-09-18 实测事故, 见 ADR-0007 缺口 5): 本函数**只有 `$code` 该进管道**,
+            #   任何未被 `Out-Null` 吸收的 cmdlet 输出都会**混进返回值**(调用方 `$code = Invoke-Task …`)。
+            #   实测: 环境层 `Remove-Item` 包装器在"回收站失败"时往管道吐了 `$null` ⇒ 契约字段畸形。
+            #   ⇒ 本段所有 `Move-Item`/`Copy-Item`/`Remove-Item` 一律 `| Out-Null`(它们本就无返回值语义)。
             $run | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $runDir '.agent-run.json') -Encoding utf8
             # move pulled output into runDir
-            if (Test-Path $outTxt) { Move-Item $outTxt (Join-Path $runDir 'agent-output.txt') -Force }
-            if (Test-Path $accTxt) { Move-Item $accTxt (Join-Path $runDir 'accept-output.txt') -Force }
-            if (Test-Path $accGoldTxt) { Move-Item $accGoldTxt (Join-Path $runDir 'accept-golden-output.txt') -Force }   # O-12 M4 P2-2
+            if (Test-Path $outTxt) { Move-Item $outTxt (Join-Path $runDir 'agent-output.txt') -Force | Out-Null }
+            if (Test-Path $accTxt) { Move-Item $accTxt (Join-Path $runDir 'accept-output.txt') -Force | Out-Null }
+            if (Test-Path $accGoldTxt) { Move-Item $accGoldTxt (Join-Path $runDir 'accept-golden-output.txt') -Force | Out-Null }   # O-12 M4 P2-2
             # ADR-0005 D1/D2/D4a (2026-09-16) 证据回收闭环: 判据记录 / 节拍原文 / 输入全文 / 命令清单
             #   一并归 runDir(**原文照收**, 不改写不规范); Move 即同时完成 TEMP 清理(D4a)。
-            if (Test-Path $metaTxt) { Move-Item $metaTxt (Join-Path $runDir 'judgment-record.txt') -Force }
-            if (Test-Path $progressTxt) { Move-Item $progressTxt (Join-Path $runDir 'progress-trace.txt') -Force }
-            if (Test-Path $promptTxt) { Move-Item $promptTxt (Join-Path $runDir 'prompt.txt') -Force }
-            if ($accCmdTxt -and (Test-Path $accCmdTxt)) { Move-Item $accCmdTxt (Join-Path $runDir 'accept-cmds.txt') -Force }
-            if ($goldCmdTxt -and (Test-Path $goldCmdTxt)) { Move-Item $goldCmdTxt (Join-Path $runDir 'golden-cmd.txt') -Force }
+            if (Test-Path $metaTxt) { Move-Item $metaTxt (Join-Path $runDir 'judgment-record.txt') -Force | Out-Null }
+            if (Test-Path $progressTxt) { Move-Item $progressTxt (Join-Path $runDir 'progress-trace.txt') -Force | Out-Null }
+            if (Test-Path $promptTxt) { Move-Item $promptTxt (Join-Path $runDir 'prompt.txt') -Force | Out-Null }
+            if ($accCmdTxt -and (Test-Path $accCmdTxt)) { Move-Item $accCmdTxt (Join-Path $runDir 'accept-cmds.txt') -Force | Out-Null }
+            if ($goldCmdTxt -and (Test-Path $goldCmdTxt)) { Move-Item $goldCmdTxt (Join-Path $runDir 'golden-cmd.txt') -Force | Out-Null }
             # ADR-0007 缺口 4: readonly 卡的"未越界"载体(缺件时不动 —— 非 readonly 卡本就没有)
             $wdSrc = Join-Path $evDir '.workspace-diff.txt'
-            if (Test-Path $wdSrc) { Move-Item $wdSrc (Join-Path $runDir 'workspace-diff.txt') -Force }
+            if (Test-Path $wdSrc) { Move-Item $wdSrc (Join-Path $runDir 'workspace-diff.txt') -Force | Out-Null }
+            # ADR-0007 缺口 5: 附件清单原件(逐文件 `<sha>  <relpath>`) —— **下钻**用(是"哪份附件里的哪个
+            #   文件"的原始证据)。⚠ 本件**未被链钉住**(被钉住的是 run.json 里的摘要), 故"本件 ↔ 摘要"
+            #   是否自洽**只能在人/工具侧核对**, 该上限已记入 ADR-0007/ARCHITECTURE。
+            $amSrc = Join-Path $evDir '.attach-manifest.txt'
+            if (Test-Path $amSrc) { Move-Item $amSrc (Join-Path $runDir 'attach-manifest.txt') -Force | Out-Null }
             # D4a: 合批暂存目录(5 个小件已 Move 走)一并清掉, 不留 TEMP 残留
-            if (Test-Path $evDir) { Remove-Item $evDir -Recurse -Force -ErrorAction SilentlyContinue }
-            Remove-Item (Join-Path $projRoot 'agent-out\.agent-run.json') -ErrorAction SilentlyContinue
+            if (Test-Path $evDir) { Remove-Item $evDir -Recurse -Force -ErrorAction SilentlyContinue | Out-Null }
+            Remove-Item (Join-Path $projRoot 'agent-out\.agent-run.json') -ErrorAction SilentlyContinue | Out-Null
         }
         catch {
             $collectOk = $false
@@ -1746,18 +1839,19 @@ function Invoke-Task-Claude {
     if ($collectOk) {
         try {
             $run | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $runDir '.agent-run.json') -Encoding utf8
-            if (Test-Path $outTxt) { Copy-Item $outTxt (Join-Path $runDir 'agent-output.txt') -Force }
-            if (Test-Path $accTxt) { Copy-Item $accTxt (Join-Path $runDir 'accept-output.txt') -Force }
-            if ($goldenActive -and (Test-Path $accGoldTxt)) { Copy-Item $accGoldTxt (Join-Path $runDir 'accept-golden-output.txt') -Force }
+            # ⚠ 归零纪律(见 Invoke-Task 内注): 本函数返回 `$finalCode`, 故以下副作用一律 `| Out-Null`。
+            if (Test-Path $outTxt) { Copy-Item $outTxt (Join-Path $runDir 'agent-output.txt') -Force | Out-Null }
+            if (Test-Path $accTxt) { Copy-Item $accTxt (Join-Path $runDir 'accept-output.txt') -Force | Out-Null }
+            if ($goldenActive -and (Test-Path $accGoldTxt)) { Copy-Item $accGoldTxt (Join-Path $runDir 'accept-golden-output.txt') -Force | Out-Null }
             # ADR-0005 D1 (2026-09-16) 证据回收闭环(本地备路): prompt 全文 + stderr 归 runDir ——
             #   本路的 prompt/stderr 是主控本地 scratch 里的件, 此前同样不归档(出 bug 时无从复核)。
-            if (Test-Path $promptIn) { Copy-Item $promptIn (Join-Path $runDir 'prompt.txt') -Force }
-            if (Test-Path $errTxt) { Copy-Item $errTxt (Join-Path $runDir 'stderr.txt') -Force }
+            if (Test-Path $promptIn) { Copy-Item $promptIn (Join-Path $runDir 'prompt.txt') -Force | Out-Null }
+            if (Test-Path $errTxt) { Copy-Item $errTxt (Join-Path $runDir 'stderr.txt') -Force | Out-Null }
         } catch { $collectOk = $false; Write-Host "COLLECT_FAIL: $($_.Exception.Message)" }
     }
     # ADR-0005 D4a/D4c (2026-09-16): **归档成功才清理** scratch(本路原为 Copy-Item, scratch 此前永不
     #   清理); 失败则保留并打印可寻路径 —— 不得"既没归档又被删"。
-    if ($collectOk) { try { Remove-Item $scratch -Recurse -Force -ErrorAction SilentlyContinue } catch {} }
+    if ($collectOk) { try { Remove-Item $scratch -Recurse -Force -ErrorAction SilentlyContinue | Out-Null } catch {} }
     else { Write-Host "EVIDENCE_LEFT_IN_SCRATCH=$scratch" }
 
     Write-Host "TASK_DONE dir=$runDir exit=$finalCode cli=claude prompt_sha256=sha256:$promptSha"
@@ -1874,7 +1968,8 @@ function Invoke-RemoteCapture {
     if ($LASTEXITCODE -ne 0) { throw "NETFAIL: scp failed: $LocalName" }
     try { $sshOut = ssh -o ConnectTimeout=10 $HostName "bash /tmp/${LocalName}" 2>&1 }
     catch { $sshOut = @("$($_.Exception.Message)"); $LASTEXITCODE = 255 }
-    Remove-Item $localPath -ErrorAction SilentlyContinue
+    # 同上(归零纪律): 本函数返回**文本**, 故收尾的 Remove-Item 必须 `| Out-Null`。
+    Remove-Item $localPath -ErrorAction SilentlyContinue | Out-Null
     return (($sshOut | Out-String).Trim())
 }
 

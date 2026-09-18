@@ -3418,9 +3418,16 @@ def _verdict_check(run_dir: Path, ts: str, label: str) -> tuple:
     if rc is not None and rc.lstrip("-").isdigit():
         rci = int(rc)
         allowed = _VERDICT_RC_MAP.get(rci, {rci})
+        ec = j.get("exit_code")
         judged += 1
-        if j.get("exit_code") not in allowed:
-            bad.append(f"{label}: TASK_RC={rci} 但 run.json exit_code={j.get('exit_code')} "
+        # 形状守卫 (2026-09-18 实测): 环境层污染曾使 `exit_code` 变成**数组** `[null, 0]` ⇒ 原写法
+        #   `ec not in allowed`(集合成员判定) 抛 `TypeError: unhashable type: 'list'` ⇒ **复验器崩掉**
+        #   ⇒ 整条链的全部判据同时消失(比"单条报错"糟得多)。故先判形状、畸形报 issue, 绝不抛。
+        if not isinstance(ec, (int, str, type(None))):
+            bad.append(f"{label}: run.json exit_code **形状畸形** ({type(ec).__name__}: {ec!r}) "
+                       f"⇒ 该条不可判(不静默跳过)")
+        elif ec not in allowed:
+            bad.append(f"{label}: TASK_RC={rci} 但 run.json exit_code={ec} "
                        f"(依映射允许 {sorted(allowed)})")
     cmp("ACCEPT_OK↔accept.passed", _tri(meta.get("ACCEPT_OK")), (j.get("accept") or {}).get("passed"))
     ag = j.get("accept_golden")
