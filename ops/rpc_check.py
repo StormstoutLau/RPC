@@ -116,6 +116,44 @@ foreach ($f in $files) {
 }
 """
 
+# ── P2 (ADR-0007 路A, 2026-09-18): 用 **PATH 第一个 `python`** 再编译一遍 .py ──────────
+# 为什么单列: 上面那次 py_compile 用**当前解释器**, 而 rpc.ps1 挑的是"候选里**第一个能
+#   `import paramiko` 的**" ⇒ 本机落到 **Python312**。后果实测(2026-09-18):
+#   `cluster.py` 一行 f-string 表达式段含反斜杠(PEP 701 才允许) ⇒ 在 PATH 第一个
+#   `python`(3.11.16) 下**整个模块不可解析**, 而 syntax 报 **0 失败**、evidence 因
+#   `import cluster` 被 except 兜住只报 WARN ⇒ **判据静默消失、整仓仍 PASS**。
+# 判据: 取 PATH 第一个 `python`(即人工敲 `python ops/cluster.py` 时真正会用的那个);
+#   只要它与当前解释器**不同**, 就用它**一个子进程**批量编译(逐文件 spawn 会 43×0.2s)。
+#   失败 ⇒ FAIL, 且明细**点名用了哪个解释器** —— 否则读者无从判断"该修语法还是该改声明"。
+# 注: 这不是"多解释器矩阵"(不承诺支持任意旧版本), 只盯**人工实际会用的那个**。
+PY_SNIPPET = r"""
+import sys, os, py_compile, tempfile
+td = tempfile.mkdtemp()
+n = 0
+for raw in sys.stdin.read().splitlines():
+    f = raw.strip()
+    if not f:
+        continue
+    n += 1
+    try:
+        py_compile.compile(f, cfile=os.path.join(td, "c%d" % n), doraise=True)
+    except Exception as e:
+        msg = str(e).strip().splitlines()
+        print("FAIL\t%s\t%s" % (f, (msg[-1] if msg else type(e).__name__)[:160]))
+print("SUMMARY\t%d" % n)
+"""
+
+
+def _py_version(exe: str) -> str:
+    """取解释器版本 'X.Y.Z'；取不到返回 ''（**不抛** —— 这只是辅助信息，不该炸掉整个断言）。"""
+    try:
+        p = subprocess.run([exe, "-c", "import sys;print('%d.%d.%d' % sys.version_info[:3])"],
+                           capture_output=True, cwd=ROOT, timeout=30)
+        return (p.stdout or b"").decode("utf-8", "replace").strip() if p.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
 SH_LINT = ("n=0; while IFS= read -r f; do [ -z \"$f\" ] && continue; n=$((n+1)); "
            "if ! out=$(bash -n \"$f\" 2>&1); then printf 'FAIL\\t%s\\t%s\\n' \"$f\" \"$out\"; fi; "
            "done; printf 'COUNT\\t%s\\n' \"$n\"")
@@ -280,6 +318,41 @@ def check_syntax(ctx):
                 bad += 1
                 detail.append(f"{rel}  {type(e).__name__}: {e}")
     counts[".py"] = (len(py_files), bad)
+
+    # ── P2: 再用 **PATH 第一个 `python`** 编译一遍（见 PY_SNIPPET 处说明）─────────────
+    # 目的只有一个: 让"人工敲 `python ops/cluster.py` 会不会炸"成为**门禁判据** ——
+    #   上面那次编译用的是门禁自己的解释器(rpc.ps1 挑的第一个带 paramiko 的), 两者可能不同版本。
+    _alt = shutil.which("python")
+    _cur_ver = "%d.%d.%d" % sys.version_info[:3]
+    if not _alt:
+        detail.append("(py-alt) PATH 上无 `python` ⇒ 【人工敲的那个解释器能否解析】该维度未验证")
+    elif os.path.abspath(_alt) == os.path.abspath(sys.executable):
+        detail.append(f"(py-alt) PATH 第一个 python 就是当前解释器({_cur_ver}) ⇒ 无需重复编译")
+    else:
+        _alt_ver = _py_version(_alt)
+        if not _alt_ver:
+            detail.append(f"(py-alt) PATH 第一个 python({_alt}) 取不到版本 ⇒ 该维度未验证")
+        else:
+            _abs2rel = {str(p): rel for rel, p in py_files}
+            _out = _run_with_stdin([_alt, "-c", PY_SNIPPET], [str(p) for _, p in py_files])
+            _fails, _seen = [], 0
+            for _ln in _out.splitlines():
+                if _ln.startswith("SUMMARY\t"):
+                    _, _n = _ln.split("\t", 1)
+                    _seen = int(_n.strip() or 0)
+                elif _ln.startswith("FAIL\t"):
+                    _, _f, _msg = _ln.split("\t", 2)
+                    _fails.append(f"(py{_alt_ver}) {_abs2rel.get(_f, _f)}  {_msg}")
+            bad_alt = len(_fails)
+            detail += _fails
+            if _seen != len(py_files):
+                # 与 .sh 分支同一条纪律: 读到数 != 喂入数 ⇒ 结果不可信, 拒绝给 PASS
+                bad_alt = len(py_files)
+                detail.append(f"(py{_alt_ver}) 覆盖不全: 实际编译 {_seen} / 应有 {len(py_files)} 个"
+                              f" (读到数 != 喂入数 ⇒ 结果不可信)")
+            counts[f".py@{_alt_ver}"] = (len(py_files), bad_alt)
+            detail.append(f"(py-alt) PATH 第一个 python = {_alt_ver}"
+                          f"（≠ 门禁解释器 {_cur_ver}）⇒ 已按它复检 {_seen} 个 .py, 失败 {bad_alt}")
 
     # .ps1 —— 单次 PowerShell 调用处理全部文件 (避免逐文件起进程)
     ps_files = by_ext.get(".ps1", [])
@@ -1679,9 +1752,43 @@ def check_evidence(ctx):
                      for c in (r.get("coverage") or []) if ":" in c)
     note = (f"证据链: {r.get('entries', 0)} 条 · 未入链 {len(un)} · "
             f"锚{'在' if r.get('anchor_present') else '缺'}" + (f" · {cov}" if cov else ""))
+    # ── 增量审计（ADR-0007 路A，2026-09-18）: 只报**新增**可重放性缺口 ─────────────
+    # 与上面 verify 的分工（**严格按 D4 三层，不许混**）:
+    #   · verify 的 issues = 篡改/损坏 ⇒ **FAIL**
+    #   · verify 的 gaps / 未入链 / 缺锚 = **覆盖缺口** ⇒ **WARN**
+    #   · 本段 = **可重放性**缺口，同属"**没验到**"⇒ **只 WARN，不进 FAIL 集**
+    #     （D4 原文: 属"没验到"不是"验出问题"; 报 FAIL 会让判据**因噪声被整体忽略**）
+    # 增量水印（K1/K2）: 用**归一 key** 与基线比对 ⇒ 存量 52 条不刷屏、新增必被抓。
+    #   基线由**显式命令** `cluster.py agent audit --accept` 推进 —— **门禁只读、不自己写**
+    #   （本文件对仓库全程只读，唯一写动作是 check_syntax 的 tempfile; 门禁挂 pre-commit,
+    #    自己写就会把工作区弄脏）。副作用刻意接受: "接受新缺口"是人的显式动作, 不静默抹平。
+    try:
+        ra = cluster.agent_audit(limit=0)
+    except Exception as e:
+        # ⚠ 这里**刻意 FAIL 而非 WARN**: `import cluster` 失败是**环境**问题(缺 paramiko),
+        #   而 `agent_audit` 抛异常是**本仓自己的 bug** —— 2026-09-18 的 Py3.11 语法事故正是
+        #   被上面的 `except Exception` 静默降级成 WARN ⇒ **判据消失而门禁照绿**。两者必须分开。
+        return "FAIL", f"可重放性审计异常: {type(e).__name__}: {e}", details
+    _base = cluster.agent_audit_baseline_load()
+    _bkeys = set(_base.get("keys") or [])
+    _cur = set(ra.get("gap_keys") or [])
+    _pending = sorted(_cur - _bkeys)
+    _gtext = {it["key"]: it["text"] for it in (ra.get("gap_items") or [])}
+    note += (f" · 可重放 gap {len(_cur)} 条(存量 {len(_cur & _bkeys)}"
+             + (f", **新增 {len(_pending)}**" if _pending else "") + ")")
+    if _pending:
+        details.append(
+            f"**可重放性审计: 新增 {len(_pending)} 条** gap"
+            f"（存量 {len(_cur & _bkeys)} 条已接受、不再重复报；逐条如下）"
+            f" ⇒ 确认可接受后跑 `python ops/cluster.py agent audit --accept` 推进水印")
+        for _k in _pending[:8]:
+            details.append(f"    · {_gtext.get(_k, _k)}")
+        if len(_pending) > 8:
+            details.append(f"    · …另有 {len(_pending) - 8} 条（`cluster.py agent audit` 看全表）")
+
     if issues:
         return "FAIL", note, details
-    if gaps or not r.get("anchor_present"):
+    if gaps or _pending or not r.get("anchor_present"):
         if not r.get("anchor_present"):
             details.append("外部锚未建立 → `cluster.py agent chain` 生成, 提交并 push 到 origin")
         for g in gaps[:6]:
@@ -2056,7 +2163,11 @@ CHECKS = [
     {"id": "evidence", "title": "agent 证据链", "fn": check_evidence, "quick": True,
      "fix": "digest/链/锚不符 = 归档证据或链被改动 ⇒ FAIL —— 用 `cluster.py agent verify` 定位到条与件, "
             "再追查改动来源(别急着 `--reanchor`, 那是把信号抹平); 有 run 未入链只是**覆盖缺口** ⇒ WARN, "
-            "跑 `cluster.py agent chain` 补录(钩子已自动入链, 出现未入链说明钩子没跑或被 --no-verify 绕过)"},
+            "跑 `cluster.py agent chain` 补录(钩子已自动入链, 出现未入链说明钩子没跑或被 --no-verify 绕过); "
+            "「可重放性审计: 新增 N 条」= **增量**可重放性缺口(同属覆盖缺口 ⇒ WARN, 刻意不进 FAIL 集) "
+            "⇒ 先看逐条明细, **确认可接受**后跑 `cluster.py agent audit --accept` 推进水印(存量即不再重复报); "
+            "若明细里是「已归档但未被任何 subject 覆盖」= 新证据件没进产出方基线 ⇒ 应改 "
+            "`ops/station-bin/agent-cli.ps1` 的 `Get-FrameworkSubjects`(清单唯一真值在那里), 而不是接受它"},
     {"id": "usb4", "title": "USB4 三角环链路", "fn": check_usb4, "quick": False,
      "fix": "地址/路由不符 => 对照 inventory/net.yaml 与归档 §6.3/§6.6; "
             "链路不通 => 先查 BIOS USB4 安全等级与是否冷启动(归档 §6.5)"},

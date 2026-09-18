@@ -3774,6 +3774,63 @@ def agent_ledger_freshness(rows) -> dict:
     return {"label": newest.get("label"), "age_s": int(time.time() - t)}
 
 
+def _gap_key(kind: str, label: str, sub: str) -> str:
+    """把 gap 归一为**可比较标识**（ADR-0007 路A 的硬前置 K1）。
+
+    为什么**不能**用 gap 的文本做增量基线（实测，见
+    docs/research/2026-09-18_证据流审计常跑_触发点与成本严重度调研.md §4.3）:
+      同类 gap 的文本会随"约定名归档件在/不在"而变化 —— 例如 collect 型会多一句
+      "（归档件 `x.txt` 按约定名存在 ⇒ 只有产物、无执行记录）"，件一被补上/删掉文本就变
+      ⇒ 拿文本比对会把"同一 gap 换了种表现"读成**新增 gap** ⇒ **假告警**。
+    形状: `<kind>|<label>|<sub>`；`sub` = subject 名，undeclared 型 = **排序后件名**逗号连接
+      （排序保证集合可比；新增/减少件确实改变 key —— 那是**真信息**，应当告警）。
+    """
+    return f"{kind}|{label}|{sub}"
+
+
+# ── 审计水印（ADR-0007 路A / K2）───────────────────────────────────────
+# 用途: 让"常跑审计"只报**新增**可重放性缺口 —— 否则存量 52 条会天天刷屏，正好落进
+#   ADR-0007 D4 警告的"判据因噪声被整体忽略"。
+# **为什么写点必须在这里、而不在门禁里**（复验实测）: `ops/rpc_check.py` 对仓库**全程只读**
+#   （唯一写动作是 check_syntax 的 tempfile），而门禁挂在 pre-commit 上 —— 门禁自己去写水印
+#   会把工作区弄脏。⇒ 水印只能由**显式命令** `cluster.py agent audit --accept` 推进。
+#   副作用（刻意接受，与"不静默降级"同向）: **"接受这批新 gap"成为人类的显式动作**，
+#   而不是被自动抹平。门禁的 fix 字段会直接给出该命令。
+# 存储位置与 `ops/.egress_daily.json` 同族（主控本地状态、已在 .gitignore）——
+#   本仓是单机单贡献者，入仓换来的"跨机一致"当前无收益；若将来多人/多机，再升级为入仓
+#   （那时 `git log` 就是"谁在何时接受了什么"的留痕）。
+AGENT_AUDIT_BASELINE = Path(__file__).resolve().parent / ".audit-baseline.json"
+
+
+def agent_audit_baseline_load() -> dict:
+    """读水印；缺失/损坏 ⇒ 空基线（**不抛** —— 缺基线只意味着"首跑会把存量当新增报一次"，自愈）。"""
+    try:
+        d = json.loads(AGENT_AUDIT_BASELINE.read_text(encoding="utf-8"))
+        if isinstance(d, dict) and isinstance(d.get("keys"), list):
+            return d
+    except Exception:
+        pass
+    return {"version": 1, "keys": [], "created": "", "updated": ""}
+
+
+def agent_audit_baseline_accept(keys) -> dict:
+    """把当前 gap key 集合**并入**水印（**单调**：并集，绝不移除）。
+
+    单调的理由: 非单调（快照式）会在"runDir 被删后又恢复"时把老 gap 读成新增 ⇒ 假告警。
+    代价（已在调研 §10.3 记账）: 同一处 gap 被修复后再次出现**不会二次告警**。
+    """
+    cur = agent_audit_baseline_load()
+    old = set(cur.get("keys") or [])
+    new = sorted(set(str(k) for k in keys) - old)
+    merged = sorted(old | set(str(k) for k in keys))
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    out = {"version": 1, "keys": merged,
+           "created": cur.get("created") or ts, "updated": ts}
+    AGENT_AUDIT_BASELINE.write_text(json.dumps(out, ensure_ascii=False, indent=1) + "\n",
+                                    encoding="utf-8")
+    return {"added": new, "total": len(merged), "path": str(AGENT_AUDIT_BASELINE)}
+
+
 def agent_audit(limit: int = 0, save: bool = False) -> dict:
     """阶段 3-a (ADR-0007): **证据可复现性审计** → 机器可判 gap 表（advisory）。
 
@@ -3797,7 +3854,7 @@ def agent_audit(limit: int = 0, save: bool = False) -> dict:
     runs = _chain_runs(roots)
     if limit and limit > 0:
         runs = runs[-limit:]
-    out_runs, gaps = [], []
+    out_runs, gaps, gap_keys = [], [], []   # gap_keys 与 gaps **逐条平行**(K1: 供水印比对)
     n_sub = n_offline = n_collect = n_undecl = n_runs_v2 = n_ephemeral = 0
     for ts, proj, run_dir in runs:
         label = f"{proj}/{ts}"
@@ -3832,15 +3889,19 @@ def agent_audit(limit: int = 0, save: bool = False) -> dict:
             elif coll:
                 rdy = "declared-not-executed+" + ("artifact-by-convention" if exists else "no-artifact")
                 n_collect += 1
+                # ⚠ 这一条的**文本**会随 `exists` 变(见 _gap_key 的说明) ⇒ 故其 key **不含**该细节
                 gaps.append(f"{label}: subject '{name}' 声明了 collect 命令但**从未执行**"
                             + (f"（归档件 `{path}` 按约定名存在 ⇒ 只有产物、无执行记录）" if exists
                                else f"（且约定名 `{path}` 无归档件）"))
+                gap_keys.append(_gap_key("collect-not-executed", label, name))
             elif not path:
                 rdy = "no-path-no-collect"
                 gaps.append(f"{label}: subject '{name}' 既无 path 也无 collect ⇒ 不可复现")
+                gap_keys.append(_gap_key("no-path-no-collect", label, name))
             elif not exists:
                 rdy = "missing-artifact"
                 gaps.append(f"{label}: subject '{name}' 声明的 `{path}` 不在 runDir")
+                gap_keys.append(_gap_key("missing-artifact", label, name))
             else:
                 # ⚠ 此处**刻意不比对链上摘要**（那是 `verify` 的轴）: `_run_digest` 是按**当前字节**重算的,
                 #   拿它跟"刚算出的文件哈希"比必然相等 —— 写进判据就是**恒真判据**（自欺, 实测踩到）。
@@ -3865,6 +3926,7 @@ def agent_audit(limit: int = 0, save: bool = False) -> dict:
             n_runs_v2 += 1
         if undecl:
             gaps.append(f"{label}: 已归档但未被任何 subject 覆盖: {', '.join(undecl)}")
+            gap_keys.append(_gap_key("undeclared", label, ",".join(undecl)))
         out_runs.append({"label": label, "recipe": recipe, "declared": len(subs),
                          "offline_ok": sum(1 for x in subjects if x["readiness"] == "offline-ok"),
                          "not_exec": sum(1 for x in subjects if x["readiness"].startswith("declared-not-executed")),
@@ -3877,8 +3939,18 @@ def agent_audit(limit: int = 0, save: bool = False) -> dict:
         f" —— 不计入缺口, 也**不计入可离线复算**(否则覆盖率虚高)",
         f"已归档但未声明: {n_undecl} 件",
         f"有 manifest 的 run: {n_runs_v2}/{len(out_runs)}",
+        # P1 (ADR-0007 路A, 2026-09-18): **口径要说实话** —— 上面那行只说"有多少个 run 有 manifest",
+        #   不说**另外那些判不了**。report 里 `可离线复算 N/M` 的分母**只覆盖 v2 run**;
+        #   若不显式说明, 读表的人会把它当成**语料级**结论（本 ADR 已记过"同一份报告两个口径打架"
+        #   的同族问题）。这里把"看不见的那部分"点名, 并说明它是**历史欠账而非缺陷**:
+        #   早于阶段 1 的 run 没有声明这回事, 改卡也不会回溯（manifest 是 run.json 的派发时快照）。
+        f"**零声明（recipe v1）运行**: {len(out_runs) - n_runs_v2}/{len(out_runs)} 个"
+        f" —— 这些 run **不参与可重放性判定**（v1 无「声明」这回事；属**历史欠账非缺陷**，"
+        f"改卡不回溯）。故上方 `可离线复算` 的分母**只覆盖 v2 run**，不是语料级结论",
     ]
     out = {"runs": out_runs, "coverage": coverage, "gaps": gaps,
+           "gap_keys": gap_keys,      # K1: 与水印比对用（**单调集合**，不含文本细节）
+           "gap_items": [{"key": k, "text": t} for k, t in zip(gap_keys, gaps)],
            "totals": {"runs": len(out_runs), "subjects": n_sub, "offline_ok": n_offline,
                       "collect": n_collect, "undeclared": n_undecl, "runs_v2": n_runs_v2,
                       "ephemeral": n_ephemeral}}
@@ -4118,6 +4190,8 @@ def cmd_agent(argv) -> int:
     输出**机器可判 gap 表**(advisory, **不进 FAIL 集**); 与 verify 分工: verify 管"是否被改",
     audit 管"是否可重放"。只读, 不触站。`--save` 落**项目侧** `<proj>/agent-out/_audits/<ts>.json`
     (与 runDir 同级、**不碰链**; 红线: 机器产物**不入仓**)。
+    **`--accept`**(路A, 2026-09-18): 把当前 gap 集合**并入水印**(`ops/.audit-baseline.json`, 本地
+    不入仓) ⇒ 门禁只报此后**新增**的 gap。见下"增量水印"一段。需人先看到清单, 故不可与 `--json` 同用。
     `audit-judge`=**阶段 3-b 校准**(advisory): 用**在服务引擎**(宜为**跨家族**模型, 如 qwen3.8-27b-mtp)
     对 3-a 的条目判两次(A/A 噪声底) + 倒序再判一次(position bias) + 判据改写版一次(稳健性) ⇒
     只**测量** judge 可靠性, 不改门禁、不写 run 目录。`--save` 把**校准报告**入仓
@@ -4126,7 +4200,7 @@ def cmd_agent(argv) -> int:
     act = (argv[0] if argv else "runs").lower()
     if act not in ("runs", "live", "tail", "chain", "verify", "audit", "audit-judge"):
         print("用法: cluster.py agent {runs|live|tail|chain|verify|audit|audit-judge} [--limit N] "
-              "[--station A|B|C] [--json] [--save] [chain 可加 --reanchor]")
+              "[--station A|B|C] [--json] [--save] [chain 可加 --reanchor; audit 可加 --accept]")
         return 1
     limit, only, as_json = 20, None, ("--json" in argv)
     i = 1
@@ -4175,8 +4249,29 @@ def cmd_agent(argv) -> int:
 
     if act == "audit":
         r = agent_audit(limit=(limit if "--limit" in argv else 0), save=("--save" in argv))
+        # ADR-0007 路A: 水印状态 —— 让"还欠多少"随时可见, 而不只依赖门禁那一次喊话
+        base = agent_audit_baseline_load()
+        bkeys = set(base.get("keys") or [])
+        cur = set(r.get("gap_keys") or [])
+        pending = sorted(cur - bkeys)
+
+        def _accept_baseline():
+            # K2(**要紧**): 水印的**写点只在这里**。门禁 `rpc_check.py` 对仓库**全程只读**
+            #   （唯一写动作是 check_syntax 的 tempfile）⇒ 门禁不能自己写水印（会把 pre-commit
+            #   的工作区弄脏）。副作用是**"接受这批新 gap"成为人类的显式动作** —— 与"不静默降级"
+            #   同向: 自动推进等于把信号抹平。
+            acc = agent_audit_baseline_accept(sorted(cur))
+            print(f"  ✓ 水印已推进: 新增接受 **{len(acc['added'])}** 条 key，累计 {acc['total']} 条"
+                  f" → {acc['path']}")
+
         if as_json:
-            print(json.dumps(r, ensure_ascii=False))
+            if "--accept" in argv:
+                # 刻意拒绝: 接受动作的前提是"人先看到清单", 且确认行会污染 JSON 流
+                print("--accept 不能与 --json 同用（接受前必须先看到 gap 清单）", file=sys.stderr)
+                return 2
+            print(json.dumps(dict(r, audit_baseline={
+                "total": len(bkeys), "pending": len(pending),
+                "created": base.get("created") or ""}), ensure_ascii=False))
             return 0
         print("=== 证据可复现性审计 (阶段 3-a; ADR-0007) ===")
         print("  口径: **advisory** —— 只出 gap 表, 不改门禁 FAIL 集。verify 管'是否被改', audit 管'是否可重放'。\n")
@@ -4207,6 +4302,13 @@ def cmd_agent(argv) -> int:
         if r.get("saved"):
             # 落库第一层: 机器产物只落**项目侧**; 仓库侧只收"校准报告"(audit-judge --save)
             print("  已落库(项目侧 _audits/): " + " · ".join(r["saved"]))
+        print(f"\n  水印: 存量 key {len(bkeys)} 条 · 待接受(新增) **{len(pending)}** 条"
+              + (f" · 建立于 {base.get('created')}" if base.get("created") else " · (尚未建立)"))
+        if pending:
+            print("  门禁 `evidence` 会把上面这些**逐条**报为 WARN；确认可接受后跑 "
+                  "`python ops/cluster.py agent audit --accept` 推进水印(存量即不再重复报)。")
+        if "--accept" in argv:
+            _accept_baseline()
         return 0
 
     if act == "audit-judge":
