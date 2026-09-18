@@ -28,6 +28,9 @@ Desktop.ini
 # D2 运行时生成物
 ops/cluster_status.html
 ops/.egress_daily.json
+# ADR-0007 路A: 审计增量水印 —— 主控本地状态(单机单贡献者, 入仓换来的"跨机一致"当前无收益);
+# 由显式命令 `cluster.py agent audit --accept` 推进, 门禁只读不改它。
+ops/.audit-baseline.json
 ops/__pycache__/
 
 # agent-cli / 评测 运行日志与结果快照 (不入库)
