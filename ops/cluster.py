@@ -16,7 +16,7 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
     python ops/cluster.py flow [list|<name>] [--plan|--go] [args...]        # 声明式流程 (步骤→判据→台账)
     python ops/cluster.py reqlog {sample|summary|tail|path} [--minutes N]   # 引擎请求/token 统计 (站上采样)
     python ops/cluster.py ttl {status|check|enable|disable} [--ttl N] [--dry-run] [--go]  # 空闲 TTL 自动卸载 (默认关)
-    python ops/cluster.py agent {runs|live|tail|chain|verify} [--limit N] [--station X] [--json]  # agent 任务进度/吞吐 + 证据链
+    python ops/cluster.py agent {runs|live|tail|chain|verify|audit} [--limit N] [--station X] [--json]  # 进度/吞吐 + 证据链 + 可复现性审计
 
 子命令:
     status   三站 llama /health + 当前加载实例 + 引擎清单一屏聚合
@@ -3773,18 +3773,120 @@ def agent_ledger_freshness(rows) -> dict:
     return {"label": newest.get("label"), "age_s": int(time.time() - t)}
 
 
+def agent_audit(limit: int = 0) -> dict:
+    """阶段 3-a (ADR-0007): **证据可复现性审计** → 机器可判 gap 表（advisory）。
+
+    与 `verify` 的**分工**（刻意分清，否则两套判据会互相污染）:
+      - `verify` 判 **"证据是否被改"**（篡改/损坏）⇒ 有 FAIL 集，进门槛；
+      - `audit`  判 **"每条声明能否被独立复现、卡在哪"**（可重放性）⇒ **只出 gap 表**，不改 FAIL 集。
+    这正是不把 audit 直接塞进门禁的原因: 可重放性缺口是**已知的工程债**（如 `collect` 命令从未执行），
+    判 FAIL 会把每次派发都拦下 ⇒ 造出"因无人能应对而失败"的判据（调研 §5.6 的反面教训）。
+
+    逐 subject 的 readiness（机器可判字段）:
+      path 型   → 归档件在 + 摘要命中 ⇒ `offline-ok`（可离线按件复算）
+                  归档件缺            ⇒ `missing-artifact`
+                  摘要不符            ⇒ `digest-mismatch`（**责任归 verify**：那是篡改/损坏轴）
+      collect 型 → 框架**从不执行**声明的命令（ADR-0007 缺口 4/5 已记）⇒ 一律 `declared-not-executed`，
+                  并按**约定名** `<name>.txt` 看归档件: 在 ⇒ `+artifact-by-convention` / 缺 ⇒ `+no-artifact`
+      其他       → runDir 里存在但**未被任何 subject 的 path 覆盖**的非隐藏件 ⇒ `undeclared-evidence`
+    """
+    roots, _note = _agent_proj_roots()
+    runs = _chain_runs(roots)
+    if limit and limit > 0:
+        runs = runs[-limit:]
+    out_runs, gaps = [], []
+    n_sub = n_offline = n_collect = n_undecl = n_runs_v2 = 0
+    for ts, proj, run_dir in runs:
+        label = f"{proj}/{ts}"
+        jp = run_dir / ".agent-run.json"
+        if not jp.is_file():
+            continue
+        try:
+            j = json.loads(jp.read_text(encoding="utf-8-sig", errors="replace"))
+        except Exception:
+            continue
+        subs = ((j.get("evidence_manifest") or {}).get("subjects")) or []
+        recipe = "v2" if subs else "v1"
+        per = _run_digest(run_dir, recipe) or {}
+        files = per.get("files") or {}
+        subjects, covered = [], set()
+        for s in subs:
+            name = str(s.get("name") or "?").strip() or "?"
+            path = str(s.get("path") or "").strip()
+            coll = str(s.get("collect") or "").strip()
+            if not path and coll:
+                path = f"{name}.txt"                  # 约定名（与 v2 取件规则一致, 不另立规则）
+            tgt = run_dir / path if path else None
+            exists = bool(tgt is not None and tgt.is_file())
+            if path:
+                covered.add(path)
+            hx = files.get(name)
+            if coll:
+                rdy = "declared-not-executed+" + ("artifact-by-convention" if exists else "no-artifact")
+                n_collect += 1
+                gaps.append(f"{label}: subject '{name}' 声明了 collect 命令但**从未执行**"
+                            + (f"（归档件 `{path}` 按约定名存在 ⇒ 只有产物、无执行记录）" if exists
+                               else f"（且约定名 `{path}` 无归档件）"))
+            elif not path:
+                rdy = "no-path-no-collect"
+                gaps.append(f"{label}: subject '{name}' 既无 path 也无 collect ⇒ 不可复现")
+            elif not exists:
+                rdy = "missing-artifact"
+                gaps.append(f"{label}: subject '{name}' 声明的 `{path}` 不在 runDir")
+            else:
+                # ⚠ 此处**刻意不比对链上摘要**（那是 `verify` 的轴）: `_run_digest` 是按**当前字节**重算的,
+                #   拿它跟"刚算出的文件哈希"比必然相等 —— 写进判据就是**恒真判据**（自欺, 实测踩到）。
+                #   ⇒ audit 只答"能不能离线复算"; "算出来是否与链一致"由 verify 定责（分工, 不重叠）。
+                rdy = "offline-ok" if hx not in (None, "-") else "offline-ok(未入 recipe 件集)"
+                n_offline += 1
+            n_sub += 1
+            subjects.append({"name": name, "mode": ("collect" if coll else "path"),
+                             "target": path, "readiness": rdy})
+        # 已归档但未被任何声明覆盖的非隐藏件（**动态**枚举 —— 不维护第二份"框架件清单"）。
+        #   仅对**有 manifest 的 run** 计: v1 run 没有"声明"这回事 ⇒ 全列出来只会淹没 gap 表。
+        undecl = []
+        if subs and run_dir.is_dir():
+            for f in sorted(run_dir.iterdir()):
+                if not f.is_file() or f.name.startswith("."):
+                    continue
+                if f.name in covered:
+                    continue
+                undecl.append(f.name)
+        n_undecl += len(undecl)
+        if subs:
+            n_runs_v2 += 1
+        if undecl:
+            gaps.append(f"{label}: 已归档但未被任何 subject 覆盖: {', '.join(undecl)}")
+        out_runs.append({"label": label, "recipe": recipe, "declared": len(subs),
+                         "offline_ok": sum(1 for x in subjects if x["readiness"] == "offline-ok"),
+                         "collect": sum(1 for x in subjects if x["mode"] == "collect"),
+                         "subjects": subjects, "undeclared": undecl})
+    coverage = [
+        f"可离线复算: {n_offline}/{n_sub} 条声明（其余为 collect 型/缺件/摘要不符）",
+        f"collect 型（声明了命令但从未执行）: {n_collect} 条",
+        f"已归档但未声明: {n_undecl} 件",
+        f"有 manifest 的 run: {n_runs_v2}/{len(out_runs)}",
+    ]
+    return {"runs": out_runs, "coverage": coverage, "gaps": gaps,
+            "totals": {"runs": len(out_runs), "subjects": n_sub, "offline_ok": n_offline,
+                       "collect": n_collect, "undeclared": n_undecl, "runs_v2": n_runs_v2}}
+
+
 def cmd_agent(argv) -> int:
-    """cluster.py agent {runs|live|tail|chain|verify} [--limit N] [--station A|B|C] [--json] [--reanchor]
+    """cluster.py agent {runs|live|tail|chain|verify|audit} [--limit N] [--station A|B|C] [--json] [--reanchor]
 
     P0 只读视图: `runs`=派发台账尾 N 条(join run.json 详情) / `live`=三站运行中节拍 /
     `tail`=台账原始行。**只读, 无副作用**; 口径与判据见 spec/agent-observability/。
     证据链 (spec/d6-agent-standard/evidence-chain/): `chain`=把未入链的 run 补进链(幂等,
     写链 + 冷路径镜像 + 外部锚 ANCHOR.txt; `--reanchor` 才强制重锚) / `verify`=复验
     (重算 digest + 验 prev 链 + 比冷路径与外部锚; 只读)。门禁第 15 项 `evidence` 自动覆盖。
+    `audit`=**可复现性审计**(阶段 3-a, ADR-0007): 逐 subject 判"能否被独立复现、卡在哪",
+    输出**机器可判 gap 表**(advisory, **不进 FAIL 集**); 与 verify 分工: verify 管"是否被改",
+    audit 管"是否可重放"。只读, 不触站。
     """
     act = (argv[0] if argv else "runs").lower()
-    if act not in ("runs", "live", "tail", "chain", "verify"):
-        print("用法: cluster.py agent {runs|live|tail|chain|verify} [--limit N] [--station A|B|C] "
+    if act not in ("runs", "live", "tail", "chain", "verify", "audit"):
+        print("用法: cluster.py agent {runs|live|tail|chain|verify|audit} [--limit N] [--station A|B|C] "
               "[--json] [chain 可加 --reanchor]")
         return 1
     limit, only, as_json = 20, None, ("--json" in argv)
@@ -3830,6 +3932,35 @@ def cmd_agent(argv) -> int:
         print("  判据: 本命令**唯一**写动作为链文件+冷路径镜像+外部锚; run 目录一律只读。")
         if not r.get("anchor_written") and not (r.get("added") or []):
             print("  提示: 锚与链**不符**时本命令刻意不动锚(避免抹掉篡改信号); 确要重锚用 --reanchor。")
+        return 0
+
+    if act == "audit":
+        r = agent_audit(limit=(limit if "--limit" in argv else 0))
+        if as_json:
+            print(json.dumps(r, ensure_ascii=False))
+            return 0
+        print("=== 证据可复现性审计 (阶段 3-a; ADR-0007) ===")
+        print("  口径: **advisory** —— 只出 gap 表, 不改门禁 FAIL 集。verify 管'是否被改', audit 管'是否可重放'。\n")
+        for c in r["coverage"]:
+            print(f"  · {c}")
+        print()
+        cols = [(28, "run", 0), (6, "recipe", 0), (6, "声明", 1), (8, "可离线", 1),
+                (8, "collect", 1), (8, "未声明", 1)]
+        print("  " + " ".join(_pad(t, w, bool(rg)) for w, t, rg in cols))
+        print("  " + "-" * (sum(w for w, _, _ in cols) + len(cols) - 1))
+        for x in r["runs"][-10:]:
+            row = [x["label"], x["recipe"], x["declared"], x["offline_ok"], x["collect"], len(x["undeclared"])]
+            print("  " + " ".join(_pad(v, w, bool(rg)) for v, (w, _, rg) in zip(row, cols)))
+        if len(r["runs"]) > 10:
+            print(f"  …另有 {len(r['runs']) - 10} 个 run（--limit 或 --json 查看）")
+        if r["gaps"]:
+            print(f"\n  ▲ gap 表 ({len(r['gaps'])} 条 —— 均为**可重放性缺口**, 不是篡改):")
+            for g in r["gaps"][:10]:
+                print(f"      · {g}")
+            if len(r["gaps"]) > 10:
+                print(f"      · …另有 {len(r['gaps']) - 10} 条")
+        else:
+            print("\n  ✓ gap 表为空（每条声明都可离线复现, 且无未声明归档件）")
         return 0
 
     if act == "verify":

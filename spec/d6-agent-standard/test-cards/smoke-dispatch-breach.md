@@ -26,6 +26,15 @@ evidence-manifest:
     - name: prompt
       path: prompt.txt
       digest: sha256
+    - name: progress-trace
+      path: progress-trace.txt
+      digest: sha256
+    - name: accept-cmds
+      path: accept-cmds.txt
+      digest: sha256
+    - name: golden-cmd
+      path: golden-cmd.txt
+      digest: sha256
     - name: workspace-diff
       collect: "find . -newer .run-marker -type f -printf '%P\\n'"
       digest: sha256
