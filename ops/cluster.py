@@ -4091,8 +4091,10 @@ def agent_audit_judge(audit: dict, max_tokens: int = 400, rounds: int = 3, save:
                   f"- 与判据一致：{res['rule_agree']} · UNSURE(r1+r2) {used}", "",
                   "| # | 期望 | 第1轮 | 第2轮 | 倒序 | 改写 | 事实 |", "|---|---|---|---|---|---|---|"]
             for x in rows:
+                # 注意: 反斜杠不能出现在 f-string 的表达式段 (Py<3.12 SyntaxError) ⇒ 先算再插
+                fact = str(x['fact']).replace('|', '\\|')
                 md.append(f"| {x['idx']} | {x['expect']} | {x['aa_1']} | {x['aa_2']} | {x['swap']} | "
-                          f"{x['para']} | {x['fact'].replace('|', '\\|')} |")
+                          f"{x['para']} | {fact} |")
             md += ["", "## 判读", "",
                    "- **A/A** = 确定性（噪声底）· **序翻转** = position bias · **措辞扰动** = 稳健性（temp=0 下 A/A 测不到的那半）",
                    "- 题集内**故意**放了机器标签与判据相反的条目 ⇒ 可辨 judge 是**复核**还是**复读**",
