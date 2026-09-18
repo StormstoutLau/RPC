@@ -26,6 +26,9 @@ evidence-manifest:
     - name: prompt
       path: prompt.txt
       digest: sha256
+    - name: card
+      path: card.md
+      digest: sha256
     - name: progress-trace
       path: progress-trace.txt
       digest: sha256

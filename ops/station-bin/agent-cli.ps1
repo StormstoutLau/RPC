@@ -701,6 +701,52 @@ function Get-Sha256Text([string]$text) {
     return (($bytes | ForEach-Object { $_.ToString('x2') }) -join '')
 }
 
+function Get-CardIdentity([string]$card) {
+    # ADR-0007 前置(2026-09-18): **卡片身份** —— 卡是最大的注入物(决定 prompt / 验收 / golden / manifest 本身),
+    #   而此前 run.json 与站上 .meta **都不记卡** ⇒ "那次跑的是**哪张卡的哪个版本**"不可判、复跑无法定版
+    #   (实测: Cpp_Hub 的复现关键 `commit=b278151` **只存在于 prompt 文本**里)。
+    #   摘要用**原始字节**(Get-FileHash), 便于任何工具独立复核(`Get-FileHash`/`sha256sum`/python 均可)。
+    #   **单一实现点**: 主路与 claude 备路共用本函数(避免两处各算一份而漂移)。
+    #   注: 只记 path+hash **不够** —— 卡**会改**(同日实测改了 4 张夹具卡) ⇒ 调用方另把卡字节归档为 runDir `card.md`。
+    $o = [ordered]@{ path = [string]$card; sha256 = ''; bytes = 0; front_matter = $false }
+    try {
+        if (Test-Path -LiteralPath $card) {
+            $full = (Resolve-Path -LiteralPath $card).Path
+            $o.path = $full
+            $o.bytes = [int](Get-Item -LiteralPath $full).Length
+            $o.sha256 = "sha256:" + (Get-FileHash -LiteralPath $full -Algorithm SHA256).Hash.ToLower()
+            # "有没有 front-matter" **必须看原文围栏**, 不能用 `$fm.Keys.Count` ——
+            #   ⚠ 本轮实测(2026-09-18): `Get-FrontMatter` 返回的是**预置 18 键的固定集**(缺的键=空值)
+            #   ⇒ `Keys.Count` **恒为 18**、判据恒真, 护栏曾因此**放行**无 front-matter 卡(与"恒真判据"
+            #   同族: 批A 的 `TASK_ID != label`、缺口4 的空件被丢)。按 §4 契约, front-matter 以 `---` 围栏给出。
+            $txt = [IO.File]::ReadAllText($full)     # ReadAllText 自动去 BOM
+            $o.front_matter = [bool]($txt -match '^\s*---\r?\n')
+        }
+    }
+    catch { Write-Host "CARD_ID_WARN: $($_.Exception.Message)" }
+    return $o
+}
+
+function Test-CardSafetyDeclared([string]$card, $cardId, [string]$sensitive) {
+    # ADR-0007 前置(2026-09-18): **无 front-matter 卡的处置** —— 实测这类卡在 D6 路径下会**静默退化**:
+    #   `readonly` 永远 false、`sensitivity` 默认 `public`、且无 accept-golden / 无 manifest。
+    #   对 local-only 项目(Paper/Cpp_Hub/Auto_Prover 实测均以 local-only 为主)**这就是安全回退**。
+    #   实测依据: Cpp_Hub 真正走 D6 的 4 次派发**全部** `sensitivity=local-only` 且带
+    #   `accept_golden.cmd`, 即用的是**有 front-matter 的卡**; `F:\Cpp_Hub\dispatch\TASK_*.md` 那批
+    #   无 front-matter 的手工任务书走的是 bespoke `dispatch/*.ps1`, 不是本路径。
+    #   ⇒ 处置: **要求显式声明安全属性**(`-Sensitive`) 才放行; 否则拒绝(与 §4 统一卡契约一致)。
+    if ($cardId -and $cardId.front_matter) { return $true }
+    if ($sensitive) {
+        Write-Host ("CARD_WARN: 卡无 front-matter ⇒ readonly=false / 无 accept-golden / 无 manifest" +
+                    "(已按显式 -Sensitivity=$sensitive 放行)")
+        return $true
+    }
+    Write-Host ("REJECT no-front-matter-card (exit 2) - 卡 $card 无 front-matter ⇒ 会静默退化为 " +
+                "sensitivity=public + readonly=false(对 local-only 项目是安全回退)。" +
+                "请补 front-matter, 或显式传 -Sensitivity <local-only|public>。")
+    return $false
+}
+
 function Get-Sha256Lines([string[]]$lines) {
     # ADR-0007 缺口 5: 附件摘要 —— 对已(按相对路径)排序的 `relpath:sha256` 行做整体哈希。
     #   目录附件用**树摘要**; 单文件附件只有一行 ⇒ 摘要即该文件哈希的再哈希(仍可判断"是否被换")。
@@ -772,9 +818,18 @@ function Invoke-Task {
 
     # 1) card front-matter
     $fm = Get-FrontMatter $card
+    # ADR-0007 前置: 卡身份(路径/原始字节摘要/字节数/是否含 front-matter) —— 复跑定版的唯一依据。
+    #   形状守卫: 环境层会往管道吐 $null 使返回值变数组(缺口 5 实测教训) ⇒ 退化时取首元素。
+    $cardId = Get-CardIdentity $card
+    if ($cardId -is [array]) { $cardId = $cardId[0] }
     $m = if ($model) { $model } else { if ($fm['model']) { $fm['model'] } else { '' } }
     $sens = if ($sensitive) { $sensitive } else { if ($fm['sensitivity']) { $fm['sensitivity'] } else { 'public' } }
     if (-not $m) { Write-Host 'REJECT missing-model (exit 2) - card has no model and no --model (inv 3)'; return 2 }
+    # ADR-0007 前置: 无 front-matter 卡**必须显式声明安全属性**才放行(否则静默退化为 public+可写)。
+    #   形状守卫同 $cardId(环境层可能吐 $null 使返回值变数组)。
+    $cardOk = Test-CardSafetyDeclared $card $cardId $sensitive
+    if ($cardOk -is [array]) { $cardOk = @($cardOk | Where-Object { $null -ne $_ })[0] }
+    if (-not $cardOk) { return 2 }
     $readonly = [bool]$fm['readonly']
     # O-09 isolate-xdg: 1 => 远程 $body 里 per-task XDG_DATA_HOME 隔离 opencode.db (同站并行写任务用)
     $isolateXdgOn = if ([bool]$fm['isolate-xdg']) { 1 } else { 0 }
@@ -1432,6 +1487,10 @@ exit `$RC
         if (-not (Test-Path $projOutRoot)) { New-Item -ItemType Directory -Path $projOutRoot -Force | Out-Null }
         $runDir = Join-Path $projOutRoot $ts
         New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+        # ADR-0007 前置: 归档**卡字节**(卡会改 ⇒ 只记 hash 无法复跑; 与 prompt.txt 同族但含 front-matter)
+        if ($cardId.path -and (Test-Path -LiteralPath $cardId.path)) {
+            Copy-Item -LiteralPath $cardId.path -Destination (Join-Path $runDir 'card.md') -Force | Out-Null
+        }
     }
     catch {
         $collectOk = $false
@@ -1461,6 +1520,9 @@ exit `$RC
         timestamp_start = $tsStart
         timestamp_end = $tsEnd
         prompt_sha256 = "sha256:$promptSha"
+        # ADR-0007 前置(2026-09-18): 卡身份 —— 与 prompt_sha256 同族, 但**卡决定 prompt 自己**
+        #   (最大的注入物); 落进 run.json ⇒ 自动被证据链钉住。原始件另存 runDir `card.md`。
+        card = $cardId
         # ADR-0007 缺口 5: 有附件时为**对象数组** {name,src,kind,files,sha256}(摘要源于站上清单);
         #   无附件时 `[]`(与老形状一致)。消费方需按"对象数组 / 名字数组"两种形状处理(见 ARCHITECTURE §6)。
         attach = $attachEntries
@@ -1756,9 +1818,17 @@ function Invoke-Task-Claude {
 
     $utf8NoBom = New-Object System.Text.UTF8Encoding $false
     $fm = Get-FrontMatter $card
+    # ADR-0007 前置(2026-09-18): 卡身份 —— 与主路**共用单一实现点** Get-CardIdentity(避免两处各算一份漂移);
+    #   含形状守卫(环境层可能往管道吐 $null 使返回值变数组, 缺口 5 实测教训)。
+    $cardId = Get-CardIdentity $card
+    if ($cardId -is [array]) { $cardId = $cardId[0] }
     $m = if ($model) { $model } else { if ($fm['model']) { $fm['model'] } else { '' } }
     $sens = if ($sensitive) { $sensitive } else { if ($fm['sensitivity']) { $fm['sensitivity'] } else { 'public' } }
     if (-not $m) { Write-Host 'REJECT missing-model (exit 2) - card has no model and no --model (inv 3)'; return 2 }
+    # ADR-0007 前置: 无 front-matter 卡须显式声明安全属性(claude 备路独立入口也要护栏)
+    $cardOk = Test-CardSafetyDeclared $card $cardId $sensitive
+    if ($cardOk -is [array]) { $cardOk = @($cardOk | Where-Object { $null -ne $_ })[0] }
+    if (-not $cardOk) { return 2 }
     $readonly = [bool]$fm['readonly']
     $timeout = [int]$fm['timeout_s']
     $continueTimeout = [int]$fm['continue-timeout-s']
@@ -1903,6 +1973,10 @@ function Invoke-Task-Claude {
         if (-not (Test-Path $projOutRoot)) { New-Item -ItemType Directory -Path $projOutRoot -Force | Out-Null }
         $runDir = Join-Path $projOutRoot $ts
         New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+        # ADR-0007 前置: 归档卡字节(与主路同一处置; 卡会改 ⇒ 只记 hash 无法复跑)
+        if ($cardId.path -and (Test-Path -LiteralPath $cardId.path)) {
+            Copy-Item -LiteralPath $cardId.path -Destination (Join-Path $runDir 'card.md') -Force | Out-Null
+        }
     } catch { $collectOk = $false; $runDir = "$projRoot\agent-out\<$ts>"; Write-Host "COLLECT_FAIL: $($_.Exception.Message)" }
 
     $contentSha = if (Test-Path $outTxt) { Get-Sha256Text ([IO.File]::ReadAllText($outTxt)) } else { '' }
@@ -1918,6 +1992,8 @@ function Invoke-Task-Claude {
         output_bytes = $outputBytes; output_bps = $outputBps
         timestamp_start = ''; timestamp_end = ''
         prompt_sha256 = "sha256:$promptSha"; attach = @($attach)
+        # ADR-0007 前置(2026-09-18): 卡身份(与主路同一处置)
+        card = $cardId
         profile = [ordered]@{ name=$prof.profile; context=$prof.context; max_output=$prof.max_output;
                               thinking=$prof.thinking; template=$prof.template; reasoning_format=$prof.reasoning_format; flavor=$prof.flavor }
         accept = [ordered]@{ cmd = @($accept); passed = ($acceptOk -eq 1) }
