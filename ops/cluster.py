@@ -3481,6 +3481,41 @@ def _golden_identity_check(run_dir: Path, label: str) -> tuple:
                 f"⇒ 合法演进或篡改, **需人判**"], True
 
 
+# readonly 卡的 diff-scope 判据 (ADR-0007 缺口 4)。allow = 工作区相对路径前缀。
+#   **必须含 `out/`** —— readonly 卡的交付物就写在那里(如 dogfood-research-modulemap 的
+#   accept 判的就是 out/.dogfood_module_map.md) ⇒ naive "readonly ⇒ 零改动" 会误杀合法运行。
+#   载体 (`workspace-diff.txt`) 尚未落地 ⇒ 判据当前**不可判**, 不得当作通过 (记 gap)。
+AGENT_DIFF_ALLOW_PREFIXES = ("out/",)
+
+
+def _diff_scope_check(run_dir: Path, label: str) -> tuple:
+    """diff-scope: readonly 卡"未越界"判据。→ (issues, gaps, judged_bool)
+
+    载体 = `workspace-diff.txt`, 内容为**工作区相对路径**, 每行一个 (由远端 `find -newer`
+    以 `-printf '%P\\n'` 产出 —— 与 git 无关, 因实测工作区非 git 仓库)。
+    非 readonly 卡 ⇒ 本判据**不适用**(not-a-judgment, 调研 §7.2 要点 4)。
+    """
+    try:
+        j = json.loads((run_dir / ".agent-run.json").read_text(encoding="utf-8-sig", errors="replace"))
+    except Exception:
+        return [], [], False
+    if not j.get("readonly"):
+        return [], [], False                       # 非 readonly ⇒ 不适用
+    p = run_dir / "workspace-diff.txt"
+    if not p.is_file():
+        return [], [f"{label}: readonly 卡但无 workspace-diff 载体 ⇒ **不可判**(缺口 4 未落地)"], False
+    try:
+        txt = p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return [], [f"{label}: workspace-diff 不可读"], False
+    touched = [ln.strip().lstrip("./") for ln in txt.splitlines() if ln.strip()]
+    oos = [t for t in touched if not t.startswith(AGENT_DIFF_ALLOW_PREFIXES)]
+    if oos:
+        return [f"{label}: readonly 卡**越界** —— 改动 out/ 之外: {', '.join(oos[:5])}"
+                + (f" …(共 {len(oos)})" if len(oos) > 5 else "")], [], True
+    return [], [], True
+
+
 def agent_chain_append(reanchor: bool = False) -> dict:
     """把**尚未入链**的 run 补进链 (幂等: 重复跑不产生新条目), 并镜像冷路径。
 
@@ -3552,7 +3587,7 @@ def agent_chain_verify() -> dict:
     chain = _chain_load(AGENT_CHAIN)
     issues, prev = [], "-"
     v_gaps, v_notes = [], []
-    v_na, v_judged, g_na, g_judged = 0, 0, 0, 0
+    v_na, v_judged, g_na, g_judged, d_na, d_judged = 0, 0, 0, 0, 0, 0
     for i, e in enumerate(chain["entries"]):
         proj, ts = e.get("proj"), e.get("run_id")
         tag = {"index": i, "proj": proj, "run_id": ts}
@@ -3612,6 +3647,17 @@ def agent_chain_verify() -> dict:
             elif g_ok:
                 g_judged += 1
                 v_notes += g_gap               # 可判但"哈希已变/源已不在" ⇒ notes(info), 不告警
+            # ── 缺口 4: diff-scope (readonly 卡的"未越界"; 载体未落地 ⇒ 不可判, 不当作通过) ──
+            d_bad, d_gap, d_ok = _diff_scope_check(run_dir, lbl)
+            for b in d_bad:
+                issues.append(dict(tag, kind="diff_scope", detail=b))
+            if not d_ok and d_gap:
+                if "缺口 4 未落地" in d_gap[0]:
+                    d_na += 1                  # 载体未落地 ⇒ 只计"不适用", 不逐个报(防噪声)
+                else:
+                    v_gaps += d_gap
+            elif d_ok:
+                d_judged += 1
         prev = e.get("digest")
     cold = _chain_load(AGENT_CHAIN_COLD)
     if [x.get("digest") for x in cold["entries"]] != [x.get("digest") for x in chain["entries"]]:
@@ -3625,6 +3671,7 @@ def agent_chain_verify() -> dict:
     coverage = [
         f"A1 verdict-chain: {v_judged}/{n} 可判" + (f" ({v_na} 个早于 ADR-0005 无 judgment-record)" if v_na else ""),
         f"A2 golden-identity: {g_judged}/{n} 可判" + (f" ({g_na} 个早于 ADR-0005 无 base/sha256)" if g_na else ""),
+        f"A3 diff-scope: {d_judged}/{n} 可判" + (f" ({d_na} 个 readonly 卡缺 workspace-diff 载体 ⇒ 不可判)" if d_na else ""),
     ]
     gaps = list(v_gaps) + ([f"未入链 {len(unchained)} 个: {', '.join(unchained[:3])}"
                             + ("…" if len(unchained) > 3 else "")] if unchained else [])
@@ -3805,7 +3852,7 @@ def cmd_agent(argv) -> int:
                 elif k == "recipe_unknown":
                     print(f"  ✗ [{x['index']}] {loc} recipe 不可验 (链={x['got']} 本工具知 {x['expect']})"
                           f" —— 工具比链旧, **不得当作通过**")
-                elif k in ("verdict_mismatch", "golden_identity", "manifest_missing", "manifest_undeclared"):
+                elif k in ("verdict_mismatch", "golden_identity", "manifest_missing", "manifest_undeclared", "diff_scope"):
                     print(f"  ✗ [{x.get('index')}] {loc} {k}: {x.get('detail')}")
                 elif k == "anchor_mismatch":
                     print(f"  ✗ 外部锚 anchor_mismatch 与链不符: {', '.join(x.get('diff') or []) or '(未列出)'}")
