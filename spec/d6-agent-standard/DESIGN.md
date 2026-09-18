@@ -246,6 +246,10 @@ M3 接受两种表示：完整 ID 直接查路由表；别名先经本表解析�
   "queue_s": 0, "run_s": 0,                 // Codex 分离计量（§9.7.2-5：获锁后才起 run 计时）
   "timestamp_start": "", "timestamp_end": "",
   "prompt_sha256": "", "attach": []        // Model-visible means logged（§9.8.1）：一切注入留哈希
+  // ⚠ attach 形状（2026-09-18，缺口 5）：**有附件的新 run** ⇒ 对象数组
+  //   [{name, src, kind: file|dir, files, sha256}]（sha256 = 该附件"注入字节"的摘要，依站上清单算出后
+  //   落进 run.json ⇒ **被链钉住**）；无附件 ⇒ []；**老 run 与 claude 备路 ⇒ 名字数组**（消费方须兼容两形）。
+  //   原始证据（逐文件 `<sha>  <relpath>`）另存 runDir 的 `attach-manifest.txt`。见 ADR-0007。
 }
 ```
 
