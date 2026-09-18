@@ -95,6 +95,30 @@ readonly: false
 model: EVIL-MODEL
 "@ | Set-Content $fenceCard -Encoding utf8
 
+# ADR-0007 阶段 1 (2026-09-18): evidence-manifest 三级嵌套。
+#   关键坑: 键名含 `-`, 而通用键正则 `^\s*([A-Za-z_\-]+)\s*:` 的字符类**也含 `-`** 且允许前导
+#   空白 ⇒ 若新分支顺序错位, `evidence-manifest:` 会落到通用分支, 因 ContainsKey 命中而
+#   `$h[$k] = $v`(**空串覆盖整个哈希表**) ⇒ 顶层键同时被清。本用例同时守这两件事。
+$evmCard = Join-Path $tmpCards 'evm.md'
+@"
+---
+proj: paper
+task: evm parse test
+model: gpt-oss
+evidence-manifest:
+  version: 1
+  subjects:
+    - name: agent-output
+      path: agent-output.txt
+      digest: sha256
+    - name: workspace-diff
+      collect: "find . -newer .marker"
+      digest: sha256
+---
+## 任务描述
+evm body
+"@ | Set-Content $evmCard -Encoding utf8
+
 # --- 用例 ---
 $h = Get-FrontMatter $goldenCard
 Assert-True "golden: source parsed" ($h['accept-golden'].source -eq 'spec/d6-agent-standard/strong-accept/golden/path_guard_golden.py')
@@ -116,6 +140,15 @@ Assert-True "fence: header task NOT overwritten by body line (缺口10)" ($h4['t
 Assert-True "fence: header readonly NOT overwritten by body line (缺口10)" ($h4['readonly'] -eq $true)
 Assert-True "fence: header model NOT overwritten by body line (缺口10)" ($h4['model'] -eq 'gpt-oss')
 Assert-True "fence: body keeps the quoted lines verbatim" ($h4['body'] -match 'EVIL-OVERWRITE')
+
+$h5 = Get-FrontMatter $evmCard
+$ev = $h5['evidence-manifest']
+Assert-True "evm: version parsed" ($ev['version'] -eq '1')
+Assert-True "evm: two subjects" (@($ev['subjects']).Count -eq 2)
+Assert-True "evm: subject[0] name/path/digest" ($ev['subjects'][0]['name'] -eq 'agent-output' -and $ev['subjects'][0]['path'] -eq 'agent-output.txt' -and $ev['subjects'][0]['digest'] -eq 'sha256')
+Assert-True "evm: subject[1] collect parsed, path empty" ($ev['subjects'][1]['name'] -eq 'workspace-diff' -and $ev['subjects'][1]['collect'] -match 'find \. -newer' -and $ev['subjects'][1]['path'] -eq '')
+Assert-True "evm: top-level keys NOT clobbered" ($h5['task'] -eq 'evm parse test' -and $h5['model'] -eq 'gpt-oss')
+Assert-True "evm: body intact" ($h5['body'] -match 'evm body')
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
