@@ -3093,7 +3093,7 @@ AGENT_CHAIN_ANCHOR = AGENT_CHAIN_COLD.parent / "ANCHOR.txt"
 #   新增 recipe 的纪律: ① 入 `AGENT_DIGEST_RECIPES` 才可被复验; ② 未知 recipe = **不可验**
 #   ⇒ 报 recipe_unknown 且 FAIL (不得静默跳过 —— 那会让"工具比链旧"变成静默通过)。
 AGENT_DIGEST_RECIPE = "v1"
-AGENT_DIGEST_RECIPES = ("v1",)
+AGENT_DIGEST_RECIPES = ("v1", "v2")   # v2 = 件集由 run.json 的 evidence_manifest.subjects 声明 (ADR-0007 阶段 1)
 # 入 digest 的回收件 (与 agent-cli.ps1 collect 段 Move 后的名字一致):
 #   · .agent-run.json    = 主控写的终态契约 (含 accept_golden.sha256 ⇒ "当次注入的是哪份 golden")
 #   · judgment-record.txt= 远端 .meta (builder 自述) —— **入链不等于可信**, 只保证"回收后未被改"
@@ -3225,6 +3225,32 @@ def _run_digest(run_dir: Path, recipe: str = AGENT_DIGEST_RECIPE):
     """
     if recipe not in AGENT_DIGEST_RECIPES:
         return None
+    if recipe == "v2":
+        # v2 (ADR-0007 阶段 1): 件集 = run.json 的 evidence_manifest.subjects (**按 run 声明**)。
+        #   ⇒ 新增证据类型不必动全局 recipe, 历史条目(自带 v1)**不受影响** ⇒ 无需重建链。
+        #   `.agent-run.json` **恒入集**(它是声明载体本身, 也要被钉住);
+        #   `collect` 型 subject 尚无采集物(缺口 4) ⇒ 记 `-`, 不当篡改。
+        try:
+            j = json.loads((run_dir / ".agent-run.json").read_text(encoding="utf-8-sig", errors="replace"))
+        except Exception:
+            return None
+        subs = ((j.get("evidence_manifest") or {}).get("subjects")) or []
+        if not subs:
+            return None                       # 声明了 v2 却无 subjects ⇒ 不可验(调用方报 manifest_missing)
+        lines, files = [], {}
+        for nm in (".agent-run.json",):
+            hx = _sha256_file(run_dir / nm) if (run_dir / nm).is_file() else "-"
+            files[nm] = hx
+            lines.append(f"{nm}:{hx}")
+        for s in subs:
+            name = str(s.get("name") or "").strip() or "?"
+            path = str(s.get("path") or "").strip()
+            tgt = (run_dir / path) if path else None
+            hx = _sha256_file(tgt) if (tgt is not None and tgt.is_file()) else "-"
+            files[name] = hx
+            lines.append(f"{name}:{hx}")
+        blob = (recipe + "\n" + "\n".join(lines) + "\n").encode("utf-8")
+        return {"digest": hashlib.sha256(blob).hexdigest(), "files": files}
     lines, files = [], {}
     for name in AGENT_EVIDENCE_FILES:
         p = run_dir / name
@@ -3468,10 +3494,20 @@ def agent_chain_append(reanchor: bool = False) -> dict:
     for ts, proj, run_dir in _chain_runs(roots):
         if (proj, ts) in seen:
             continue
-        rd = _run_digest(run_dir)
+        # recipe **自动选择**(ADR-0007 阶段 1): 卡声明了 evidence_manifest.subjects ⇒ v2, 否则 v1。
+        #   自动而非全局默认 ⇒ 未声明 manifest 的卡**链形完全不变**(向后兼容), 且新增证据类型
+        #   不必动全局 recipe ⇒ **无需重建链**。
+        _rec = AGENT_DIGEST_RECIPE
+        try:
+            _j = json.loads((run_dir / ".agent-run.json").read_text(encoding="utf-8-sig", errors="replace"))
+            if ((_j.get("evidence_manifest") or {}).get("subjects")):
+                _rec = "v2"
+        except Exception:
+            pass
+        rd = _run_digest(run_dir, _rec)
         chain["entries"].append({
             "proj": proj, "run_id": ts, "digest": rd["digest"], "prev": prev,
-            "files": rd["files"], "recipe": AGENT_DIGEST_RECIPE,
+            "files": rd["files"], "recipe": _rec,
             "chained_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         })
         prev = rd["digest"]
@@ -3529,7 +3565,11 @@ def agent_chain_verify() -> dict:
             issues.append(dict(tag, kind="run_dir_missing"))
         else:
             rd = _run_digest(run_dir, rec)
-            if rd["digest"] != e.get("digest"):
+            if rd is None:
+                # 声明了 v2 却无 subjects ⇒ **不可验** ⇒ FAIL (不得当作通过)
+                issues.append(dict(tag, kind="manifest_missing",
+                                   detail=f"{proj}/{ts}: recipe={rec} 但 run.json 无 evidence_manifest.subjects"))
+            elif rd["digest"] != e.get("digest"):
                 old = e.get("files") or {}
                 issues.append(dict(tag, kind="digest_mismatch",
                                    files_changed=sorted(k for k in rd["files"] if rd["files"][k] != old.get(k)),
