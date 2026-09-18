@@ -114,6 +114,14 @@ evidence-manifest:
     - name: workspace-diff
       collect: "find . -newer .marker"
       digest: sha256
+    - name: station-tmp-log
+      collect: "tail -5 /tmp/x.log"
+      ephemeral: true
+# 3-b-2: manifest 块内的注释行(以 # 开头)必须被**忽略** —— 卡作者要能就地写说明,
+#   而不会被当成键(已实测: `#` 不在通用键正则的字符类内 ⇒ 落到无匹配分支 ⇒ 忽略)。
+    - name: after-comment
+      path: after-comment.txt
+      digest: sha256
 ---
 ## 任务描述
 evm body
@@ -144,11 +152,16 @@ Assert-True "fence: body keeps the quoted lines verbatim" ($h4['body'] -match 'E
 $h5 = Get-FrontMatter $evmCard
 $ev = $h5['evidence-manifest']
 Assert-True "evm: version parsed" ($ev['version'] -eq '1')
-Assert-True "evm: two subjects" (@($ev['subjects']).Count -eq 2)
+Assert-True "evm: two subjects" (@($ev['subjects']).Count -eq 4)
 Assert-True "evm: subject[0] name/path/digest" ($ev['subjects'][0]['name'] -eq 'agent-output' -and $ev['subjects'][0]['path'] -eq 'agent-output.txt' -and $ev['subjects'][0]['digest'] -eq 'sha256')
 Assert-True "evm: subject[1] collect parsed, path empty" ($ev['subjects'][1]['name'] -eq 'workspace-diff' -and $ev['subjects'][1]['collect'] -match 'find \. -newer' -and $ev['subjects'][1]['path'] -eq '')
 Assert-True "evm: top-level keys NOT clobbered" ($h5['task'] -eq 'evm parse test' -and $h5['model'] -eq 'gpt-oss')
 Assert-True "evm: body intact" ($h5['body'] -match 'evm body')
+# ADR-0007 3-b-2: subject 级 ephemeral(设计性临时产物) —— 布尔归一 + 未声明者缺省 false
+Assert-True "evm: ephemeral true on subject[2]" ($ev['subjects'][2]['ephemeral'] -eq $true)
+Assert-True "evm: ephemeral default false on subject[0]/[1]" ($ev['subjects'][0]['ephemeral'] -eq $false -and $ev['subjects'][1]['ephemeral'] -eq $false)
+# 3-b-2: manifest 块内注释行被忽略(不影响其后的 subject 解析)
+Assert-True "evm: subject after in-block comment parsed" ($ev['subjects'][3]['name'] -eq 'after-comment' -and $ev['subjects'][3]['path'] -eq 'after-comment.txt')
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
