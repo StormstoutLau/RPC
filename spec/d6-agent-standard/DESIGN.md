@@ -253,6 +253,12 @@ M3 接受两种表示：完整 ID 直接查路由表；别名先经本表解析�
   //   [{name, src, kind: file|dir, files, sha256}]（sha256 = 该附件"注入字节"的摘要，依站上清单算出后
   //   落进 run.json ⇒ **被链钉住**）；无附件 ⇒ []；**老 run 与 claude 备路 ⇒ 名字数组**（消费方须兼容两形）。
   //   原始证据（逐文件 `<sha>  <relpath>`）另存 runDir 的 `attach-manifest.txt`。见 ADR-0007。
+  // ADR-0007 前置（2026-09-18）：card = {path, sha256, bytes, front_matter}
+  //   —— **卡是最大的注入物**（决定 prompt/验收/golden/manifest 本身）；sha256 取卡的**原始字节**
+  //   （任何工具可独立复核）；原始件另存 runDir `card.md`（卡会改 ⇒ 只记 hash 无法复跑）。
+  //   无 front-matter 卡须显式 `-Sensitivity` 才放行（否则静默退化为 public + 可写 + **无 golden** ⇒ 验收消失），
+  //   该情形落 `front_matter=false`。判"有无 front-matter"**必须看原文围栏**：`Get-FrontMatter` 返回的是
+  //   预置 18 键固定集（缺的键=空值）⇒ 用 `Keys.Count` 判会**恒真**（本轮实测踩到）。
 }
 ```
 
