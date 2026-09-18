@@ -218,6 +218,10 @@ frozen_ops_scripts:
   - ops/station-bin/golden/cpphub_beta_golden.sh
   - ops/station-bin/golden/cpphub_golden.py
   - ops/station-bin/golden/o13_sympy_golden.py
+  # 2026-09-18: ADR-0007 阶段 0.5 改动验证夹具的 golden（配套卡 spec/d6-agent-standard/
+  #   test-cards/smoke-dispatch.md）。刻意**入库**而非放 tmp/ —— ADR-0005 的等价夹具卡因
+  #   tmp/ 被 .gitignore 而丢失。它不管理任何资源，故入 frozen（与既有 golden 同桶）。
+  - ops/station-bin/golden/smoke_dispatch_golden.sh
   - ops/station-bin/repro-check.sh
   - ops/station-bin/repro-fire.sh
   - ops/station-bin/repro-health.sh
