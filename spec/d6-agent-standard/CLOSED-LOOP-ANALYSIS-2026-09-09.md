@@ -88,7 +88,7 @@ opencode CLI 原生提供：
      │    ⑤ 主控站 opencode CLI【备选】：主控侧 npm 装 `opencode-ai`，直连 ultra/本地模型；
      │        与 ①trae 同源、wrapper 闭环全在主控；仅当 ① 执行者不可用/需隔离时启用
      │
-     → 输出结构化多级 JSON → 回写 ledger/review.json（run.json 平行键 review）
+     → 输出结构化多级 JSON → 回写 `<runDir>/review.json`（**独立文件**，非 run.json 内的键）
 ```
 
 > **五源布局（异源 + 上下文 + 算力正交；⑤ 备选）**：
