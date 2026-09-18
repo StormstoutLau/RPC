@@ -20,6 +20,15 @@ evidence-manifest:
     - name: judgment-record
       path: judgment-record.txt
       digest: sha256
+    - name: accept-output
+      path: accept-output.txt
+      digest: sha256
+    - name: accept-golden-output
+      path: accept-golden-output.txt
+      digest: sha256
+    - name: prompt
+      path: prompt.txt
+      digest: sha256
 ---
 ## 任务描述
 

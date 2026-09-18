@@ -3102,6 +3102,9 @@ AGENT_DIGEST_RECIPES = ("v1", "v2")   # v2 = 件集由 run.json 的 evidence_man
 #   避免同一事实两个定义点 (抽出来也永远与文件哈希同涨同落, 是冗余)。
 AGENT_EVIDENCE_FILES = (".agent-run.json", "judgment-record.txt", "agent-output.txt",
                         "accept-output.txt", "accept-golden-output.txt", "prompt.txt")
+# v2 的"必须声明"集 = 已知证据件去掉 `.agent-run.json`(它是声明载体本身, 卡不该声明它)。
+#   判据见 agent_chain_verify 的 manifest_undeclared (ADR-0007 阶段1「未声明产物出现即失败」)。
+AGENT_MANIFEST_REQUIRED = tuple(f for f in AGENT_EVIDENCE_FILES if f != ".agent-run.json")
 
 
 def _dw(s) -> int:
@@ -3574,6 +3577,20 @@ def agent_chain_verify() -> dict:
                 issues.append(dict(tag, kind="digest_mismatch",
                                    files_changed=sorted(k for k in rd["files"] if rd["files"][k] != old.get(k)),
                                    expect=(e.get("digest") or "")[:16], got=rd["digest"][:16]))
+            if rec == "v2":
+                # 阶段1 判据「未声明的产物类型若出现 ⇒ 判失败」(借 SLSA "未识别 externalParameters
+                #   ⇒ 校验失败")。判法: 框架**已知**的证据件若**已存在于 runDir 却未在 manifest 声明**
+                #   ⇒ manifest_undeclared FAIL。只查"已存在"的 ⇒ 缺件(老 run)不误报。
+                try:
+                    _jj = json.loads((run_dir / ".agent-run.json").read_text(encoding="utf-8-sig", errors="replace"))
+                    _decl = {str(s.get("path") or "").strip() for s in
+                             ((_jj.get("evidence_manifest") or {}).get("subjects") or [])}
+                except Exception:
+                    _decl = set()
+                _und = [f for f in AGENT_MANIFEST_REQUIRED if (run_dir / f).is_file() and f not in _decl]
+                if _und:
+                    issues.append(dict(tag, kind="manifest_undeclared",
+                                       detail=f"{proj}/{ts}: 已归档但未在 evidence_manifest 声明的件: {', '.join(_und)}"))
             # ── A1/A2 (批 A) ── 只在 run_dir 可达时判 (ts 是裸时间戳, label 仅用于显示)
             lbl = f"{proj}/{ts}"
             v_bad, v_gap, v_ok = _verdict_check(run_dir, ts, lbl)
@@ -3788,8 +3805,8 @@ def cmd_agent(argv) -> int:
                 elif k == "recipe_unknown":
                     print(f"  ✗ [{x['index']}] {loc} recipe 不可验 (链={x['got']} 本工具知 {x['expect']})"
                           f" —— 工具比链旧, **不得当作通过**")
-                elif k in ("verdict_mismatch", "golden_identity"):
-                    print(f"  ✗ [{x['index']}] {loc} {k}: {x.get('detail')}")
+                elif k in ("verdict_mismatch", "golden_identity", "manifest_missing", "manifest_undeclared"):
+                    print(f"  ✗ [{x.get('index')}] {loc} {k}: {x.get('detail')}")
                 elif k == "anchor_mismatch":
                     print(f"  ✗ 外部锚 anchor_mismatch 与链不符: {', '.join(x.get('diff') or []) or '(未列出)'}")
                 elif k == "anchor_unreadable":

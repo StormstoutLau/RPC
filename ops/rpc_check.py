@@ -1665,8 +1665,8 @@ def check_evidence(ctx):
         elif k == "recipe_unknown":
             details.append(f"[{x['index']}] {loc} recipe **不可验** (链={x.get('got')} 本工具知 "
                            f"{x.get('expect')}) —— 工具比链旧, 不得当作通过")
-        elif k in ("verdict_mismatch", "golden_identity"):
-            details.append(f"[{x['index']}] {x.get('detail')}")
+        elif k in ("verdict_mismatch", "golden_identity", "manifest_missing", "manifest_undeclared"):
+            details.append(f"[{x.get('index')}] {x.get('detail')}")
         elif k == "anchor_mismatch":
             details.append(f"外部锚与链不符: {', '.join(x.get('diff') or []) or '(未列出)'}")
         elif k == "anchor_unreadable":
