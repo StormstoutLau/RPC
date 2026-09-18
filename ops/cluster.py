@@ -3488,7 +3488,8 @@ def _golden_identity_check(run_dir: Path, label: str) -> tuple:
 # readonly 卡的 diff-scope 判据 (ADR-0007 缺口 4)。allow = 工作区相对路径前缀。
 #   **必须含 `out/`** —— readonly 卡的交付物就写在那里(如 dogfood-research-modulemap 的
 #   accept 判的就是 out/.dogfood_module_map.md) ⇒ naive "readonly ⇒ 零改动" 会误杀合法运行。
-#   载体 (`workspace-diff.txt`) 尚未落地 ⇒ 判据当前**不可判**, 不得当作通过 (记 gap)。
+#   载体 (`workspace-diff.txt`) 自 2026-09-18 起由**远端 `find -newer`** 采集 (缺口 4 已闭环) ⇒
+#   仍是 readonly 的**老 run** 无载体, 记 gap 而**不得当作通过**。
 AGENT_DIFF_ALLOW_PREFIXES = ("out/",)
 
 
@@ -3651,7 +3652,7 @@ def agent_chain_verify() -> dict:
             elif g_ok:
                 g_judged += 1
                 v_notes += g_gap               # 可判但"哈希已变/源已不在" ⇒ notes(info), 不告警
-            # ── 缺口 4: diff-scope (readonly 卡的"未越界"; 载体未落地 ⇒ 不可判, 不当作通过) ──
+            # ── 缺口 4: diff-scope (readonly 卡的"未越界"; 老 run 无载体 ⇒ 不可判, 不当作通过) ──
             d_bad, d_gap, d_ok = _diff_scope_check(run_dir, lbl)
             for b in d_bad:
                 issues.append(dict(tag, kind="diff_scope", detail=b))
