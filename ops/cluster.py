@@ -3248,6 +3248,10 @@ def _run_digest(run_dir: Path, recipe: str = AGENT_DIGEST_RECIPE):
         for s in subs:
             name = str(s.get("name") or "").strip() or "?"
             path = str(s.get("path") or "").strip()
+            # collect 型 subject 无 path ⇒ 按**约定名** `<name>.txt` 找归档件(缺口 4: 远端采集的
+            #   `workspace-diff` 由 console 归档为 `workspace-diff.txt`)。否则该件不被链钉住。
+            if not path and str(s.get("collect") or "").strip():
+                path = f"{name}.txt"
             tgt = (run_dir / path) if path else None
             hx = _sha256_file(tgt) if (tgt is not None and tgt.is_file()) else "-"
             files[name] = hx
