@@ -110,9 +110,36 @@ try:
     d = mk(tmp / "t13", META_OK.format(ts="1111"), dict(BASE, accept_golden=None))
     gb, gg, gok = C._golden_identity_check(d, "t/1111")
     chk("T13 A2 non-golden card => n/a", (not gb) and (not gg) and (not gok), f"gok={gok}")
+    # ── 缺口 4: diff-scope (readonly 卡的"未越界") ──
+    d = mk(tmp / "d1", META_OK.format(ts="1111"), dict(BASE, readonly=False))
+    (d / "workspace-diff.txt").write_text("docs/a.md\n", encoding="utf-8")
+    ib, gp, ok = C._diff_scope_check(d, "t/d1")
+    chk("D1 non-readonly => not applicable", (not ib) and (not gp) and (not ok), f"ok={ok}")
+
+    d = mk(tmp / "d2", META_OK.format(ts="1111"), dict(BASE, readonly=True))
+    ib, gp, ok = C._diff_scope_check(d, "t/d2")
+    chk("D2 readonly w/o carrier => gap, NOT issue (不得当作通过)",
+        (not ib) and gp and (not ok) and "不可判" in gp[0], f"ib={ib} gp={gp} ok={ok}")
+
+    d = mk(tmp / "d3", META_OK.format(ts="1111"), dict(BASE, readonly=True))
+    (d / "workspace-diff.txt").write_text("out/report.md\nout/sub/x.txt\n", encoding="utf-8")
+    ib, gp, ok = C._diff_scope_check(d, "t/d3")
+    chk("D3 readonly touching only out/ => clean", (not ib) and (not gp) and ok, f"ib={ib}")
+
+    d = mk(tmp / "d4", META_OK.format(ts="1111"), dict(BASE, readonly=True))
+    (d / "workspace-diff.txt").write_text("out/ok.md\ndocs/paper.md\nsrc/a.py\n", encoding="utf-8")
+    ib, gp, ok = C._diff_scope_check(d, "t/d4")
+    chk("D4 readonly touching outside out/ => ISSUE (越界)",
+        ib and ok and "越界" in ib[0] and "docs/paper.md" in ib[0], f"ib={ib}")
+
+    d = mk(tmp / "d5", META_OK.format(ts="1111"), dict(BASE, readonly=True))
+    (d / "workspace-diff.txt").write_text("\n  \n", encoding="utf-8")
+    ib, gp, ok = C._diff_scope_check(d, "t/d5")
+    chk("D5 readonly with empty diff => clean", (not ib) and (not gp) and ok, f"ib={ib}")
+
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 
 print()
-print("RESULT:", "ALL PASS (13/13)" if not fails else f"{len(fails)} FAILED -> {fails}")
+print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAILED -> {fails}")
 sys.exit(1 if fails else 0)
