@@ -243,8 +243,11 @@ M3 接受两种表示：完整 ID 直接查路由表；别名先经本表解析�
   "exit_code": 0, "status": "completed | failed | timeout | orphaned",
   "content_digest": "sha256:...",           # 全文不落（防敏感内容二次落盘），摘要+站上 out/ 原文
   "usage": {"total_tokens": 0, "tool_uses": 0},  // Anthropic task-notification 字段（§9.6-2）
+  // ⚠ usage 形状（2026-09-18，缺口 8）：新 run 为 {source, total_tokens, tool_uses, input, output,
+  //   reasoning, cache_read, cache_write, cost}（源于**站上 opencode 会话库**那次会话的聚合）；
+  //   source=opencode-session-db / unavailable（取不到，**不猜数**）/ not-collected-claude-path。
   "queue_s": 0, "run_s": 0,                 // Codex 分离计量（§9.7.2-5：获锁后才起 run 计时）
-  "timestamp_start": "", "timestamp_end": "",
+  "timestamp_start": "", "timestamp_end": "",  // 缺口 8：= 会话库该会话的 time_created/updated（ms→ISO8601）
   "prompt_sha256": "", "attach": []        // Model-visible means logged（§9.8.1）：一切注入留哈希
   // ⚠ attach 形状（2026-09-18，缺口 5）：**有附件的新 run** ⇒ 对象数组
   //   [{name, src, kind: file|dir, files, sha256}]（sha256 = 该附件"注入字节"的摘要，依站上清单算出后

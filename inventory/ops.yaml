@@ -32,6 +32,7 @@ station_runtime:
   - ops/station-bin/reqlog
   - ops/station-bin/plugin-probe
   - ops/station-bin/gguf-meta
+  - ops/station-bin/_oc_session_meta.sh
   - ops/station-bin/_slot_gate.sh
   - ops/station-bin/_station_ready.sh
   - ops/station-bin/agent-cli.ps1
