@@ -711,6 +711,13 @@ function Get-Sha256Lines([string[]]$lines) {
     return (Get-Sha256Text $blob)
 }
 
+function Get-NumOr([string]$s, [double]$def) {
+    # ADR-0007 缺口 8: 站上遥测文件的**容错取数** —— 只在形如数字时才转, 否则取默认值。
+    #   为什么不用 `[int]$x`: 字段缺失/被截断时会**抛异常**, 而遥测不该影响任务结论(只该显式降级)。
+    if ("$s" -match '^-?\d+(\.\d+)?$') { return [double]$s }
+    return $def
+}
+
 function Invoke-Scrubber {
     # D6 audit P1 (2026-09-03): regex-only sanitizer for sensitivity=sanitized (IMPL T2 scope).
     # Patterns: api keys (sk-...), emails, windows absolute paths. Runs on console BEFORE
@@ -898,9 +905,11 @@ function Invoke-Task {
     # ADR-0007 缺口 5: 附件身份 —— 除名字外还记**源路径**与**种类**(file/dir), 供 run.json 落
     #   每件摘要(kind 在该 .ps1 内是已知的; 从远端清单反推种类会多一个推断点)。
     $attachSrc = @{}; $attachKind = @{}
-    if ($attach.Count -gt 0) {
-        # remote .attach/ once; files/dirs scp per attachment below
-        $body = @"
+    # remote .attach/ reset —— **无条件**(含"本次无附件"的情形)! 2026-09-18 实测发现: 原实现只在
+    #   `$attach.Count -gt 0` 时才重建 ⇒ **无附件的派发会留着上一次的附件**(agent 可 `ls`/读到, 且
+    #   `attach-manifest` 会把外来文件算进本次 run —— 实测两次无附件 run 都报 `ATTACH_MANIFEST_LINES=3`)。
+    #   代价: 无附件派发多一次 ssh(reset) —— 正确性优先, 且该 reset 必须在 scp 之前。
+    $body = @"
 set -eu
 W="$Script:WORKSPACE_ROOT/$proj"
 # ADR-0007 缺口 5 实测发现(2026-09-18): `.attach/` **从不回收** —— 站上实测残留着 09-05/09-12 五次派发的
@@ -910,7 +919,8 @@ W="$Script:WORKSPACE_ROOT/$proj"
 #   ⇒ 改为**派发前清空**(等价于所声明的语义, 且不必依赖"collect 回收"那一步)。
 rm -rf "`$W/.attach" && mkdir -p "`$W/.attach"
 "@
-        Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-attach-mkdir.sh"
+    Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-attach-reset.sh"
+    if ($attach.Count -gt 0) {
         foreach ($a in $attach) {
             if (-not (Test-Path $a)) { Write-Host "attach missing (skip): $a"; continue }
             $isDir = Test-Path $a -PathType Container   # dir -> scp -r recursion (O-01 dfile)
@@ -1195,6 +1205,31 @@ exit `$RC
     if ($code -eq 124) { $code = 6 }
     Write-Host "TASK remote excode=$code"
 
+    # ADR-0007 缺口 8 (2026-09-18): 站在 **opencode 会话库**取本 run 遥测(session_id / tokens / tool_uses /
+    #   时间戳)。**不猜数**: headless run 的 stdout 不吐 usage(见 cluster.py reqlog 注) ⇒ 唯一可自证的
+    #   口径是**会话库自己对这次会话的聚合**。只有"取到/取不到"两态: 取不到时下方落
+    #   `usage.source=unavailable` 并告警 —— **绝不把 0 当作"用了 0 token"**。
+    #   纪律: 遥测**不参与成败判定**(失败只告警, 不改 rc), 与 .meta/.progress 同属"站上原件"。
+    try {
+        $localSm = 'D:\RPC\ops\station-bin\_oc_session_meta.sh'
+        $tmpSm = Join-Path $Script:TMP_ROOT '_oc_session_meta.sh'
+        New-Item -ItemType Directory -Path $Script:TMP_ROOT -Force | Out-Null
+        Copy-Item $localSm $tmpSm -Force | Out-Null
+        scp -q -o ConnectTimeout=10 $tmpSm "${hostName}:/tmp/_oc_session_meta.sh" 2>$null
+        if ($LASTEXITCODE -ne 0) { Write-Host "SESSION_META_WARN: scp helper failed" }
+        else {
+            # 窗口起点 = 本 run 的 ts − 5min 裕度 ⇒ 只取"本次新建"的会话(同工作区的旧会话被 since 排除)
+            #   ⚠ **PS5.1 地雷(实测 2026-09-18)**: `[DateTime]::UnixEpoch` 在 .NET Framework 4.8 **不存在**
+            #   (静默为 `''` ⇒ 相减时抛 `找不到 op_Subtraction 的重载`)。改用 `[DateTimeOffset]`(4.6+ 有
+            #   `ToUnixTimeMilliseconds`) —— 该路径虽有 try/catch 兜底(首次实测正是它把 NA 路径跑通了),
+            #   但**不能靠兜底当正常路径**。
+            $runStart = [DateTimeOffset]::ParseExact($ts.Substring(0, 14), 'yyyyMMddHHmmss', [Globalization.CultureInfo]::InvariantCulture)
+            $sinceMs = $runStart.ToUnixTimeMilliseconds() - 300000
+            & ssh -o ConnectTimeout=10 $hostName "bash /tmp/_oc_session_meta.sh '$W' $sinceMs '$W/out/.session-meta.txt'" 2>$null | Out-Null
+        }
+    }
+    catch { Write-Host "SESSION_META_WARN: $($_.Exception.Message)" }
+
     # 6) collect: pull out/.meta + out/.agent-output.txt + out/.accept-output.txt, compute content_digest (M1)
     $outTxt = Join-Path $env:TEMP "agent-cli-out-$ts.txt"
     $accTxt = Join-Path $env:TEMP "agent-cli-accept-$ts.txt"
@@ -1222,7 +1257,8 @@ exit `$RC
         #   远端已由 `find -newer .run-marker` 产出(见 body 内的采集段); 缺件时下面 else 分支跳过。
         # ADR-0007 缺口 5: 增 `.attach-manifest.txt`(附件**注入字节**的逐文件哈希; 无附件时为**空件**,
         #   仍会发 marker ⇒ 靠下面的**存在性**判定归档, 不靠真值判定)。
-        $evNames = @('.meta', '.prompt.txt', '.progress', '.accept-cmds.txt', '.golden-cmd.txt', '.workspace-diff.txt', '.attach-manifest.txt')
+        # ADR-0007 缺口 8: 增 `.session-meta.txt`(站上会话库遥测; helper **一定**产出该件, 含"取不到"情形)。
+        $evNames = @('.meta', '.prompt.txt', '.progress', '.accept-cmds.txt', '.golden-cmd.txt', '.workspace-diff.txt', '.attach-manifest.txt', '.session-meta.txt')
         $evCmd = (($evNames | ForEach-Object { "if [ -f $W/out/$_ ]; then echo FILE:$_ ; base64 -w0 $W/out/$_ ; echo ; fi" }) -join ' ; ')
         $evRaw = @(& ssh -o ConnectTimeout=10 $hostName $evCmd 2>$null)
         $evBuf = @{}; $evCur = ''
@@ -1329,6 +1365,51 @@ exit `$RC
         }
     }
 
+    # ── ADR-0007 缺口 8 (2026-09-18): **遥测解析**(站上会话库原件 ⇒ run.json) ──
+    #   三态而非二态: `SESSION_FOUND=1` ⇒ 落真实值(source=opencode-session-db);
+    #   否则 ⇒ `usage.source='unavailable'` + 告警(**不把 0 当成"用了 0 token"**, 与缺口 4/5 的
+    #   "不适用/不可判/可判分开报"同一纪律)。文件缺失同样落入 unavailable 分支(件存在性由合批通道保证)。
+    $sessKv = @{}
+    $smPath = Join-Path $evDir '.session-meta.txt'
+    if (Test-Path $smPath) {
+        foreach ($ln in @(Get-Content $smPath -Encoding UTF8)) {
+            if ("$ln" -match '^([A-Z_]+)=(.*)$') { $sessKv[$matches[1]] = $matches[2] }
+        }
+    }
+    $sessionId = ''; $tsStart = ''; $tsEnd = ''
+    $usageObj = [ordered]@{ source = 'unavailable'; total_tokens = 0; tool_uses = 0 }
+    if ($sessKv['SESSION_FOUND'] -eq '1') {
+        $sessionId = "$($sessKv['SESSION_ID'])"
+        $srcTag = 'opencode-session-db'
+        if ("$($sessKv['SESSION_AMBIGUOUS'])" -eq '1') {
+            # 站上判据: 仅当**另一会话与本会话时间重叠**才算歧义(与钟无关) ⇒ 背靠背派发不会误报;
+            #   真并发(同工作区 readonly 共享锁)才会命中 ⇒ 标注而非假装确定。
+            $srcTag = "opencode-session-db(时间重叠 $($sessKv['SESSION_CANDIDATES']) 个会话: 归属不确定)"
+            Write-Host "SESSION_META_AMBIGUOUS: 该工作区有与本 run **时间重叠**的会话 ⇒ 遥测归属不确定(已标注)"
+        }
+        $usageObj = [ordered]@{
+            source = $srcTag
+            total_tokens = [int](Get-NumOr $sessKv['TOKENS_TOTAL'] 0)
+            tool_uses = [int](Get-NumOr $sessKv['TOOL_USES'] 0)
+            input = [int](Get-NumOr $sessKv['TOKENS_INPUT'] 0)
+            output = [int](Get-NumOr $sessKv['TOKENS_OUTPUT'] 0)
+            reasoning = [int](Get-NumOr $sessKv['TOKENS_REASONING'] 0)
+            cache_read = [int](Get-NumOr $sessKv['TOKENS_CACHE_READ'] 0)
+            cache_write = [int](Get-NumOr $sessKv['TOKENS_CACHE_WRITE'] 0)
+            cost = Get-NumOr $sessKv['SESSION_COST'] 0
+        }
+        foreach ($pair in @(@('TS_CREATED_MS', 'start'), @('TS_UPDATED_MS', 'end'))) {
+            if ("$($sessKv[$pair[0]])" -match '^\d+$') {
+                # ⚠ 同上: 用 [DateTimeOffset](PS5.1 无 [DateTime]::UnixEpoch)
+                $iso = [DateTimeOffset]::FromUnixTimeMilliseconds([int64]$sessKv[$pair[0]]).ToLocalTime().ToString('o')
+                if ($pair[1] -eq 'start') { $tsStart = $iso } else { $tsEnd = $iso }
+            }
+        }
+    }
+    else {
+        Write-Host "SESSION_META_UNAVAILABLE: 站上未取到本 run 会话遥测(helper/会话库/窗口不匹配) ⇒ usage.source=unavailable(**不猜数**)"
+    }
+
     # 8) ledger line FIRST (G13) -- fixed to sandbox-writable d:\RPC zone (O-04: projRoot not
     #     sandbox-safe). Run ledger before any agent-out write so a collect crash (startup-
     #     injected sandbox whitelist w/o D:\Paper\agent-out) never loses the run record.
@@ -1364,18 +1445,21 @@ exit `$RC
         model = $id
         sensitivity = $sens
         readonly = $readonly
-        session_id = ''
+        # ADR-0007 缺口 8: 会话 id / 用量 / 时间戳 —— 源为**站上 opencode 会话库**(见上方遥测解析段);
+        #   取不到时 session_id='' 且 usage.source='unavailable'(**不猜数**)。
+        session_id = $sessionId
         exit_code = $code
         status = if ($code -eq 0 -and $acceptPassed -and $acceptGoldenPassed) { 'completed' } elseif ($code -eq 6) { 'timeout' } else { 'failed' }
         content_digest = "sha256:$contentSha"
-        usage = [ordered]@{ total_tokens = 0; tool_uses = 0 }
+        # 缺口 8: 形状升级 —— 除 total_tokens/tool_uses 外含 breakdown + `source`(血缘: 会话库 vs 取不到)
+        usage = $usageObj
         queue_s = $queue_s
         run_s = $run_s
         slot = $slotGate
         output_bytes = $outputBytes
         output_bps = $outputBps
-        timestamp_start = ''
-        timestamp_end = ''
+        timestamp_start = $tsStart
+        timestamp_end = $tsEnd
         prompt_sha256 = "sha256:$promptSha"
         # ADR-0007 缺口 5: 有附件时为**对象数组** {name,src,kind,files,sha256}(摘要源于站上清单);
         #   无附件时 `[]`(与老形状一致)。消费方需按"对象数组 / 名字数组"两种形状处理(见 ARCHITECTURE §6)。
@@ -1437,6 +1521,10 @@ exit `$RC
             #   是否自洽**只能在人/工具侧核对**, 该上限已记入 ADR-0007/ARCHITECTURE。
             $amSrc = Join-Path $evDir '.attach-manifest.txt'
             if (Test-Path $amSrc) { Move-Item $amSrc (Join-Path $runDir 'attach-manifest.txt') -Force | Out-Null }
+            # ADR-0007 缺口 8: 遥测原件(会话库取数结果) —— 与 run.json 的解析值**同源**, 便于人/工具复核
+            #   (解析若被误改, 可直接比对原件; 摘要未被链钉住 ⇒ 该上限同 attach-manifest, 见 ADR-0007)
+            $smSrc = Join-Path $evDir '.session-meta.txt'
+            if (Test-Path $smSrc) { Move-Item $smSrc (Join-Path $runDir 'session-meta.txt') -Force | Out-Null }
             # D4a: 合批暂存目录(5 个小件已 Move 走)一并清掉, 不留 TEMP 残留
             if (Test-Path $evDir) { Remove-Item $evDir -Recurse -Force -ErrorAction SilentlyContinue | Out-Null }
             Remove-Item (Join-Path $projRoot 'agent-out\.agent-run.json') -ErrorAction SilentlyContinue | Out-Null
@@ -1807,7 +1895,7 @@ function Invoke-Task-Claude {
     $finalCode = if ($rc -eq 0 -and $acceptOk -eq 1 -and $acceptGoldenOk -eq 1) { 0 } elseif ($rc -eq 6) { 6 } else { 1 }
     $ledger = 'd:\RPC\ops\station-bin\agent-runs.log'
     $line = "$ts,$proj,$id,$sens,$finalCode,0,$runS"
-    try { Add-Content -Path $ledger -Value $line -Encoding utf8 } catch { Write-Host "LEDGER_WARN: $($_.Exception.Message)" }
+    try { Add-Content -Path $ledger -Value $line -Encoding utf8 | Out-Null } catch { Write-Host "LEDGER_WARN: $($_.Exception.Message)" }
 
     $collectOk = $true; $runDir = ''
     try {
@@ -1822,7 +1910,10 @@ function Invoke-Task-Claude {
         proj = $proj; task_id = "task-$ts"; cli = 'claude'; model = $id; sensitivity = $sens
         readonly = $readonly; session_id = ''; exit_code = $finalCode
         status = if ($finalCode -eq 0) { 'completed' } elseif ($finalCode -eq 6) { 'timeout' } else { 'failed' }
-        content_digest = "sha256:$contentSha"; usage = [ordered]@{ total_tokens = 0; tool_uses = 0 }
+        # 缺口 8 **刻意不做 claude 备路**(与缺口 5/6 同例): 该路的会话不落在 opencode 会话库 ⇒
+        #   不猜数, 用 source 显式标注"未采集", 使"0"与"没采集"可区分。
+        content_digest = "sha256:$contentSha"
+        usage = [ordered]@{ source = 'not-collected-claude-path'; total_tokens = 0; tool_uses = 0 }
         queue_s = 0; run_s = $runS; slot = $null
         output_bytes = $outputBytes; output_bps = $outputBps
         timestamp_start = ''; timestamp_end = ''

@@ -29,6 +29,9 @@ evidence-manifest:
     - name: prompt
       path: prompt.txt
       digest: sha256
+    - name: session-meta
+      path: session-meta.txt
+      digest: sha256
 ---
 ## 任务描述
 
