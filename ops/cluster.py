@@ -16,7 +16,7 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
     python ops/cluster.py flow [list|<name>] [--plan|--go] [args...]        # 声明式流程 (步骤→判据→台账)
     python ops/cluster.py reqlog {sample|summary|tail|path} [--minutes N]   # 引擎请求/token 统计 (站上采样)
     python ops/cluster.py ttl {status|check|enable|disable} [--ttl N] [--dry-run] [--go]  # 空闲 TTL 自动卸载 (默认关)
-    python ops/cluster.py agent {runs|live|tail|chain|verify|audit} [--limit N] [--station X] [--json]  # 进度/吞吐 + 证据链 + 可复现性审计
+    python ops/cluster.py agent {runs|live|tail|chain|verify|audit|audit-judge} [--limit N] [--station X] [--json]  # 进度/吞吐 + 证据链 + 可复现性审计 + judge 校准
 
 子命令:
     status   三站 llama /health + 当前加载实例 + 引擎清单一屏聚合
@@ -73,6 +73,7 @@ import sys
 import re
 import time
 import json
+import base64
 import socket
 import hashlib
 import datetime
@@ -3872,6 +3873,154 @@ def agent_audit(limit: int = 0) -> dict:
                        "collect": n_collect, "undeclared": n_undecl, "runs_v2": n_runs_v2}}
 
 
+# ── 阶段 3-b: 异基座 judge 的 **A/A 基线 + 顺序对调** 校准 (ADR-0007) ──────────────
+# 为什么先做校准而不是先上"审计结论": 调研 §5.5 已量化"家族级自偏好"与 position bias(63%) ——
+#   在**没量出噪声底**之前, 任何"judge 说 X"都无法归因(是发现还是抖动)。故 3-b 第一步只回答一个问题:
+#   **"这条判据, 一个跨家族 judge 能不能稳定地判?"** —— 能则继续, 不能则据实停下(不建在沙上)。
+AGENT_AUDIT_JUDGE_RULE = """你是**证据可复现性审计员**。给你一次 run 的元数据与若干"声明条目"。
+判据（**只按此判据**, 不要引入其它标准）:
+  一条 subject 声明**可独立复现**当且仅当：它是 path 型 **且** 该归档件存在 **且** 非空（字节 > 0）。
+  其余一律是**缺口（REAL）** —— 含 collect 型（其声明的命令从未执行, 只有约定名产物 ⇒ 不可独立复现）、
+  件缺失、件为空、既无 path 也无 collect。
+  信息不足（如"存在=未知"）⇒ **UNSURE**。
+只输出逐行 `ITEM <序号>: <REAL|FALSE|UNSURE>`；不要解释、不要多余文字。
+
+事实：
+"""
+
+# 同判据的**改写版**（措辞扰动轴）: 同参同序的 A/A 只证明"确定性"(temp=0 下近乎必一致),
+#   措辞一改才看得出判据理解是否**稳健** —— 这是 A/A 之外必须补的一轴(否则噪声底被低估)。
+AGENT_AUDIT_JUDGE_RULE_B = """任务：复核"证据可复现性"条目。逐条给结论。
+判定原则（仅按此原则）：
+  · 只有当**同时**满足"path 型、归档件存在、文件字节数 > 0"时，该声明才算**可复现** ⇒ 输出 FALSE（不是缺口）。
+  · 其它情况都算**缺口** ⇒ 输出 REAL。例如：collect 型（声明了命令却没执行过）、文件不存在、文件 0 字节、
+    未给出 path 也没给出 collect。
+  · 若关键信息没给全（比如"存在=未知"）⇒ 输出 UNSURE（宁弃权不猜）。
+格式：逐行 `ITEM <序号>: <REAL|FALSE|UNSURE>`，无其它内容。
+
+事实：
+"""
+
+
+def _judge_call(st: str, port: int, prompt: str, max_tokens: int = 512, timeout: int = 240) -> str:
+    """站上 curl 调**内层引擎端口**(与 `flow` 的 bench 同路 —— 该端口无鉴权; studio 的 8080 才有 key)。
+
+    body 走 **base64 通道**(与本仓既有手法一致): 避免引号/中文/换行在 shell 层被改写。
+    """
+    body = json.dumps({"model": "main", "messages": [{"role": "user", "content": prompt}],
+                       "max_tokens": max_tokens, "temperature": 0, "stream": False})
+    b64 = base64.b64encode(body.encode("utf-8")).decode("ascii")
+    cmd = (f"echo {b64} | base64 -d > /tmp/_judge_body.json && "
+           f"curl -s -m {timeout} -H 'Content-Type: application/json' "
+           f"--data-binary @/tmp/_judge_body.json http://127.0.0.1:{port}/v1/chat/completions")
+    ok, out = ssh_run(st, cmd, timeout=timeout + 30)
+    if not ok or not out.strip().startswith("{"):
+        return ""
+    try:
+        r = json.loads(out)
+        return (r["choices"][0]["message"]["content"] or "").strip()
+    except Exception:
+        return ""
+
+
+def _judge_identity(st: str, port: int) -> str:
+    """取引擎实际加载的**模型 id** —— 跨家族的说法必须落到真值上(不写"我以为用的是 Qwen")。"""
+    ok, out = ssh_run(st, f"curl -s -m 10 http://127.0.0.1:{port}/v1/models")
+    if not ok or not out.strip().startswith("{"):
+        return ""
+    try:
+        d = json.loads(out).get("data") or []
+        return ",".join(str(x.get("id") or "") for x in d)[:80]
+    except Exception:
+        return ""
+
+
+def _audit_judge_items(audit: dict) -> list:
+    """构造**校准题集**: 每条 = (展示事实, 期望判定)。
+
+    两类: ① **真实语料条目**(3-a 在真 run 上产出的 gap) —— 检验"真数据上能否稳定判";
+         ② **构造对照**(含边界: 0 字节 / collect 但产物在 / 存在未知) —— 期望值由**提示里写明的判据**唯一决定,
+            故可与 judge 的答案比对(这是"校准", 不是"用 LLM 当 oracle")。
+    """
+    items = []
+    # ① 真实条目: 取 audit 里的 collect 型(declared-not-executed) —— 判据下它们必是 REAL
+    real = [g for g in audit.get("gaps", []) if "collect 命令但**从未执行**" in g]
+    for g in real[:2]:
+        items.append((f"[真实语料] " + g.replace("\n", " "), "REAL"))
+    # ② 构造对照(事实陈述式, 不依赖任何归档件 —— 故不需要动盘上文件)
+    items += [
+        ("subject 'prompt' | 类型=path | 归档件 prompt.txt | 存在=是 | 字节=1389 | 机器层判定=offline-ok", "FALSE"),
+        ("subject 'workspace-diff' | 类型=collect | 约定名件 workspace-diff.txt | 存在=是 | 字节=0", "REAL"),
+        ("subject 'judgment-record' | 类型=path | 归档件 judgment-record.txt | 存在=否 | 机器层判定=missing-artifact", "REAL"),
+        ("subject 'attach-manifest' | 类型=collect | 约定名件 attach-manifest.txt | 存在=是 | 字节=232", "REAL"),
+        ("subject 'mystery' | 类型=— | 既无 path 也无 collect | 机器层判定=no-path-no-collect", "REAL"),
+        ("subject 'session-meta' | 类型=path | 归档件 session-meta.txt | 存在=未知 | 机器层判定=不可判", "UNSURE"),
+        ("subject 'agent-output' | 类型=path | 归档件 agent-output.txt | 存在=是 | 字节=51 | 机器层判定=offline-ok", "FALSE"),
+        # ⚠ **关键对照: 机器层判定故意与判据相反** —— 用来分辨 judge 是"复核"还是"复读机器判定":
+        #   若它照抄机器标签(offline-ok / missing-artifact) ⇒ 异基座复核**零增量**(只是复述);
+        #   若它按提示里写明的判据判(0 字节 ⇒ REAL / 件在且非空 ⇒ FALSE) ⇒ 才是真的独立复核。
+        ("subject 'ledger-extra' | 类型=path | 归档件 ledger-extra.txt | 存在=是 | 字节=0 | 机器层判定=offline-ok", "REAL"),
+        ("subject 'diff-full' | 类型=path | 归档件 diff-full.txt | 存在=是 | 字节=1024 | 机器层判定=missing-artifact", "FALSE"),
+    ]
+    return items
+
+
+def _parse_verdicts(text: str, n_items: int) -> list:
+    """从 judge 回复里抽 `ITEM k: V` ⇒ 按**展示序号**返回定长列表(缺失记 'MISSING')。"""
+    got = ["MISSING"] * n_items
+    for ln in (text or "").splitlines():
+        m = re.search(r"ITEM\s*(\d+)\s*[:：]\s*(REAL|FALSE|UNSURE)\b", ln, re.I)
+        if m:
+            i = int(m.group(1))
+            if 1 <= i <= n_items:
+                got[i - 1] = m.group(2).upper()
+    return got
+
+
+def agent_audit_judge(audit: dict, max_tokens: int = 400, rounds: int = 3) -> dict:
+    """A/A 基线（同题集连判两次）+ 顺序对调（第三次把题序整体倒过来）⇒ 三个数:
+
+      - **A/A 一致率**: 第 1、2 轮同序 ⇒ 该 judge 的**自一致**(噪声底)
+      - **序翻转率**: 第 1 轮 vs 第 3 轮(倒序) **按条目**比对 ⇒ position bias 的直接影响
+      - **与判据一致率**: 各轮 vs 期望值 ⇒ 是否真的会按写明的判据判
+
+    仍是 **advisory**: 本命令只**测量** judge 的可靠性, 不改门禁 FAIL 集、不写任何 run 目录。
+    """
+    st, port = _flow_find_engine()
+    if not port:
+        return {"error": "无在服务引擎(先 load 一个**跨家族** judge 模型, 如 qwen3.8-27b-mtp)"}
+    ident = _judge_identity(st, port)
+    items = _audit_judge_items(audit)
+    n = len(items)
+
+    def _one(order, rule=AGENT_AUDIT_JUDGE_RULE):
+        facts = "\n".join(f"ITEM {i+1}: {items[j][0]}" for i, j in enumerate(order))
+        return _parse_verdicts(_judge_call(st, port, rule + facts, max_tokens), n)
+
+    r1 = _one(list(range(n)))
+    r2 = _one(list(range(n)))
+    rev = list(range(n))[::-1]
+    r3_disp = _one(rev)
+    r4 = _one(list(range(n)), AGENT_AUDIT_JUDGE_RULE_B)     # 措辞扰动(同序)
+    # 把倒序轮的**展示序**映射回条目 idx
+    r3 = ["MISSING"] * n
+    for disp, idx in enumerate(rev):
+        r3[idx] = r3_disp[disp]
+
+    aa = sum(1 for i in range(n) if r1[i] == r2[i])
+    flip = sum(1 for i in range(n) if r1[i] != r3[i])
+    para = sum(1 for i in range(n) if r1[i] == r4[i])
+    agree = {k: sum(1 for i in range(n) if [r1, r2, r3, r4][k][i] == items[i][1]) for k in (0, 1, 2, 3)}
+    used = sum(1 for i in range(n) if r1[i] == "UNSURE") + sum(1 for i in range(n) if r2[i] == "UNSURE")
+    rows = [{"idx": i + 1, "fact": items[i][0][:70], "expect": items[i][1],
+             "aa_1": r1[i], "aa_2": r2[i], "swap": r3[i], "para": r4[i]} for i in range(n)]
+    return {"station": st, "port": port, "judge_model": ident, "items": rows,
+            "aa_agree": f"{aa}/{n}", "swap_flip": f"{flip}/{n}", "paraphrase_agree": f"{para}/{n}",
+            "rule_agree": f"r1 {agree[0]}/{n} · r2 {agree[1]}/{n} · r3(倒序) {agree[2]}/{n} · r4(改写) {agree[3]}/{n}",
+            "unsure_total": used,
+            "note": "advisory: 本命令只测量 judge 可靠性, 不改门禁"}
+
+
 def cmd_agent(argv) -> int:
     """cluster.py agent {runs|live|tail|chain|verify|audit} [--limit N] [--station A|B|C] [--json] [--reanchor]
 
@@ -3883,11 +4032,14 @@ def cmd_agent(argv) -> int:
     `audit`=**可复现性审计**(阶段 3-a, ADR-0007): 逐 subject 判"能否被独立复现、卡在哪",
     输出**机器可判 gap 表**(advisory, **不进 FAIL 集**); 与 verify 分工: verify 管"是否被改",
     audit 管"是否可重放"。只读, 不触站。
+    `audit-judge`=**阶段 3-b 校准**(advisory): 用**在服务引擎**(宜为**跨家族**模型, 如 qwen3.8-27b-mtp)
+    对 3-a 的条目判两次(A/A 噪声底) + 倒序再判一次(position bias) ⇒ 只**测量** judge 可靠性,
+    不改门禁、不写 run 目录。**先量噪声底再决定要不要把异基座审计做成常跑**。
     """
     act = (argv[0] if argv else "runs").lower()
-    if act not in ("runs", "live", "tail", "chain", "verify", "audit"):
-        print("用法: cluster.py agent {runs|live|tail|chain|verify|audit} [--limit N] [--station A|B|C] "
-              "[--json] [chain 可加 --reanchor]")
+    if act not in ("runs", "live", "tail", "chain", "verify", "audit", "audit-judge"):
+        print("用法: cluster.py agent {runs|live|tail|chain|verify|audit|audit-judge} [--limit N] "
+              "[--station A|B|C] [--json] [chain 可加 --reanchor]")
         return 1
     limit, only, as_json = 20, None, ("--json" in argv)
     i = 1
@@ -3961,6 +4113,34 @@ def cmd_agent(argv) -> int:
                 print(f"      · …另有 {len(r['gaps']) - 10} 条")
         else:
             print("\n  ✓ gap 表为空（每条声明都可离线复现, 且无未声明归档件）")
+        return 0
+
+    if act == "audit-judge":
+        a = agent_audit(limit=(limit if "--limit" in argv else 0))
+        mt = 400
+        if "--max-tokens" in argv:
+            try:
+                mt = max(64, int(argv[argv.index("--max-tokens") + 1]))
+            except (ValueError, IndexError):
+                print("--max-tokens 需要整数")
+                return 1
+        r = agent_audit_judge(a, max_tokens=mt)
+        if as_json:
+            print(json.dumps(r, ensure_ascii=False))
+            return 0 if not r.get("error") else 1
+        if r.get("error"):
+            print(f"阶段 3-b 校准: 不可执行 —— {r['error']}")
+            return 1
+        print("=== 阶段 3-b 校准: A/A 基线 + 序对调 + 措辞扰动 (advisory; 只测 judge 可靠性) ===")
+        print(f"  judge 引擎: {r['station']}:{r['port']} · 模型={r['judge_model'] or '(未报)'}")
+        print(f"  A/A 一致 **{r['aa_agree']}** · 序翻转 **{r['swap_flip']}** · 措辞扰动一致 **{r['paraphrase_agree']}**")
+        print(f"  与判据一致 {r['rule_agree']} · UNSURE(r1+r2) {r['unsure_total']}")
+        print(f"  {'#':<3} {'期望':<7} {'第1轮':<8} {'第2轮':<8} {'倒序':<8} {'改写':<8} 事实")
+        for x in r["items"]:
+            print(f"  {x['idx']:<3} {x['expect']:<7} {x['aa_1']:<8} {x['aa_2']:<8} {x['swap']:<8} "
+                  f"{x['para']:<8} {x['fact']}")
+        print("\n  判读: A/A=确定性(噪声底) · 序翻转=position bias · 措辞扰动=**稳健性**(A/A 测不到的那半) ·")
+        print("        与判据一致=是否真按判据判(对照项故意让机器标签与判据相反 ⇒ 可辨'复核'vs'复读')。")
         return 0
 
     if act == "verify":
