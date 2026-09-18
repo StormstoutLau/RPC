@@ -4047,20 +4047,19 @@ def _judge_identity(st: str, port: int) -> str:
         return ""
 
 
-def _audit_judge_items(audit: dict) -> list:
-    """构造**校准题集**: 每条 = (展示事实, 期望判定)。
+def _audit_judge_stable_items() -> list:
+    """**稳定题集** = 与语料无关的"构造对照"（事实陈述式, 不依赖任何归档件 ⇒ 不动盘上文件）。
 
-    两类: ① **真实语料条目**(3-a 在真 run 上产出的 gap) —— 检验"真数据上能否稳定判";
-         ② **构造对照**(含边界: 0 字节 / collect 但产物在 / 存在未知) —— 期望值由**提示里写明的判据**唯一决定,
-            故可与 judge 的答案比对(这是"校准", 不是"用 LLM 当 oracle")。
+    **为什么必须与语料派生条目分开成一个函数**（2026-09-18 闭环复核的两次修正）:
+      ① 校准指纹要判"判据/题集改没改、校准过没过期" ⇒ 若把**语料派生**条目也纳入,
+         语料一变指纹就变 ⇒ 每次都判"过期"（假告警）。
+      ② 更关键: 指纹的**比对方**（`agent_audit_calib_status`，门禁会用）**手上没有 audit 结果**。
+         首版让它按空题集算指纹 ⇒ 与报告里"含 16 条"的指纹**恒定不等** ⇒ 保存完立刻自报
+         "校准已过期"（实测踩到）。这是"恒真判据"的**镜像: 恒假判据** —— 判据永远不成立,
+         后果同样是"判据失效而无人察觉"。
+      ⇒ 本题集**无需 audit 即可构造** ⇒ 比对双方从同一来源取, 才谈得上"可比"。
     """
-    items = []
-    # ① 真实条目: 取 audit 里的 collect 型(declared-not-executed) —— 判据下它们必是 REAL
-    real = [g for g in audit.get("gaps", []) if "collect 命令但**从未执行**" in g]
-    for g in real[:2]:
-        items.append((f"[真实语料] " + g.replace("\n", " "), "REAL"))
-    # ② 构造对照(事实陈述式, 不依赖任何归档件 —— 故不需要动盘上文件)
-    items += [
+    return [
         ("subject 'prompt' | 类型=path | 归档件 prompt.txt | 存在=是 | 字节=1389 | 机器层判定=offline-ok", "FALSE"),
         ("subject 'workspace-diff' | 类型=collect | 约定名件 workspace-diff.txt | 存在=是 | 字节=0", "REAL"),
         ("subject 'judgment-record' | 类型=path | 归档件 judgment-record.txt | 存在=否 | 机器层判定=missing-artifact", "REAL"),
@@ -4086,7 +4085,89 @@ def _audit_judge_items(audit: dict) -> list:
         #   ⑤ Auto_Prover 型: 证明日志(长文本) + 存在未知 ⇒ 应弃权
         ("subject 'lake-build-log' | 类型=path | 归档件 lake-build.log | 存在=未知", "UNSURE"),
     ]
-    return items
+
+
+def _audit_judge_items(audit: dict) -> list:
+    """构造**校准题集**: 每条 = (展示事实, 期望判定)。返回 `(items, n_real)`。
+
+    两类: ① **真实语料条目**(取 audit 的 collect 型 gap) —— 检验"真数据上能否稳定判";
+         ② **稳定题集**（= `_audit_judge_stable_items()`）—— 期望值由**提示里写明的判据**唯一决定,
+            故可与 judge 的答案比对(这是"校准", 不是"用 LLM 当 oracle")。
+    `n_real` = ① 的条数, 交给调用方**只为在报告里写清"哪几条不入指纹"**;
+    指纹只覆盖 ② —— 因为 ① 随语料变化, 且**比对方（门禁）手上没有 audit 结果**（见 `_judge_calib_digest`）。
+    """
+    items = []
+    # ① 真实条目: 取 audit 里的 collect 型(declared-not-executed) —— 判据下它们必是 REAL
+    real = [g for g in audit.get("gaps", []) if "collect 命令但**从未执行**" in g]
+    for g in real[:2]:
+        items.append((f"[真实语料] " + g.replace("\n", " "), "REAL"))
+    items += _audit_judge_stable_items()
+    return items, len(real[:2])
+
+
+def _judge_calib_digest() -> dict:
+    """校准**指纹**: 钉住"判据文本(A/B 两版) + **稳定题集**"。
+
+    取数**不需要 audit 结果**（稳定题集是构造出来的）—— 这点要紧: 门禁就是靠它才能在没有 audit
+    上下文的情况下算出"当前指纹"并与报告比对。签名**刻意不带参数**，免得又出现"双方各算一套"。
+
+    为什么需要（2026-09-18 闭环复核）：ADR-0007 写着"改判据必须同步改题集并重跑校准"，
+    但校准报告此前**既不记判据文本、也不记题集**（且展示列还截断到 70 字符）⇒
+    **"改了没重跑"无人能发现** —— 而本仓自己的纪律原文是：
+    "**只写规则不绑定执行等于空头承诺**，故做成断言"（`check_scripts` 注释）。
+    本函数把那句空头承诺变成**可判**：报告存指纹，比对不上就是"校准已过期"。
+
+    ⚠ 指纹**排除语料派生条目**（见 `_audit_judge_items`）—— 否则语料一变动就假报过期。
+    """
+    import hashlib as _h
+
+    def _sha(s: str) -> str:
+        return _h.sha256(s.encode("utf-8")).hexdigest()
+
+    # 题集按**完整文本**入指纹 —— 报告正文里那列为了排版截断过, 不能拿它算
+    stable = _audit_judge_stable_items()
+    blob = "\n".join(f"{a}\t{b}" for a, b in stable) + "\n"
+    rule_a, rule_b = _sha(AGENT_AUDIT_JUDGE_RULE), _sha(AGENT_AUDIT_JUDGE_RULE_B)
+    items_sha = _sha(blob)
+    return {"rule_sha256": rule_a, "rule_b_sha256": rule_b,
+            "items_sha256": items_sha, "items_n": len(stable),
+            "calib_sha256": _sha(rule_a + "\n" + rule_b + "\n" + items_sha)}
+
+
+def agent_audit_calib_status() -> dict:
+    """把**最近一份校准报告**的指纹与当前判据/题集比对 ⇒ 判"校准是否过期"。
+
+    **纯本地、零网络、不需要引擎** —— 这正是它能被门禁直接调用的原因（才算"可判"）。
+    `state`: `fresh`（一致）/ `stale`（**判据或题集改过、报告没重跑**）/ `no-fingerprint`（旧报告，
+    产生于指纹机制之前 ⇒ **不得当过期报**，只提示）/ `no-report`。
+    """
+    d = (Path(__file__).resolve().parent.parent / "spec" / "d6-agent-standard"
+         / "evidence-chain" / "audits")
+    cur = _judge_calib_digest()
+    try:
+        fs = sorted(d.glob("AUDIT-JUDGE-*.json"))
+    except OSError:
+        fs = []
+    if not fs:
+        return {"state": "no-report", "file": "", "recorded": "", "current": cur["calib_sha256"]}
+    f = fs[-1]
+    try:
+        j = json.loads(f.read_text(encoding="utf-8"))
+    except Exception:
+        return {"state": "no-report", "file": f.name, "recorded": "", "current": cur["calib_sha256"]}
+    rec = str((j.get("calib") or {}).get("calib_sha256") or "")
+    if not rec:
+        return {"state": "no-fingerprint", "file": f.name, "recorded": "", "current": cur["calib_sha256"]}
+    return {"state": "fresh" if rec == cur["calib_sha256"] else "stale",
+            "file": f.name, "recorded": rec, "current": cur["calib_sha256"]}
+
+
+def calib_status_line(cs: dict) -> str:
+    """`agent_audit_calib_status()` 的人读一行（**单一文案点** —— 命令与门禁共用，免得两处口径漂移）。"""
+    return {"fresh": "✅ 与当前判据/稳定题集一致",
+            "stale": "⚠ **校准已过期** —— 判据或稳定题集已改，但报告未重跑",
+            "no-fingerprint": "· 最近一份报告生成于指纹机制之前（**无法比对，不当作过期**）",
+            "no-report": "· 尚无校准报告"}.get(cs.get("state", ""), "· 状态未知")
 
 
 def _parse_verdicts(text: str, n_items: int) -> list:
@@ -4114,7 +4195,7 @@ def agent_audit_judge(audit: dict, max_tokens: int = 400, rounds: int = 3, save:
     if not port:
         return {"error": "无在服务引擎(先 load 一个**跨家族** judge 模型, 如 qwen3.8-27b-mtp)"}
     ident = _judge_identity(st, port)
-    items = _audit_judge_items(audit)
+    items, n_real = _audit_judge_items(audit)
     n = len(items)
 
     def _one(order, rule=AGENT_AUDIT_JUDGE_RULE):
@@ -4138,10 +4219,14 @@ def agent_audit_judge(audit: dict, max_tokens: int = 400, rounds: int = 3, save:
     used = sum(1 for i in range(n) if r1[i] == "UNSURE") + sum(1 for i in range(n) if r2[i] == "UNSURE")
     rows = [{"idx": i + 1, "fact": items[i][0][:70], "expect": items[i][1],
              "aa_1": r1[i], "aa_2": r2[i], "swap": r3[i], "para": r4[i]} for i in range(n)]
+    # 校准指纹（2026-09-18 闭环复核）: 钉住**判据文本 A/B + 稳定题集**
+    #   ⇒ 报告由此**自带"当时校的是哪份判据"**；比对不上 = 校准已过期（`agent_audit_calib_status`）。
+    #   语料派生条目（② 之前那 n_real 条）**不入指纹** —— 否则语料一变就假报过期。
+    calib = _judge_calib_digest()
     res = {"station": st, "port": port, "judge_model": ident, "items": rows,
            "aa_agree": f"{aa}/{n}", "swap_flip": f"{flip}/{n}", "paraphrase_agree": f"{para}/{n}",
            "rule_agree": f"r1 {agree[0]}/{n} · r2 {agree[1]}/{n} · r3(倒序) {agree[2]}/{n} · r4(改写) {agree[3]}/{n}",
-           "unsure_total": used,
+           "unsure_total": used, "n_real": n_real, "calib": calib,
            "note": "advisory: 本命令只测量 judge 可靠性, 不改门禁"}
     if save:
         # 落库**第二层**(3-b-2 定案): **校准报告**入仓 `spec/d6-agent-standard/evidence-chain/audits/`。
@@ -4161,6 +4246,13 @@ def agent_audit_judge(audit: dict, max_tokens: int = 400, rounds: int = 3, save:
                   f"- **A/A 一致 {res['aa_agree']}** · **序翻转 {res['swap_flip']}** · "
                   f"**措辞扰动一致 {res['paraphrase_agree']}**",
                   f"- 与判据一致：{res['rule_agree']} · UNSURE(r1+r2) {used}", "",
+                  # 校准指纹（2026-09-18 闭环复核）: 报告必须**自带"当时校的是哪份判据"** —— 否则
+                  #   "改了判据没重跑"无人能发现（本仓原文: "只写规则不绑定执行等于空头承诺"）。
+                  f"- **校准指纹**：`calib={calib['calib_sha256'][:16]}…`"
+                  f" · 规则A `{calib['rule_sha256'][:12]}…` / 规则B `{calib['rule_b_sha256'][:12]}…`"
+                  f" · 稳定题集 `{calib['items_sha256'][:12]}…`（{calib['items_n']} 条）",
+                  f"  ⤷ 判据或稳定题集一改，指纹即变 ⇒ `cluster.py agent audit-judge` 与门禁会报"
+                  f"「校准已过期」；**本报告的 items 里前 {res.get('n_real', 0)} 条取自语料，不入指纹**", "",
                   "| # | 期望 | 第1轮 | 第2轮 | 倒序 | 改写 | 事实 |", "|---|---|---|---|---|---|---|"]
             for x in rows:
                 # 注意: 反斜杠不能出现在 f-string 的表达式段 (Py<3.12 SyntaxError) ⇒ 先算再插
@@ -4304,6 +4396,10 @@ def cmd_agent(argv) -> int:
             print("  已落库(项目侧 _audits/): " + " · ".join(r["saved"]))
         print(f"\n  水印: 存量 key {len(bkeys)} 条 · 待接受(新增) **{len(pending)}** 条"
               + (f" · 建立于 {base.get('created')}" if base.get("created") else " · (尚未建立)"))
+        # 校准可判（2026-09-18 闭环复核）: 判据/稳定题集改过而报告没重跑 ⇒ 这里直接说出来
+        _cs = agent_audit_calib_status()
+        print(f"  校准: {calib_status_line(_cs)}"
+              + (f"（{_cs['file']} · 报告指纹 {_cs['recorded'][:16]}…）" if _cs.get("recorded") else ""))
         if pending:
             print("  门禁 `evidence` 会把上面这些**逐条**报为 WARN；确认可接受后跑 "
                   "`python ops/cluster.py agent audit --accept` 推进水印(存量即不再重复报)。")
@@ -4337,6 +4433,12 @@ def cmd_agent(argv) -> int:
                   f"{x['para']:<8} {x['fact']}")
         print("\n  判读: A/A=确定性(噪声底) · 序翻转=position bias · 措辞扰动=**稳健性**(A/A 测不到的那半) ·")
         print("        与判据一致=是否真按判据判(对照项故意让机器标签与判据相反 ⇒ 可辨'复核'vs'复读')。")
+        _cal = r.get("calib") or {}
+        if _cal:
+            print(f"  校准指纹: calib={_cal.get('calib_sha256', '')[:16]}…"
+                  f" · 规则A/B={_cal.get('rule_sha256', '')[:8]}…/{_cal.get('rule_b_sha256', '')[:8]}…"
+                  f" · 稳定题集={_cal.get('items_n', 0)} 条(不入指纹的语料条目 {r.get('n_real', 0)} 条)")
+            print(f"  校准状态: {calib_status_line(agent_audit_calib_status())}")
         if r.get("saved"):
             print("  校准报告已入仓(第二层): " + " · ".join(r["saved"]))
         return 0

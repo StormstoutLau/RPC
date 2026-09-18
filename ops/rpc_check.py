@@ -1786,9 +1786,27 @@ def check_evidence(ctx):
         if len(_pending) > 8:
             details.append(f"    · …另有 {len(_pending) - 8} 条（`cluster.py agent audit` 看全表）")
 
+    # ── 校准可判（2026-09-18 闭环复核；D4 归类: 覆盖缺口 ⇒ **只 WARN，不阻断**）──────────
+    # "改判据必须重跑校准"此前是**空头承诺** —— 校准报告不记判据文本/题集 ⇒ 改了没重跑无人能发现。
+    # 本仓自己的纪律原文: "只写规则不绑定执行等于空头承诺, 故做成断言"。指纹机制之后它可判了:
+    #   报告指纹 ≠ 当前"判据(A/B) + 稳定题集" ⇒ 报过期。
+    # ⚠ 旧报告（生成于指纹机制之前，无 calib 字段）**不当作过期**, 只提示 —— 否则一上线就对历史假告警。
+    try:
+        _cs = cluster.agent_audit_calib_status()
+        note += f" · 校准 {_cs.get('state', '?')}"
+    except Exception as e:
+        _cs = {"state": "no-report"}
+        details.append(f"(info) 校准状态不可判: {type(e).__name__}: {e}")
+    _calib_stale = (_cs.get("state") == "stale")
+    if _calib_stale:
+        details.append(
+            f"**judge 校准已过期**（{_cs['file']} 指纹 {_cs['recorded'][:16]}… ≠ 当前 "
+            f"{_cs['current'][:16]}…）—— 判据或稳定题集已改、报告没重跑 ⇒ 跑 "
+            f"`python ops/cluster.py agent audit-judge --save`（需站上在服务**跨家族**引擎）")
+
     if issues:
         return "FAIL", note, details
-    if gaps or _pending or not r.get("anchor_present"):
+    if gaps or _pending or _calib_stale or not r.get("anchor_present"):
         if not r.get("anchor_present"):
             details.append("外部锚未建立 → `cluster.py agent chain` 生成, 提交并 push 到 origin")
         for g in gaps[:6]:
@@ -2167,7 +2185,10 @@ CHECKS = [
             "「可重放性审计: 新增 N 条」= **增量**可重放性缺口(同属覆盖缺口 ⇒ WARN, 刻意不进 FAIL 集) "
             "⇒ 先看逐条明细, **确认可接受**后跑 `cluster.py agent audit --accept` 推进水印(存量即不再重复报); "
             "若明细里是「已归档但未被任何 subject 覆盖」= 新证据件没进产出方基线 ⇒ 应改 "
-            "`ops/station-bin/agent-cli.ps1` 的 `Get-FrameworkSubjects`(清单唯一真值在那里), 而不是接受它"},
+            "`ops/station-bin/agent-cli.ps1` 的 `Get-FrameworkSubjects`(清单唯一真值在那里), 而不是接受它; "
+            "「judge 校准已过期」= 判据(A/B)或稳定题集改过、校准报告没重跑 ⇒ 跑 "
+            "`cluster.py agent audit-judge --save`(需站上在服务跨家族引擎)。这条把"
+            "「改判据必须重跑校准」从**空头承诺**变成可判——报告自带 calib 指纹, 比对即可"},
     {"id": "usb4", "title": "USB4 三角环链路", "fn": check_usb4, "quick": False,
      "fix": "地址/路由不符 => 对照 inventory/net.yaml 与归档 §6.3/§6.6; "
             "链路不通 => 先查 BIOS USB4 安全等级与是否冷启动(归档 §6.5)"},
