@@ -1072,6 +1072,10 @@ sample_progress() {
 }
 sample_progress &
 SPID=`$!
+# ADR-0007 缺口 4: agent 运行**窗口起点**标记 —— 必须在 agent 运行前创建, 否则窗口错位、
+#   diff 恒空。后续用 `find -newer` 列出本窗口内被改动的文件(与 git 无关: 实测工作区非
+#   git 仓库, git diff 会静默返回空 = 假的"未越界")。
+: > "`$W/.run-marker"
 timeout $timeout opencode run -m "$id" < "`$W/out/.prompt.txt" > "`$W/out/.agent-output.txt" 2>&1
 RC=`$?
 # O-24 P0-① resume loop: on failure retry <=2 via `--continue` (opencode isolates sessions
@@ -1097,6 +1101,16 @@ wait `$SPID 2>/dev/null
 TOTAL_BYTES=`$(wc -c < "`$W/out/.agent-output.txt" 2>/dev/null)
 TBPS=`$(( TOTAL_BYTES / ( (R1-R0)/1000000000 +1 ) ))
 printf 't=end bytes=%s bytes_s=%s\n' "`$TOTAL_BYTES" "`$TBPS" >> "`$W/out/.progress"
+# ADR-0007 缺口 4: readonly 卡的"未越界"载体 —— **与 git 无关**(实测工作区非 git 仓库,
+#   `git diff` 在非仓库上静默返回空 = 假的"未越界") ⇒ marker + `find -newer`, 只列 agent
+#   运行窗口内被改动的**工作区相对路径**(`-printf '%P'`)。
+#   **放在 golden/accept 门之前** —— 否则会被 golden 自身产出的构建物(如 cpphub beta 编译)污染。
+#   排除框架自身产物(漏项 ⇒ diff 恒非空 ⇒ 判据退化为噪声)。
+( cd "`$W" && find . -newer .run-marker -type f -printf '%P\n' 2>/dev/null \
+    | grep -v -E '^(out|\.golden|\.attach|agent-out|\.agentsync|\.git)/' \
+    | grep -v -E '^\.(agent-lock|agent-state\.json|run-marker)$' \
+    | grep -v -E '^agent-runs\.log$' ) > "`$W/out/.workspace-diff.txt" 2>/dev/null || true
+echo "WORKSPACE_DIFF_LINES=`$(wc -l < "`$W/out/.workspace-diff.txt" 2>/dev/null || echo 0)"
 # accept gate (A14): run executable criteria in workspace after agent completes
 # golden gate (O-12, IMPLEMENTATION §3.3 M3): authoritative criteria run BEFORE self accept (inv 2/5)
 # default line: ACCEPT_GOLDEN_OK always present in .meta (derived-requirement, IMPLEMENTATION §9.2)
@@ -1167,7 +1181,9 @@ exit `$RC
         # 逐件 `marker + base64`（**刻意不用 tar**）: Windows 侧 GNU tar 对 `C:\...` 会按 host:path 去连
         #   "C" 主机(需 --force-local), 而 --force-local 又不认反斜杠路径 —— 两坑皆实测踩到。base64
         #   文本通道是本文件既有手法, 且全程不经过本机原生工具的参数解析。
-        $evNames = @('.meta', '.prompt.txt', '.progress', '.accept-cmds.txt', '.golden-cmd.txt')
+        # ADR-0007 缺口 4: 增 `.workspace-diff.txt`(readonly 卡的"未越界"载体) 入合批通道。
+        #   远端已由 `find -newer .run-marker` 产出(见 body 内的采集段); 缺件时下面 else 分支跳过。
+        $evNames = @('.meta', '.prompt.txt', '.progress', '.accept-cmds.txt', '.golden-cmd.txt', '.workspace-diff.txt')
         $evCmd = (($evNames | ForEach-Object { "if [ -f $W/out/$_ ]; then echo FILE:$_ ; base64 -w0 $W/out/$_ ; echo ; fi" }) -join ' ; ')
         $evRaw = @(& ssh -o ConnectTimeout=10 $hostName $evCmd 2>$null)
         $evBuf = @{}; $evCur = ''
@@ -1177,7 +1193,11 @@ exit `$RC
             elseif ($evCur -and $t) { $evBuf[$evCur] += $t }
         }
         foreach ($n in $evNames) {
-            if ($evBuf[$n]) {
+            # ⚠ 缺口 4 实测踩到: 原为 `if ($evBuf[$n])` = **真值**判定 ⇒ **空文件被静默丢弃**
+            #   (base64 -w0 对空文件输出空串 ⇒ 值为 '' ⇒ falsy)。而 `workspace-diff` 的"零改动"
+            #   恰恰是**空文件** = readonly 卡最正常的结果 ⇒ 该例必被丢。改为**存在性**判定:
+            #   marker 行 `FILE:<name>` 只要文件存在就发, 故 ContainsKey 即"远端确有该件"。
+            if ($evBuf.ContainsKey($n)) {
                 if (-not (Test-Path $evDir)) { New-Item -ItemType Directory -Path $evDir -Force | Out-Null }
                 [IO.File]::WriteAllBytes((Join-Path $evDir $n), [Convert]::FromBase64String($evBuf[$n]))
             }
@@ -1321,6 +1341,9 @@ exit `$RC
             if (Test-Path $promptTxt) { Move-Item $promptTxt (Join-Path $runDir 'prompt.txt') -Force }
             if ($accCmdTxt -and (Test-Path $accCmdTxt)) { Move-Item $accCmdTxt (Join-Path $runDir 'accept-cmds.txt') -Force }
             if ($goldCmdTxt -and (Test-Path $goldCmdTxt)) { Move-Item $goldCmdTxt (Join-Path $runDir 'golden-cmd.txt') -Force }
+            # ADR-0007 缺口 4: readonly 卡的"未越界"载体(缺件时不动 —— 非 readonly 卡本就没有)
+            $wdSrc = Join-Path $evDir '.workspace-diff.txt'
+            if (Test-Path $wdSrc) { Move-Item $wdSrc (Join-Path $runDir 'workspace-diff.txt') -Force }
             # D4a: 合批暂存目录(5 个小件已 Move 走)一并清掉, 不留 TEMP 残留
             if (Test-Path $evDir) { Remove-Item $evDir -Recurse -Force -ErrorAction SilentlyContinue }
             Remove-Item (Join-Path $projRoot 'agent-out\.agent-run.json') -ErrorAction SilentlyContinue
