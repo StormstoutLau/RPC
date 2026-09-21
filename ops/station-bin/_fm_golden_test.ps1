@@ -26,7 +26,8 @@ Invoke-Expression $fn.Extent.Text   # 定义函数到当前会话
 # --- ADR-0007 路B: 一并提取框架基线两函数 ---
 # 它们是**纯函数**(只吃 $accept/$goldenActive/卡 subjects, 不碰站、不碰文件系统)
 # ⇒ 可离线单测; 这正是"派发路径改动"能被验证而不用每次都真派发的关键。
-foreach ($nm in @('Get-FrameworkSubjects', 'Merge-EvidenceSubjects')) {
+# O-15/AUDIT (2026-09-21): 追加提取 claude 按路基线(Get-ClaudeFrameworkSubjects) 与 fallback 判定 (Test-FallbackEligible)。
+foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-FallbackEligible')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -209,6 +210,52 @@ Assert-True "merge: 五键齐备(免得下游取键得 null 静默传播)" (
 # 路B 的核心目的: **无 manifest 的卡**(= 71 个真实 run 的来源)也能拿到非空声明 ⇒ 不再是 recipe v1
 $m0 = @(Merge-EvidenceSubjects @() @() $false)
 Assert-True "merge: 空卡仍得 10 件(=> 不再退化为 recipe v1)" ($m0.Count -eq 10)
+
+# --- O-15/AUDIT (2026-09-21): claude 备路按路基线(证据面到齐 => recipe v2) ---
+# 该路归档件集 = opencode 子集 + stderr, 无 judgment-record 等远端合成批件
+$cb = @(Get-ClaudeFrameworkSubjects @() $false)
+$cbn = @($cb | ForEach-Object { $_.name })
+Assert-True "claude: 无 accept/golden => 4 件" ($cb.Count -eq 4)
+Assert-True "claude: 含 agent-output/prompt/stderr/card" (
+    ($cbn -contains 'agent-output') -and ($cbn -contains 'prompt') -and
+    ($cbn -contains 'stderr') -and ($cbn -contains 'card'))
+# 负向自证: claude 基线**不得**混入 opencode 专用件, 否则每 run 假报缺件(噪声判据)
+Assert-True "claude: 无 judgment-record/workdiff/sessmeta/attach/mishap" (-not (
+    ($cbn -contains 'judgment-record') -or ($cbn -contains 'workspace-diff') -or
+    ($cbn -contains 'session-meta') -or ($cbn -contains 'attach-manifest') -or
+    ($cbn -contains 'progress-trace') -or ($cbn -contains 'accept-cmds') -or ($cbn -contains 'golden-cmd')))
+
+$cb1 = @(Get-ClaudeFrameworkSubjects @('echo ok') $true)
+$cbn1 = @($cb1 | ForEach-Object { $_.name })
+Assert-True "claude: 有 accept+golden => 6 件" ($cb1.Count -eq 6)
+Assert-True "claude: 含 accept-output/accept-golden-output" (
+    ($cbn1 -contains 'accept-output') -and ($cbn1 -contains 'accept-golden-output'))
+
+# 合并: claude 走 baselineFn 分支 —— 空卡 => 得 claude 基线(4), 不掺主路 10 件
+$cmg = @(Merge-EvidenceSubjects @() @() $false { param($ac,$ga) Get-ClaudeFrameworkSubjects $ac $ga })
+Assert-True "claude merge: 空卡 => 4 件(claude 基线, 而非主路 10)" ($cmg.Count -eq 4)
+# 去重: 卡声明与 claude 基线同 path(prompt.txt)只出现一次
+$csubs = @(
+    @{ name = 'prompt'; path = 'prompt.txt'; digest = 'sha256'; collect = ''; ephemeral = $false }
+    @{ name = 'station-tmp-log'; path = ''; collect = 'tail -5 /tmp/x.log'; digest = 'sha256'; ephemeral = $true }
+)
+$cmg2 = @(Merge-EvidenceSubjects $csubs @() $false { param($ac,$ga) Get-ClaudeFrameworkSubjects $ac $ga })
+Assert-True "claude merge: 基线4 + 卡声明2 - 重复1 = 5" ($cmg2.Count -eq 5)
+Assert-True "claude merge: prompt.txt 只出现一次" ((@($cmg2 | Where-Object { $_.path -eq 'prompt.txt' })).Count -eq 1)
+Assert-True "claude merge: 卡特有件保留" ((@($cmg2 | Where-Object { $_.name -eq 'station-tmp-log' })).Count -eq 1)
+# baselineFn 缺省(主路调用点)不传时行为不变 => 既有的 10 件合并仍成立(防退化)
+$defmg = @(Merge-EvidenceSubjects @() @() $false)
+Assert-True "claude merge: 缺省 baselineFn 仍得主路 10 件(未破坏主路调用)" ($defmg.Count -eq 10)
+
+# --- O-15/AUDIT (2026-09-21): auto-fallback 触发判定(纯函数, rc 表) ---
+# 正向: 只认 rc=6(引擎死锁/超时)才切 claude 备路
+Assert-True "fallback: rc=6 => true(引擎死锁/超时才兜底)" (Test-FallbackEligible 6)
+# 负向: 任务真实结果/基建门**不得**触发 fallback(否则掩盖真实错误)
+$noFallback = ($true)
+foreach ($rc in @(0, 1, 5, 9, 10, 12, 24, 13)) {
+    if (Test-FallbackEligible $rc) { $noFallback = $false }
+}
+Assert-True "fallback: rc in {0,1,5,9,10,12,24,13} 均不触发(不掩盖真实错误)" $noFallback
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
