@@ -311,6 +311,16 @@ Assert-True "station: 只有被排除的那一站 ⇒ **仍返回它**(不因排
     ((Resolve-ClaudeStationCandidates -Avoid 'A' -Stations @('A')) -join ',') -eq 'A')
 Assert-True "station: 候选为空 ⇒ 空数组(调用方据此 fail-closed)" (
     (@(Resolve-ClaudeStationCandidates -Avoid 'A' -Stations @()).Count) -eq 0)
+# ⚠ 2026-09-21 复查发现的**交互缺陷**: pref(卡的 model 指向的站) 会**覆盖率** avoid —— 而兜底场景下
+#   pref 常正是刚死锁的那一站 ⇒ 不修就等于"避免死锁站"被架空。规则①(avoid)必须胜过规则②(pref)。
+Assert-True "station: pref=B, avoid=B ⇒ **avoid 胜**(B 垫底, 不是第一)(复查修掉的交互缺陷)" (
+    ((Resolve-ClaudeStationCandidates -Avoid 'B' -Stations @('A','B','C') -Preferred 'B') -join ',') -eq 'A,C,B')
+Assert-True "station: pref=B, avoid='' ⇒ pref 提前 (B,A,C)" (
+    ((Resolve-ClaudeStationCandidates -Avoid '' -Stations @('A','B','C') -Preferred 'B') -join ',') -eq 'B,A,C')
+Assert-True "station: pref=C, avoid=B ⇒ pref 提到最前 (C,A,B)" (
+    ((Resolve-ClaudeStationCandidates -Avoid 'B' -Stations @('A','B','C') -Preferred 'C') -join ',') -eq 'C,A,B')
+Assert-True "station: pref 不在候选集 ⇒ 顺序不变(不因未知 pref 而丢站)" (
+    ((Resolve-ClaudeStationCandidates -Avoid '' -Stations @('A','B') -Preferred 'Z') -join ',') -eq 'A,B')
 # 结构性断言(安全带): ① 判据按**后端属性**参数化(P2 的核心), 不再硬编码 $true;
 #   ② 站上不可用时**明确 return 4**(fail-closed)且**不**回退本地 spawn。
 Assert-True "station: 判据已参数化 -backendEgress (-not \$useStation)(P2 的核心)" (
@@ -333,6 +343,12 @@ $iUse = $content.IndexOf('$useStation = ($sens -eq ''local-only'')')
 $iPref = $content.IndexOf("`$stPref = ''")
 Assert-True "station: \$useStation 赋值**早于** \$stPref 使用(实弹踩到的顺序 bug)" (
     $iUse -gt 0 -and $iPref -gt 0 -and $iUse -lt $iPref)
+# ⚠ "优先选与死锁站不同的一站"这条 **2026-09-21 复查时实测未生效**(只读 env, 而无人填 env):
+#   ⇒ 兜底调用点必须把主路死锁站传进来; 且 `$avoid` 必须**优先取参数**(env 降级为手工覆盖通道)。
+Assert-True "station: AUTO_FALLBACK 调用点把主路死锁站传进来(-AvoidStation \$station)" (
+    $content.Contains('-taskType $taskType -AvoidStation $station'))
+Assert-True "station: \$avoid **优先取参数**, env 降级为手工覆盖通道" (
+    $content.Contains('$avoid = if ($AvoidStation) { $AvoidStation } elseif ($env:AGENT_AVOID_STATION)'))
 # 位置断言(结构性, 守"四处一致"的不变式): 检测必须**早于**台账 `$line = …$code…` —— 否则
 #   台账说 6、进程返 14(以及 run.json/TASK_DONE 与 fallback 判定各自打架) ⇒ 自己造一次"rc 不可信"。
 $iCtx = $content.IndexOf('Test-CtxOverflowError $agentOutText')
