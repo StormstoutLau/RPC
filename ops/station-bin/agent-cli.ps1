@@ -902,6 +902,25 @@ function Test-FallbackEligible([int]$code) {
     return ($code -eq 6)
 }
 
+function Test-SensitivityEgressAllowed {
+    # P0 止血 (2026-09-21, 安全策略洞): `local-only` 的 prompt 字节**永不**得离开
+    #   "主控站→站内本地模型"路径(DESIGN §358 路由不变式) ⇒ 判据 = **后端是否出网**。
+    # 为何参数化而不是查表: **同一个型号在不同通道下出网性不同** —— 如 `gpt-oss-20b` 走站上
+    #   本地引擎=不出网, 而 `claude` 走**主控本地 spawn**=云端 OpenRouter=出网。故"出网性"是
+    #   **通道属性**, 由调用点声明(P2 会把它升级为按后端的 egress 属性查表/实测, 取代硬编码)。
+    # ⚠ 现状: 两个调用点都硬编码 $backendEgress=$true —— 因为 Invoke-Task-Claude 是**主控本地**
+    #   spawn, 其 ANTHROPIC_BASE_URL(主控 ~/.claude/settings.json)=`https://openrouter.ai/api`
+    #   ⇒ 确实出网。(**站上** claude 通道指 `http://127.0.0.1:8080` 本地引擎, **不出网** —— 那是
+    #   P3 站上化的目标形态, 不走本函数。)
+    # 刻意做成**纯函数**(不碰站、不碰文件系统) ⇒ 夹具可按名提取离线单测(与 Test-FallbackEligible 同族)。
+    param(
+        [string]$sensitivity,
+        [bool]$backendEgress
+    )
+    if ($sensitivity -ne 'local-only') { return $true }
+    return (-not $backendEgress)
+}
+
 function Invoke-Task {
     # D6 M2: full chain sync->lock->run->collect->unlock for a single task card.
     # prompt is transferred via base64 (immune to quote hell); remote reads it and
@@ -1742,6 +1761,19 @@ exit `$RC
     #   `return (…)` 只会吐其 int 返回值, 不会污染调用方 `$code = Invoke-Task …`。
     #   ⚠ 刻意只对 `effectiveCli -eq 'opencode'`: 若卡/路由本就选 claude(或其自身超时)则**不二次转发**。
     if ($AutoFallback -and $effectiveCli -eq 'opencode' -and (Test-FallbackEligible $code)) {
+        # ⚠ P0 止血 (2026-09-21, 安全策略洞 · 出网路径②): 主路 model 是**站上本地引擎**时
+        #   (如 gpt-oss-20b 走 B 站), 上方的 local-only 闸**不会**拦(它只拦 local-only+`^opencode/`)
+        #   ⇒ 死锁 rc=6 一路走到这里 ⇒ `Invoke-Task-Claude` ⇒ **云端 OpenRouter**
+        #   ⇒ `local-only` 卡的 prompt **实际出网**。必须**在调用点也判**(Invoke-Task-Claude 内那道
+        #   守是"直接入口", 这道守是"自动兜底入口" —— 只判一处会漏)。
+        #   语义: **拒绝兜底**(fail-closed, 不是"兜底到别处")。返回 4 而**不是**原 rc —— 刻意让
+        #   "策略拒绝"盖过"超时": 否则调用方只看到 timeout 会**换站重试**(每次重试都要再跑一遍本地
+        #   引擎), 策略事件被埋掉。原 rc 已在上一行 `TASK_DONE … exit=$code` 打印, 未丢失。
+        if (-not (Test-SensitivityEgressAllowed -sensitivity $sens -backendEgress $true)) {
+            Write-Host "AUTO_FALLBACK: opencode rc=$code -> REFUSED (sensitivity=local-only)"
+            Write-Host "REJECT local-only+egress-fallback exit 4 - no override channel (owner-policy)"
+            return 4
+        }
         # ⚠ **必须用 `$taskModel`(顶部快照), 不能用 `$m`** —— 后者已被 collect 段改写为 .meta 全文
         #   (2026-09-21 真实站实弹实测踩到, 见上方快照处注释)。
         # 备路模型: claude 备路只接受 `station=''` 的**本地** claude 路由(Invoke-Task-Claude 内护栏),
@@ -1997,6 +2029,17 @@ function Invoke-Task-Claude {
     if (-not $r) { Write-Host "REJECT unknown-model ($m) exit 2 - not in route table"; return 2 }
     $id = $r['id']
     if ($r['station']) { Write-Host "REJECT claude-station=$($r['station']) (exit 4) - claude channel must run local (station='')"; return 4 }
+    # ⚠ P0 止血 (2026-09-21, 安全策略洞 · 出网路径①): **local-only 绝不走本通道** —— 本函数是
+    #   **主控本地** spawn claude, 其 ANTHROPIC_BASE_URL(主控 settings.json)=云端 OpenRouter
+    #   ⇒ 属"会出网的后端"。此前本函数**没有**这条判据, 而既有三处闸(Resolve-Model L435 /
+    #   Invoke-Task L968 / route cmd L1805)一律只判 `^opencode/`(把"出网"等同于"opencode/*")
+    #   ⇒ 卡写 `sensitivity: local-only` + `cli: claude` 会从 L968 **放行**并在本函数出网。
+    #   该洞此前**惰性**(备路不可用 `Not logged in`), 2026-09-21 备路修通后**变活** ⇒ 破 DESIGN §358。
+    #   → 与既有三处同族: REJECT + exit 4, **无覆写通道**(owner-policy)。
+    if (-not (Test-SensitivityEgressAllowed -sensitivity $sens -backendEgress $true)) {
+        Write-Host "REJECT local-only+claude-egress ($id) exit 4 - no override channel (owner-policy)"
+        return 4
+    }
 
     $prof = Resolve-Profile -model $m -complexity $complexity -taskType $taskType
     Write-Host "PROFILE: profile=$($prof.profile) ctx=$($prof.context) max_out=$($prof.max_output) flavor=$($prof.flavor) (claude local)"
