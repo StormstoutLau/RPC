@@ -911,6 +911,48 @@ function Test-FallbackEligible([int]$code) {
     return ($code -eq 6)
 }
 
+function Test-CtxOverflowError {
+    # C1 (2026-09-21): 识别"上下文长度被**明确拒绝**"这一类。⚠ **它是两种形态, 落点不同**(实弹实测):
+    #   · 形态 A(危险): **引擎侧** 400 —— llama.cpp 的
+    #     `request (N) exceeds the available context size (M)`。此时 opencode **不处理该错误串
+    #     ⇒ 永久挂死** ⇒ 被 `timeout` 掐断 ⇒ **rc=6** ⇒ 会被 AUTO_FALLBACK 兜底。
+    #     触发条件: opencode 估算的预算 > 引擎实际 ctx(O-23 的"预算不可信": 发送预算由内置
+    #     catalog 决定, `limit.context` 不参与) ⇒ **它发出去了, 引擎才回 400**。
+    #   · 形态 B(不危险): **客户端/SDK 侧**长度校验 ——
+    #     `Message too long: N tokens exceeds the M-token context window` +
+    #     `"code":"context_length_exceeded"`。此时 opencode **快速失败**(实测还 RESUME 了两轮,
+    #     每轮立即失败) ⇒ **rc=1**(不是 6) ⇒ **本就不会触发 fallback**。
+    #     触发条件: 客户端**自己能算出**超了 ⇒ 请求根本没发出去。
+    # ⇒ 判据要**两种都认**(形态 B 也要可诊断, 否则它混在"agent 自己失败"里看不出来);
+    #   但**是否改写 rc** 由 Resolve-CtxOverflowCode 决定(只形态 A 才改, 见其注释)。
+    # 串取**逐字**(不用宽泛模式, 免得把普通输出误判成配置错误):
+    #   · llama.cpp `srv send_error` 的原文中段
+    #   · 我们日志里实际出现过的异常类名 `ContextOverflowError`(OPEN-ISSUES O-21/O-23)
+    #   · 形态 B 的错误码/措辞(2026-09-21 实弹逐字取自 opencode 的 JSON 错误体)
+    # 纯函数 ⇒ 夹具可按名提取离线单测(与 Test-FallbackEligible 同族)。
+    param([string]$text)
+    if (-not $text) { return $false }
+    if ($text -match 'exceeds the available context size') { return $true }
+    if ($text -match 'ContextOverflowError') { return $true }
+    if ($text -match 'context_length_exceeded') { return $true }
+    if ($text -match 'Message too long') { return $true }
+    return $false
+}
+
+function Resolve-CtxOverflowCode {
+    # C1 (2026-09-21): 命中 ctx 超限后**是否改写退出码**。纯函数 ⇒ 夹具可正负双向断言。
+    #   · rc=6(**形态 A**, 引擎侧 400 ⇒ 挂死) ⇒ **改 14**。目的只有一个: **别让备路兜它**
+    #     —— ctx 不够**换后端也兜不住**(换到哪都不够), 兜了就是白烧一轮, 还把"配置问题"
+    #     伪装成"引擎问题"。rc=6 的语义是"引擎在预算内产不出终态" ⇒ 与它根本不同。
+    #   · **其它 rc 一律不改**(当前实测形态 B = rc=1 快速失败) —— 理由: rc=1 是"agent 退出 1"
+    #     这一大类, 把它改写成 14 会**掩盖**该类的其它含义(与"rc 不可信"同源)。形态 B
+    #     本就不触发 fallback ⇒ **无需防兜错**, 只保留一行诊断输出。
+    param([int]$code, [bool]$isOverflow)
+    if (-not $isOverflow) { return $code }
+    if ($code -eq 6) { return 14 }
+    return $code
+}
+
 function Get-SensitivityBackendReject {
     # 硬闸**判据唯一实现点** (P0 止血, 2026-09-21)。返回 '' = 放行;
     # 否则返回**拒绝原因 token**(供调用点打印, 使证据行能指名"哪条规则拦的")。
@@ -1544,7 +1586,26 @@ exit `$RC
         $accept_ok = $null; $accept_golden_ok = $null
     }
     $contentSha = ''
-    if (Test-Path $outTxt) { $contentSha = Get-Sha256Text ([IO.File]::ReadAllText($outTxt)) }
+    $agentOutText = ''
+    if (Test-Path $outTxt) {
+        $agentOutText = [IO.File]::ReadAllText($outTxt)
+        $contentSha = Get-Sha256Text $agentOutText
+    }
+    # ── C1 (2026-09-21): 把"上下文长度被**明确拒绝**"从 rc=6 里分出来 → rc=14 ──
+    # 为什么在此处判(而不是等 fallback 判定时再判): 本行之后 `$code` 会依次被写进
+    #   **台账**(L1662 `$line`)、**run.json**(exit_code/status)、`TASK_DONE`、以及 fallback 判定
+    #   ⇒ 只在这里改才能让四处**一致**(否则归档说 6、进程返 14 = 自己造一次"rc 不可信")。
+    # 两种形态的区分与"只形态 A 改 rc"的理由: 见 Test-CtxOverflowError / Resolve-CtxOverflowCode。
+    $isCtxOverflow = Test-CtxOverflowError $agentOutText
+    if ($isCtxOverflow) {
+        $newCode = Resolve-CtxOverflowCode -code $code -isOverflow $true
+        if ($newCode -ne $code) {
+            Write-Host "CTX_OVERFLOW: 引擎侧 400(形态A, 引擎健康非死锁) ⇒ rc $code -> $newCode; 换后端无意义, 不触发 fallback"
+        } else {
+            Write-Host "CTX_OVERFLOW(non-timeout): agent 输出含上下文长度拒绝串, rc=$code 维持不变(仅作诊断, 不改 rc 语义)"
+        }
+        $code = $newCode
+    }
     # O-25 P0-②: parse .progress tail ("t=end bytes=.. bytes_s=..") into per-run throughput baseline.
     $outputBytes = 0; $outputBps = 0
     if (Test-Path $progressTxt) {
