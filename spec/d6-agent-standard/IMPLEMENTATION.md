@@ -103,7 +103,10 @@ agent-cli.ps1
 
 ### T2：M3 router + M4 lock/state
 
-- Invoke-Router：三拒绝规则（退出码 2/4/2）+ sanitized scrubber（正则清单：密钥模式 `sk-[A-Za-z0-9]{16,}`/邮箱/绝对路径 `D:\\`/`F:\\`；gitleaks 若主控站有则挂，无则纯正则版）
+- Invoke-Router：三拒绝规则（退出码 2/4/2）+ sanitized scrubber（gitleaks 若主控站有则挂，无则纯正则版）
+  - **⚠ 2026-09-21 更新（scrubber 规则扩充裁定 §3，9 条；清单单一真值源 = `agent-cli.ps1` 的 `Get-ScrubRules`）**：`sk-` / email / win 绝对路径（段后带 `\` 才允许段内空格，否则路径残留 —— 见夹具 §2b/§4b）/ **GitHub PAT**（`ghp_`等 5 前缀 + `github_pat_`）/ **AWS**（`AKIA`/`ASIA`/…+16）/ **Slack**（`xox[baprs]-`）/ **JWT**（三段 base64url）/ **`Bearer <≥20 字符>`**（收窄：无 `Bearer ` 上下文不认）/ **私钥块**（`-----BEGIN … PRIVATE KEY …-----`）。
+  - **刻意不加**（同一裁定的 §3，理由见全文）：内网 IP / `.local` 主机名 / Linux 绝对路径 / UNC / 用户名 / 手机号 / 身份证 / 银行卡 —— 前三类是项目自己的寻址方式（`.local` 212 处、`/home/<user>/` 211 处、内网 IP 是 `inventory/net.yaml` 真值），长度判据会命中本仓 run ID（`yyyyMMddHHmmssffff` 恰好 18 位、全仓 204 处），裸用户名不可判 ⇒ 那 8 项的正确防线是**档位**（走 `local-only`）。
+  - **私钥块 ⇒ 拒发**（退出码 4，fail-closed）而非抹掉继续 —— 二分与理由见 DESIGN §5.1「sanitized 前置」下的 2026-09-21 消歧义条。
 - Invoke-LockState：flock -n 获取/释放 + .agent-state.json 写 + 孤儿检测（running + PID 死 → 归档 orphaned）
 - **readonly 记录（m1）**：任务卡 readonly 字段解析后写入 .agent-run.json（DESIGN 层 2 语义——MVP 仅记录不生效，全部按排它处理）；V2 激活时无需改 schema
 - 验收：A8（路由拒绝）、A9（锁互斥）、A10（孤儿恢复）

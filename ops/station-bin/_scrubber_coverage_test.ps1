@@ -27,9 +27,13 @@ $tok = $null; $errs = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($cli, [ref]$tok, [ref]$errs)
 if ($errs.Count -gt 0) { throw "agent-cli.ps1 解析失败: $($errs[0].Message)" }
 $fns = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
-$fn = @($fns) | Where-Object { $_.Name -eq 'Invoke-Scrubber' } | Select-Object -First 1
-if (-not $fn) { throw 'Invoke-Scrubber not found in agent-cli.ps1' }
-Invoke-Expression $fn.Extent.Text
+# ⚠ 2026-09-21: 规则清单抽到 `Get-ScrubRules`(单一真值源) 后, 被提取的函数由 1 个变 3 个 ——
+#   缺任何一个都会让夹具"跑不起来", 或更糟: 跑的是**半套**(旧定义 + 新调用点)。故按名单提取 + 缺则显式抛错。
+foreach ($nm in @('Get-ScrubRules', 'Invoke-Scrubber', 'Get-ScrubBlockReason')) {
+    $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
+    if (-not $f) { throw "$nm not found in agent-cli.ps1" }
+    Invoke-Expression $f.Extent.Text
+}
 
 $script:pass = 0; $script:fail = 0; $script:failNames = @()
 function Assert-True([string]$name, [bool]$cond) {
@@ -49,9 +53,24 @@ function Sam([string[]]$parts) { return (-join $parts) }
 Write-Host "=== [1] 该认的: 命中后**原文片段不得残留**(覆盖内形态) ==="
 $K1 = Sam 'sk', '-or-v1-', '1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b'
 $K2 = Sam 'sk', '-ant-api03-', 'abcdefghijklmnopqrstuvwxyz012345'
+# 2026-09-21 新增的 6 条凭据类（裁定 §3「加」的那 6 项），样串同样按段拼接（见上方说明）。
+$GP = Sam 'ghp_', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+$GP2 = Sam 'github_pat_', 'abcdefghijklmnopqrstuv_0123456789'
+$AK = Sam 'AKIA', 'IOSFODNN7EXAMPLE'
+$SL = Sam 'xoxb-', '123456789012-abcdefghijklmnop'
+$JW = Sam 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.', 'eyJzdWIiOiIxIn0.', 'abcdEFGH1234'
+$BT = Sam '8f3a29c7d1b04e6f9a2c5b8d7e0f1a3c'
+$PK = Sam '-----BEGIN ', 'OPENSSH PRIVATE KEY-----'
 $pos = @(
     @{ n = 'OpenRouter key (sk-or-v1-…)';  s = $K1;      must = @($K1) },
     @{ n = 'Anthropic key (sk-ant-…)';     s = $K2;      must = @($K2) },
+    @{ n = 'GitHub PAT (ghp_…)';           s = $GP;      must = @($GP) },
+    @{ n = 'GitHub PAT (github_pat_…)';    s = $GP2;     must = @($GP2) },
+    @{ n = 'AWS Access Key (AKIA…)';       s = $AK;      must = @($AK) },
+    @{ n = 'Slack token (xoxb-…)';         s = $SL;      must = @($SL) },
+    @{ n = 'JWT (三段)';                    s = $JW;      must = @($JW) },
+    @{ n = 'Bearer token';                 s = ('Authorization: Bearer ' + $BT); must = @($BT) },
+    @{ n = 'OpenSSH 私钥块';                s = $PK;      must = @($PK) },
     @{ n = 'email 常规';                    s = 'peng.liu.john@gmail.com';                          must = @('peng.liu.john@gmail.com') },
     @{ n = 'email 带 + 与多级域';            s = 'a.b+c@sub.example.co.uk';                         must = @('a.b+c@sub.example.co.uk') },
     @{ n = 'win 路径 **无空格**';            s = 'C:\RPC\secrets\stations\A\openrouter.key';        must = @('C:\RPC\secrets\stations\A\openrouter.key') },
@@ -67,11 +86,21 @@ foreach ($c in $pos) {
 }
 
 Write-Host "=== [2] 不该认的: 不得被替换(误伤 = 静默破坏输入) ==="
+# ★ 标星的三条 = **把裁定的"不加"决定做成可判的回归守卫**: 判别力差一点点(改回长度判据)就会变红。
 $neg = @(
     @{ n = '普通技术文本(含反斜杠但无盘符)'; s = 'use bin\bash.exe and \n escapes' },
     @{ n = '短 sk- 片段(<16 字符, 非 key)';  s = 'the tag sk-short has fewer chars' },
     @{ n = '相对路径';                        s = '.\out\agent-output.txt' },
-    @{ n = '无 TLD 的 @ 用法';                s = 'mail me at user@localhost' }
+    @{ n = '无 TLD 的 @ 用法';                s = 'mail me at user@localhost' },
+    @{ n = '短 ghp_(<36 字符)';               s = 'ghp_abc123' },
+    @{ n = 'AKIA 但不足 16 位';               s = 'AKIA1234567890' },
+    @{ n = 'Bearer 但 token 过短(<20)';       s = 'Authorization: Bearer short12' },
+    @{ n = '裸词 bearer(无 token)';           s = 'the bearer of this letter' },
+    @{ n = '证书块(-----BEGIN CERTIFICATE-----, 公钥非私钥)'; s = '-----BEGIN CERTIFICATE-----' },
+    @{ n = '裸长十六进制串(无 Bearer 上下文 ⇒ 不收窄就会吃)'; s = 'token=8f3a29c7d1b04e6f9a2c5b8d7e0f1a3c' },
+    @{ n = '★ run ID(18 位数字 = 本项目证据句柄)'; s = '复现 run 202609180952112524 的结论' },
+    @{ n = '★ 站主机名(.local = 项目主要寻址方式)'; s = 'ssh scott-lau-GTR-Pro.local' },
+    @{ n = '★ 内网 IP(inventory/net.yaml 真值)';   s = 'C 站 192.168.1.37 / A-B 段 10.10.10.0/24' }
 )
 foreach ($c in $neg) {
     $out = Scrub $c.s
@@ -88,12 +117,30 @@ $over = @(
 )
 foreach ($c in $over) { Assert-True "over: $($c.n) ⇒ 只替换路径本身" ((Scrub $c.s) -eq $c.e) }
 
-Write-Host "=== [3] 幂等性: 再跑一遍结果不变(占位符不得被二次处理) ==="
-$idem = Scrub ('C:\RPC\a.key + peng.liu.john@gmail.com + ' + $K1)
-Assert-True "幂等: scrub(scrub(x)) == scrub(x)" ((Scrub $idem) -eq $idem)
+Write-Host "=== [2c] 新凭据类规则的**过度消费**守门(与 §2b 同族) ==="
+# ⚠ 凭据类的固有风险与路径相反: 前缀很确定 ⇒ 误伤≈0, 但**贪婪把后面的词一起吃**同样要防。
+$over2 = @(
+    @{ n = 'Bearer 后只吃 token, 不吃后续词'; s = ('Bearer ' + $BT + ' and more');   e = '[REDACTED-BEARER] and more' },
+    @{ n = 'AKIA 后接普通词';                s = ($AK + ' is a sample key');        e = '[REDACTED-AWS-KEY] is a sample key' },
+    @{ n = 'ghp_ 后接普通词';                s = ($GP + ' leaked here');            e = '[REDACTED-GH-PAT] leaked here' },
+    @{ n = '私钥块后接正文';                  s = ($PK + ' then content');           e = '[REDACTED-PRIVATE-KEY] then content' }
+)
+foreach ($c in $over2) { Assert-True "over: $($c.n) ⇒ 只替换凭据本身" ((Scrub $c.s) -eq $c.e) }
 
-Write-Host "=== [4] 覆盖率报告: 当前 3 条规则**未覆盖**的敏感形态(不计 FAIL, 但必须显式列出) ==="
+Write-Host "=== [3] 幂等性: 再跑一遍结果不变(占位符不得被二次处理) ==="
+# ⚠ 覆盖**全部 9 类占位符**(不只路径/邮箱/key): 只要有一类的新占位符能二次命中, 这里就红。
+#   例: `bearer` 规则若不收窄, `[REDACTED-BEARER]` 之后的字样可能被再次吃掉 —— 幂等性是它的哨兵。
+$idem = Scrub ('C:\RPC\a.key + peng.liu.john@gmail.com + ' + $K1 + ' + ' + $GP + ' + ' + $AK + ' + ' + $SL + ' + ' + $JW + ' + ' + $PK + ' + Bearer ' + $BT)
+Assert-True "幂等: scrub(scrub(x)) == scrub(x) (覆盖 9 类占位符)" ((Scrub $idem) -eq $idem)
+
+Write-Host "=== [4] 覆盖率报告: 现有 9 条规则**未覆盖**的敏感形态(不计 FAIL, 但必须显式列出) ==="
 # ⚠ 这一段的**存在**比数值重要: 它把"我以为覆盖了"变成"我知道没覆盖这些"。
+# 2026-09-21: 前 6 项(凭据类)已由裁定 §3 落地规则 ⇒ 本段应从 0/14 变 6/14。
+# ⚠ **后 8 项是裁定明确"不加"的**(身份与拓扑类) —— 它们**不是待办**, 而是**设计上交给档位**的:
+#   含 PII/拓扑的卡走 `local-only`。故这段的期望值就是 6/14, 不是 14/14。
+# ⚠ 若将来真要给「身份证/银行卡」加规则: **必须用校验位**(GB 11643 mod-11-2 / Luhn),
+#   且**本段的探针要同时换掉** —— 现在的 `110101199003071234` / `6222021234567890123` 都是**编造值,
+#   校验位不合法**(实测: 校验位判据对它们**不命中**), 不换探针就会出现"有规则但探针永不被认"的假覆盖。
 $probe = @(
     @{ n = 'GitHub PAT';        s = (Sam 'ghp_', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') },
     @{ n = 'AWS Access Key';    s = (Sam 'AKIA', 'IOSFODNN7EXAMPLE') },
@@ -131,6 +178,32 @@ foreach ($c in $resid) {
     else { Write-Host "  已覆盖: $($c.n) ⇒ '$out'" }
 }
 Write-Host "  残留缺口: $($leaky.Count) / $($resid.Count)"
+Write-Host "  另两条**设计如此**(不是缺口, 免得被当成 bug 去修): JWT **只有两段**(header.payload)不认(需第 3 段 ≥10 字符); 私钥块命中由 §5 **拒发**, 不是抹掉继续"
+
+Write-Host "=== [5] 不可安全抹除判据(Get-ScrubBlockReason): 命中 ⇒ **拒发**, 不是抹掉继续 ==="
+# 2026-09-21 (裁定 §5-1): DESIGN §193「命中即拦截」与 §2.1 三档定义「脱敏后远端」的张力在此钉死 ——
+#   二分依据 = **能不能安全抹除**。凭据类抹掉后卡仍自洽 ⇒ 继续; 私钥块 ⇒ 拒发(卡本身不该出网)。
+$blk = @(
+    @{ n = 'OpenSSH 私钥块';        s = (Sam '-----BEGIN ', 'OPENSSH PRIVATE KEY-----');    e = 'scrub-unsafe:private-key' },
+    @{ n = 'RSA 私钥块';            s = (Sam '-----BEGIN ', 'RSA PRIVATE KEY-----');        e = 'scrub-unsafe:private-key' },
+    @{ n = 'PGP 私钥块(BLOCK 后缀)'; s = (Sam '-----BEGIN ', 'PGP PRIVATE KEY BLOCK-----');  e = 'scrub-unsafe:private-key' },
+    @{ n = '证书块(公钥) ⇒ 放行';    s = '-----BEGIN CERTIFICATE-----';                      e = '' },
+    @{ n = '普通卡正文 ⇒ 放行';      s = '把结果写到 out/result.md';                          e = '' },
+    @{ n = '只含 key/路径 ⇒ 放行(抹掉即可)'; s = ($K1 + ' at C:\RPC\a.key');                 e = '' },
+    @{ n = '空串 ⇒ 放行';           s = '';                                                e = '' }
+)
+foreach ($c in $blk) { Assert-True "block: $($c.n) ⇒ '$($c.e)'" ((Get-ScrubBlockReason $c.s) -eq $c.e) }
+
+Write-Host "=== [6] 规则清单自证(抽成 Get-ScrubRules 后必须仍是「单一真值源」) ==="
+# ⚠ 这条是"抽公共函数"的**代价守卫**: 抽出去以后若有人又在别处手写一遍模式, 这两条断言抓不到,
+#   但至少能保证**这一份**自身是完整的(名字唯一 + 四键齐备) —— 否则规则会**静默失效**
+#   (例: 漏写 `block` 键 ⇒ Get-ScrubBlockReason 永不命中, 而夹具其余部分照样全绿)。
+$rules = @(Get-ScrubRules)
+$names = @($rules | ForEach-Object { $_['name'] })
+$missing = @($rules | Where-Object { -not ($_.ContainsKey('name') -and $_.ContainsKey('re') -and $_.ContainsKey('block') -and $_.ContainsKey('repl')) })
+Assert-True "规则清单: 名字唯一($($names.Count) 条无重名)" ((@($names | Sort-Object -Unique)).Count -eq $names.Count)
+Assert-True "规则清单: 每条都有 name/re/block/repl 四键(缺键 = 静默失效)" ($missing.Count -eq 0)
+Write-Host "  规则数: $($rules.Count) 条 · 其中 block(命中即拒发) $((@($rules | Where-Object { $_['block'] })).Count) 条"
 
 Write-Host ""
 Write-Host "SCRUBBER_COVERAGE_TEST pass=$script:pass fail=$script:fail  (未覆盖形态 $($uncovered.Count) 项 / 残留缺口 $($leaky.Count) 项, 见上)"
