@@ -268,33 +268,28 @@ foreach ($rc in @(0, 1, 5, 9, 10, 12, 24, 13)) {
 }
 Assert-True "fallback: rc in {0,1,5,9,10,12,24,13} 均不触发(不掩盖真实错误)" $noFallback
 
-# --- P0 止血 + P1 免费档闸 (2026-09-21): sensitivity × **后端属性** 硬闸 ---
-# 洞①(P0): local-only 硬闸三处判据一律只判 `^opencode/`, 而 claude 备路(直接入口 + AUTO_FALLBACK
+# --- P0 止血 (2026-09-21): sensitivity × **后端出网性** 硬闸 ---
+# 洞: local-only 硬闸三处判据一律只判 `^opencode/`, 而 claude 备路(直接入口 + AUTO_FALLBACK
 #   入口)无 sensitivity 判据 ⇒ local-only 卡的 prompt 可**实际出网**(破 DESIGN §358 不变式)。
-# 洞②(P1, 新登记): claude 备路两型号都是 **`:free`**, 而免费档端点**全部训练/不可 ZDR**
-#   (实测: `data_collection=deny` 与 `zdr` 均 404 `No endpoints found matching your data policy`)
-#   ⇒ `sanitized` 卡的 prompt 会进"可能训练/公开发布"的 provider ⇒ **脱敏 ≠ 同意进公开数据集**。
-# 判据纯函数, 返回 '' = 放行 / 否则**原因 token**(使证据行能指名哪条规则拦的):
+# ⚠ **同日撤回**了一条 `sanitized × 可能训练` 规则 —— 理由见 Get-SensitivityBackendReject 的留档
+#   注释(①与档位定义冲突: sanitized 抹完 = public; ②不对称 ⇒ 虚假安心; ③"免费档可能训练"是使用
+#   免费额度的固有代价)。⇒ 本夹具只剩"出网"这一维; **探针的 C/D 例反向守卫"不许再加回那条闸"**。
 Assert-True "reject: local-only + 出网后端 => 'local-only+egress'" (
     (Get-SensitivityBackendReject -sensitivity 'local-only' -backendEgress $true) -eq 'local-only+egress')
 Assert-True "reject: local-only + 本地引擎(不出网) => 放行" (
     (Get-SensitivityBackendReject -sensitivity 'local-only' -backendEgress $false) -eq '')
-Assert-True "reject: sanitized + 可能训练的后端(:free) => 'sanitized+trains'" (
-    (Get-SensitivityBackendReject -sensitivity 'sanitized' -backendEgress $true -backendTrains $true) -eq 'sanitized+trains')
-Assert-True "reject: sanitized + 不训练的后端(付费/ZDR) => 放行" (
-    (Get-SensitivityBackendReject -sensitivity 'sanitized' -backendEgress $true -backendTrains $false) -eq '')
-Assert-True "reject: public + 出网 + 训练 => 放行(public 是唯一无闸档)" (
-    (Get-SensitivityBackendReject -sensitivity 'public' -backendEgress $true -backendTrains $true) -eq '')
-Assert-True "reject: 缺省(空 sensitivity) + 出网 + 训练 => 放行(与既有三处闸'缺省=public'一致)" (
-    (Get-SensitivityBackendReject -sensitivity '' -backendEgress $true -backendTrains $true) -eq '')
-# 覆盖(结构): 判据必须在**两个入口都真被调用** —— 只判一处会漏(这正是洞①的成因)
+Assert-True "reject: sanitized + 出网后端 => 放行(无'训练档'判据 —— 那条规则已撤回)" (
+    (Get-SensitivityBackendReject -sensitivity 'sanitized' -backendEgress $true) -eq '')
+Assert-True "reject: public + 出网后端 => 放行(public 是唯一无闸档)" (
+    (Get-SensitivityBackendReject -sensitivity 'public' -backendEgress $true) -eq '')
+Assert-True "reject: 缺省(空 sensitivity) + 出网后端 => 放行(与既有三处闸'缺省=public'一致)" (
+    (Get-SensitivityBackendReject -sensitivity '' -backendEgress $true) -eq '')
+# 覆盖(结构): 判据必须在**两个入口都真被调用** —— 只判一处会漏(这正是本洞的成因)
 $callSig = 'Get-SensitivityBackendReject -sensitivity $sens -backendEgress $true'
 Assert-True "reject: 判据在 Invoke-Task-Claude(直接入口)与 AUTO_FALLBACK(兜底入口)两处均被调用" (
     ([regex]::Matches($content, [regex]::Escape($callSig))).Count -ge 2)
 Assert-True "reject: 两条路径的拒绝串可分辨路径(claude-direct / fallback 均在)" (
-    $content.Contains('(claude-direct, $id)') -and $content.Contains('(fallback, $fbId)'))
-Assert-True "reject: 兜底入口先 Resolve-Model 取 id 再判属性(不能只看别名)" (
-    $content.Contains('$fbId = if ($fbR) { $fbR[''id''] } else { $fbModel }'))
+    $content.Contains('(claude-direct, $id)') -and $content.Contains('(fallback, $fbModel)'))
 
 # --- O-15/AUDIT (2026-09-21): claude 本地备路的判据 shell 语义 = bash(本地 Git Bash) ---
 # 定案: 卡的 accept/accept-golden **一律 bash 语义**; 两条路只差执行机器与 cwd, 不差 shell。
@@ -322,10 +317,10 @@ Assert-True "route: claude/claude-opus 仍 cli='claude'" ("$($rtc.cli)" -eq 'cla
 # env AGENT_FALLBACK_MODEL 覆盖需能解析 ⇒ 必须有 full-id 直传条目
 Assert-True "route: 备路型号有 full-id 直传条目(env AGENT_FALLBACK_MODEL 才能解析)" (
     $Script:ROUTE_TABLE.ContainsKey("$($rtc.id)"))
-# ⚠ P1 免费档闸的**前提** (2026-09-21): `$backendTrains` 由 `$id -match ':free'` 派生, 而该代理的
-#   依据是"免费档端点实测全部训练(account 开关 A 站为开)"。若谁把备路换成**付费型号**, 这条会亮
-#   —— 那时必须**重新审**"sanitized 是否还该被拦"(而不是让旧判据静默失效)。
-Assert-True "route: 备路两型号均为 :free(⇒ backendTrains=true 的代理依据成立)" (
+# 备路两型号均为 `:free` —— 这是 OPEN-ISSUES「备路全档依赖'免费模型允许训练'开关 + 免费日额度」
+#   那条登记的**事实前提**。若谁把备路换成付费型号, 这条会亮提醒同步那条登记(与闸无关: 那条
+#   `sanitized × 可能训练` 规则已于 2026-09-21 撤回, 见上)。
+Assert-True "route: 备路两型号均为 :free(⇒ OPEN-ISSUES 的'依赖免费开关/额度'前提成立)" (
     "$($rtc.id)" -match ':free' -and "$($rto.id)" -match ':free')
 
 Write-Host "--------------------------------"
