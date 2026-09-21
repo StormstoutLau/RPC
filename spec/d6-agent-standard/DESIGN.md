@@ -190,7 +190,12 @@ agent-cli task <proj> [--card <task.md>] [--model <m>] [--cli auto|opencode]
 
 - model 不在 §9.4 路由表 → 拒绝（退出码 2）
 
-- **sanitized 前置**（Review F2 补充）：`sensitivity: sanitized` 时 M3 先跑机械 scrubber（regex + gitleaks，§2.1 敏感路由定义），命中即拦截并报脱敏项；**未通过 scrubber 的任务绝不进入远端路径**（消毒正确性是机械可验证门禁，非 LLM 自查）
+- **sanitized 前置**（Review F2 补充）：`sensitivity: sanitized` 时 M3 先跑机械 scrubber（**regex 必需 + gitleaks 可选** —— 见 IMPLEMENTATION §106「gitleaks 若主控站有则挂，无则纯正则版」；实测主控站**未装** gitleaks ⇒ 现状即纯正则版，非漏项，§2.1 敏感路由定义），命中即拦截并报脱敏项；**未通过 scrubber 的任务绝不进入远端路径**（消毒正确性是机械可验证门禁，非 LLM 自查）
+  - **⚠ 2026-09-21 消歧义（scrubber 规则扩充裁定 §5-1，code 已按此实现）**：本轮把上句「命中即拦截」与 §2.1 三档定义「sanitized→**脱敏后**远端」的**张力钉死** —— 二分依据 = **能不能安全抹除**：
+    - **凭据类**（`sk-`/email/win 路径/GitHub PAT/AWS/Slack/JWT/Bearer）⇒ **抹掉继续**（脱敏后进远端，= §2.1 的"脱敏后远端"）：抹掉后卡仍自洽，下游（证据流/归档/验收/基线）看到的就是"已消毒"的 prompt。
+    - **私钥块**（`-----BEGIN … PRIVATE KEY …-----`）⇒ **拒发、fail-closed**（退出码 4，= 上句的"命中即拦截"）：卡里贴了整把私钥说明**这张卡本身就不该出网**，抹掉它会让一张本该被作者修掉的卡**看起来正常**（同族于"看起来处理过了"）。
+    - 规则清单的**单一真值源** = `agent-cli.ps1` 的 `Get-ScrubRules`（`Invoke-Scrubber` 抹 / `Get-ScrubBlockReason` 拒都从它取）；**主路与 claude 备路各判一次**（免得"主路守、备路漏"）。覆盖哪些/刻意不覆盖哪些、以及为什么，见该裁定 §3。
+    - **⚠ 卡作者纪律（不是判据，是纪律 —— 裁定 §6-P4）**：**含 PII（手机号/身份证/银行卡）或本机拓扑（内网 IP/主机名/绝对路径）的卡必须声明 `sensitivity: local-only`**。理由：scrubber **刻意不覆盖**这些形态（判据会误伤 —— 长度判据会命中本仓 run ID、`.local`/内网 IP 是本项目的主要寻址方式），所以"它们不出网"这件事**只能由档位保证**，不能指望正则。
 
 ### 5.2 远端执行脚本契约（R14 铁律）
 
@@ -346,7 +351,7 @@ M3 接受两种表示：完整 ID 直接查路由表；别名先经本表解析�
 | 错误场景                          | 处理方式                             | 退出码    |
 | ----------------------------- | -------------------------------- | ------ |
 | 锁被占用                          | 报占用者 PID/task\_id 即退             | 3      |
-| sensitivity 冲突（local-only+远端） | 拒绝，无覆写通道                         | 4      |
+| sensitivity 冲突（local-only+远端） / **消毒失败**（卡内含不可安全抹除项，如私钥块） | 拒绝，无覆写通道（fail-closed，绝不"抹掉继续"） | 4      |
 | model 缺失/不在路由表                | 拒绝                               | 2      |
 | ssh 断连                        | 自动重试 1 次（门禁缓存不重审，Codex §9.7.2-1） | 5      |
 | 超时                            | kill → failed{timeout} → 释放锁     | 6      |

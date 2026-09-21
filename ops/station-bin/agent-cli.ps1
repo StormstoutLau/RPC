@@ -873,27 +873,50 @@ function Get-NumOr([string]$s, [double]$def) {
     return $def
 }
 
+function Get-ScrubRules {
+    # 2026-09-21 · scrubber 规则扩充裁定（docs/security/2026-09-21_scrubber规则扩充裁定与影响面.md）：
+    # ★ **规则的单一真值源** —— `Invoke-Scrubber`(抹) 与 `Get-ScrubBlockReason`(拒) 都从这里取，
+    #   免得"同一个模式两处各写一遍"然后漂移（本项目反复栽在这个形态上）。
+    # 本次按裁定 §3 由 3 条扩到 9 条：加 6 条**凭据类**（固定前缀锚定 ⇒ 可判性高、误伤≈0）。
+    # ★ **刻意不加**那 8 条身份与拓扑类（内网 IP / .local 主机名 / Linux 绝对路径 / UNC /
+    #   用户名 / 手机号 / 身份证 / 银行卡），理由见裁定 §3，一句话：
+    #     · 前三类是**项目自己的日常寻址方式**（`.local` 212 处 / `/home/<user>/` 211 处 /
+    #       内网 IP 是 `inventory/net.yaml` 的权威真值）⇒ 抹掉它们 = 抹掉任务可执行性；
+    #     · 手机号/身份证/银行卡的**长度判据会命中本仓 run ID**（`yyyyMMddHHmmssffff` 恰好
+    #       18 位数字、全仓 204 处）；要加也只能用**校验位**（GB 11643 / Luhn）—— 见裁定 §2.3/§6-P5；
+    #     · 裸用户名**不可判**。那 8 项的正确防线是**档位**（含 PII/拓扑的卡走 local-only），不是正则。
+    # block=$true ⇒ 命中时**拒发**（不是抹掉继续）—— 见 `Get-ScrubBlockReason` 的注释。
+    return @(
+        # —— 凭据类：固定前缀锚定 ——
+        @{ name = 'private-key'; block = $true;  re = '-----BEGIN [A-Z ]*PRIVATE KEY[A-Z ]*-----';                repl = '[REDACTED-PRIVATE-KEY]' },
+        @{ name = 'github-pat';  block = $false; re = '\b(?:github_pat_[A-Za-z0-9_]{22,}|gh[pousr]_[A-Za-z0-9]{36,})'; repl = '[REDACTED-GH-PAT]' },
+        @{ name = 'aws-ak';      block = $false; re = '\b(?:AKIA|ASIA|A3T[A-Z0-9]|AGPA|AIDA|AROA|AIPA|ANPA|ANVA)[A-Z0-9]{16}\b'; repl = '[REDACTED-AWS-KEY]' },
+        @{ name = 'slack';       block = $false; re = '\bxox[abprs]-[A-Za-z0-9\-]{10,}';                          repl = '[REDACTED-SLACK-TOKEN]' },
+        @{ name = 'jwt';         block = $false; re = '\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}'; repl = '[REDACTED-JWT]' },
+        @{ name = 'api-key';     block = $false; re = 'sk-[A-Za-z0-9_\-]{16,}';                                   repl = '[REDACTED-KEY]' },
+        # bearer **刻意收窄**（裁定 §3-5）：泛模式会吃掉任何长不透明串 ⇒ 只在 `Bearer ` 上下文里认 + 长度 ≥20。
+        @{ name = 'bearer';      block = $false; re = '(?i)\bbearer\s+[A-Za-z0-9._~+/=\-]{20,}';                   repl = '[REDACTED-BEARER]' },
+        @{ name = 'email';       block = $false; re = '[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}';          repl = '[REDACTED-EMAIL]' },
+        # win-path —— 两条**已被夹具实测钉死**的取舍（改动前先读夹具 §2b/§4b）：
+        # ⚠ 不能是 `\S+`：空格即断 ⇒ `C:\Program Files\Git\bin\bash.exe` 只吃掉 `C:\Program`，
+        #   **残留** `Files\Git\bin\bash.exe` —— 而"看起来已处理过"的残留比不处理更危险。
+        # ⚠ 也不能是"段内一律允许空格"（`(?:\\[^\\]+)+`）：贪心会把**路径后面的普通词一起吃**
+        #   （`C:\RPC\out.txt done` → 整段变 `[REDACTED-PATH]`）—— 本机 prompt 里句中路径极常见
+        #   ⇒ 那是**误伤任务输入**（静默破坏，同族于静默降级）。
+        # 取舍：只有当段后**还有 `\`**（即能证明它仍是路径）时才允许段内含空格；末段遇空格即停。
+        #   代价 = "末段含空格"形态会**残留**（已知缺口，见夹具 §4b），消除它需再加规则=决策。
+        @{ name = 'win-path';    block = $false; re = '(?i)\b[A-Z]:\\(?:[^\\/:*?"<>|\r\n\t]+\\+)*[^\\/:*?"<>|\r\n\t\s]*'; repl = '[REDACTED-PATH]' }
+    )
+}
+
 function Invoke-Scrubber {
     # D6 audit P1 (2026-09-03): regex-only sanitizer for sensitivity=sanitized (IMPL T2 scope).
-    # Patterns: api keys (sk-...), emails, windows absolute paths. Runs on console BEFORE
-    # the prompt leaves (invariant 2: scrub on console, remote only receives sanitized text).
-    # R4: prints masked previews of hit lines for human confirmation; no whitelist in MVP.
+    # Runs on console BEFORE the prompt leaves (invariant 2: scrub on console, remote only
+    # receives sanitized text). R4: prints masked previews of hit lines for human confirmation;
+    # no whitelist in MVP. **规则清单已抽到 `Get-ScrubRules`（单一真值源，2026-09-21）。**
     param([string]$text)
-    $rules = @(
-        @{ name = 'api-key';  re = 'sk-[A-Za-z0-9_\-]{16,}';                             repl = '[REDACTED-KEY]' },
-        @{ name = 'email';    re = '[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}';   repl = '[REDACTED-EMAIL]' },
-        # ⚠ 不能是 `\S+`: 空格即断 ⇒ `C:\Program Files\Git\bin\bash.exe` 只吃掉 `C:\Program`,
-        #   **残留** `Files\Git\bin\bash.exe` —— 而"看起来已处理过"的残留比不处理更危险
-        #   (夹具 `_scrubber_coverage_test.ps1` 第 ③ 态专抓此类)。
-        # ⚠ 也不能是"段内一律允许空格"(`(?:\\[^\\]+)+`): 贪心会把**路径后面的普通词一起吃**
-        #   (`C:\RPC\out.txt done` → 整段变 `[REDACTED-PATH]`) —— 本机 prompt 里句中路径极常见
-        #   ⇒ 这是**误伤任务输入**(静默破坏, 同族于静默降级)。夹具 §2b 专抓此类。
-        # 取舍: 只有当段后**还有 `\`**(即能证明它仍是路径)时才允许段内含空格; 末段遇空格即停。
-        #   代价 = "末段含空格"形态会**残留**(已知缺口, 见夹具 §4b), 消除它需再加规则=决策。
-        @{ name = 'win-path'; re = '(?i)\b[A-Z]:\\(?:[^\\/:*?"<>|\r\n\t]+\\+)*[^\\/:*?"<>|\r\n\t\s]*'; repl = '[REDACTED-PATH]' }
-    )
     $hits = 0
-    foreach ($r in $rules) {
+    foreach ($r in (Get-ScrubRules)) {
         $ms = [regex]::Matches($text, $r['re'])
         if ($ms.Count -gt 0) {
             $hits += $ms.Count
@@ -906,6 +929,25 @@ function Invoke-Scrubber {
     }
     if ($hits -gt 0) { Write-Host "SCRUB total hits: $hits (sanitized gate active)" }
     return $text
+}
+
+function Get-ScrubBlockReason {
+    # 2026-09-21 · scrubber 规则扩充裁定 §5-1：把"**命中即拦截**"与"**脱敏后继续**"的二分钉死
+    #   （此前 DESIGN §193 写"命中即拦截"、而 §2.1 三档定义写"sanitized→**脱敏后**远端"，
+    #     两句张力一直没被处置）。二分依据 = **能不能安全抹除**：
+    #   · 凭据类（key/email/路径/PAT/…）⇒ **抹掉继续**：抹掉后卡仍自洽，且下游（证据流/归档/
+    #     验收/基线）看到的就是"已消毒"的 prompt，语义与 `public` 档一致。
+    #   · **私钥块** ⇒ **拒发（fail-closed）**：卡里贴了整把私钥说明**这张卡本身就不该出网**；
+    #     抹掉它会让一张本该被作者修掉的卡**看起来正常** —— 与"看起来处理过了"同族。
+    # 返回 '' = 放行 / 否则原因 token（与 `Get-SensitivityBackendReject` 同约定）。
+    # ⚠ 模式**不在此处重复写**：从 `Get-ScrubRules` 里取 `block=$true` 的那几条（单一真值源）。
+    # 纯函数 ⇒ 夹具可按名提取离线单测（与 `Test-FallbackEligible` 同族）。
+    param([string]$text)
+    if (-not $text) { return '' }
+    foreach ($r in (Get-ScrubRules)) {
+        if ($r['block'] -and [regex]::IsMatch($text, $r['re'])) { return "scrub-unsafe:$($r['name'])" }
+    }
+    return ''
 }
 
 function Test-FallbackEligible([int]$code) {
@@ -1254,6 +1296,10 @@ mkdir -p "`$W/.attach/$name"
         $promptFull += "`n`n(高效应答: 请尽量精简思考, 直接给出关键步骤与最终结论)"
     }
     if ($sens -eq 'sanitized') {
+        # 2026-09-21 (裁定 §5-1): **先过"不可安全抹除"判据** —— 命中即**拒发**(fail-closed),
+        #   绝不"抹掉继续"(那会把一张本该被作者修掉的卡伪装成正常卡)。
+        $scrubBlock = Get-ScrubBlockReason $promptFull
+        if ($scrubBlock) { Write-Host "REJECT $scrubBlock exit 4 - 卡内含不可安全抹除项 ⇒ fail-closed(不改卡不出网)"; return 4 }
         Write-Host 'SANITIZED gate: scrubbing prompt before it leaves console (P1a)'
         $promptFull = Invoke-Scrubber $promptFull
     }
@@ -2267,7 +2313,12 @@ function Invoke-Task-Claude {
     if ($prof.thinking -eq 'ON' -and $prof.profile -in @('short','reason')) {
         $promptFull += "`n`n(concise reply expected: minimize thinking, give key steps + final result)"
     }
-    if ($sens -eq 'sanitized') { Write-Host 'SANITIZED gate: scrubbing prompt (P1a)'; $promptFull = Invoke-Scrubber $promptFull }
+    if ($sens -eq 'sanitized') {
+        # 与主路同一判据(裁定 §5-1): 不可安全抹除 ⇒ 拒发。备路**同规矩**, 免得"主路守、备路漏"。
+        $scrubBlock = Get-ScrubBlockReason $promptFull
+        if ($scrubBlock) { Write-Host "REJECT $scrubBlock (claude-direct) exit 4 - 卡内含不可安全抹除项 ⇒ fail-closed"; return 4 }
+        Write-Host 'SANITIZED gate: scrubbing prompt (P1a)'; $promptFull = Invoke-Scrubber $promptFull
+    }
     [IO.File]::WriteAllText($promptIn, $promptFull, $utf8NoBom)
     $promptSha = Get-Sha256Text $promptFull
     Write-Host "PROMPT_SHA=sha256:$promptSha scratch=$scratch"
