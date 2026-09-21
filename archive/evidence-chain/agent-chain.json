@@ -1523,11 +1523,49 @@
    },
    "recipe": "v2",
    "chained_at": "2026-09-21 16:58:34"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609211710448807",
+   "digest": "e0410623afbf5879d33bed3e96976f31f0fe85e1cda75e8d227f0f43f6242f53",
+   "prev": "71877c81e96b2fa39efacf2d64f9a006e876bd7ac363e775dd674620f2d6005b",
+   "files": {
+    ".agent-run.json": "142b689d7fd50a68e1b1415ba476af426a36a742ac33b6a2089324e98babc8bf",
+    "agent-output": "a2ef77e474f94e3fc3652ade764dba495013b2e797d1a6fb7bd8ddbe0ae154ca",
+    "judgment-record": "b903d4bd95149753dd67a6dbe80fafe47019cc5e63813e9a34677f3a0d899261",
+    "prompt": "d51e1e8e88dfac2e2a124d60280c25ab7ce551c8e0cb56187832da12efb09ed9",
+    "accept-cmds": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+    "golden-cmd": "7db3fbadc46a9b58757ab0a5055c184dde25c5577375c6f37dc7d9b76813f83b",
+    "progress-trace": "1273f8a682dcd99416a7e4c9ed4b09dc4174fef44e3b21b7e678bcd8c34d0282",
+    "session-meta": "034506d94f8e101fd9493775a77d6f28fa3263c0cf613cad19821f3b768a6a16",
+    "attach-manifest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "workspace-diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "card": "a5dc263db10971cde59b950994117834bcce8f7de73a25018f7a7b23290ae271",
+    "accept-output": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-21 17:12:15"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609211711138716",
+   "digest": "14c2f6fce42251d3384364c655b10981990906d01f2cd269ffcb8ab115f86db6",
+   "prev": "e0410623afbf5879d33bed3e96976f31f0fe85e1cda75e8d227f0f43f6242f53",
+   "files": {
+    ".agent-run.json": "467dc4976125d8ea84b83fbf5aa66acdb37ba827771bce9f471550d899a9ffb5",
+    "agent-output": "99c17f0535a3c31dda6c80768970371a4d0549f49cb3949c6ff4328e543b6768",
+    "prompt": "88478ce85c31adc03d5dc44b547696adcf7b568fd7790f294d1c303bdf376a67",
+    "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "card": "a5dc263db10971cde59b950994117834bcce8f7de73a25018f7a7b23290ae271",
+    "accept-output": "c0a024032a487ae3eb4dcfe1da0c0f833822cabbb688e49b25670e4ee3474faf"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-21 17:12:15"
   }
  ],
  "head": {
   "proj": "paper",
-  "run_id": "202609211652389854",
-  "digest": "71877c81e96b2fa39efacf2d64f9a006e876bd7ac363e775dd674620f2d6005b"
+  "run_id": "202609211711138716",
+  "digest": "14c2f6fce42251d3384364c655b10981990906d01f2cd269ffcb8ab115f86db6"
  }
 }
