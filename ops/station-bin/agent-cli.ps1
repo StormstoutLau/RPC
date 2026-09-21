@@ -926,6 +926,14 @@ function Invoke-Task {
     if ($cardId -is [array]) { $cardId = $cardId[0] }
     $m = if ($model) { $model } else { if ($fm['model']) { $fm['model'] } else { '' } }
     $sens = if ($sensitive) { $sensitive } else { if ($fm['sensitivity']) { $fm['sensitivity'] } else { 'public' } }
+    # O-15/AUDIT (2026-09-21 实弹实测修正): 自动 fallback 的**入参必须在此处快照** ——
+    #   主路 collect 段有 `$m = Get-Content $metaTxt | Out-String`(见本函数内"遥测解析"上方)
+    #   会把 `$m` **改写成 .meta 全文**。真实站点实弹(2026-09-21, B 站 rc=6)正是因此把 meta 文本
+    #   当模型名传给 claude 备路 ⇒ `REJECT unknown-model (TASK_ID=202609211645528026 QUEUE_S=2 …)`。
+    #   与缺口 5「返回值被非返回值输出污染」同族: **变量被复用即等于被污染**。
+    #   ⚠ 注入式夹具(_probe_fallback.ps1)抓不到它 —— stub 不产 .meta 文件 ⇒ `Test-Path $metaTxt`
+    #   为假 ⇒ `$m` 未被改写; **只有真实站才暴露**(这是真实实弹不可被注入式替代的实例)。
+    $taskModel = $m
     if (-not $m) { Write-Host 'REJECT missing-model (exit 2) - card has no model and no --model (inv 3)'; return 2 }
     # ADR-0007 前置: 无 front-matter 卡**必须显式声明安全属性**才放行(否则静默退化为 public+可写)。
     #   形状守卫同 $cardId(环境层可能吐 $null 使返回值变数组)。
@@ -1724,8 +1732,16 @@ exit `$RC
     #   `return (…)` 只会吐其 int 返回值, 不会污染调用方 `$code = Invoke-Task …`。
     #   ⚠ 刻意只对 `effectiveCli -eq 'opencode'`: 若卡/路由本就选 claude(或其自身超时)则**不二次转发**。
     if ($AutoFallback -and $effectiveCli -eq 'opencode' -and (Test-FallbackEligible $code)) {
+        # ⚠ **必须用 `$taskModel`(顶部快照), 不能用 `$m`** —— 后者已被 collect 段改写为 .meta 全文
+        #   (2026-09-21 真实站实弹实测踩到, 见上方快照处注释)。
+        # 备路模型: claude 备路只接受 `station=''` 的**本地** claude 路由(Invoke-Task-Claude 内护栏),
+        #   而主路模型(如 gpt-oss-20b)解析出 station='B' ⇒ **不能透传**, 否则被
+        #   `REJECT claude-station=B (exit 4)` 拦掉 ⇒ 备路等于白切。故按语义切到 claude 备路型号:
+        #   默认 ROUTE_TABLE 的 `claude`(=claude-sonnet-4-5), 可用 env `AGENT_FALLBACK_MODEL` 覆盖。
+        $fbModel = if ($env:AGENT_FALLBACK_MODEL) { $env:AGENT_FALLBACK_MODEL } else { 'claude' }
         Write-Host "AUTO_FALLBACK: opencode rc=$code -> local claude backup (explicit -AutoFallback)"
-        return (Invoke-Task-Claude -proj $proj -card $card -model $m -sensitive $sens -attach $attach -complexity $complexity -taskType $taskType)
+        Write-Host "AUTO_FALLBACK_MODEL: $taskModel -> $fbModel"
+        return (Invoke-Task-Claude -proj $proj -card $card -model $fbModel -sensitive $sens -attach $attach -complexity $complexity -taskType $taskType)
     }
     return $code
 }
@@ -2202,18 +2218,49 @@ function Resolve-ClaudeSpawn {
 }
 
 function Invoke-ClaudeFly {
-    # 用 Start-Process 把 stdin 文件喂给 claude headless, stdout/stderr 落盘; 超时 kill 返回 124.
+    # 直起 claude headless: stdin 从文件喂, stdout/stderr 落盘; 预算超时则 kill 并返回 124。
+    # ⚠ **2026-09-21 实弹实测修正**: 原写法 `Start-Process -NoNewWindow -PassThru -RedirectStandard*`
+    #   在本 PS5.1 上 **`$p.ExitCode` 恒为 `$null`**(实测: 加 `-Wait` 才非空, 仅调无参 `WaitForExit()`
+    #   或 `Refresh()` 都补不回来) ⇒ `$rc` 变 **空串** ⇒ 两处后果: ①`'' -ne 0` 为真 ⇒ resume 循环空转;
+    #   ②`$null -eq 0` 为假 ⇒ **成功的 claude run 也会被判 `failed`**(最终码恒 1) —— 备路等于白修。
+    #   改用 .NET `Process`+`ProcessStartInfo`: `WaitForExit(ms)` 语义不变(**保留预算内 kill**),
+    #   且 `ExitCode` 真实可读(**实测 `--version` 得 0**)。
     param([string]$argStr, [string]$stdin, [string]$stdout, [string]$stderr, [string]$scratch, [int]$budgetS)
     if (-not (Test-Path $stdin)) { [IO.File]::WriteAllText($stdin, '', (New-Object System.Text.UTF8Encoding $false)) }
+    $fsIn = $null; $fsOut = $null; $fsErr = $null
     try {
         $spawn = Resolve-ClaudeSpawn
         Write-Host "CLAUDE_SPAWN=$spawn"
-        $p = Start-Process -FilePath $spawn -ArgumentList $argStr -NoNewWindow -PassThru `
-            -RedirectStandardInput $stdin -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-        if (-not $p.WaitForExit($budgetS * 1000)) { $p.Kill(); $p.WaitForExit(); return @{ code = 124; msg = "timeout after ${budgetS}s (killed)" } }
-        return @{ code = $p.ExitCode; msg = '' }
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $spawn
+        $psi.Arguments = $argStr
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardInput = $true
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        # 三路**并发**搬运, 防任一管道写满互锁: stdin 从文件灌入, stdout/stderr 落文件。
+        #   必须先起 stdout/stderr 的搬运再去等 stdin —— 否则"子进程猛写 stdout 而我们卡在喂 stdin"会死锁。
+        $fsIn  = [IO.File]::OpenRead($stdin)
+        $fsOut = [IO.File]::Create($stdout)
+        $fsErr = [IO.File]::Create($stderr)
+        $tIn  = $fsIn.CopyToAsync($proc.StandardInput.BaseStream)
+        $tOut = $proc.StandardOutput.BaseStream.CopyToAsync($fsOut)
+        $tErr = $proc.StandardError.BaseStream.CopyToAsync($fsErr)
+        $tIn.Wait()                              # 喂完即关 stdin(等价 `< file` 的 EOF 语义)
+        try { $proc.StandardInput.Close() } catch { }
+        $done = $proc.WaitForExit($budgetS * 1000)
+        if (-not $done) { try { $proc.Kill() } catch { }; try { $proc.WaitForExit() } catch { } }
+        # 收尾: 等三路搬运收敛(进程已退出 ⇒ 管道关闭 ⇒ 任务立即完成), 再取 rc
+        foreach ($t in @($tIn, $tOut, $tErr)) { try { [void]$t.Wait(5000) } catch { } }
+        if (-not $done) { return @{ code = 124; msg = "timeout after ${budgetS}s (killed)" } }
+        return @{ code = $proc.ExitCode; msg = '' }
     }
     catch { return @{ code = 7; msg = $_.Exception.Message } }
+    finally {
+        foreach ($fs in @($fsIn, $fsOut, $fsErr)) { if ($fs) { try { $fs.Dispose() } catch { } } }
+    }
 }
 
 # ---------------- O-16 review ring (review --peer) ----------------

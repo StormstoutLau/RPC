@@ -1,4 +1,4 @@
-# _probe_fallback.ps1 - Injection live-probe for claude auto-fallback (O-15/AUDIT 2026-09-21)
+﻿# _probe_fallback.ps1 - Injection live-probe for claude auto-fallback (O-15/AUDIT 2026-09-21)
 # Drives the REAL Invoke-Task dispatch logic; stubs only the remote/site deps so the
 # opencode main path returns rc=6 (engine-deadlock/timeout sentinel) WITHOUT a live site,
 # then asserts the AUTO_FALLBACK branch fires and calls the REAL Invoke-Task-Claude.
@@ -45,9 +45,30 @@ function Invoke-SlotGate { param() return @{ na = $true; slot_total = 0; slot_bu
 function Invoke-Workspace { param() return $null }
 function Invoke-RemoteScript { param() return 124 }   # simulate remote opencode timeout sentinel
 
+# 2026-09-21 加固(真实站实弹教训): 也让"远端证据回收"产出一个 `.meta`。
+#   为什么必须加: 主路 collect 段有 `$m = Get-Content $metaTxt | Out-String`, 会把 `$m` **改写成
+#   .meta 全文**。若不产 `.meta`, 该行不执行 ⇒ `$m` 保持为模型别名 ⇒ **本夹具对"fallback 把
+#   .meta 文本当模型名"这一类回归完全不敏感**(首版正是如此, 是真实站实弹当场踩到 `REJECT unknown-model
+#   (TASK_ID=…)` 才暴露)。加了它之后, 回归一旦发生 ⇒ `Resolve-Model <meta 文本>` 返回 $null ⇒
+#   REJECT ⇒ 下面对"是否产出 claude run"的断言必 FAIL。
+#   本函数覆盖真实 `ssh`(PS 里函数优先于外部命令), 只在证据批通道(命令行含 'FILE:')回 marker+base64。
+function ssh {
+    $all = ($args -join ' ')
+    if ($all -match 'FILE:') {
+        $meta = "TASK_ID=PROBE-SYNTHETIC`nQUEUE_S=2`nRUN_S=7`nTASK_RC=124`nACCEPT_OK=1`nACCEPT_GOLDEN_OK=1`nREVIEW_NEEDED=1`n"
+        Write-Output 'FILE:.meta'
+        Write-Output ([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($meta)))
+        Write-Output ''
+    }
+}
+
 # --- script globals referenced by extracted functions / Invoke-Task ---
 $probeProj = Join-Path $env:TEMP 'probe-proj'
-if (-not (Test-Path $probeProj)) { New-Item -ItemType Directory -Path $probeProj -Force | Out-Null }
+# ⚠ **每次必须清空**: 否则"找最新的 claude run"会命中**上一次运行遗留**的 run ⇒ 断言**假 PASS**
+#   (2026-09-21 负向自证当场踩到: 把 fallback 退回用 `$m` 的回归版**仍报 pass**, 因为上一轮
+#   成功产出的 claude run 还在磁盘上被找到)。夹具的隔离性本身也是判据的一部分。
+if (Test-Path $probeProj) { Remove-Item $probeProj -Recurse -Force -ErrorAction SilentlyContinue }
+New-Item -ItemType Directory -Path $probeProj -Force | Out-Null
 $Script:PROJECTS = @{ paper = $probeProj }
 $Script:REPO_ROOT = 'd:\RPC'
 $Script:WORKSPACE_ROOT = 'C:\Windows\Temp\probe-ws'
@@ -115,6 +136,13 @@ else {
     if ($claudeRun.status -ne 'failed' -and $claudeRun.status -ne 'timeout') {
         Write-Host ('WARN  claude run status=' + $claudeRun.status + ' (expected failed/timeout under unauth claude)')
     } else { Write-Host ('PASS  claude run status=' + $claudeRun.status + ' (honest failure, unauth claude)') }
+    # (2b) 备路型号映射: 必须落到 claude 路由解析出的 id, **不能**是主路模型别名、更不能是 .meta 文本。
+    #      (真实站实弹踩过: `$m` 被 collect 段改写 ⇒ 传 meta 文本 ⇒ REJECT; 见 ssh stub 处注释)
+    if ($claudeRun.model -eq 'claude-sonnet-4-5') {
+        Write-Host 'PASS  claude run model=claude-sonnet-4-5 (备路型号映射正确, 未被 .meta 文本污染)'
+    } else {
+        Write-Host ('FAIL  claude run model=' + $claudeRun.model + ' (期望 claude-sonnet-4-5)'); $ok = $false
+    }
     # (3) evidence_manifest present => recipe v2 (the headline of this change)
     $evm = $claudeRun.evidence_manifest
     if (-not $evm -or -not @($evm.subjects).Count) {
