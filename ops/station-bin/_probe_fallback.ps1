@@ -5,10 +5,11 @@
 # claude CLI is installed but UNAUTHENTICATED in this env => the backup run FAILS, but
 # the v2 evidence (evidence_manifest + attach array + stderr/card/prompt archive) must
 # still be emitted => proves "evidence is judgeable on a real failure", not faked.
-# P0+P1 (2026-09-21): also drives the **sensitivity x backend** hard gate - 4 cases over
-# (local-only | sanitized) x (direct -cli claude | AUTO_FALLBACK). All 4 must be REJECTED (rc=4)
-# with NO claude run produced (that count is the outbound-side evidence). Mutation-tested: dropping
-# either rule turns exactly its own 2 cases red while the other 2 stay green.
+# P0 (2026-09-21): also drives the **sensitivity x backend** hard gate in BOTH directions -
+# local-only x (direct -cli claude | AUTO_FALLBACK) must be REJECTED (rc=4, no claude run produced =
+# the outbound-side evidence), while sanitized x (same two entries) must PASS THROUGH (claude run
+# produced). The sanitized direction is a reverse guard: a "sanitized x trains" rule was added and
+# then withdrawn the same day (see Get-SensitivityBackendReject for why) - re-adding it turns C/D red.
 # Exit: 0 = pass, 1 = fail. Comments kept ASCII to avoid PS5.1 BOM/GBK parse traps.
 # SilentlyContinue: bare collect scp to an OFFLINE site returns nonzero; under EAP=Stop that
 # would throw before the fallback gate is reached. This is the known BatchMode OPEN-ISSUE
@@ -208,19 +209,18 @@ if (Test-Path $rj2) { $cli2 = (Get-Content $rj2 -Raw | ConvertFrom-Json).cli }
 if ($code2 -eq 6 -and $cli2 -eq 'opencode') { Write-Host 'PASS  gate-off: returned 6, newest run cli=opencode (no fallback)' }
 else { Write-Host ("FAIL  gate-off: code=" + $code2 + " newest cli=" + $cli2); $ok = $false }
 
-# === 硬闸自证 (2026-09-21): sensitivity × **后端属性**, 两条出网路径各自判 ===
-# 洞①(P0): 既有三处闸只判 `^opencode/`(把"出网"等同于"opencode/*"), 而 claude 备路(主控本地
+# === 硬闸自证 (2026-09-21): sensitivity × **后端出网性**, 两条出网路径各自判 ===
+# 洞: 既有三处闸只判 `^opencode/`(把"出网"等同于"opencode/*"), 而 claude 备路(主控本地
 #   spawn → ANTHROPIC_BASE_URL=云端 OpenRouter)**没有** sensitivity 判据 ⇒ local-only 卡的
 #   prompt 可**实际出网**(破 DESIGN §358 路由不变式)。
-# 洞②(P1): claude 备路两型号都是 **`:free`**, 而免费档端点**全部训练/不可 ZDR**(P1 实测:
-#   `data_collection=deny` 与 `zdr` 均 404 `No endpoints found matching your data policy`)
-#   ⇒ sanitized 卡的 prompt 会进"可能训练/公开发布"的 provider。**脱敏 ≠ 同意进公开数据集**。
-# 两条路径(直接入口 / 自动兜底入口)是**独立入口** ⇒ 2 类 sensitivity × 2 条路径 = 4 例, 逐个自证。
-# 判据用**出网侧证据**: claude 通道在发请求**前**必先落 `.agent-run.json`(cli=claude) ⇒
-#   "claude run 计数不增"就是"未出网"的本地可判证据(计数若增 = 真发了请求; claude 现已带
-#   OpenRouter key 授权, 会真出网)。
+# ⚠ 同日**撤回**了一条 `sanitized × 可能训练` 规则(理由见 Get-SensitivityBackendReject 留档) ⇒
+#   本探针**双向守**: A/B 必须**被拒**(负例), C/D 必须**被放行且真在免费档产出 claude run**
+#   (反向守卫 —— 谁再把那条无依据的闸加回来, C/D 立刻变红)。**C/D 会真发 2 个免费档请求**
+#   (合成 prompt "reply with PASS") —— 这正是"放行"的实弹证据。
+# 出网侧证据: claude 通道在发请求**前**必先落 `.agent-run.json`(cli=claude) ⇒
+#   "claude run 计数"就是本地可判的出网计数器(拒 ⇒ 不增; 放行 ⇒ 必增)。
 Write-Host ''
-Write-Host '=== sensitivity x backend gate: local-only/sanitized must NOT reach the :free claude channel ==='
+Write-Host '=== sensitivity x backend gate: local-only must be REJECTED; sanitized must PASS THROUGH ==='
 function New-ProbeCard([string]$name, [string]$sens) {
     $p = Join-Path $env:TEMP "probe-$name-card.md"
     @"
@@ -251,31 +251,40 @@ function Count-ClaudeRuns {
     return $n
 }
 
-# 直接入口用 claude 型号; 兜底入口的主路用**站上本地引擎**型号(gpt-oss) —— 那正是洞②的真实场景
+# 直接入口用 claude 型号; 兜底入口的主路用**站上本地引擎**型号(gpt-oss) —— 那正是本洞的真实场景
 #   (非 `opencode/*` ⇒ 旧三处闸不拦)。
 $cases = @(
-    @{ tag = 'A local-only + -cli claude (直接入口) '; card = $cardLocal; sens = 'local-only'; cli = 'claude';   model = 'claude';  fb = $false },
-    @{ tag = 'B local-only + AUTO_FALLBACK (兜底入口)'; card = $cardLocal; sens = 'local-only'; cli = 'opencode'; model = 'gpt-oss'; fb = $true  },
-    @{ tag = 'C sanitized  + -cli claude (直接入口) '; card = $cardSanit; sens = 'sanitized'; cli = 'claude';   model = 'claude';  fb = $false },
-    @{ tag = 'D sanitized  + AUTO_FALLBACK (兜底入口)'; card = $cardSanit; sens = 'sanitized'; cli = 'opencode'; model = 'gpt-oss'; fb = $true  }
+    @{ tag = 'A local-only + -cli claude (直接入口) '; card = $cardLocal; sens = 'local-only'; cli = 'claude';   model = 'claude';  fb = $false; expect = 'reject' },
+    @{ tag = 'B local-only + AUTO_FALLBACK (兜底入口)'; card = $cardLocal; sens = 'local-only'; cli = 'opencode'; model = 'gpt-oss'; fb = $true;  expect = 'reject' },
+    @{ tag = 'C sanitized  + -cli claude (直接入口) '; card = $cardSanit; sens = 'sanitized'; cli = 'claude';   model = 'claude';  fb = $false; expect = 'allow'  },
+    @{ tag = 'D sanitized  + AUTO_FALLBACK (兜底入口)'; card = $cardSanit; sens = 'sanitized'; cli = 'opencode'; model = 'gpt-oss'; fb = $true;  expect = 'allow'  }
 )
 foreach ($c in $cases) {
     $before = Count-ClaudeRuns
     $rc = Scalar (Invoke-Task -proj 'paper' -card $c.card -model $c.model -sensitive $c.sens -cli $c.cli -AutoFallback:$c.fb)
     $after = Count-ClaudeRuns
-    if ($rc -eq 4 -and $after -eq $before) {
-        Write-Host ('     PASS  ' + $c.tag + ': rc=4 且 claude run 数 ' + $before + '->' + $after + ' 未增(未出网)')
+    if ($c.expect -eq 'reject') {
+        if ($rc -eq 4 -and $after -eq $before) {
+            Write-Host ('     PASS  ' + $c.tag + ' [拒]: rc=4 且 claude run 数 ' + $before + '->' + $after + ' 未增(未出网)')
+        } else {
+            Write-Host ('     FAIL  ' + $c.tag + ' [拒]: rc=' + $rc + ' claude run 数 ' + $before + '->' + $after + ' (期望 rc=4 且不增)')
+            $ok = $false
+        }
     } else {
-        Write-Host ('     FAIL  ' + $c.tag + ': rc=' + $rc + ' claude run 数 ' + $before + '->' + $after + ' (期望 rc=4 且不增)')
-        $ok = $false
+        if ($after -gt $before -and $rc -ne 4) {
+            Write-Host ('     PASS  ' + $c.tag + ' [放行]: claude run 数 ' + $before + '->' + $after + ' 已增(真到免费档); rc=' + $rc)
+        } else {
+            Write-Host ('     FAIL  ' + $c.tag + ' [放行]: rc=' + $rc + ' claude run 数 ' + $before + '->' + $after + ' (期望计数增加且 rc<>4 ⇒ 不许把撤回的闸加回来)')
+            $ok = $false
+        }
     }
 }
 
-# (7e) 覆盖: 4 例对"零出网"这一结果是**同构**的(任一处闸生效都成立) ⇒ 只有覆盖断言能把
+# (7e) 覆盖: 4 例对"是否出网"这一结果在**同一类**内是同构的(任一处闸生效都成立) ⇒ 只有覆盖断言能把
 #      "哪一处闸在守"分辨开(与夹具的结构断言互补: 判据必须报覆盖率, 而不是"有个闸在跑")。
 $callSig = 'Get-SensitivityBackendReject -sensitivity $sens -backendEgress $true'
 $nCalls = ([regex]::Matches($src, [regex]::Escape($callSig))).Count
-if ($nCalls -ge 2 -and $src.Contains('(claude-direct, $id)') -and $src.Contains('(fallback, $fbId)')) {
+if ($nCalls -ge 2 -and $src.Contains('(claude-direct, $id)') -and $src.Contains('(fallback, $fbModel)')) {
     Write-Host ('     PASS  coverage: 判据在两条路径均被调用(实测调用点 ' + $nCalls + ' 处) + 拒绝串可分辨路径')
 } else {
     Write-Host ('     FAIL  coverage: 调用点 ' + $nCalls + ' 处(期望 >=2) 或拒绝串缺失'); $ok = $false
