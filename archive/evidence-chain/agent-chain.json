@@ -1425,11 +1425,109 @@
    },
    "recipe": "v2",
    "chained_at": "2026-09-18 23:14:38"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609211645528026",
+   "digest": "d359bfe209862ba57f681d2d1a1d89c49b6543595f05a58c853e3bee94f4be1a",
+   "prev": "7f4741f0c6802b799cb2cbe93575381c03e8afea9bd88fc397ab89a5007491c8",
+   "files": {
+    ".agent-run.json": "88ad94621fda420c7ed3db52dca105b5a60d3c7bfab74a98139a0794e62c4736",
+    "agent-output": "a2ef77e474f94e3fc3652ade764dba495013b2e797d1a6fb7bd8ddbe0ae154ca",
+    "judgment-record": "cc7070f2d01744e5e5f96cd7ec7a870487689a54aec816e7be768d03567efe36",
+    "prompt": "d51e1e8e88dfac2e2a124d60280c25ab7ce551c8e0cb56187832da12efb09ed9",
+    "accept-cmds": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+    "golden-cmd": "7db3fbadc46a9b58757ab0a5055c184dde25c5577375c6f37dc7d9b76813f83b",
+    "progress-trace": "d7a48380b124accfe61c7e8a746a06ca1e675d815890b95c45451ea0d02c1349",
+    "session-meta": "8f64c5b93a3f6635ba79248aa02f5a3a9ffc37242acc74597ebf5970eb62837d",
+    "attach-manifest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "workspace-diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "card": "a5dc263db10971cde59b950994117834bcce8f7de73a25018f7a7b23290ae271",
+    "accept-output": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-21 16:58:34"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609211647356392",
+   "digest": "94c7b9b65624db92e61941daeb83721cc04329b72655b625adf1b1c97d1ab7ec",
+   "prev": "d359bfe209862ba57f681d2d1a1d89c49b6543595f05a58c853e3bee94f4be1a",
+   "files": {
+    ".agent-run.json": "9db7e483dc76bd5f23d59be1a289580d16a21676130637275ae735d1c5a7fbdf",
+    "agent-output": "46f3df8e887ee609196f34329801d6ee1363abb34a97b7583d96599d187bcce1",
+    "judgment-record": "bd42a9009b32fd4a0daacaaf4f1e5265ecb1fe6ebdb37cda27b6247ebfae2c96",
+    "prompt": "d51e1e8e88dfac2e2a124d60280c25ab7ce551c8e0cb56187832da12efb09ed9",
+    "accept-cmds": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+    "golden-cmd": "7db3fbadc46a9b58757ab0a5055c184dde25c5577375c6f37dc7d9b76813f83b",
+    "progress-trace": "9725e95468eaea6ff090052e44eba4909b7a748978774f8880a879dc0619e529",
+    "session-meta": "0523b5753d2ff2d6d35504d005b83b55fc4a5b6234bb4de0ac8585111d3a57af",
+    "attach-manifest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "workspace-diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "card": "a5dc263db10971cde59b950994117834bcce8f7de73a25018f7a7b23290ae271",
+    "accept-output": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-21 16:58:34"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609211650147008",
+   "digest": "7e837c69761db9e936e0cb221f1f263957aa3f8bbe2d4228697449e2f27c1ead",
+   "prev": "94c7b9b65624db92e61941daeb83721cc04329b72655b625adf1b1c97d1ab7ec",
+   "files": {
+    ".agent-run.json": "f7b9989045348a540a2f91218a90e8922e9d4df8490450731409c8a6fcd3d98c",
+    "agent-output": "e4e3d296970c0c454111d5db77b6e2d093df8a2f393346f946549e964d665953",
+    "prompt": "88478ce85c31adc03d5dc44b547696adcf7b568fd7790f294d1c303bdf376a67",
+    "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "card": "a5dc263db10971cde59b950994117834bcce8f7de73a25018f7a7b23290ae271",
+    "accept-output": "8263715e4aa7054769b092f39bba777a6666dfa223e2ec8a3bba4865c3a121c7"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-21 16:58:34"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609211652100034",
+   "digest": "af5c3e576239b9fb20df45c28578b45ce05a108f28bcb384b8ce899e17dfb7fe",
+   "prev": "7e837c69761db9e936e0cb221f1f263957aa3f8bbe2d4228697449e2f27c1ead",
+   "files": {
+    ".agent-run.json": "2e575b1333665f839e06cd2f8c4c2038b2b413f3ee2c7e2d9825175156f33f41",
+    "agent-output": "a2ef77e474f94e3fc3652ade764dba495013b2e797d1a6fb7bd8ddbe0ae154ca",
+    "judgment-record": "32b69a75146c1da178e9777e84d964d4ab6896b9ca4a1680d8cd71a25b968f0d",
+    "prompt": "d51e1e8e88dfac2e2a124d60280c25ab7ce551c8e0cb56187832da12efb09ed9",
+    "accept-cmds": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+    "golden-cmd": "7db3fbadc46a9b58757ab0a5055c184dde25c5577375c6f37dc7d9b76813f83b",
+    "progress-trace": "881fdb5d0c494a3024652086d7e1433d553a734389193dbfd317a61360b6e224",
+    "session-meta": "888905f4a85ff575113823d6dd0daab31323c270a76845dabbac6cdad6eab546",
+    "attach-manifest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "workspace-diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "card": "a5dc263db10971cde59b950994117834bcce8f7de73a25018f7a7b23290ae271",
+    "accept-output": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-21 16:58:34"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609211652389854",
+   "digest": "71877c81e96b2fa39efacf2d64f9a006e876bd7ac363e775dd674620f2d6005b",
+   "prev": "af5c3e576239b9fb20df45c28578b45ce05a108f28bcb384b8ce899e17dfb7fe",
+   "files": {
+    ".agent-run.json": "edc88ed04bb43b467b190ced09aab2c5c562ce6a64dba2e43074aa7f636e2d18",
+    "agent-output": "99c17f0535a3c31dda6c80768970371a4d0549f49cb3949c6ff4328e543b6768",
+    "prompt": "88478ce85c31adc03d5dc44b547696adcf7b568fd7790f294d1c303bdf376a67",
+    "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "card": "a5dc263db10971cde59b950994117834bcce8f7de73a25018f7a7b23290ae271",
+    "accept-output": "8263715e4aa7054769b092f39bba777a6666dfa223e2ec8a3bba4865c3a121c7"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-21 16:58:34"
   }
  ],
  "head": {
   "proj": "paper",
-  "run_id": "202609182314143434",
-  "digest": "7f4741f0c6802b799cb2cbe93575381c03e8afea9bd88fc397ab89a5007491c8"
+  "run_id": "202609211652389854",
+  "digest": "71877c81e96b2fa39efacf2d64f9a006e876bd7ac363e775dd674620f2d6005b"
  }
 }
