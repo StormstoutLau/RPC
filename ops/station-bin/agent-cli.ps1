@@ -83,9 +83,19 @@ $Script:ROUTE_TABLE = @{
     'opencode/nemotron-3.5-lightning-free'  = @{ id = 'opencode/nemotron-3.5-lightning-free';  station = 'B' }
     'opencode/nemotron-3-ultra-free'        = @{ id = 'opencode/nemotron-3-ultra-free';        station = 'B' }
     # O-15 claude 备通道 (2026-09-12): 控制台本地执行, station 空 = 不走 ssh. cli=claude 选中本地执行器.
-    #   id = 传给 `claude -p --model` 的 Claude 型号; 作者/登录走 claude CLI 自身 (claude auth/login)。
-    'claude'       = @{ id = 'claude-sonnet-4-5'; station = ''; cli = 'claude' }   # 默认备份型号
-    'claude-opus'  = @{ id = 'claude-opus-4-1';    station = ''; cli = 'claude' }   # 高保真备路
+    #   id = 传给 `claude -p --model` 的型号。
+    #   ⚠ **2026-09-21 修正（实测，阻断级）**: 原为 **Claude 原生 id**(claude-sonnet-4-5 / claude-opus-4-1) ——
+    #     控制台 claude 已切 **OpenRouter** 后，这些 id 会被 OpenRouter **路由到真实 Anthropic 上游** ⇒
+    #     **必 403 `This model is not available in your region.`**（实测三个 Claude 原生 id 全 403；
+    #     `thinkingmachines/*:free` 与 `nvidia/*:free` 均 `OK`）。⇒ 免登录只解决认证、**不解决可用性**。
+    #   现 id 取 `secrets/openrouter.conf` 的 **`harness_priority`** 前两档（该键是权威真值，三处消费方从此镜像；
+    #     本表只镜像其前两项，**不新立模型清单**）。
+    #   别名 `claude` / `claude-opus` **保留原名** —— 它们命名的是**备通道档位**(默认/高保真)，不是厂商。
+    'claude'       = @{ id = 'thinkingmachines/inkling:free';          station = ''; cli = 'claude' }   # 默认备份型号
+    'claude-opus'  = @{ id = 'nvidia/nemotron-3-ultra-550b-a55b:free'; station = ''; cli = 'claude' }   # 高保真备路
+    # full id 直传 (与上面 local/* 同例): 使 `--model <openrouter-id>` 与 env `AGENT_FALLBACK_MODEL` 可解析
+    'thinkingmachines/inkling:free'          = @{ id = 'thinkingmachines/inkling:free';          station = ''; cli = 'claude' }
+    'nvidia/nemotron-3-ultra-550b-a55b:free' = @{ id = 'nvidia/nemotron-3-ultra-550b-a55b:free'; station = ''; cli = 'claude' }
 }
 
 # ---------------- .agentsync four-type templates (T1, F3) ----------------
@@ -1737,7 +1747,9 @@ exit `$RC
         # 备路模型: claude 备路只接受 `station=''` 的**本地** claude 路由(Invoke-Task-Claude 内护栏),
         #   而主路模型(如 gpt-oss-20b)解析出 station='B' ⇒ **不能透传**, 否则被
         #   `REJECT claude-station=B (exit 4)` 拦掉 ⇒ 备路等于白切。故按语义切到 claude 备路型号:
-        #   默认 ROUTE_TABLE 的 `claude`(=claude-sonnet-4-5), 可用 env `AGENT_FALLBACK_MODEL` 覆盖。
+        #   默认 ROUTE_TABLE 的 `claude`(=**thinkingmachines/inkling:free**, OpenRouter 可服务;
+        #   2026-09-21 实测修正: 原值 `claude-sonnet-4-5` 是 Claude 原生 id ⇒ 经 OpenRouter 被路由到
+        #   真实 Anthropic 上游 ⇒ **403 地区墙**, 见 ROUTE_TABLE 处注释), 可用 env `AGENT_FALLBACK_MODEL` 覆盖。
         $fbModel = if ($env:AGENT_FALLBACK_MODEL) { $env:AGENT_FALLBACK_MODEL } else { 'claude' }
         Write-Host "AUTO_FALLBACK: opencode rc=$code -> local claude backup (explicit -AutoFallback)"
         Write-Host "AUTO_FALLBACK_MODEL: $taskModel -> $fbModel"
