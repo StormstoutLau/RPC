@@ -3220,6 +3220,21 @@ def _sha256_file(p: Path) -> str:
     return h.hexdigest()
 
 
+def _sha_lf(b: bytes) -> str:
+    """sha256 of **LF 规范**字节 (CRLF→LF)。锚的 chain/cold_sha 用它。
+
+    2026-09-21 P2: 实测 `core.autocrlf=true` ⇒ 工作树 JSON 是 **CRLF**, 而 git 仓库存 **LF** blob;
+    锚若按盘面原始字节哈希, 就会钉住"本机工作树编码", 与"提交/克隆下来的字节"不符 ⇒
+    off-machine 副本与锚对不上(P2 的正向自证正是踩到这条: 同文件 `git show :`=704cd0b7 vs 盘面=b34a3f)。
+    全链条统一用 LF 规范哈希, "入仓链 == 锚"才真正生效 —— 且与工作树编码(CRLF or LF)无关。
+    """
+    return hashlib.sha256(b.replace(b"\r\n", b"\n")).hexdigest()
+
+
+def _sha_lf_file(p: Path) -> str:
+    return _sha_lf(p.read_bytes())
+
+
 def _run_digest(run_dir: Path, recipe: str = AGENT_DIGEST_RECIPE):
     """按 `recipe` 算 run_digest —— 纯本地重算, 不触站。未知 recipe 返回 None (**不可验**)。
 
@@ -3310,8 +3325,8 @@ def _anchor_write(chain: dict) -> None:
         f"entries={len(chain['entries'])}",
         f"head_run={(head.get('proj') + '/' + head.get('run_id')) if head else '-'}",
         f"head_digest={head.get('digest') or '-'}",
-        f"chain_sha256={_sha256_file(AGENT_CHAIN)}",
-        f"cold_sha256={_sha256_file(AGENT_CHAIN_COLD) if AGENT_CHAIN_COLD.is_file() else '-'}",
+        f"chain_sha256={_sha_lf_file(AGENT_CHAIN)}",
+        f"cold_sha256={_sha_lf_file(AGENT_CHAIN_COLD) if AGENT_CHAIN_COLD.is_file() else '-'}",
         f"recipe={AGENT_DIGEST_RECIPE}",
         f"generated_at={time.strftime('%Y-%m-%dT%H:%M:%S')}",
     ]
@@ -3331,13 +3346,13 @@ def _anchor_check(chain: dict) -> list:
     except OSError:
         return [{"kind": "anchor_unreadable"}]
     head = chain.get("head") or {}
-    cold_sha = _sha256_file(AGENT_CHAIN_COLD) if AGENT_CHAIN_COLD.is_file() else "-"
+    cold_sha = _sha_lf_file(AGENT_CHAIN_COLD) if AGENT_CHAIN_COLD.is_file() else "-"
     diff = []
     if got.get("entries") != str(len(chain["entries"])):
         diff.append(f"条数(锚={got.get('entries')} 链={len(chain['entries'])})")
     if got.get("head_digest") != (head.get("digest") or "-"):
         diff.append("head_digest")
-    if got.get("chain_sha256") != _sha256_file(AGENT_CHAIN):
+    if got.get("chain_sha256") != _sha_lf_file(AGENT_CHAIN):
         diff.append("chain_sha256(链文件字节已变)")
     if got.get("cold_sha256") != cold_sha:
         diff.append("cold_sha256(冷路径字节已变)")
@@ -3588,6 +3603,64 @@ def agent_chain_append(reanchor: bool = False) -> dict:
             "anchor": str(AGENT_CHAIN_ANCHOR), "anchor_written": anchor_stale}
 
 
+def _p2_committed_chain_assert() -> list:
+    """P2（2026-09-21）: 断言「**暂存区(将入库)的链** == **暂存区锚钉的 cold_sha256**」。
+
+    为什么需要（这是 P2 断言的必要性，`_anchor_check` 覆盖不了）:
+      · `_anchor_check` 的 chain_sha256/cold_sha256 只比**工作区盘面字节** vs 锚 —— 它保证
+        "**盘上**的链==锚"，但**不保证"即将/已提交的链==锚"**。
+      · 链本体是 append-only、`agent chain` 每次派发都会重写 + 改写锚 ⇒ 若只 `git add` 了锚、
+        或只 `git add` 了链，HEAD 里两者就**不成对** ⇒ off-machine 副本与锚对不上，且在
+        干净 clone 上无法复验。这正是 P2（链入仓给 off-machine 副本）要抓的**成对提交违规**。
+      ⇒ 断言必须盯 **commit 面（git index）**，不是盘上草稿。
+
+    读 index（`git show :<path>`，只读）取两侧字节:
+      · 链   = `archive/evidence-chain/agent-chain.json`（冷镜像，已入仓）
+      · 锚   = `archive/evidence-chain/ANCHOR.txt` → 取 cold_sha256
+    两侧都取 index ⇒ 能同时抓"只 add 锚"与"只 add 链"两种半提交。
+    git 不可用 ⇒ 返回空（**不假装 FAIL** —— 沿用"能区分环境缺依赖 vs 本仓 bug"的纪律）。
+    """
+    import shutil, subprocess
+    root = Path(__file__).resolve().parent.parent
+    rel_chain = "archive/evidence-chain/agent-chain.json"
+    rel_anchor = "archive/evidence-chain/ANCHOR.txt"
+    git = shutil.which("git")
+    if not git:
+        return []
+
+    def _index(path: str):
+        try:
+            p = subprocess.run([git, "show", f":{path}"], cwd=str(root), capture_output=True)
+        except Exception:
+            return None
+        return p.stdout if p.returncode == 0 else None
+
+    anc_b = _index(rel_anchor)
+    if anc_b is None:
+        return []   # 锚未暂存 ⇒ 由 _anchor_check / 其它状态兜, 这里不误判
+    got = {}
+    try:
+        for ln in anc_b.decode("utf-8", "replace").splitlines():
+            if "=" in ln and not ln.lstrip().startswith("#"):
+                k, v = ln.split("=", 1)
+                got[k.strip()] = v.strip()
+    except Exception:
+        got = {}
+    pinned = got.get("cold_sha256") or got.get("chain_sha256") or ""
+    chain_b = _index(rel_chain)
+    if chain_b is None:
+        return [{"kind": "p2_pair_mismatch",
+                 "detail": f"链与锚未成对提交: 锚已暂存但链未暂存（{rel_chain} 需与锚同批 `git add`）"}]
+    if not pinned:
+        return []   # 锚里没有 sha 字段 ⇒ 交给 _anchor_check 判
+    got_sha = _sha_lf(chain_b)
+    if got_sha != pinned:
+        return [{"kind": "p2_pair_mismatch",
+                 "detail": f"链与锚未成对提交: 暂存链 sha256={got_sha[:16]}… ≠ 锚钉 cold_sha256={pinned[:16]}… "
+                           f"⇒ 两件须在同一 commit 一起 add（先跑 `agent chain` 使锚与链一致，再同时 add 两者）"}]
+    return []
+
+
 def agent_chain_verify() -> dict:
     """复验: ①逐条重算 digest 比链 ②prev 链闭合 ③冷路径/外部锚一致 ④A1 verdict-chain ⑤A2 golden-identity。
 
@@ -3677,6 +3750,7 @@ def agent_chain_verify() -> dict:
         issues.append({"kind": "cold_mismatch",
                        "cold_n": len(cold["entries"]), "chain_n": len(chain["entries"])})
     issues += _anchor_check(chain)
+    issues += _p2_committed_chain_assert()   # P2(入仓链==锚成对): 抓"只 add 锚或只 add 链"
     # 未入链 = **覆盖缺口, 不是篡改** ⇒ gaps(WARN), 见 rpc_check.check_evidence
     seen = {(e.get("proj"), e.get("run_id")) for e in chain["entries"]}
     unchained = sorted(f"{p}/{t}" for t, p, _ in _chain_runs(roots) if (p, t) not in seen)

@@ -41,8 +41,9 @@ ops/station-bin/result_*.jsonl
 ops/station-bin/b6_smoke_*.result.jsonl
 
 # agent 证据链 (2026-09-17, spec/d6-agent-standard/evidence-chain/)
-#   · 链本体**不入库**: 体积随 run 数线性长, 且**可由归档重算**(digest 确定性已验证) ⇒ 放 git 是噪声。
+#   · live 链(工作副本)不入库: 体积随 run 数线性长, 且**可由归档重算**(digest 确定性已验证) ⇒ 放 git 是噪声。
 #   · ANCHOR.txt **必须入库**(刻意不排除): 它钉住链文件字节, 是唯一**不可重算**的外部锚 ——
 #     提交并 push 到 origin 后, 改写链/证据须同时改写已推送的 git 历史才可能无痕。
+#   · (P2, 2026-09-21) **冷镜像 `archive/evidence-chain/agent-chain.json` 入仓** —— 本体字节==锚的
+#     chain/cold_sha256, 供应 off-machine 副本; 与锚**成对提交**, 由 verify 的 `p2_pair_mismatch` 断言兜。
 ops/station-bin/agent-chain.json
-archive/evidence-chain/agent-chain.json
