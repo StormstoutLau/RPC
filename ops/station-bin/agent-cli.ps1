@@ -60,6 +60,16 @@ $Script:ROUTE_TABLE = @{
     'qwen'       = @{ id = 'local/qwen';                              station = 'B' }
     'gpt-oss'    = @{ id = 'local/gpt-oss';                           station = 'A' }
     'gpt-oss-20b'= @{ id = 'local/gpt-oss-20b';                       station = 'B' }   # O-13 sympy 收口卡 (B 站 20b, 2026-09-14)
+    # ⚠ **2026-09-21 实测：以下三个 zen 路由当前不可用，别用** —— 三站 `opencode auth list` 均为
+    #   **0 credentials**；而 `opencode/*` 是 opencode 自带网关(zen)，**无凭据时不报错、只静默挂死**
+    #   （实测 `timeout 120` 被掐 3 次 = **360s**，输出只有 `> build · <model>` banner；**同一模型**
+    #   走站上**有凭据**的 `openrouter/*` 则 **16s** 出结果 ⇒ 差异只在凭据）。
+    #   ⇒ 要恢复须先 `opencode auth login --provider opencode`（要 https://opencode.ai/auth 的 API key，
+    #   且 clack TUI **需 tty** ⇒ 管道喂 stdin 无效、无设备码流程）。
+    #   复验（30s 以内，判据写在脚本头）：站上 `bash _probe_opencode_provider.sh <model> 25`
+    #   ⇒ `RC=124` + 只有 banner = 静默挂死；`RC=0` + `ZEN-OK` = 可用。
+    #   ⚠ 连带：`test-cards/sanitized.md`（**唯一那张 `sanitized` 验收卡**）用的就是下面的 `lightning`
+    #   ⇒ **该卡当前跑不通**（sanitized 闸的验收路径实际是断的），见 OPEN-ISSUES。
     'lightning'  = @{ id = 'opencode/nemotron-3.5-lightning-free';              station = 'B' }
     'ultra'      = @{ id = 'opencode/nemotron-3-ultra-free';                    station = 'B' }
     'free-1m'    = @{ id = 'opencode/nemotron-3-ultra-free';                    station = 'B' }  # alias of ultra

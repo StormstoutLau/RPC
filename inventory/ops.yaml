@@ -183,6 +183,7 @@ frozen_ops_scripts:
   - ops/station-bin/_probe_glm_env.sh
   - ops/station-bin/_probe_glm_files.sh
   - ops/station-bin/_probe_glm_relocate.sh
+  - ops/station-bin/_probe_opencode_provider.sh
   - ops/station-bin/_qwen27_build.sh
   - ops/station-bin/_qwen27_download.sh
   - ops/station-bin/_qwen27_enginecheck.sh
