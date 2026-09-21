@@ -1,0 +1,1435 @@
+{
+ "version": 1,
+ "recipe": "v1",
+ "entries": [
+  {
+   "proj": "paper",
+   "run_id": "202609031358181347",
+   "digest": "090db783efbf0e5dffdc0e97fd2e1ee674ccea50987205419350c32ba5b539d4",
+   "prev": "-",
+   "files": {
+    ".agent-run.json": "aea4c3c5a5020b5180c625ccf4ce6bca6557194d8a90e8e2daff3a6dce1f778e",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609031450522065",
+   "digest": "f889d2e1652051f0cf3e639f7f5b42b2c8d4b3761198ec0b89ac169951a7f864",
+   "prev": "090db783efbf0e5dffdc0e97fd2e1ee674ccea50987205419350c32ba5b539d4",
+   "files": {
+    ".agent-run.json": "c27740c9478532154bcde536d1fc2624a6c95f8d1d78f827e1840109023da053",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "c95b6fd26584cdc0e6b7d906a9b4c9d1fb21431656b49cc830dc8cd00a6b5297",
+    "accept-output.txt": "7d883e736c4367495199848b14a013c2d0a5a7cf4522cb5f6937dd78f7425a58",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609031459088466",
+   "digest": "a9998f7ae802d577fea404b53f78915d8c40d1d72a81a2bee701f21ac8d71f48",
+   "prev": "f889d2e1652051f0cf3e639f7f5b42b2c8d4b3761198ec0b89ac169951a7f864",
+   "files": {
+    ".agent-run.json": "7d2a52f44db03b6e0df69185aa5fb9ad353d9aea6004b19029c026d3283f21a0",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "068b7467ccffe21f4989fec9ea6389754edca1a27934146c9d2a1fef6a461918",
+    "accept-output.txt": "72f3e8a2a130312caa0e5b3bdb57e3c9f06865096daee6f2eddbdeef3e0563a3",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609031510368423",
+   "digest": "6d7472d46f0715b6b1d2020a3535153443ed9a3a13f2a314031a2e5176371e19",
+   "prev": "a9998f7ae802d577fea404b53f78915d8c40d1d72a81a2bee701f21ac8d71f48",
+   "files": {
+    ".agent-run.json": "d4eaa0d34d922b6f02ce36dbaaa36f3cb1887bc7b9f3b668bb24a448a87e3258",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "68c179d3474589230ed97083aaf4659480bfb4618293f4a1a7bdab1834e8f5a6",
+    "accept-output.txt": "4af6a29fd90314480cb51c2ab07c754b763cd06645ba645bb7b28c5085a0cb78",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609031618015982",
+   "digest": "dfed555f14e4c9ffa13ca42f9fc08a2218f51d6c93768e35dac4f08ff668aa3f",
+   "prev": "6d7472d46f0715b6b1d2020a3535153443ed9a3a13f2a314031a2e5176371e19",
+   "files": {
+    ".agent-run.json": "d5bbde5204f15605059e099fab31c2277ab3e2558aa82ef840f3b90911906cef",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "bb9b88dcd277a4da4c6e1b6addba342019f569aeca0da7a3270a9c7c2afbd959",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609031628040512",
+   "digest": "c891fb5c2a98c50a6c260705596d2fb28555349515f862b6e627c08db7ff62b6",
+   "prev": "dfed555f14e4c9ffa13ca42f9fc08a2218f51d6c93768e35dac4f08ff668aa3f",
+   "files": {
+    ".agent-run.json": "b20acf4afb5e80fc72fd3b6b42303744e1fc11f2e414931d99dd9de0fbc17932",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "86a740d177ed3bc245f28c02923219325245feda6cd5857032164d194ecf6dbc",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609031638191276",
+   "digest": "8ce5bf86305169f8d425b541466efe81ba3ca49b6d140f24224757c4816de72d",
+   "prev": "c891fb5c2a98c50a6c260705596d2fb28555349515f862b6e627c08db7ff62b6",
+   "files": {
+    ".agent-run.json": "d72dce511659127d7019c30a41c0fd9651ecff9da58ab7e4cc559240c1e19dbc",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "b8d84c136854e9571f0d6ad01a19d6d4eaff4b3cd530f462f8dc87352cf628f2",
+    "accept-output.txt": "e612d1d767a8ccd10dbc431d188370481e83314031e4b0c6052fb4502ac06936",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609031653036638",
+   "digest": "1bd1b8849dbf6f6a307aee6d6ca58ad8a20e61e826d6df4de004dcf419da62d7",
+   "prev": "8ce5bf86305169f8d425b541466efe81ba3ca49b6d140f24224757c4816de72d",
+   "files": {
+    ".agent-run.json": "bc97bd9733d513c7ac18882f0ee1fcf3e155e63c7759679d91ef56c2a6063225",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "eee91199953850599e2f88348a69173eecae7bcbd5c7d1f18ca1cd0d021a72fa",
+    "accept-output.txt": "b53c3ba60db8298242b179b86d89671638e27a4479a60c855de7f38a29a33a71",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609031704438655",
+   "digest": "5cbf44213879360a29b8be53314a57c6628322f8c9670454cf674b1fdcfa1e83",
+   "prev": "1bd1b8849dbf6f6a307aee6d6ca58ad8a20e61e826d6df4de004dcf419da62d7",
+   "files": {
+    ".agent-run.json": "fd1cdd89bb164915c74a26c0b7b94d0a7562a3392601b3843561ad3eddb06612",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "0fe55d789e5f952c616e0fd2796398505a55307c2d96a971bc012c799b89681b",
+    "accept-output.txt": "3f05e0f3a0346d5e8f583ff38fbb1c92c9626e6079e9ed54e4cbebce29cf093a",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609051641084235",
+   "digest": "0cc5a933946e3f5c705bf58bbe70756d646e6bc4e5b069e5b321f07ab280ce6d",
+   "prev": "5cbf44213879360a29b8be53314a57c6628322f8c9670454cf674b1fdcfa1e83",
+   "files": {
+    ".agent-run.json": "b6d12a7286f38212cc82773f6b9b2fb330706ff317d073df85edcdf0b23a7da2",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "76e2f65ba6c8695a0a5c345e00b1fa47bb2f7bbf6862f940cea4de99fee16dbd",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609051648102241",
+   "digest": "2133941bb5ee748b256848000b843cb77882ca617eb06af03ade78be5a67bba5",
+   "prev": "0cc5a933946e3f5c705bf58bbe70756d646e6bc4e5b069e5b321f07ab280ce6d",
+   "files": {
+    ".agent-run.json": "8d51174f672b1e985ea690738c996a332a03c74e6e13877f4f7b031ef3c9d365",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "c1dab73d6f0f97b0e82c18255ca39395bce41c9b404d12f69deb3c61b482320f",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609051726428762",
+   "digest": "84537e051a1bdc5ffa1ddc4608252046e28249d6e0cd89e3131863e62555ddd2",
+   "prev": "2133941bb5ee748b256848000b843cb77882ca617eb06af03ade78be5a67bba5",
+   "files": {
+    ".agent-run.json": "56898ea3061b6012263567c19f47a1b89b34687cd527923248cd9b47a005598c",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "8452ebc22edac011689ff91532ec2ba46dd020cbd705714a696d7b0f4899f2e8",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609051732525894",
+   "digest": "a2943be040a9d4c9f445de3f80eccf2334f67640c987b8f42091489bd145b806",
+   "prev": "84537e051a1bdc5ffa1ddc4608252046e28249d6e0cd89e3131863e62555ddd2",
+   "files": {
+    ".agent-run.json": "4fb6ebd72f0c8b61eb5ba820b381dd6096cb93ed58500cbbe9325b69508c73f5",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "75af3719a333b92a483373d0558c702bd93f2c7d2d5223ea1792dfa1500dbfd5",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609051819399617",
+   "digest": "73204b6b147163e6e5b946babb6a62e9b6668db1f3641ae294e0b1c0f3c89433",
+   "prev": "a2943be040a9d4c9f445de3f80eccf2334f67640c987b8f42091489bd145b806",
+   "files": {
+    ".agent-run.json": "2c64a0073f3a5601dfd369c50911c7e40b05fa9edfc0f3162d6655a8f0d4cd5f",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "d57f76bec76da9d5350d4fad203ad01c7078dd1c4ac1f5f02966d80a6a008476",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609051829425046",
+   "digest": "d393a0122ed063b511788669c488425c551ff8bbe3f495f036e20e363257bbb4",
+   "prev": "73204b6b147163e6e5b946babb6a62e9b6668db1f3641ae294e0b1c0f3c89433",
+   "files": {
+    ".agent-run.json": "5b8cbb93acda6c91f39cbec966484aa6422da11c1bc97f553b54044591bc0239",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "6bc82346ca4e2b6acc6ef41201a7c5caf74e175c9034c8a65fbc55d42e5c4d7c",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609051838322991",
+   "digest": "0581d844ff7b9fefa0ddff3e526c29725d1f064bd34b9e8f0fc17c6ace8d6a69",
+   "prev": "d393a0122ed063b511788669c488425c551ff8bbe3f495f036e20e363257bbb4",
+   "files": {
+    ".agent-run.json": "de08483b9fa95bd2a6b0bac0c26cdb20c99aaafd92f5bcde26cc8e181ec9aea5",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "6bc82346ca4e2b6acc6ef41201a7c5caf74e175c9034c8a65fbc55d42e5c4d7c",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609051925301291",
+   "digest": "2f8061a7ff315c5c22bfb290dd0e032b88f0abf3af42feb3f1112df541e9cc31",
+   "prev": "0581d844ff7b9fefa0ddff3e526c29725d1f064bd34b9e8f0fc17c6ace8d6a69",
+   "files": {
+    ".agent-run.json": "bbddd8002430e51c33deddab38d44dfb66420f558cf6273ccbc77c4e97aa632c",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "75fd152689d9512de8cd850c64f7449357438e1438ab62cacfb254d2f8acf92a",
+    "accept-output.txt": "e307ac7721ebeb96d9dcdc25d01e5ef0c185807101dab473246138d151193aeb",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609052028203624",
+   "digest": "ebfa4af9264abff35a75c37f98da25fb9706507a45f338876f2d5cf768b3890a",
+   "prev": "2f8061a7ff315c5c22bfb290dd0e032b88f0abf3af42feb3f1112df541e9cc31",
+   "files": {
+    ".agent-run.json": "1fc830e60ed2220f73d8ebff9a2164845b544bbdfefb668d5fb889948635149e",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "657b7db95e1b378d58118a072a8fa2e4b99f2de39c488224bf632449fbda88a5",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609052036316686",
+   "digest": "d0b774c3472899e171e91ea636228375adb4067aad7aa47dc6088b7f853dee38",
+   "prev": "ebfa4af9264abff35a75c37f98da25fb9706507a45f338876f2d5cf768b3890a",
+   "files": {
+    ".agent-run.json": "12e1541e81f972040abb16b9bf3748236ccfaf3bf1911b837feff1d6dee085cb",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "ca944d8dcf0239784decf11f9190f6316083902d529de800eed35d302f779aff",
+    "accept-output.txt": "1ab456088dda6f066703fed70e0689bfaf6c457827eac997fb7209bcf3c52a4e",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609052036326870",
+   "digest": "37ff2a7fc7754060458791f5dc0085e79c2031853bf2228dc562fd17867d9f5c",
+   "prev": "d0b774c3472899e171e91ea636228375adb4067aad7aa47dc6088b7f853dee38",
+   "files": {
+    ".agent-run.json": "8ce4fe916ae272c76049dca75a4881539fb88f78caaeca9d9a30983c9403e968",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "e38b91476cfb5d0ce7b9b5a2a524a2139238536c6cf7fe781713a6d73b1ca89a",
+    "accept-output.txt": "95234629cc3b099220e9529b90da4a4ee94458ade4ba5d5f20d1c9986041d3dc",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609052056359852",
+   "digest": "a1eb3fe2905f1c7a014e30312f69fbf6780cfb34184c5673f885bb74c0d5c442",
+   "prev": "37ff2a7fc7754060458791f5dc0085e79c2031853bf2228dc562fd17867d9f5c",
+   "files": {
+    ".agent-run.json": "df6d303881a6f0b5bafd8201aa82a0a20d428407c3bbae2d084e5ed33175f2bd",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "7e2267607099692d345d2056120b8cf76ad1e0087871d064b1d39e75bbb31a97",
+    "accept-output.txt": "95234629cc3b099220e9529b90da4a4ee94458ade4ba5d5f20d1c9986041d3dc",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609052156440312",
+   "digest": "9093bfa47c914110bd12f5da975d786827a4c4d7f5f10af4b053b751720ee869",
+   "prev": "a1eb3fe2905f1c7a014e30312f69fbf6780cfb34184c5673f885bb74c0d5c442",
+   "files": {
+    ".agent-run.json": "54fba57e43cea92049e1657fee208be497184711838f546ec3049806d8ed6350",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "4e2880c2b62fff80b38ea1af377ee10c15f68b88d2c1de87cc7caf8b72770403",
+    "accept-output.txt": "95234629cc3b099220e9529b90da4a4ee94458ade4ba5d5f20d1c9986041d3dc",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609052244236536",
+   "digest": "5aefb0dcc886e29a89c5ba17b3b0f933ab13815f2c1d5c3073c3a7bcb2954b3e",
+   "prev": "9093bfa47c914110bd12f5da975d786827a4c4d7f5f10af4b053b751720ee869",
+   "files": {
+    ".agent-run.json": "6fee417d65fdb813784a7a9eeb4bf57b4c1b3bab7b63ac6fd19065560542c972",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "ad093f7859a625d7cc08c62228205bf6447830b512dee53141df89e46e712a48",
+    "accept-output.txt": "95234629cc3b099220e9529b90da4a4ee94458ade4ba5d5f20d1c9986041d3dc",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609060017545026",
+   "digest": "4aebecb9510fd816b58da359f4c18e5686a1b4be500f7f3608c8211077bf7d7e",
+   "prev": "5aefb0dcc886e29a89c5ba17b3b0f933ab13815f2c1d5c3073c3a7bcb2954b3e",
+   "files": {
+    ".agent-run.json": "5ef7108568ab4ce6920c0b777bf1d11b56b1160b890c0d32a38bdd534f3e33a4",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "c26798275243ded988cfd1008cf3d81ae6d8edf4e9d47e57ae552ae0e7011505",
+    "accept-output.txt": "95234629cc3b099220e9529b90da4a4ee94458ade4ba5d5f20d1c9986041d3dc",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609060141172589",
+   "digest": "c79417d0f57174237fefd82d30645f3ede28e6eb0dcb5bc38c5a7cebb19fb28f",
+   "prev": "4aebecb9510fd816b58da359f4c18e5686a1b4be500f7f3608c8211077bf7d7e",
+   "files": {
+    ".agent-run.json": "d9403511edd6177a767a1d083913b1386bc2a6d9ce18bef00071156ecddbe8e0",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "81c95b31f397d563a04cce1091baf092f88bd3120c1ab004865223f1187b44ee",
+    "accept-output.txt": "8f136125ee8b4382a8594d56c956e54caa05ad63ac815af3b25283eb44809644",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609061025144827",
+   "digest": "6a5bdcbf63c0330eb544656c234c09bb986ef5a9b09d4abaac3bb5814ddcb6e3",
+   "prev": "c79417d0f57174237fefd82d30645f3ede28e6eb0dcb5bc38c5a7cebb19fb28f",
+   "files": {
+    ".agent-run.json": "0c534cc26f31ee5119c248dc5b4bca5fb0f08bccc601c5cf1c4c0f8fc314e2d5",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "3be57061adaad8e65542e4157d436fea005dab07ad28135696e1f228c24d5d8b",
+    "accept-output.txt": "b73679078bcf43498e90d0e522ff1fd2020424dc4d8a4eab5b5e3025f8f11100",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609070035340153",
+   "digest": "1165aeab56c44e3feaa1fdee29a21440bad84a03d3331b508b55f0888fbf9182",
+   "prev": "6a5bdcbf63c0330eb544656c234c09bb986ef5a9b09d4abaac3bb5814ddcb6e3",
+   "files": {
+    ".agent-run.json": "1980f902fbb88ef203a403052c5ee692bd34c1a877a8cd50808580b0e0ff8063",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "eb08980500b74ad90b26b06cda9da1563d29ef97652073488a7661c90cd0a90d",
+    "accept-output.txt": "b73679078bcf43498e90d0e522ff1fd2020424dc4d8a4eab5b5e3025f8f11100",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609070042009100",
+   "digest": "fc594155afaf2ca77d4210c54de996322db8fa316996de68973a756c8b1628fd",
+   "prev": "1165aeab56c44e3feaa1fdee29a21440bad84a03d3331b508b55f0888fbf9182",
+   "files": {
+    ".agent-run.json": "5537fe1be2ede7463ee4878d53838e87d5458e4e854dd4e18108f41422156bdf",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "2858559c21e9cc6d55da5ebaab5ab3d0700306868d421ed04c35aa407c73758a",
+    "accept-output.txt": "95234629cc3b099220e9529b90da4a4ee94458ade4ba5d5f20d1c9986041d3dc",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609070101133311",
+   "digest": "9948c599b6e74a4ae50b3fb6a817730d8f06e451b19261982fc55f177c97972e",
+   "prev": "fc594155afaf2ca77d4210c54de996322db8fa316996de68973a756c8b1628fd",
+   "files": {
+    ".agent-run.json": "81b6aa6d57c284333fb24a89fc2c80d3c454d918db9674ef9d6d32fe468daab4",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "80781956e96b8eabbd81475ef01e864686fcf0df455e2f95c220f7a8724bce83",
+    "accept-output.txt": "b73679078bcf43498e90d0e522ff1fd2020424dc4d8a4eab5b5e3025f8f11100",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609070148519001",
+   "digest": "24028f60088ba26bfd090e6c0506f406c81a8fc7ed9b84d871dc704f6581c7f3",
+   "prev": "9948c599b6e74a4ae50b3fb6a817730d8f06e451b19261982fc55f177c97972e",
+   "files": {
+    ".agent-run.json": "0c49fdc679d1945ca5472a6e093b320773ecae88f3cf522a2360fefc9303f803",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "2b911786ffbb3c342e8ffae26a496e647decd3373e559a0f249ca876a2f5df01",
+    "accept-output.txt": "8f136125ee8b4382a8594d56c956e54caa05ad63ac815af3b25283eb44809644",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609070215229619",
+   "digest": "b47daf4096fd7e81ca5c275f1d978d0c3c48c4204613a740caceee87dd889b89",
+   "prev": "24028f60088ba26bfd090e6c0506f406c81a8fc7ed9b84d871dc704f6581c7f3",
+   "files": {
+    ".agent-run.json": "5f64d5909615e86c10a831b1630ced5f41676390ac93e898c24ef43aa9fac961",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "21c5144bfe4c44e392c8ad8ff88a8f7865e8eb491fe4b820a310453dd9ccd6cd",
+    "accept-output.txt": "8f136125ee8b4382a8594d56c956e54caa05ad63ac815af3b25283eb44809644",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609070237087492",
+   "digest": "b055c244467508ed4980e41899fc00e094f8b40d7424e8f4ab753e03f2ddab9a",
+   "prev": "b47daf4096fd7e81ca5c275f1d978d0c3c48c4204613a740caceee87dd889b89",
+   "files": {
+    ".agent-run.json": "0f7ccf297ca9f0edabe364e3ed9c5ce8b9fdab8e4e527c8fb0b77a3702a8010e",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "17084ebf3a2c525689c86a555d891e1f40b2599eb32b89f52bc72140d0baf06e",
+    "accept-output.txt": "35f98b86e718ef4d0fa1bacd08842cc84fcaeacbfb70e2d461d84d923e6eafe1",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609071313122396",
+   "digest": "d3bb1c24b32342e83ff046de258167485509eee2d39408d60a15aa8577485788",
+   "prev": "b055c244467508ed4980e41899fc00e094f8b40d7424e8f4ab753e03f2ddab9a",
+   "files": {
+    ".agent-run.json": "b16b2e76a3e69b6b8529b9125605d01ae6f82603a9f9d5698e3547adf81e700b",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "04c732f800f62df556d37320fa923d76508f0c7d3e962210f2b3280ff1ab9382",
+    "accept-output.txt": "8f136125ee8b4382a8594d56c956e54caa05ad63ac815af3b25283eb44809644",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609071736045544",
+   "digest": "6e0109abf85d4a2fc5c7a676222ab4b4a50c88592fa67a02f7d187d13a4650ec",
+   "prev": "d3bb1c24b32342e83ff046de258167485509eee2d39408d60a15aa8577485788",
+   "files": {
+    ".agent-run.json": "5d986d1f3a727cd35d3d3731f1d1366fa6d8d85fb985e533839912f2d6b35f40",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "c29146b9933320f879576bfa3d1028e1fc08c3b2ca61b5c8ba7b4401e10c67fc",
+    "accept-output.txt": "8f136125ee8b4382a8594d56c956e54caa05ad63ac815af3b25283eb44809644",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609090359252348",
+   "digest": "3873e21e0de62c9c9bbd8531e48431be4ea7b6a8daed1c08627a4cb98d10ec90",
+   "prev": "6e0109abf85d4a2fc5c7a676222ab4b4a50c88592fa67a02f7d187d13a4650ec",
+   "files": {
+    ".agent-run.json": "3ce2b25e47623b86f5f564eddac2407f870df0fe13619a74ab16d94972860c5d",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "d90e9deaac6563bc6a88d233e8c0d00c583b090208130208f5667df49ba950a9",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609090457360888",
+   "digest": "84a1192922061b1075b324aee80290aabcd2d37e156e7ee69fdd09f345ebc912",
+   "prev": "3873e21e0de62c9c9bbd8531e48431be4ea7b6a8daed1c08627a4cb98d10ec90",
+   "files": {
+    ".agent-run.json": "c5557fac050bfc7de2b8bf180d937bec5619f812b9d0381523d83ae57833c5c8",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "3acc727364ef3547b74248212dcfd7a7e5e05f97a0761c2ab768613da994e23d",
+    "accept-output.txt": "21f1b336aadeb2726451a6b3a045da73ccdc74e4747a60f77a0e37e8ec8d1fe3",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609091833028817",
+   "digest": "3a97a3b80b3e0b7a0d9d4b5a848b54b991185db4e3ee5ac94d373dcdde93a4aa",
+   "prev": "84a1192922061b1075b324aee80290aabcd2d37e156e7ee69fdd09f345ebc912",
+   "files": {
+    ".agent-run.json": "9e86dcc941d2174c07186b5fadde27eb95cb8d141d11dcd44844bd8cd773cabc",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "569ae57c1b20114e702541f7b64eaef257f7bf7235f6e4aab49caddc08268eb3",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "6474fd881e14731a04599f6d08d27b7196ebf70340e76945d9ea345dad4e3c3d",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609091841153622",
+   "digest": "e1527922feb2ed02d4406d7972968f72d98b65b08840c13237b6c376356a7ca7",
+   "prev": "3a97a3b80b3e0b7a0d9d4b5a848b54b991185db4e3ee5ac94d373dcdde93a4aa",
+   "files": {
+    ".agent-run.json": "549f424967a3422335260266d0433d320b13d6bc2a607990228608d4f9ff1860",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "d90e9deaac6563bc6a88d233e8c0d00c583b090208130208f5667df49ba950a9",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609091855364954",
+   "digest": "0bf768e3a34e4754f7bf0c208844837b9e84eaec57e9084ea171462fcfd36d9d",
+   "prev": "e1527922feb2ed02d4406d7972968f72d98b65b08840c13237b6c376356a7ca7",
+   "files": {
+    ".agent-run.json": "888cf965a2064c918ecfd0550e3247811fe9753e6dd7e70e9dbef0185340a488",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "3c3370d6e51cd957dd964c6f0549e5b4dfffea075f33b28f4144ad38899e5da6",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609092106365998",
+   "digest": "871f7a4bd2eae7ccabf5f1d84e4514bf51d0c05d9cc54191861da5b9f2d222b7",
+   "prev": "0bf768e3a34e4754f7bf0c208844837b9e84eaec57e9084ea171462fcfd36d9d",
+   "files": {
+    ".agent-run.json": "5b08a7820cf7927e3f13bebdce44b0af6a23564f0e51e85a27f71a9e0da042dd",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "d90e9deaac6563bc6a88d233e8c0d00c583b090208130208f5667df49ba950a9",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609092111029300",
+   "digest": "97319902ae4ade7cfafbd52332ed96b907c5c4826b6bd79599016f511e140908",
+   "prev": "871f7a4bd2eae7ccabf5f1d84e4514bf51d0c05d9cc54191861da5b9f2d222b7",
+   "files": {
+    ".agent-run.json": "beced01b51df000eada405980e711fd9a25e2b613e11c0bf12ae4114c0917972",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "d90e9deaac6563bc6a88d233e8c0d00c583b090208130208f5667df49ba950a9",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609092126446663",
+   "digest": "35fab719422398c7cce06e6ebf6336447f9facddcdb6fb1dbe3f2824e0cd31e9",
+   "prev": "97319902ae4ade7cfafbd52332ed96b907c5c4826b6bd79599016f511e140908",
+   "files": {
+    ".agent-run.json": "52d66a42927aafe6802faa7849580b3349dd89505adccefbd0e54abc3c31cdef",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "d90e9deaac6563bc6a88d233e8c0d00c583b090208130208f5667df49ba950a9",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609092152069189",
+   "digest": "69432d4972cde4365ec3ad9c87573686988d598e98158ec377332126af0f7728",
+   "prev": "35fab719422398c7cce06e6ebf6336447f9facddcdb6fb1dbe3f2824e0cd31e9",
+   "files": {
+    ".agent-run.json": "23aff00c318aded04c8af2c8aff1284e1420c11f62428b110ffff2bfcab5efd7",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "7561ba89e22ba88eddb951161b92f6ba97e6b3d1d9e7b36104e7b89d6cb98b3d",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609092204504272",
+   "digest": "5466e297a0b2fcf3065745c5ced432e735ac97dc1cdb9c0d2134e7ad40f698cb",
+   "prev": "69432d4972cde4365ec3ad9c87573686988d598e98158ec377332126af0f7728",
+   "files": {
+    ".agent-run.json": "adae70aab96a40053253066844766d291ac8aa113434b51518ae21aa18796181",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "23f0b8759540620f31f09d9ae61aa5ea762a06ad53234a988847b622769bea2e",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609092210355310",
+   "digest": "5646f31543cadbbf43750984d4c6f44d31e80375b462223893c90044ca5adaca",
+   "prev": "5466e297a0b2fcf3065745c5ced432e735ac97dc1cdb9c0d2134e7ad40f698cb",
+   "files": {
+    ".agent-run.json": "ae6e1261ab8e21f1c721d149cb645353e4f398741100b3f0b59f8bfc524d2f4a",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "812a16b72b43753ab998c7910b6fc84bdbac3a593fa19ca8c4f32e1e4f0d8ea2",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609092236252327",
+   "digest": "7e2913daf46353406e810b12ef47b885114532b6509b9e027a562a9e7520fb36",
+   "prev": "5646f31543cadbbf43750984d4c6f44d31e80375b462223893c90044ca5adaca",
+   "files": {
+    ".agent-run.json": "abeb8ef0f0f6850eeaf9041d78d72937972517a739636d4e638dabe6534a79bf",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "d317ebda7e2b1d20af62aedbfe414773322891092dcc81ccb256e826dc9e12e2",
+    "accept-output.txt": "be7c166da3859ae097cb40bc7d5e96d129ab7c1bea61bfade91d5e2a0de986c5",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609121542299263",
+   "digest": "20079e43c834a50d3a9469fbe88054316e54cb0b2e029de0cefb3eae43c08724",
+   "prev": "7e2913daf46353406e810b12ef47b885114532b6509b9e027a562a9e7520fb36",
+   "files": {
+    ".agent-run.json": "f7b1e857bfa4464ca71c87279c9698a43d7a86b826f091cbc60ac5da4462c0dc",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "30bef20b478bcf9a68529cdd92e6c6a8b76e657495c0ce20905ab6b70d0fe7e4",
+    "accept-output.txt": "be7c166da3859ae097cb40bc7d5e96d129ab7c1bea61bfade91d5e2a0de986c5",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609121551485642",
+   "digest": "1d6b0d022665d71c94722825ed526106b32a1a05b2cfeb12df81b2926a907fda",
+   "prev": "20079e43c834a50d3a9469fbe88054316e54cb0b2e029de0cefb3eae43c08724",
+   "files": {
+    ".agent-run.json": "f860054850fc294c8d39fff529553f20b07769114a2e7e16918f4bcd62da72a8",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "bd2d78e3d91eb71ba6504107f83a23c749c8d1d8489b5697994844182dc337ed",
+    "accept-output.txt": "8f136125ee8b4382a8594d56c956e54caa05ad63ac815af3b25283eb44809644",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609121621404557",
+   "digest": "8e185916ba24f824d7be1b4d57608b89695cfdbbad7f7b507137fa17f64aa7b6",
+   "prev": "1d6b0d022665d71c94722825ed526106b32a1a05b2cfeb12df81b2926a907fda",
+   "files": {
+    ".agent-run.json": "eae1120c1add9f37f6523c4c34f01df5e7fb0e3f768fc6e7318ab8b7e568770b",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "4e5e5468ce131b07851da953ca2cafdbe1150f1b80f0b58a551844121376eb69",
+    "accept-output.txt": "c4c9fed5c78f1f68cfc131d8df622d81d81869fbb02c1165b1be98b00cb968a1",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609121621413882",
+   "digest": "c3496a17b3fe4abf338adc1594ffec3c3092f41ee9a070d21e48d516d089e1d1",
+   "prev": "8e185916ba24f824d7be1b4d57608b89695cfdbbad7f7b507137fa17f64aa7b6",
+   "files": {
+    ".agent-run.json": "aab840b5cc1e17662a9cae894893ff6c67a2760aab4714fafacb31e751407ef6",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "738a4da162e205a5076cfbf4066c5506aaafaad245ee351d499d03bb76ac7662",
+    "accept-output.txt": "c4c9fed5c78f1f68cfc131d8df622d81d81869fbb02c1165b1be98b00cb968a1",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609121659177636",
+   "digest": "358870f2110128e5c63d7f1a0752bcbb30389fb9e56da3b41ec60ab9cf23258c",
+   "prev": "c3496a17b3fe4abf338adc1594ffec3c3092f41ee9a070d21e48d516d089e1d1",
+   "files": {
+    ".agent-run.json": "3aae3d62b4cced98564ccb78d9f0525d1e39933bf60793ff043cb6f2b38f407f",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "d71caf3dcd008aec09cc56c30d2e2cb9892d64be2d05f8285d84c820fbaa6ab1",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609121659187748",
+   "digest": "3ac359ff0a8b1a880fdc0a62e45099caaa15eed48ca89625632b5e5f57e856b1",
+   "prev": "358870f2110128e5c63d7f1a0752bcbb30389fb9e56da3b41ec60ab9cf23258c",
+   "files": {
+    ".agent-run.json": "be9d3ca84f18eb361755ea58c5df5bd0269d64b69dd52649e006f8c244328358",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "f74d4dfada22fce22897f30ebc31c3e9bc3648b82b9303c0a0dac35e6bf56df9",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609121718180193",
+   "digest": "98c012502b003ba0ab13e322cc5cd2e07e52c8eb5692e79927b203ad33d0cc15",
+   "prev": "3ac359ff0a8b1a880fdc0a62e45099caaa15eed48ca89625632b5e5f57e856b1",
+   "files": {
+    ".agent-run.json": "77ebe6f0e248d48794ebe4293b22d58f2e20160bc4b06946e56a65988b0dd894",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "b86d344afc17c6e1b37cba2143259c8b77039622ada3fbcdb58cad203af919f1",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609121718201426",
+   "digest": "c5c2228f43431701b7667f7a39eb10db7df78a82e3ddbd0f03985c384b052728",
+   "prev": "98c012502b003ba0ab13e322cc5cd2e07e52c8eb5692e79927b203ad33d0cc15",
+   "files": {
+    ".agent-run.json": "80a02e6e550fd23dc974e3b5654dfab233ba16b954bb485be91493c90655ec55",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "44fdc6d010bca204a9058cf2b09b7bea730c9bc19d6eca1dc50a49d7c7dc7ab6",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609121756484053",
+   "digest": "f36fc7e2cfb01c952a922f29bf0d08a8e04f8e6856aeacdb63414ba4797fb8b5",
+   "prev": "c5c2228f43431701b7667f7a39eb10db7df78a82e3ddbd0f03985c384b052728",
+   "files": {
+    ".agent-run.json": "fa2975fae6bc2156e85b08271e7f8fa7f1ec971db82ab826e4d5fd6089f16776",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "5722f1144a668f0d207281dd01bc561c056e2f1565b97f0c5951f9532feadf9f",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609121803068322",
+   "digest": "616a6d5d55b1c6010fa6083d37f8134d3bc8a2ce41e5285e46393ac9c34ff961",
+   "prev": "f36fc7e2cfb01c952a922f29bf0d08a8e04f8e6856aeacdb63414ba4797fb8b5",
+   "files": {
+    ".agent-run.json": "1d5ee6759241895ef3f8cb0327983e6a62ad5477552a8d668c52c5f02910dee8",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "882ddf5b55b205bde2543efaff1fc3c63f821c1debd80a06ee24e4d9e8c35222",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609121935547170",
+   "digest": "10df4ab6d96479f794756d4696692908cb21e3da8e1c2603890cf31fba432cff",
+   "prev": "616a6d5d55b1c6010fa6083d37f8134d3bc8a2ce41e5285e46393ac9c34ff961",
+   "files": {
+    ".agent-run.json": "a483604d4b226fed4905d6529ec11075edd1bb43aa84e7bfeca399d37d9cea5c",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "376a646587d9af8d91a4210f8a5778a9d674c26892060b74b6ef950a7026db8b",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609121941585236",
+   "digest": "c9661dbefa39c0b26aaf721dd62628f9fba13a3a77cfe47979f2a89ea9513a5f",
+   "prev": "10df4ab6d96479f794756d4696692908cb21e3da8e1c2603890cf31fba432cff",
+   "files": {
+    ".agent-run.json": "069c7d634d1d5728ae3b5d50aecc9d0b3859f8d80cc8d112719ee76edf091875",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "c88f2544d34ab3c919b2860ab65b85078484e2d489980c49a0c9f0763f4a45fc",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609141104575441",
+   "digest": "3f433f779007f4b55c08b78bbe58cd7d426398078dca7d1fc0c06584f4b40997",
+   "prev": "c9661dbefa39c0b26aaf721dd62628f9fba13a3a77cfe47979f2a89ea9513a5f",
+   "files": {
+    ".agent-run.json": "6bcc56cd683bb3396080532866b708b59a85f820a17e96bdc34512722ba7757f",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "cb402d72df42b3afe737eb2f55c1880857812a26c863544f26f5fb2dd35e9fec",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "cbc4e91493564d5be379713df5529ed36c29e60e3f2505326f3501b9aea0f968",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "Cpp_Hub",
+   "run_id": "202609141245587145",
+   "digest": "85d05c9f6c3fb047a8eeac6e55b4518b7bbb39e5e59184e7b09c4d3206b264a0",
+   "prev": "3f433f779007f4b55c08b78bbe58cd7d426398078dca7d1fc0c06584f4b40997",
+   "files": {
+    ".agent-run.json": "e79ddb0904891ff97923c831185be369fd27091c50093ef4c2b7e3089d38e602",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "ca614dc9db5c060e5e54bcffc90ade2dd536028290d987ea5b1a719a3865166a",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "db8b23b34df26cf8928de6ba7ca026491c2ebe5d5487e88105c1376a1b8e5483",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "Cpp_Hub",
+   "run_id": "202609141312071820",
+   "digest": "af23124ad20ae95faf7ea979e9a62f050ccb85da870fca1bebb9771235de5fc9",
+   "prev": "85d05c9f6c3fb047a8eeac6e55b4518b7bbb39e5e59184e7b09c4d3206b264a0",
+   "files": {
+    ".agent-run.json": "809311cce27c87aaa68924db38cf3d7d9a95201928e3b9cbb9a39be006ce76a4",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "330dd9e0cdcbdc45af57d25232d9a8a54fbaeb96942171d5dc271a91f18adaa3",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "e2dc4d71ec66cf97e4c224f9a8a8d153e76fa02b8857f9dc872fe7ad5b22c334",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609161840121980",
+   "digest": "7ae8cbb69fc88f0be1d466ce941485c04f884e9239f341e68c4ed5b56e3f4054",
+   "prev": "af23124ad20ae95faf7ea979e9a62f050ccb85da870fca1bebb9771235de5fc9",
+   "files": {
+    ".agent-run.json": "d0d0f569c20044211932de12735d9c794a335a06ede78dd0819d5a103b18a7eb",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "657b7db95e1b378d58118a072a8fa2e4b99f2de39c488224bf632449fbda88a5",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609161929384613",
+   "digest": "ad96ab45b2b8fd8bbad9dcd723e7b3e5faea422844812baaf7d7a0c275d99297",
+   "prev": "7ae8cbb69fc88f0be1d466ce941485c04f884e9239f341e68c4ed5b56e3f4054",
+   "files": {
+    ".agent-run.json": "7920581d48ee3a1dc1258fd87c637b3cf540ec63475939c41aebd9e00e0cf71f",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "69b70e24523b30203b01dbaa3b24f774fee81bfc5ce80051b271f1f284215a61",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609162159313740",
+   "digest": "e822de70450ede4e958bfe439aae2b27a52730747190b7d05c81062d7baa7551",
+   "prev": "ad96ab45b2b8fd8bbad9dcd723e7b3e5faea422844812baaf7d7a0c275d99297",
+   "files": {
+    ".agent-run.json": "c62e94293b46503db70c3b7f1d2d146cd0700bf8bb1c95f0faf79b377e6409b3",
+    "judgment-record.txt": "e2cd778d9bd0c443af44bc0c6328325eaef10884d7327f23b8c4bf3b9eae31a9",
+    "agent-output.txt": "1839932e5a8800048405f0fb4e4caa401c2a1ba1ac9f98dbad0761275a00ff4b",
+    "accept-output.txt": "8d4d6cf7d23eb2808a3f684bdd27912c76926982bb8a9428885f2f6324e7a0cc",
+    "accept-golden-output.txt": "7cf9de5324f5719eedc876b9fd030d863283c6592ca5e4cae2b3d7c7e1c6baba",
+    "prompt.txt": "e5a7027e3a7da5f9a81cf1059ee27b3d635a5f900b2000c1c61523b261764d8f"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609162211465292",
+   "digest": "20f388c7ef29b047352ab564977218054208fbeccdb568aff9a9276d8c0fb640",
+   "prev": "e822de70450ede4e958bfe439aae2b27a52730747190b7d05c81062d7baa7551",
+   "files": {
+    ".agent-run.json": "f363922a5d7e66cadd71c56ff059dd157d250f7c77e1309c96cd3c2bb5beab8a",
+    "judgment-record.txt": "-",
+    "agent-output.txt": "defd0360d794d03ce2e31e668c0d88d4aa60e9fc17710ae87e09752790b0a23f",
+    "accept-output.txt": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e",
+    "accept-golden-output.txt": "7cf9de5324f5719eedc876b9fd030d863283c6592ca5e4cae2b3d7c7e1c6baba",
+    "prompt.txt": "-"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609162221088759",
+   "digest": "01ded00163546270253a85581ed789f027cb3c98a240e7d0b7b253b37d82a99f",
+   "prev": "20f388c7ef29b047352ab564977218054208fbeccdb568aff9a9276d8c0fb640",
+   "files": {
+    ".agent-run.json": "64e7e0472e807005c558740c8d69961bcd219e9b5582d3a197f39fe94734736d",
+    "judgment-record.txt": "bbfe732a00e1da2530daf0e502030d149e1426386bddb96d4aaa0cbab2c62e7f",
+    "agent-output.txt": "1839932e5a8800048405f0fb4e4caa401c2a1ba1ac9f98dbad0761275a00ff4b",
+    "accept-output.txt": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e",
+    "accept-golden-output.txt": "7cf9de5324f5719eedc876b9fd030d863283c6592ca5e4cae2b3d7c7e1c6baba",
+    "prompt.txt": "e5a7027e3a7da5f9a81cf1059ee27b3d635a5f900b2000c1c61523b261764d8f"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609162255192049",
+   "digest": "83486e3b767c15ad70c11edacfa79b5ce40e2e0c4ff09269429594fdd99f3dce",
+   "prev": "01ded00163546270253a85581ed789f027cb3c98a240e7d0b7b253b37d82a99f",
+   "files": {
+    ".agent-run.json": "c53ce3a97240aa4296e7c46f30f1e89c1ead6d7f80e62e43dbf923e68830d131",
+    "judgment-record.txt": "e8e8e6cd23f8feae9d37063c2ed94a07fdf09d568612bf49a991efe117a656b2",
+    "agent-output.txt": "1839932e5a8800048405f0fb4e4caa401c2a1ba1ac9f98dbad0761275a00ff4b",
+    "accept-output.txt": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e",
+    "accept-golden-output.txt": "7cf9de5324f5719eedc876b9fd030d863283c6592ca5e4cae2b3d7c7e1c6baba",
+    "prompt.txt": "e5a7027e3a7da5f9a81cf1059ee27b3d635a5f900b2000c1c61523b261764d8f"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-17 20:59:49"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609180952112524",
+   "digest": "232816f2c48d2d580f397c9084671dc0bf4a8cad5b225e421d3e7fc748f1b073",
+   "prev": "83486e3b767c15ad70c11edacfa79b5ce40e2e0c4ff09269429594fdd99f3dce",
+   "files": {
+    ".agent-run.json": "5efa1e273e650aa6356e1b7ca4302629193e2b2dec184e9563d21db0c50424f2",
+    "judgment-record.txt": "fdb3d70359e25686eaf11a98fac2508072e0fc007fcd128bb5f33459564ab4f2",
+    "agent-output.txt": "4a03ff0b135d0190a5b13a9a9f221f306de22d766b2d993842ef37251fb6c0bf",
+    "accept-output.txt": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e",
+    "accept-golden-output.txt": "bc2aba8c25a7b5fdb38f75dd8613f205b3df5e40d83ec18beace8abc6914f876",
+    "prompt.txt": "b6c68d319ef22fd077341a63d85b0c20f183676f734cc97d99d694ac43618158"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-18 09:52:47"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609180959398587",
+   "digest": "b08a620011334ce43fa455716e10fdd0efd5e3496b05f5ddf2d4c91923593196",
+   "prev": "232816f2c48d2d580f397c9084671dc0bf4a8cad5b225e421d3e7fc748f1b073",
+   "files": {
+    ".agent-run.json": "44ca2e11ea646558cc41e6017a7d66ced5363089b6cc9f65e6e12f5439bbd54b",
+    "judgment-record.txt": "395b570125847ea6cd08c1cc63c939a74c6ee916688ed4ab705adda706cea72f",
+    "agent-output.txt": "4a03ff0b135d0190a5b13a9a9f221f306de22d766b2d993842ef37251fb6c0bf",
+    "accept-output.txt": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e",
+    "accept-golden-output.txt": "bc2aba8c25a7b5fdb38f75dd8613f205b3df5e40d83ec18beace8abc6914f876",
+    "prompt.txt": "b6c68d319ef22fd077341a63d85b0c20f183676f734cc97d99d694ac43618158"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-18 10:00:15"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609181007039069",
+   "digest": "9db8ceb0418335d0f71473e23ef8e2d2e73084bbaf4b4133a8e07780719c0666",
+   "prev": "b08a620011334ce43fa455716e10fdd0efd5e3496b05f5ddf2d4c91923593196",
+   "files": {
+    ".agent-run.json": "e04c429ce81c5ccfba9d3fd3a9f1897ce018409869a988d687d452b3f785c2c4",
+    "judgment-record.txt": "498dfb6dbcb1ccc6770d389d632453eaa3a0f7127eb784a12763afe8af7db7bb",
+    "agent-output.txt": "4a03ff0b135d0190a5b13a9a9f221f306de22d766b2d993842ef37251fb6c0bf",
+    "accept-output.txt": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e",
+    "accept-golden-output.txt": "bc2aba8c25a7b5fdb38f75dd8613f205b3df5e40d83ec18beace8abc6914f876",
+    "prompt.txt": "53caf86a90d4d07a5f8d083cc76756c471b2ba4f97398f79a5bf74795ea6cd87"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-18 10:07:28"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609181038486558",
+   "digest": "003bde36c7a3fd82130d2a2aa7797a01215bda4a8c6ce29411e9afcc04b6fbec",
+   "prev": "9db8ceb0418335d0f71473e23ef8e2d2e73084bbaf4b4133a8e07780719c0666",
+   "files": {
+    ".agent-run.json": "aabe50f97a3832f700063e377711f776030724a82bf10aaccd1930398ba399a1",
+    "judgment-record.txt": "a45b92ac6c3a522339d0a8211b36f9c2a427ba1e66028a07da204f123b725798",
+    "agent-output.txt": "4a03ff0b135d0190a5b13a9a9f221f306de22d766b2d993842ef37251fb6c0bf",
+    "accept-output.txt": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e",
+    "accept-golden-output.txt": "bc2aba8c25a7b5fdb38f75dd8613f205b3df5e40d83ec18beace8abc6914f876",
+    "prompt.txt": "53caf86a90d4d07a5f8d083cc76756c471b2ba4f97398f79a5bf74795ea6cd87"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-18 10:39:19"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609181053055631",
+   "digest": "3de76f6363b64c0a7b52f2fcfa4120abbac5d94d4e7cfbbc4f2a93c857b05d22",
+   "prev": "003bde36c7a3fd82130d2a2aa7797a01215bda4a8c6ce29411e9afcc04b6fbec",
+   "files": {
+    ".agent-run.json": "8f294adfa917743acb1940608558437c11a23cde330467c2e6753a349dff2d65",
+    "agent-output": "4a03ff0b135d0190a5b13a9a9f221f306de22d766b2d993842ef37251fb6c0bf",
+    "judgment-record": "8b8ff35b2b75866b3172bbf47f381820c86bb2923d817dc273c3bde2db6dcf83",
+    "accept-output": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e",
+    "accept-golden-output": "bc2aba8c25a7b5fdb38f75dd8613f205b3df5e40d83ec18beace8abc6914f876",
+    "prompt": "53caf86a90d4d07a5f8d083cc76756c471b2ba4f97398f79a5bf74795ea6cd87"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-18 10:53:45"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609181118164876",
+   "digest": "a3464c5e5d65467cba86378500e968251852efcfe77fc82c72dd9b6ab349f753",
+   "prev": "3de76f6363b64c0a7b52f2fcfa4120abbac5d94d4e7cfbbc4f2a93c857b05d22",
+   "files": {
+    ".agent-run.json": "a14576c4df0268303b2f08f4a584d222495c19099268a3f597b453a5ae1e4460",
+    "agent-output": "f6b258a5746989b641f88a6293384c0f57e7ade9e8e7fc643a9ab95fdab6697a",
+    "judgment-record": "ff5058ce695eadb4e6ddcd9ad02a487e5268b717bd312ab0722134aed0bff354",
+    "accept-output": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e",
+    "accept-golden-output": "bc2aba8c25a7b5fdb38f75dd8613f205b3df5e40d83ec18beace8abc6914f876",
+    "prompt": "81bc213639cf33e879437ae8ab0de9811e9ad543bed01a788245f3fb1bd54e24",
+    "workspace-diff": "-"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-18 11:18:50"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609181119254134",
+   "digest": "7ddb27be0f81c1754ab1e83f5ef04a6ee8258cc54bfdb94fa1303e8afd2f4a7b",
+   "prev": "a3464c5e5d65467cba86378500e968251852efcfe77fc82c72dd9b6ab349f753",
+   "files": {
+    ".agent-run.json": "be2d3029ef3d4eaa44e9b9c77ead354b7aaa69e70dcb3c400243b63711841919",
+    "agent-output": "7e9499bc8f4b8c98299663f521bf990fc279fc1ce690387f066641e4deb95ddb",
+    "judgment-record": "3c6d7ddc0cc6d7d4ffb2f9739c07e98f7e5f9e2db3a6ab39a4715c9c94728289",
+    "accept-output": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e",
+    "accept-golden-output": "bc2aba8c25a7b5fdb38f75dd8613f205b3df5e40d83ec18beace8abc6914f876",
+    "prompt": "81bc213639cf33e879437ae8ab0de9811e9ad543bed01a788245f3fb1bd54e24",
+    "workspace-diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-18 11:20:15"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609181200256681",
+   "digest": "f18d38ba1092cf31d1fcf9694483183eacc257f4b4b53168b637a6b4e4413626",
+   "prev": "7ddb27be0f81c1754ab1e83f5ef04a6ee8258cc54bfdb94fa1303e8afd2f4a7b",
+   "files": {
+    ".agent-run.json": "1209d94d2afea5fbdde8fb5b64feed88990a586d0311095863925119decd01bc",
+    "agent-output": "79ee3229f0ba934d6cb110c5bab4e037c7714205796c927477375275718b6989",
+    "judgment-record": "b586a0ae7886f67fe48207c78363c3a4fb7710c7d335e3b7225d87f0ad5485ee",
+    "accept-output": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e",
+    "accept-golden-output": "bc2aba8c25a7b5fdb38f75dd8613f205b3df5e40d83ec18beace8abc6914f876",
+    "prompt": "6067bd01c0c4b1156ffe2902d41f98456d9d87aca640969b72b521808614b8b5",
+    "attach-manifest": "6506ff6cb3ecbb684b3b743c9fa58a57aa198a33d1adcc1684f62aa6d8df1c95",
+    "workspace-diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-18 12:01:38"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609181204076459",
+   "digest": "94a05118ca952dad85cc05bfd9403e904c949bfd9cc47bc86807d67f9f485ed9",
+   "prev": "f18d38ba1092cf31d1fcf9694483183eacc257f4b4b53168b637a6b4e4413626",
+   "files": {
+    ".agent-run.json": "55aa5729702d0d78f8ed373df057f82c696c94f7776572ff7bab1bb0f8491b5c",
+    "agent-output": "710c29fabac7338d235f808da00fa86c2d97fb311f6f0f58e6b998510434b46a",
+    "judgment-record": "5812e388a08785e1462bd57671db5b333e81d9b5d6e5fa18163a71d4521c51aa",
+    "accept-output": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e",
+    "accept-golden-output": "bc2aba8c25a7b5fdb38f75dd8613f205b3df5e40d83ec18beace8abc6914f876",
+    "prompt": "6067bd01c0c4b1156ffe2902d41f98456d9d87aca640969b72b521808614b8b5",
+    "attach-manifest": "6506ff6cb3ecbb684b3b743c9fa58a57aa198a33d1adcc1684f62aa6d8df1c95",
+    "workspace-diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-18 12:05:19"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609181232158097",
+   "digest": "145ae772bd6acf00bdef3b6632751a562bbe6b703fd96b2e34d1d78f11fc5fe2",
+   "prev": "94a05118ca952dad85cc05bfd9403e904c949bfd9cc47bc86807d67f9f485ed9",
+   "files": {
+    ".agent-run.json": "0dd492814caf5b5c7657857572aa365c109e13e7d3aece15c60bb0e22764a198",
+    "agent-output": "4a03ff0b135d0190a5b13a9a9f221f306de22d766b2d993842ef37251fb6c0bf",
+    "judgment-record": "f1b0aa203a6736c078781dbccd2de3ed4aa8cddd416f044459e04494fa6565a6",
+    "accept-output": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e",
+    "accept-golden-output": "bc2aba8c25a7b5fdb38f75dd8613f205b3df5e40d83ec18beace8abc6914f876",
+    "prompt": "53caf86a90d4d07a5f8d083cc76756c471b2ba4f97398f79a5bf74795ea6cd87",
+    "session-meta": "-"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-18 12:36:50"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609181233182088",
+   "digest": "c89cb25c408a027488009130baaaf13a4c0ceaee811b6eb67f9a62e7fd74a803",
+   "prev": "145ae772bd6acf00bdef3b6632751a562bbe6b703fd96b2e34d1d78f11fc5fe2",
+   "files": {
+    ".agent-run.json": "bff7a37cdbc68f68413b2c61356ca897c352beef2e3e0d087e416804f0b4cef2",
+    "agent-output": "c2b072b47e01f533ee27856369eb0006a82f8cc67fb10f876e7cf605bb12b07a",
+    "judgment-record": "006b8dc8e47eeb837f3eaa796f3b4cb18772f2f7e822e0e6171f2c15f24de90c",
+    "accept-output": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e",
+    "accept-golden-output": "bc2aba8c25a7b5fdb38f75dd8613f205b3df5e40d83ec18beace8abc6914f876",
+    "prompt": "53caf86a90d4d07a5f8d083cc76756c471b2ba4f97398f79a5bf74795ea6cd87",
+    "session-meta": "ea10023fc5e4ba5d1ded116f669f135909200cdaf57ccd585ddd81a330ae5715"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-18 12:36:50"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609181235380478",
+   "digest": "c39382b627d82da108343f6fb192c9f9421e5f576a9853b3eb2476caf49c7a6f",
+   "prev": "c89cb25c408a027488009130baaaf13a4c0ceaee811b6eb67f9a62e7fd74a803",
+   "files": {
+    ".agent-run.json": "e17d3c7075561a749e1f97a5bab0957e52d18920783003558e424cc953ed1c9f",
+    "agent-output": "4a03ff0b135d0190a5b13a9a9f221f306de22d766b2d993842ef37251fb6c0bf",
+    "judgment-record": "c4adb4ee58c3a6213608df5290828b1dd13b153480f6c0692be59e63bba666ce",
+    "accept-output": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e",
+    "accept-golden-output": "bc2aba8c25a7b5fdb38f75dd8613f205b3df5e40d83ec18beace8abc6914f876",
+    "prompt": "53caf86a90d4d07a5f8d083cc76756c471b2ba4f97398f79a5bf74795ea6cd87",
+    "session-meta": "435ffd244e87cdc9de155ccdb3c8b5690cb46da9fc9e8e128577fcf79d7a1509"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-18 12:36:50"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609181326115792",
+   "digest": "58fddb8039a453b168193261b17ca5b222d45ce57f74412ae2341f412545de9f",
+   "prev": "c39382b627d82da108343f6fb192c9f9421e5f576a9853b3eb2476caf49c7a6f",
+   "files": {
+    ".agent-run.json": "7913d4837ceb9c174be24adf2169a03864585f2e18e84727a4e7dfcc1a76658f",
+    "agent-output": "c2b072b47e01f533ee27856369eb0006a82f8cc67fb10f876e7cf605bb12b07a",
+    "judgment-record": "6e772dec09a315c86c128c2d13848cfd3bcfdb3dd32eea4556f1b4f0ae17f497",
+    "accept-output": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e",
+    "accept-golden-output": "bc2aba8c25a7b5fdb38f75dd8613f205b3df5e40d83ec18beace8abc6914f876",
+    "prompt": "53caf86a90d4d07a5f8d083cc76756c471b2ba4f97398f79a5bf74795ea6cd87",
+    "progress-trace": "2ecd944af53209bc7c148809adcb7250ea218afdc2c5783b45528f9ff4d5d7a3",
+    "accept-cmds": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+    "golden-cmd": "7db3fbadc46a9b58757ab0a5055c184dde25c5577375c6f37dc7d9b76813f83b",
+    "session-meta": "4243a35cc01d451b6e7fa2259a7c78e296cbad49a2e6465fc395c720ce84584c",
+    "attach-manifest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-18 13:27:01"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609181334020073",
+   "digest": "28f89cb71727323941a7c59e3e272df37dc12e374ace594e3ffba40ce5894dbe",
+   "prev": "58fddb8039a453b168193261b17ca5b222d45ce57f74412ae2341f412545de9f",
+   "files": {
+    ".agent-run.json": "2932a0bf547929abdbb77e09f063c1e6a6eba72c7b23ffa70ce18cd554e5eb70",
+    "agent-output": "c2b072b47e01f533ee27856369eb0006a82f8cc67fb10f876e7cf605bb12b07a",
+    "judgment-record": "a31b9b9eafad0599fdf3734783b93dabcf5a5ae1d2c998eb8c96881f79ab4775",
+    "accept-output": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e",
+    "accept-golden-output": "bc2aba8c25a7b5fdb38f75dd8613f205b3df5e40d83ec18beace8abc6914f876",
+    "prompt": "53caf86a90d4d07a5f8d083cc76756c471b2ba4f97398f79a5bf74795ea6cd87",
+    "progress-trace": "4176fd6f69f657a014a00157ac6f8a27417078ef7f35d815943c2840e5469254",
+    "accept-cmds": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+    "golden-cmd": "7db3fbadc46a9b58757ab0a5055c184dde25c5577375c6f37dc7d9b76813f83b",
+    "session-meta": "2b6037b09b8477aa679e25817f46e4734bfa6a0f89e651dbc17abd241b435bbf",
+    "attach-manifest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "workspace-diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-18 13:35:06"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609181750311812",
+   "digest": "8094c59a30c5b8da9075add7ac362c37f127103d4ef7fdc43ecdec5096f8c659",
+   "prev": "28f89cb71727323941a7c59e3e272df37dc12e374ace594e3ffba40ce5894dbe",
+   "files": {
+    ".agent-run.json": "2cbb130a817c6d54c7716221a96e6dfe960b9bd4036f72105b9594ad0c0b6f51",
+    "agent-output": "4a03ff0b135d0190a5b13a9a9f221f306de22d766b2d993842ef37251fb6c0bf",
+    "judgment-record": "219c23dfc23d5c0f2105fc350a87e3efc30767ee7a7b4a247a8a289b1cbad577",
+    "accept-output": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e",
+    "accept-golden-output": "bc2aba8c25a7b5fdb38f75dd8613f205b3df5e40d83ec18beace8abc6914f876",
+    "prompt": "53caf86a90d4d07a5f8d083cc76756c471b2ba4f97398f79a5bf74795ea6cd87",
+    "card": "2858b4f7dbb6c19c48b3f74a45737e279dbb1ceae5422c63ed8dd83e1a86494a",
+    "progress-trace": "24798f796ae8a159ef60696f72bb8b7453be2123f3f368808bed7ee1ee6d8bfd",
+    "accept-cmds": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+    "golden-cmd": "7db3fbadc46a9b58757ab0a5055c184dde25c5577375c6f37dc7d9b76813f83b",
+    "session-meta": "ed2111bceb064112649c04e532f072f9fb4a6642f3280070544707ed334e6d35",
+    "attach-manifest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "workspace-diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-18 17:54:23"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609181751581972",
+   "digest": "8eef96e1421e21c00e06c68807264c2e0209df10fc02283092e10f90624c59b2",
+   "prev": "8094c59a30c5b8da9075add7ac362c37f127103d4ef7fdc43ecdec5096f8c659",
+   "files": {
+    ".agent-run.json": "fc4b658993e5a86d819b00a967feb2075bfdba29c78ce36843183224e0dcccef",
+    "judgment-record.txt": "595b112437031e7dd98e45953a3e97fae9a4adbba7ea3a8a0f665a0645e1676f",
+    "agent-output.txt": "9b06865446d8c05863db796f2384c7b25825a97114ce45b53237a334bbbc568b",
+    "accept-output.txt": "-",
+    "accept-golden-output.txt": "-",
+    "prompt.txt": "a35fee7f0796686b8f1ffa8f97073bb2934d7c14cc96073bd0dcce3847881a64"
+   },
+   "recipe": "v1",
+   "chained_at": "2026-09-18 17:54:23"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609181934560158",
+   "digest": "7f1902bab5afd2b00986c4348ee1383eb0f3a488bf070fe747eafa37e74147b6",
+   "prev": "8eef96e1421e21c00e06c68807264c2e0209df10fc02283092e10f90624c59b2",
+   "files": {
+    ".agent-run.json": "e7a7c3053afa4b9152c2d4a20c7787474bfe56a670122ddb3dbc1bd6d15570b7",
+    "agent-output": "4a03ff0b135d0190a5b13a9a9f221f306de22d766b2d993842ef37251fb6c0bf",
+    "judgment-record": "c030277bbf6015d5844f11da6ed1f2e5c8b29ddf1a3d628f97aad3eeaef5c1ba",
+    "accept-output": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e",
+    "accept-golden-output": "bc2aba8c25a7b5fdb38f75dd8613f205b3df5e40d83ec18beace8abc6914f876",
+    "prompt": "53caf86a90d4d07a5f8d083cc76756c471b2ba4f97398f79a5bf74795ea6cd87",
+    "card": "7822e8a2b8fd068e672768601291e0188de8573a95d5212b984b207563d43963",
+    "progress-trace": "79072cb99d16ded93c7ace0ea2399da4efb7b43bba2653283e0fe17b749823f2",
+    "accept-cmds": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+    "golden-cmd": "7db3fbadc46a9b58757ab0a5055c184dde25c5577375c6f37dc7d9b76813f83b",
+    "session-meta": "1efc40abff53e14a38ddc903ac688efc96ddbb5164b83ce2eb1da917a03c4045",
+    "attach-manifest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "workspace-diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "station-tmp-log": "-"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-18 19:35:56"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609182312282167",
+   "digest": "dbff3c7ced19eb63f94b65c6d93fc7a016b1a41486c49061fb5c14a1722bc4ca",
+   "prev": "7f1902bab5afd2b00986c4348ee1383eb0f3a488bf070fe747eafa37e74147b6",
+   "files": {
+    ".agent-run.json": "8956a90d0e0294d009d585b3746b8f1d59729bb3bf7ec8bd7be4a1c8310c56cd",
+    "agent-output": "c2b072b47e01f533ee27856369eb0006a82f8cc67fb10f876e7cf605bb12b07a",
+    "judgment-record": "8acf0ced53064636c1a48588d335211aa2f0e9ef720bd99da3f60bd8d812e5c6",
+    "prompt": "53caf86a90d4d07a5f8d083cc76756c471b2ba4f97398f79a5bf74795ea6cd87",
+    "accept-cmds": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+    "golden-cmd": "7db3fbadc46a9b58757ab0a5055c184dde25c5577375c6f37dc7d9b76813f83b",
+    "progress-trace": "d678eb25406d97c3f255348a69ffc42050f21fd854ed8a5f5a7324ce44bc8782",
+    "session-meta": "8d596d0fd7b99ad9883ad66019ddb4d03cf6d641178e2c9e88f5dcee436eaf00",
+    "attach-manifest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "workspace-diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "card": "7822e8a2b8fd068e672768601291e0188de8573a95d5212b984b207563d43963",
+    "accept-output": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e",
+    "accept-golden-output": "bc2aba8c25a7b5fdb38f75dd8613f205b3df5e40d83ec18beace8abc6914f876",
+    "station-tmp-log": "-"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-18 23:13:42"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609182314143434",
+   "digest": "7f4741f0c6802b799cb2cbe93575381c03e8afea9bd88fc397ab89a5007491c8",
+   "prev": "dbff3c7ced19eb63f94b65c6d93fc7a016b1a41486c49061fb5c14a1722bc4ca",
+   "files": {
+    ".agent-run.json": "c481ef8abc2bcd919612b84b16364979372184e27502dc8e6ad06a29b688f203",
+    "agent-output": "be8187f5d5c96c269bfb8592d24ce77426a00bbbe5054c345271068cc126d7c0",
+    "judgment-record": "04006b11aa5575197acda0cda85483e0902dc9e60938bd633b5f58e7cc77109d",
+    "prompt": "2b07727e1c9de411e95e4151013ab4b3af6112fad62280ae5f308cd87d20aa76",
+    "accept-cmds": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+    "golden-cmd": "7db3fbadc46a9b58757ab0a5055c184dde25c5577375c6f37dc7d9b76813f83b",
+    "progress-trace": "675af3965c74389bd7d444b2a0029c0a7db6370b902f1f45161ad11900a341e6",
+    "session-meta": "76a418b342c73b730a7a1a0d39858ada64784052d9f5a4ecea2ee45499212883",
+    "attach-manifest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "workspace-diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "card": "a74e092ec03401b8a5c393a3b9536a8ca986ce16124424c7523e8cf1eea52303"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-18 23:14:38"
+  }
+ ],
+ "head": {
+  "proj": "paper",
+  "run_id": "202609182314143434",
+  "digest": "7f4741f0c6802b799cb2cbe93575381c03e8afea9bd88fc397ab89a5007491c8"
+ }
+}
