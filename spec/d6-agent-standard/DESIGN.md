@@ -195,6 +195,7 @@ agent-cli task <proj> [--card <task.md>] [--model <m>] [--cli auto|opencode]
     - **凭据类**（`sk-`/email/win 路径/GitHub PAT/AWS/Slack/JWT/Bearer）⇒ **抹掉继续**（脱敏后进远端，= §2.1 的"脱敏后远端"）：抹掉后卡仍自洽，下游（证据流/归档/验收/基线）看到的就是"已消毒"的 prompt。
     - **私钥块**（`-----BEGIN … PRIVATE KEY …-----`）⇒ **拒发、fail-closed**（退出码 4，= 上句的"命中即拦截"）：卡里贴了整把私钥说明**这张卡本身就不该出网**，抹掉它会让一张本该被作者修掉的卡**看起来正常**（同族于"看起来处理过了"）。
     - 规则清单的**单一真值源** = `agent-cli.ps1` 的 `Get-ScrubRules`（`Invoke-Scrubber` 抹 / `Get-ScrubBlockReason` 拒都从它取）；**主路与 claude 备路各判一次**（免得"主路守、备路漏"）。覆盖哪些/刻意不覆盖哪些、以及为什么，见该裁定 §3。
+    - **⚠ 附件不在消毒面内（2026-09-21 实测成立，此前是未写明的边界）**：`Invoke-Scrubber` 只作用于 `$promptFull`，而**附件内容**是 `scp`/`Copy-Item` **原文**（主路 L1227/1230、claude 路 L2290）⇒ 若卡同时满足「附件含敏感内容」+「模型指向云端」，**附件内容会原样进远端/云端上下文**。实测：探针卡 [`scrub-attach-probe.md`](test-cards/scrub-attach-probe.md)（自对照设计）**两路一致** —— 正文侧被抹（`[REDACTED-PATH]`）、**附件侧原样**；且 claude 转录显示 agent 真读了该文件（`tool_use`/`Read`）⇒ 不是模型猜的。⇒ **不变式②的"消毒面"目前不含附件**；要收口就得**把附件也纳入 scrubber**（或对"含敏感附件的卡"改走 `local-only`）。
     - **⚠ 卡作者纪律（不是判据，是纪律 —— 裁定 §6-P4）**：**含 PII（手机号/身份证/银行卡）或本机拓扑（内网 IP/主机名/绝对路径）的卡必须声明 `sensitivity: local-only`**。理由：scrubber **刻意不覆盖**这些形态（判据会误伤 —— 长度判据会命中本仓 run ID、`.local`/内网 IP 是本项目的主要寻址方式），所以"它们不出网"这件事**只能由档位保证**，不能指望正则。
 
 ### 5.2 远端执行脚本契约（R14 铁律）

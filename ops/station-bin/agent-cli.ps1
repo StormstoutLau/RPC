@@ -2351,7 +2351,7 @@ function Invoke-Task-Claude {
     if ($useStation) {
         $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('-p "" --model "main"') -stdin $promptIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $timeout
     } else {
-        $rcov = Invoke-ClaudeFly -argStr ('-p "" --model "' + $id + '"') -stdin $promptIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $timeout
+        $rcov = Invoke-ClaudeFly -argStr ('-p "" --model "' + $id + '"') -stdin $promptIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $timeout -cwd $projRoot
     }
     $rc = $rcov['code']; $rcMsg = $rcov['msg']; if ($rcMsg) { Write-Host "CLAUDE_RUN_WARN: $rcMsg" }
     Write-Host "claude first rc=$rc"
@@ -2366,7 +2366,7 @@ function Invoke-Task-Claude {
         if ($useStation) {
             $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('--continue -p "" --model "main"') -stdin $contIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $continueTimeout
         } else {
-            $rcov = Invoke-ClaudeFly -argStr ('--continue -p "" --model "' + $id + '"') -stdin $contIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $continueTimeout
+            $rcov = Invoke-ClaudeFly -argStr ('--continue -p "" --model "' + $id + '"') -stdin $contIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $continueTimeout -cwd $projRoot
         }
         $rc = $rcov['code']; $rcMsg = $rcov['msg']; if ($rcMsg) { Write-Host "CLAUDE_RESUME_WARN: $rcMsg" }
         Add-Content $outTxt "`n=== RESUME[$contAttempt] rc=$rc ==="
@@ -2565,7 +2565,7 @@ function Invoke-ClaudeFly {
     #   ②`$null -eq 0` 为假 ⇒ **成功的 claude run 也会被判 `failed`**(最终码恒 1) —— 备路等于白修。
     #   改用 .NET `Process`+`ProcessStartInfo`: `WaitForExit(ms)` 语义不变(**保留预算内 kill**),
     #   且 `ExitCode` 真实可读(**实测 `--version` 得 0**)。
-    param([string]$argStr, [string]$stdin, [string]$stdout, [string]$stderr, [string]$scratch, [int]$budgetS)
+    param([string]$argStr, [string]$stdin, [string]$stdout, [string]$stderr, [string]$scratch, [int]$budgetS, [string]$cwd = '')
     if (-not (Test-Path $stdin)) { [IO.File]::WriteAllText($stdin, '', (New-Object System.Text.UTF8Encoding $false)) }
     $fsIn = $null; $fsOut = $null; $fsErr = $null
     try {
@@ -2579,6 +2579,19 @@ function Invoke-ClaudeFly {
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
         $psi.CreateNoWindow = $true
+        # ⚠ **2026-09-21 实弹发现（P3 首跑 run `202609220005298044`）：必须显式设 cwd。**
+        #   不设时子进程**继承控制台的 cwd**（我们的常态是 `d:\RPC`，而非 projRoot）—— 而
+        #   ① 卡的 prompt 用**相对路径**引用附件（`.attach/<name>`，见 L2309-2310 的提示行），
+        #   ② 附件却被复制到 **`<projRoot>\.attach`**（L2290）⇒ agent 解析成 `<控制台>\.attach\`
+        #   （不存在）⇒ **附件在这条路上不可达**。实测证据：claude 自己的会话转录
+        #   `~/.claude/projects/D--RPC/<session>.jsonl` 里 `cwd="D:\\RPC"` 且 `tool_use blocks=0`
+        #   ⇒ agent 从未打开附件，回 `LINE2=NONE`（**不是**"看到了被抹的形式"）。
+        #   ⚠ 同函数里 accept 早已**显式** `-cwd $projRoot`（L2392/2408）⇒ 本改动同时消除
+        #   「**agent 的 cwd ≠ accept 的 cwd**」这个此前未被核过的**已存在不一致**。
+        #   也顺带让代码注释「claude cwd=projRoot」（L2280）从**假设**变成**事实**。
+        #   ⚠ 站上变体（`Invoke-ClaudeFly-Station`）是另一套机制（站上脚本 `cd "$HOME"`）且
+        #   **附件根本没同步到站上** ⇒ 同类但更重，**本轮不动**，已登记待办。
+        if ($cwd) { $psi.WorkingDirectory = $cwd }
         $proc = [System.Diagnostics.Process]::Start($psi)
         # 三路**并发**搬运, 防任一管道写满互锁: stdin 从文件灌入, stdout/stderr 落文件。
         #   必须先起 stdout/stderr 的搬运再去等 stdin —— 否则"子进程猛写 stdout 而我们卡在喂 stdin"会死锁。
