@@ -111,7 +111,7 @@ foreach ($f in $files) {
   $tok = $null; $errs = $null
   [System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$tok, [ref]$errs) | Out-Null
   if ($errs -and $errs.Count -gt 0) {
-    foreach ($e in $errs) { "FAIL`t$($e.Extent.StartLineNumber)`t$($e.Message)" }
+    foreach ($e in $errs) { "FAIL`t$f`t$($e.Extent.StartLineNumber)`t$($e.Message)" }
   }
 }
 """
@@ -369,12 +369,56 @@ def check_syntax(ctx):
             os.unlink(tmp_ps)
         except OSError:
             pass
+        # ⚠ 失败数按**文件**计(不是按错误行计): 一个文件多行报错只算 1 —— 否则摘要会写
+        #   "13文件/11失败", 读起来像"11 个文件坏了"(2026-09-21 实地误导过一次: 实际只有 1 个文件)。
+        #   明细里**必须带文件名**: 13 个文件里只报 "Unexpected token ')' [line 37]" 是查不到人的。
+        #   且统一回**仓库相对路径**(snippet 收到的是绝对路径), 与其它断言的明细格式一致。
+        rel_of = {str(p): rel for rel, p in ps_files}
+        bad_files = set()
         for ln in out.splitlines():
             if ln.startswith("FAIL\t"):
-                _, lineno, msg = ln.split("\t", 2)
-                bad += 1
-                detail.append(f"(ps1) {msg[:160]}  [line {lineno}]")
+                parts = ln.split("\t", 3)
+                if len(parts) < 4:
+                    bad_files.add(f"<unparsed:{ln[:40]}>")
+                    detail.append(f"(ps1) {ln[:160]}")
+                    continue
+                _, fabs, lineno, msg = parts
+                frel = rel_of.get(fabs.strip(), fabs.strip())
+                bad_files.add(frel)
+                detail.append(f"(ps1) {frel}  {msg[:160]}  [line {lineno}]")
+        bad = len(bad_files)
     counts[".ps1"] = (len(ps_files), bad)
+
+    # ── .ps1 子判据 (2026-09-21, ADR-0004 D3 路径①): 含非 ASCII 的 .ps1 **必须**带 UTF-8 BOM ──
+    # 触发: 09-18(守门夹具静默失效) 与 09-21(编辑工具剥掉三个脚本的 BOM 后夹具当场解析崩溃)。
+    # ⚠ **根因(2026-09-21 实测更正, 勿沿用早先的错误说法)**: `Parser::ParseFile` **不是**按 UTF-8 读
+    #   BOM-less 文件, 它与 `powershell -File x.ps1` **走同一条解码路径(BOM-less ⇒ ANSI/GBK)**。
+    #   实测证据: 把一个 BOM-less 的中文 .ps1 喂给上游那次 ParseFile ⇒ 报 11 条错, 行号**全部落在
+    #   中文注释行**(30/37/209/214/231/237/257/299) —— 若真是按 UTF-8 读, 一条错都不会有。
+    # ⇒ 所以上游那条判据**能抓到**, 但**只在乱码恰好破坏语法时**才抓到:
+    #     3 字节 UTF-8 被当 2 字节 GBK 解码, 是否"吞掉相邻换行"**取决于内容** ⇒ 同样的缺陷在
+    #     **不同内容下**可能报 11 条错, 也可能报 **0 条错却照样跑坏**(09-18 目击的正是后者: 门禁
+    #     `.ps1:12文件/0失败`, 而夹具 `fns count=0`)。**间歇、内容相关、且报错指向注释行而不指根因**
+    #     —— 这三条加在一起才构成"必须另加字节判据"的理由。
+    # 本判据是**确定性**的(读字节, 与内容无关), 且**报的是根因**(含非 ASCII 却无 BOM)而非症状。
+    # 判据: 有非 ASCII 字节 且 无 `EF BB BF` ⇒ FAIL。纯 ASCII 的 .ps1 **不受约束**(无 BOM 也安全, 不误报)。
+    # 为什么**不**覆盖 .sh: `.sh` **不得**加 BOM —— BOM 会让内核把 `#!` 认成 `\xEF\xBB\xBF#!`
+    #   ⇒ `bad interpreter` 直接不可执行。站上是 UTF-8 locale, 风险形态不同, 故不在此判。
+    bad_bom = 0
+    for rel, path in ps_files:
+        try:
+            raw = path.read_bytes()
+        except OSError as e:
+            bad_bom += 1
+            detail.append(f"(ps1-bom) {rel}  读字节失败: {type(e).__name__}")
+            continue
+        if raw[:3] == b"\xef\xbb\xbf":
+            continue
+        if any(byte > 0x7F for byte in raw):
+            bad_bom += 1
+            detail.append(f"(ps1-bom) {rel}  含非 ASCII 却**无 UTF-8 BOM** ⇒ PS5.1 按 ANSI(GBK) "
+                          f"解码可能吞掉换行致脚本静默损坏 ⇒ 修: 以 UTF-8 **带 BOM** 重写")
+    counts[".ps1-bom"] = (len(ps_files), bad_bom)
 
     # ── shell 语法: .sh + **无扩展名的 shebang 脚本** (站上件), 共用一次 bash 调用 ──
     sh_files = [(rel, p) for rel, p in by_ext.get(".sh", [])]

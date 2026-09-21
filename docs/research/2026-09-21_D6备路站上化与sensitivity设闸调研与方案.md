@@ -162,7 +162,9 @@
 
 ⇒ 第 3–4 条 + 第 6 条合起来证明：该洞**不是理论上的**（拆掉闸就真发请求），且探针**不是结构性失明**（此前教训：stub 型探针曾对真实 bug 完全免疫）。
 
-**⚠ 过程事故（已闭环，值得记住）**：本轮编辑（`SearchReplace`）**把三个 `.ps1` 的 UTF-8 BOM 剥掉了**，而 `syntax` 门禁**报 PASS**（`.ps1:13文件/0失败`）—— 随后夹具**当场解析崩溃**。根因：门禁的 `[Parser]::ParseFile` 走 .NET 解码（BOM-less 按 UTF-8），而**实际执行**走 PowerShell 自己的解码器（BOM-less ⇒ ANSI/GBK）⇒ 两者路径不同，门禁**结构性看不见**。已用 `tmp/_restore_bom.ps1` 补回并复检 `parseErrors=0`；**纪律：凡编辑过 `.ps1`，提交前必须按字节验 BOM，不能信 `syntax`**。已把新证据补进 [OPEN-ISSUES 该行](../../spec/d6-agent-standard/OPEN-ISSUES.md)。
+**⚠ 过程事故（已闭环，值得记住；含一次根因更正）**：本轮编辑（`SearchReplace`）**把三个 `.ps1` 的 UTF-8 BOM 剥掉了**，而 `syntax` 门禁在那个时点**没报出来** —— 随后夹具**当场解析崩溃**。已用 `tmp/_restore_bom.ps1` 补回并复检 `parseErrors=0`。
+**⚠ 我最初写的根因是错的，此处更正**：曾推断"门禁的 `[Parser]::ParseFile` 走 .NET 解码（BOM-less 按 UTF-8）而执行走 ANSI ⇒ **结构性看不见**"。实测推翻：把 BOM-less 的中文 `.ps1` 交给那次 `ParseFile`，它**报了错**且行号全落在中文注释行 ⇒ **它与执行走同一条解码路径（ANSI/GBK）**。真正的缺陷是**间歇性 + 内容相关 + 报错不指根因**（是否吞掉换行取决于具体字节；报出来的行号指向注释行，看不出"加 BOM"这个修法）。
+⇒ **已加确定性字节子判据**（`syntax` 的 `counts[".ps1-bom"]`：含非 ASCII 却无 BOM ⇒ FAIL），并顺带修了 `(ps1)` 明细缺文件名、失败数按错误行计（曾误导为"11 个文件坏了"，实际 1 个）两处报告缺陷。**自证 正/负/对照**三例齐（见 [OPEN-ISSUES 该行](../../spec/d6-agent-standard/OPEN-ISSUES.md)）。**纪律**：编辑过 `.ps1` 后提交前按字节验 BOM。
 
 ## 5. 风险与诚实边界
 - **P0 只"止血"不"治本"**：`$backendEgress` 是**硬编码 `$true`**，而判据的**根**（既有三处闸按型号前缀判"是否出网"）未动 ⇒ 下次再加一个云端后端**仍会漏一次**。治本是 P2。
