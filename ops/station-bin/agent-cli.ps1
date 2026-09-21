@@ -912,41 +912,42 @@ function Test-FallbackEligible([int]$code) {
 }
 
 function Test-CtxOverflowError {
-    # C1 (2026-09-21): 识别"上下文长度被**明确拒绝**"这一类。⚠ **它是两种形态, 落点不同**(实弹实测):
-    #   · 形态 A(危险): **引擎侧** 400 —— llama.cpp 的
-    #     `request (N) exceeds the available context size (M)`。此时 opencode **不处理该错误串
-    #     ⇒ 永久挂死** ⇒ 被 `timeout` 掐断 ⇒ **rc=6** ⇒ 会被 AUTO_FALLBACK 兜底。
-    #     触发条件: opencode 估算的预算 > 引擎实际 ctx(O-23 的"预算不可信": 发送预算由内置
-    #     catalog 决定, `limit.context` 不参与) ⇒ **它发出去了, 引擎才回 400**。
-    #   · 形态 B(不危险): **客户端/SDK 侧**长度校验 ——
-    #     `Message too long: N tokens exceeds the M-token context window` +
-    #     `"code":"context_length_exceeded"`。此时 opencode **快速失败**(实测还 RESUME 了两轮,
-    #     每轮立即失败) ⇒ **rc=1**(不是 6) ⇒ **本就不会触发 fallback**。
-    #     触发条件: 客户端**自己能算出**超了 ⇒ 请求根本没发出去。
-    # ⇒ 判据要**两种都认**(形态 B 也要可诊断, 否则它混在"agent 自己失败"里看不出来);
-    #   但**是否改写 rc** 由 Resolve-CtxOverflowCode 决定(只形态 A 才改, 见其注释)。
-    # 串取**逐字**(不用宽泛模式, 免得把普通输出误判成配置错误):
-    #   · llama.cpp `srv send_error` 的原文中段
-    #   · 我们日志里实际出现过的异常类名 `ContextOverflowError`(OPEN-ISSUES O-21/O-23)
-    #   · 形态 B 的错误码/措辞(2026-09-21 实弹逐字取自 opencode 的 JSON 错误体)
+    # C1 (2026-09-21): 识别"上下文长度被**明确拒绝**"这一类。
+    # ⚠ **定性已三次修正, 以 §3.8 实测为准**(docs/research/2026-09-21_D6备路站上化与sensitivity设闸调研与方案.md):
+    #   那条 400 是**引擎原生**的 —— 绕过 opencode 直接 curl 引擎, 报文与经 opencode 时**逐字同款**
+    #   ⇒ **不是**客户端校验。经不经客户端, 引擎都**立即 400**(实测 0.26s, 未排队未截断)。
+    #   唯一的区别在**客户端拿到 400 之后怎么做**:
+    #     · **不处理** ⇒ 挂死 ⇒ 被 `timeout` 掐断 ⇒ **rc=6** ⇒ **会被 AUTO_FALLBACK 兜错**
+    #       (ctx 不够, 换后端也兜不住) —— **这是本判据存在的唯一理由**。
+    #     · **快速失败**(2026-09-21 实测 opencode 即如此) ⇒ **rc=1** ⇒ 本就不触发 fallback
+    #       ⇒ 无需防兜错, 只留一行诊断。
+    #   ⚠ **当前版本下"挂死"那一支不可复现** ⇒ `rc=14` 是**为旧版本/未来回退准备的防线**
+    #     (O-21 记录的挂死属旧版本行为)。保持 `--no-context-shift` 的裁定 + 本判据是其配套依赖,
+    #     理由与反对意见见 §3.8。
+    # ⚠ **串必须版本化** —— llama.cpp **改过这段文案**(实测):
+    #     · **当前版**: `Message too long: N tokens exceeds the M-token context window` + `context_length_exceeded`
+    #     · **旧版**(O-21 记录): `request (N) exceeds the available context size (M)` / `ContextOverflowError`
+    #   四个都留(版本会变; 少认一个就少一条防线)。取**逐字**串, 不用宽泛模式(免得把普通输出误判成配置错误)。
     # 纯函数 ⇒ 夹具可按名提取离线单测(与 Test-FallbackEligible 同族)。
     param([string]$text)
     if (-not $text) { return $false }
+    if ($text -match 'Message too long') { return $true }
+    if ($text -match 'context_length_exceeded') { return $true }
     if ($text -match 'exceeds the available context size') { return $true }
     if ($text -match 'ContextOverflowError') { return $true }
-    if ($text -match 'context_length_exceeded') { return $true }
-    if ($text -match 'Message too long') { return $true }
     return $false
 }
 
 function Resolve-CtxOverflowCode {
     # C1 (2026-09-21): 命中 ctx 超限后**是否改写退出码**。纯函数 ⇒ 夹具可正负双向断言。
-    #   · rc=6(**形态 A**, 引擎侧 400 ⇒ 挂死) ⇒ **改 14**。目的只有一个: **别让备路兜它**
+    # ⚠ 定性以 §3.8 实测为准(见 Test-CtxOverflowError 注释): 引擎**总是立即 400**,
+    #   分岔点在"**客户端拿到 400 之后怎么做**"。
+    #   · **客户端不处理** ⇒ 挂死 ⇒ `timeout` 掐断 ⇒ `rc=6` ⇒ **改 14**。目的只有一个: **别让备路兜它**
     #     —— ctx 不够**换后端也兜不住**(换到哪都不够), 兜了就是白烧一轮, 还把"配置问题"
     #     伪装成"引擎问题"。rc=6 的语义是"引擎在预算内产不出终态" ⇒ 与它根本不同。
-    #   · **其它 rc 一律不改**(当前实测形态 B = rc=1 快速失败) —— 理由: rc=1 是"agent 退出 1"
-    #     这一大类, 把它改写成 14 会**掩盖**该类的其它含义(与"rc 不可信"同源)。形态 B
-    #     本就不触发 fallback ⇒ **无需防兜错**, 只保留一行诊断输出。
+    #   · **客户端快速失败**(2026-09-21 实测 = `rc=1`) ⇒ **不改码**。理由: `rc=1` 是"agent 退出 1"
+    #     这一大类, 把它改写成 14 会**掩盖**该类的其它含义(与"rc 不可信"同源); 且本就不触发
+    #     fallback ⇒ 无需防兜错, 只保留一行诊断输出。
     param([int]$code, [bool]$isOverflow)
     if (-not $isOverflow) { return $code }
     if ($code -eq 6) { return 14 }
