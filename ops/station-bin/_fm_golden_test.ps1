@@ -456,6 +456,21 @@ Assert-True "route: 备路型号有 full-id 直传条目(env AGENT_FALLBACK_MODE
 Assert-True "route: 备路两型号均为 :free(⇒ OPEN-ISSUES 的'依赖免费开关/额度'前提成立)" (
     "$($rtc.id)" -match ':free' -and "$($rto.id)" -match ':free')
 
+# --- 2026-09-21: claude 本地路的 **cwd 接线**(P3 首跑实弹发现的缺陷, 见 Invoke-ClaudeFly 注释) ---
+#   缺陷形态: `Invoke-ClaudeFly` 的 `ProcessStartInfo` 不设 `WorkingDirectory` ⇒ 子进程继承**控制台** cwd
+#   (常态 `d:\RPC`), 而 prompt 用**相对路径**引用附件(`.attach/<name>`)且附件落在 `<projRoot>\.attach`
+#   ⇒ **附件不可达**。实测: 转录 `~/.claude/projects/D--RPC/<s>.jsonl` 里 `cwd="D:\RPC"` + `tool_use blocks=0`。
+# ⚠ 这是**结构断言**(查"接线在不"), **不是行为断言** —— 行为证据只有实弹能给。仍然值得守:
+#   去掉 `-cwd` 传参或 `WorkingDirectory` 赋值都不会报错、不会让别的断言变红 ⇒ 没有这条就会**静默回退**。
+$flyAst = @($fns) | Where-Object { $_.Name -eq 'Invoke-ClaudeFly' } | Select-Object -First 1
+Assert-True "cwd: Invoke-ClaudeFly 存在且形参含 `$cwd" (
+    $flyAst -and $flyAst.Extent.Text -match '\$cwd\s*=\s*''''')
+Assert-True "cwd: Invoke-ClaudeFly 体内**显式**设 WorkingDirectory(不设则继承控制台 cwd)" (
+    $flyAst -and $flyAst.Extent.Text -match '\$psi\.WorkingDirectory\s*=\s*\$cwd')
+$cliText = [IO.File]::ReadAllText($cli)
+$cwdCallSites = ([regex]::Matches($cliText, 'Invoke-ClaudeFly -argStr [^\r\n]*-budgetS \$\w+(?:Timeout)? -cwd \$projRoot')).Count
+Assert-True "cwd: 两个本地调用点(首跑 + resume)都传 -cwd `$projRoot(实测 $cwdCallSites 处)" ($cwdCallSites -eq 2)
+
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
 exit $(if ($fail -eq 0) { 0 } else { 1 })
