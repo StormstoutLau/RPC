@@ -27,7 +27,7 @@ Invoke-Expression $fn.Extent.Text   # 定义函数到当前会话
 # 它们是**纯函数**(只吃 $accept/$goldenActive/卡 subjects, 不碰站、不碰文件系统)
 # ⇒ 可离线单测; 这正是"派发路径改动"能被验证而不用每次都真派发的关键。
 # O-15/AUDIT (2026-09-21): 追加提取 claude 按路基线(Get-ClaudeFrameworkSubjects) 与 fallback 判定 (Test-FallbackEligible)。
-foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-FallbackEligible', 'Test-CtxOverflowError', 'Resolve-CtxOverflowCode', 'Get-SensitivityBackendReject', 'Resolve-ClaudeBudget', 'Resolve-LocalBash', 'Invoke-LocalBashCmd')) {
+foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-FallbackEligible', 'Test-CtxOverflowError', 'Resolve-CtxOverflowCode', 'Resolve-ClaudeStationCandidates', 'Get-SensitivityBackendReject', 'Resolve-ClaudeBudget', 'Resolve-LocalBash', 'Invoke-LocalBashCmd')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -298,6 +298,41 @@ Assert-True "ctxcode: 未命中 ⇒ 原码不变(6/1/0/9 抽查)" (
     ((Resolve-CtxOverflowCode -code 1 -isOverflow $false) -eq 1) -and
     ((Resolve-CtxOverflowCode -code 0 -isOverflow $false) -eq 0) -and
     ((Resolve-CtxOverflowCode -code 9 -isOverflow $false) -eq 9))
+
+# --- P3 (2026-09-21): claude 备路**站上化**（按 sensitivity 分流） ---
+# 目标: `local-only` 卡的 claude 通道必须跑在**站上**并打**站上本地引擎**(物理不出网);
+#   站上不可用 ⇒ **fail-closed**(绝不退回主控本地 —— 那会打云端 OpenRouter = 出网)。
+# 选站纯函数: **优先排除刚 rc=6 的那一站**(它的引擎可能已被 wedge), 但不丢掉它(放最后)。
+Assert-True "station: avoid='B' ⇒ 异站优先且被排除者排最后 (A,C,B)" (
+    ((Resolve-ClaudeStationCandidates -Avoid 'B' -Stations @('A', 'B', 'C')) -join ',') -eq 'A,C,B')
+Assert-True "station: avoid='' ⇒ 原序 (A,B,C)" (
+    ((Resolve-ClaudeStationCandidates -Avoid '' -Stations @('A', 'B', 'C')) -join ',') -eq 'A,B,C')
+Assert-True "station: 只有被排除的那一站 ⇒ **仍返回它**(不因排除而丢候选)" (
+    ((Resolve-ClaudeStationCandidates -Avoid 'A' -Stations @('A')) -join ',') -eq 'A')
+Assert-True "station: 候选为空 ⇒ 空数组(调用方据此 fail-closed)" (
+    (@(Resolve-ClaudeStationCandidates -Avoid 'A' -Stations @()).Count) -eq 0)
+# 结构性断言(安全带): ① 判据按**后端属性**参数化(P2 的核心), 不再硬编码 $true;
+#   ② 站上不可用时**明确 return 4**(fail-closed)且**不**回退本地 spawn。
+Assert-True "station: 判据已参数化 -backendEgress (-not \$useStation)(P2 的核心)" (
+    $content.Contains('-backendEgress (-not $useStation)'))
+Assert-True "station: 分流判据 = sensitivity eq 'local-only'" (
+    $content.Contains('$useStation = ($sens -eq ''local-only'')'))
+Assert-True "station: 站上不可用 ⇒ fail-closed(有 REJECT 行 + return 4, 且该分支内无 Invoke-ClaudeFly 回退)" (
+    $content.Contains('REJECT local-only-no-station-engine (exit 4)'))
+$iNoSt = $content.IndexOf('REJECT local-only-no-station-engine')
+$iBlk  = $content.IndexOf('$useStation = ($sens -eq ''local-only'')')
+$blkSeg = $content.Substring($iBlk, $iNoSt - $iBlk)
+Assert-True "station: fail-closed 分支里**没有**主控本地 spawn(回退=出网)" (
+    -not ($blkSeg -match 'Invoke-ClaudeFly\s'))
+Assert-True "station: 两处 runner 调用点都已分流(首跑 + resume)" (
+    ([regex]::Matches($content, 'Invoke-ClaudeFly-Station -hostName')).Count -ge 2)
+# ⚠ 位置断言 —— 2026-09-21 **实弹踩到的顺序 bug**: 初版把 `$stPref` 块放在 `$useStation` 赋值
+#   **之前** ⇒ PS 未定义变量为 `$null` ⇒ `if ($useStation)` 为假 ⇒ 走旧的 `REJECT claude-station`
+#   分支 ⇒ `local-only` 卡被旧语义误拒。**夹具当时全绿**(它只查"串在不", 查不出顺序) ⇒ 补此条。
+$iUse = $content.IndexOf('$useStation = ($sens -eq ''local-only'')')
+$iPref = $content.IndexOf("`$stPref = ''")
+Assert-True "station: \$useStation 赋值**早于** \$stPref 使用(实弹踩到的顺序 bug)" (
+    $iUse -gt 0 -and $iPref -gt 0 -and $iUse -lt $iPref)
 # 位置断言(结构性, 守"四处一致"的不变式): 检测必须**早于**台账 `$line = …$code…` —— 否则
 #   台账说 6、进程返 14(以及 run.json/TASK_DONE 与 fallback 判定各自打架) ⇒ 自己造一次"rc 不可信"。
 $iCtx = $content.IndexOf('Test-CtxOverflowError $agentOutText')
@@ -323,10 +358,16 @@ Assert-True "reject: public + 出网后端 => 放行(public 是唯一无闸档)"
     (Get-SensitivityBackendReject -sensitivity 'public' -backendEgress $true) -eq '')
 Assert-True "reject: 缺省(空 sensitivity) + 出网后端 => 放行(与既有三处闸'缺省=public'一致)" (
     (Get-SensitivityBackendReject -sensitivity '' -backendEgress $true) -eq '')
-# 覆盖(结构): 判据必须在**两个入口都真被调用** —— 只判一处会漏(这正是本洞的成因)
-$callSig = 'Get-SensitivityBackendReject -sensitivity $sens -backendEgress $true'
-Assert-True "reject: 判据在 Invoke-Task-Claude(直接入口)与 AUTO_FALLBACK(兜底入口)两处均被调用" (
-    ([regex]::Matches($content, [regex]::Escape($callSig))).Count -ge 2)
+# 覆盖(结构): 判据必须在**两个入口都真被调用** —— 只判一处会漏(这正是本洞的成因)。
+# ⚠ P3 (2026-09-21) 更新: 原断言要求两处**都**是 `-backendEgress $true`(P0 期的实现细节)。
+#   分流后**有意**不同: 兜底入口起的 claude 在**主控本地**(=云端=出网) ⇒ `$true`;
+#   直接入口按**后端属性** ⇒ `(-not $useStation)`(站上本地时不出网)。故断言改为:
+#   "两处都调判据" + "两种输入形式都在"(后者正是 P2 的核心, 单列一条以防被改回硬编码)。
+Assert-True "reject: 判据在两个入口均被调用(直接入口 + 兜底入口)" (
+    ([regex]::Matches($content, [regex]::Escape('Get-SensitivityBackendReject -sensitivity $sens -backendEgress'))).Count -ge 2)
+Assert-True "reject: 兜底入口用 \$true(主控本地=出网), 直接入口用 (-not \$useStation) 按后端属性" (
+    $content.Contains('Get-SensitivityBackendReject -sensitivity $sens -backendEgress $true') -and
+    $content.Contains('Get-SensitivityBackendReject -sensitivity $sens -backendEgress (-not $useStation)'))
 Assert-True "reject: 两条路径的拒绝串可分辨路径(claude-direct / fallback 均在)" (
     $content.Contains('(claude-direct, $id)') -and $content.Contains('(fallback, $fbModel)'))
 
