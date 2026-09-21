@@ -1945,6 +1945,16 @@ function Invoke-Task-Claude {
         Write-Host "REJECT claude-not-installed (exit 13) - run: npm i -g @anthropic-ai/claude-code, then: claude auth login"
         return 13
     }
+    # O-15/AUDIT (2026-09-21): 判据需要本地 **Git Bash**(bash 语义, 见 Resolve-LocalBash 的定案)。
+    #   **提前**拒绝(= 在跑 agent 之前, 与 claude-not-installed 同处): 否则会白跑完整轮次才发现
+    #   无法判 accept。刻意**不**退回 PowerShell `Invoke-Expression` —— 那正是本次修掉的 bug
+    #   (bash 语义的命令在 PS 里必失败 ⇒ 判据假红灯)。缺 Git Bash 是**环境不全**, 该明确拒绝。
+    $bashPath = Resolve-LocalBash
+    if (-not $bashPath) {
+        Write-Host "REJECT local-bash-missing (exit 13) - 未找到 Git Bash(C:\Program Files\Git\bin\bash.exe)。"
+        Write-Host "  卡的 accept/accept-golden 是 **bash 语义**, 备路必须用 Git Bash 判(不退回 PowerShell/WSL)。"
+        return 13
+    }
     if (-not $card) { Write-Host 'task requires --card <task.md>'; return 2 }
     if (-not (Test-Path $card)) { throw "card not found: $card" }
     $projRoot = $Script:PROJECTS[$proj]
@@ -2088,19 +2098,27 @@ function Invoke-Task-Claude {
         if ($h -ne $goldenSha) {
             Write-Host "GOLDEN_TAMPERED"; $acceptGoldenOk = 0
         } else {
-            try { Push-Location $projRoot; try { Invoke-Expression $g.cmd } finally { Pop-Location } } catch { $acceptGoldenOk = 0 }
+            # O-15/AUDIT (2026-09-21): 与 accept **同语义** —— 本地 Git Bash, cwd=projRoot。
+            #   原为 PowerShell `Invoke-Expression`(与 accept 同一个 bug, 故一并修:
+            #   "只修一半的修复看起来是完整的")。输出落 `accept-golden-output.txt` ⇒ 备路首次
+            #   也有黄金门**输出证据**(此前该件在备路恒不存在)。
+            $garc = Invoke-LocalBashCmd -bashPath $bashPath -cmd $g.cmd -cwd $projRoot -logFile $accGoldTxt
+            if ($garc -ne 0) { $acceptGoldenOk = 0 }
         }
         if ($acceptGoldenOk -eq 1) { Write-Host "ACCEPT_GOLDEN_OK=1" } else { Write-Host "ACCEPT_GOLDEN_OK=0" }
     }
     # ---- accept gate (A14) ----
+    # O-15/AUDIT (2026-09-21): 用**本地 Git Bash**跑(**bash 语义**, 与主路一致; 见 Resolve-LocalBash)。
+    #   输出逐行落 `accept-output.txt`(与主路契约一致) —— 备路此前用 `*> $null` **丢弃输出**,
+    #   只留 rc, 出 bug 无从复核。
     $acceptOk = 1
     if ($accept.Count -gt 0) {
+        Write-Host "ACCEPT_MODE=bash-local ($bashPath, cwd=$projRoot)"
         $i = 0
         foreach ($c in $accept) {
             $i++
             Add-Content $accTxt "=== ACCEPT_CMD[$i] >>> $c"
-            $arc = 0
-            try { Push-Location $projRoot; try { Invoke-Expression $c *> $null } finally { Pop-Location } } catch { $arc = 1 }
+            $arc = Invoke-LocalBashCmd -bashPath $bashPath -cmd $c -cwd $projRoot -logFile $accTxt
             if ($arc -ne 0) { $acceptOk = 0 }
             Add-Content $accTxt "--- ACCEPT_RC[$i]=$arc"
         }
@@ -2215,6 +2233,41 @@ function Resolve-ClaudeSpawn {
     $native = Join-Path $base 'node_modules\@anthropic-ai\claude-code\bin\claude.exe'
     if (Test-Path $native) { return $native }
     return $src                                                # 兜底(可能复现旧 exec 失败)
+}
+
+function Resolve-LocalBash {
+    # O-15/AUDIT (2026-09-21): 本地 **Git Bash** —— 供 claude 本地备路执行卡的判据命令。
+    #   语义决定(定案): 卡里的 `accept` / `accept-golden` **一律是 bash 语义** —— 主路在**远端 bash**
+    #   跑, 备路在**本地 Git Bash** 跑; 两条路只差**执行机器与 cwd**(远端 Linux 工作区 vs 本地 projRoot),
+    #   **不差 shell**。为什么必须统一: 备路原先用 PowerShell `Invoke-Expression` 跑 ⇒ 实测
+    #   `ACCEPT_CMD[1] >>> true` 得 `ACCEPT_RC=1`(`true` 不是 PS 命令) ⇒ **即使 claude 成功,
+    #   accept 也必判失败** ⇒ 备路等于白修(与"exec 级失败"同族的**判据级失败**)。
+    #   ⚠ 刻意**不走 PATH 的 `bash`** —— 本机实测 PATH 命中 `C:\Windows\system32\bash.exe`(**WSL**)。
+    #   WSL 在**另一个文件系统 + 另一套 cwd 映射**里执行, 与 Git Bash **不是同一环境**: 拿它跑卡里的
+    #   accept 会在错误的目录语义下判 —— "看起来跑了", 判的却不是这里的东西(同"恒真/恒假判据"族)。
+    #   Git Bash 本就是**项目硬前提**(S1: `$Script:GNU_TAR` 直接指向 Git 的 tar; 远端脚本全 `.sh`)。
+    foreach ($c in @('C:\Program Files\Git\bin\bash.exe',
+                     'C:\Program Files\Git\usr\bin\bash.exe',
+                     'C:\Program Files (x86)\Git\bin\bash.exe')) {
+        if (Test-Path $c) { return $c }
+    }
+    return ''      # 缺失 ⇒ 调用方必须**显式拒绝**(绝不静默换 WSL/PowerShell)
+}
+
+function Invoke-LocalBashCmd {
+    # 在本地 Git Bash 里跑**一条**判据命令, cwd = $cwd; 返回其 exit code(= 判据 rc)。
+    #   输出(含 stderr)逐行追加到 $logFile ⇒ 与主路 `accept-output.txt` 的契约对齐
+    #   (主路是 `>> out/.accept-output.txt 2>&1`; 备路此前**只记 rc 不记输出**, 出 bug 无从复核)。
+    param([string]$bashPath, [string]$cmd, [string]$cwd, [string]$logFile)
+    $rc = 0
+    Push-Location $cwd
+    try {
+        & $bashPath -c $cmd 2>&1 | Add-Content -Path $logFile -ErrorAction SilentlyContinue
+        if ($LASTEXITCODE -ne 0) { $rc = $LASTEXITCODE }
+    }
+    catch { $rc = 1 }
+    finally { Pop-Location }
+    return $rc
 }
 
 function Invoke-ClaudeFly {

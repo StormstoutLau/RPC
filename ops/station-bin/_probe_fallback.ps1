@@ -24,7 +24,7 @@ $fns = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.
 foreach ($nm in @('Get-FrontMatter','Get-CardIdentity','Test-CardSafetyDeclared','Get-Sha256Text',
                   'Get-Sha256Lines','Get-NumOr','Invoke-Scrubber','Merge-EvidenceSubjects',
                   'Get-FrameworkSubjects','Get-ClaudeFrameworkSubjects','Test-FallbackEligible',
-                  'Resolve-ClaudeSpawn','Invoke-ClaudeFly','Invoke-Task-Claude')) {
+                  'Resolve-ClaudeSpawn','Invoke-ClaudeFly','Resolve-LocalBash','Invoke-LocalBashCmd','Invoke-Task-Claude')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found" }
     Invoke-Expression $f.Extent.Text
@@ -100,6 +100,8 @@ model: claude
 sensitivity: public
 timeout_s: 5
 continue-timeout-s: 3
+accept:
+  - true
 ---
 ## probe
 reply with 'PASS'
@@ -160,6 +162,20 @@ else {
     $rd = Join-Path $outRoot $claudeTs
     foreach ($art in @('stderr.txt','card.md','prompt.txt','.agent-run.json')) {
         if (Test-Path (Join-Path $rd $art)) { Write-Host ("PASS  archived " + $art) } else { Write-Host ("FAIL  missing " + $art); $ok = $false }
+    }
+    # (4b) accept 的 shell 语义(O-15/AUDIT 2026-09-21): 备路用**本地 Git Bash**判 —— 卡的 accept 是
+    #      bash 语义(`true`), 必须 rc=0。**回归检测**: 若退回 PowerShell `Invoke-Expression`,
+    #      `true` 不是 PS 命令 ⇒ rc=1 ⇒ accept.passed=false ⇒ 本断言 FAIL(这就是本次修的 bug)。
+    if ($claudeRun.accept.passed -eq $true) {
+        Write-Host 'PASS  claude accept.passed=true (bash 语义判据在本地 Git Bash 下通过)'
+    } else {
+        Write-Host ('FAIL  claude accept.passed=' + $claudeRun.accept.passed + ' (期望 true; 退回 PS 会得 false)'); $ok = $false
+    }
+    $aot = Join-Path $rd 'accept-output.txt'
+    if ((Test-Path $aot) -and ((Get-Content $aot -Raw) -match 'ACCEPT_RC\[1\]=0')) {
+        Write-Host 'PASS  accept-output.txt 记 ACCEPT_RC[1]=0'
+    } else {
+        Write-Host 'FAIL  accept-output.txt 缺失 或 ACCEPT_RC[1] != 0'; $ok = $false
     }
     # (5) attach shape: array (may be empty for no-attach); must be present as array
     $att = $claudeRun.attach
