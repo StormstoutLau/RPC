@@ -1,15 +1,19 @@
 # D6 备路站上化 + sensitivity 设闸 —— 调研与方案（2026-09-21）
 
-> **状态：调研 + 方案 + P0 已实施（2026-09-21 当日）。** 本报告的起点是一条**已生效的策略洞**（§0.1）；**P0 止血已落地并双向自证**（§4），**P1–P5 未实施**。
+> **状态：调研 + 方案 + P0 已实施 + P1 部分实施（2026-09-21 当日）。** 本报告的起点是一条**已生效的策略洞**（§0.1）。**P0 止血已落地并双向自证**；**P1 的核对面已完成并新增一条硬闸**（§4.2）；**P2–P5 未实施**。
 >
-> **P0 落地摘要（详见 §4）**：新增唯一判据 `Test-SensitivityEgressAllowed`（`agent-cli.ps1` L905，纯函数：`local-only` × 后端出网性），并在**两个出网入口各判** —— `AUTO_FALLBACK` 调用点（L1772，**拒绝兜底**）+ `Invoke-Task-Claude`（L2039）。自证：夹具 60/60；实弹探针两条路径均 `rc=4` 且 claude run 计数不增；**变异自证**（把判据短路 ⇒ 两条路径各真跑出一个 claude run，探针 FAIL）证明**洞是真的、探针不是结构性失明**。
+> **落地摘要（详见 §4）**
+> - **P0**（§4.1）：判据收敛为唯一纯函数（`local-only` × 后端出网性），**两个出网入口各判** —— `AUTO_FALLBACK` 调用点（**拒绝兜底**）+ `Invoke-Task-Claude`。
+> - **P1**（§4.1）：隐私开关**不可机读**（`/api/v1/key` 不含、`is_management_key=false`、`/settings`·`/privacy` 实测 404）；**A 站「Allow free endpoints that train on request data」= 开**（用户读 dashboard）；实测**免费档端点全部训练/不可 ZDR**，付费档有合规端点 ⇒ **决定"先不关开关"，改为把 `sanitized` 挡在备路之外**（判据扩展为 sensitivity × **后端属性**，含 `sanitized+trains`；4 例 × 2 规则**变异自证**）。
+> - 自证总账：夹具 **63/63**；实弹探针 4 例（2 类 sensitivity × 2 条路径）全 `rc=4` 且 claude run 计数不增；**两条规则各自变异自证**（拆哪条只红对应 2 例）；`public` 原路径未被破坏。全量门禁 PASS。
+> - **报告全文**：[OpenRouter 数据策略与隐私开关核对](../security/2026-09-21_OpenRouter数据策略与隐私开关核对.md)。
 >
 > **结论先行**
 > 1. **⚠ 发现一个已生效的策略洞（最高优先）**：`sensitivity: local-only` 的硬闸**只拦 `opencode/*` 型号**（3 处），而 **`Invoke-Task-Claude` 走云端 OpenRouter 却没有这道闸** ⇒ 今天它从"不可用（Not logged in）"变为"**真能用**"之后，**`local-only` 卡的 prompt 可以实际出网**。这破了 [DESIGN.md](../../spec/d6-agent-standard/DESIGN.md) §358 的不变式（"local-only 的 prompt 字节永不离开主控站→站内本地模型路径"）。
 > 2. **影响面大**：`spec/d6-agent-standard/test-cards/` 里 **20/25 张卡是 `local-only`**（`dogfood-*`、`echo`、`o13-sympy`、`smoke-*`、`fallback-deadlock` 等）⇒ 不是边角情形。
 > 3. **推荐架构（一举解决待做 2 与 3）**：**把 claude 备路整体搬到"站上执行"** —— ① 绕开主控 Trae 沙箱（工具调用被拦，[2026-09-14 §8.5](2026-09-14_OpenRouter接入与agentic-harness门禁调研.md) 已实证）；② **`local-only` 天然不出网**（站上 claude 现指 `http://127.0.0.1:8080` 本地引擎，实测 `apiKeyHelper` 只读站上 `unsloth.key`）。**一个改动同时闭合两条。**
 > 4. **不推荐**"站内多 key 代理"（待做 1）：会把每站明文面 **1→3 把**，与 [ADR-0003 D5](../../adr/ADR-0003-OpenRouter密钥与egress路由管理.md) 的「明文面收敛」直接冲突；且项目**已退役 LiteLLM**，再加常驻网关与既有取向相悖。收益（RPM 级无缝切换）在当前"按站独立账户 + 已有借用机制"下很有限。
-> 5. **补充防线（低成本，建议一并做）**：核对 OpenRouter 隐私设置里**"以日志换 1% 折扣"的 opt-in 必须关**；已确认其默认**不记录** prompt/completion。
+> 5. **补充防线（P1 已做一部分）**：隐私开关**不可机读**；**免费档开关实测为"开"**（备路两型号都是 `:free`）⇒ 新增 `sanitized` 硬闸（§4.2）。"以日志换 1% 折扣"的 opt-in **仍需用户读 dashboard 确认**（API 读不到）。
 
 ---
 
@@ -112,8 +116,8 @@
 
 | 序 | 项 | 类型 | 说明 |
 |---|---|---|---|
-| **P0** | **止血**：在 `Invoke-Task-Claude` + `AUTO_FALLBACK` 调用点各加 `local-only` 拒绝（双点，~数行） | 代码 | ✅ **2026-09-21 已实施**（判据收敛为唯一纯函数 `Test-SensitivityEgressAllowed`，见本节末「P0 落地与自证」） |
-| P1 | 核对 OpenRouter 隐私设置（opt-in 日志必须关）+ 登记 | 运维 | 低成本 |
+| **P0** | **止血**：在 `Invoke-Task-Claude` + `AUTO_FALLBACK` 调用点各加 `local-only` 拒绝（双点，~数行） | 代码 | ✅ **2026-09-21 已实施**（判据收敛为唯一纯函数，见 §4.1） |
+| P1 | 核对 OpenRouter 隐私设置（opt-in 日志必须关）+ 登记 | 运维 | 🟡 **部分完成**：核对面已做（**开关不可机读** + 免费档实测为"开" + 免费/付费档策略矩阵），并**顺带落地 `sanitized` 硬闸**（§4.2）。**待办**：① 「以日志换 1% 折扣」的实际状态需用户读 dashboard 确认。全文见[核对报告](../security/2026-09-21_OpenRouter数据策略与隐私开关核对.md) |
 | P2 | 判据统一：`local-only` 闸改为"后端 `egress` 属性" | 代码 | 结构性，防"再加云端后端又漏" |
 | P3 | claude 备路**站上化**（ssh + 脚本落盘；后端按 sensitivity 分流；选站排除死锁站；fail-closed） | 代码 | 本方案主体 |
 | P4 | 备路独立预算 `fallback-timeout-s` | 代码 | 独立缺陷，可与 P3 同批 |
@@ -126,41 +130,47 @@
 - **还原**：改回后原路径复跑 PASS
 - 全程过阶段 0.5 夹具 + 全量门禁
 
-### 4.1 P0 落地与自证（2026-09-21 已实施）
+### 4.1 P0 + P1 落地与自证（2026-09-21 已实施）
 
-**改动**（`ops/station-bin/agent-cli.ps1`）
+**改动**（`ops/station-bin/agent-cli.ps1`）—— P0（洞①）与 P1 的 `sanitized` 闸（洞②）**是同一处判据的扩展**，故合并在本节。
 
 | 位置 | 内容 |
 |---|---|
-| L905 `Test-SensitivityEgressAllowed` | **唯一判据**（纯函数）：`local-only` × 后端出网性 ⇒ 拒/放行。刻意做成纯函数（不碰站、不碰文件系统）⇒ 夹具可按名提取离线单测（与 `Test-FallbackEligible` 同族） |
-| L1772 `AUTO_FALLBACK` 调用点 | **拒绝兜底**（fail-closed，不是"兜底到别处"）⇒ `rc=4` |
-| L2039 `Invoke-Task-Claude` | 直接入口 ⇒ `REJECT local-only+claude-egress` ⇒ `rc=4` |
+| L905 `Get-SensitivityBackendReject` | **唯一判据**（纯函数，返回 '' = 放行 / 否则**原因 token**）：规则① `local-only × 会出网 ⇒ 'local-only+egress'`；规则② `sanitized × 可能训练/发布 ⇒ 'sanitized+trains'`；`public` 恒放行。做成纯函数（不碰站、不碰文件系统）⇒ 夹具可按名提取离线单测（与 `Test-FallbackEligible` 同族） |
+| `AUTO_FALLBACK` 调用点 | **拒绝兜底**（fail-closed，不是"兜底到别处"）⇒ `rc=4`；拒绝串带 tag `(fallback, <id>)` |
+| `Invoke-Task-Claude` | 直接入口 ⇒ `rc=4`；拒绝串带 tag `(claude-direct, <id>)` |
 
-**为何必须双点**：两条路径是**两个独立入口**（前者守"卡直接指定 claude"，后者守"主路死锁后自动转发"）—— 只判一处会漏，这正是本洞的成因。
-**为何 `$backendEgress` 现在硬编码 `$true`**：`Invoke-Task-Claude` 是**主控本地 spawn**，其 `ANTHROPIC_BASE_URL`（主控 `~/.claude/settings.json`）= `https://openrouter.ai/api` ⇒ 确实出网。（**站上** claude 指 `127.0.0.1:8080` 本地引擎、**不出网** —— 那是 P3 的目标形态，不走这条函数。）P2 会把它换成"按后端 `egress` 属性查表/实测"。
+**为何必须双点**：两条路径是**两个独立入口**（一个守"卡直接指定 claude"，一个守"主路死锁后自动转发"）—— 只判一处会漏，这正是洞①的成因。
+**为何判据是"后端属性"而非"型号前缀"**：同一型号在不同通道下属性不同 —— `gpt-oss-20b` 走站上本地引擎（不出网/不训练），而 `claude` 走主控本地 spawn = 云端 OpenRouter 的 `:free` 档（**出网 + 可能训练/公开**）。旧判据把"出网"等同于 `^opencode/` ⇒ 整个 claude 备路失守。`$backendEgress` 现硬编码 `$true`（`Invoke-Task-Claude` = 主控本地 spawn，`ANTHROPIC_BASE_URL` = `https://openrouter.ai/api`）；`$backendTrains` 由 `$id -match ':free'` 派生（**代理判据**：P1 实测免费档端点全部训练）。两者都是 P2 要换成"按后端属性查表"的地方。
 **`AUTO_FALLBACK` 处为何返回 4 而不是原 `rc=6`**：刻意让"策略拒绝"盖过"超时" —— 否则调用方只看到 timeout 会**换站重试**（每次重试都再跑一遍本地引擎），策略事件被埋掉。原 rc 已在上一行 `TASK_DONE … exit=$code` 打印，未丢失。
 
 **双向自证结果**
 
 | # | 项 | 结果 |
 |---|---|---|
-| 1 | 阶段 0.5 夹具 `_fm_golden_test.ps1` | **60/60 PASS**（新增 5 条真值表 + 2 条覆盖） |
-| 2 | 实弹探针 `_probe_fallback.ps1`（驱**真实** `Invoke-Task`）**正**向 | public 卡：兜底触发、证据面 v2、`accept` 在 Git Bash 下 `ACCEPT_RC[1]=0` ⇒ 全 PASS（P0 未破坏原路径） |
-| 3 | 同上 **负（路径①）** `local-only` + `-cli claude` | `REJECT local-only+claude-egress … exit 4`，**claude run 计数 1→1 不增**（= 未发出请求） |
-| 4 | 同上 **负（路径②）** `local-only` + 站上本地型号 + `-AutoFallback` | `AUTO_FALLBACK: opencode rc=6 -> REFUSED` + `REJECT local-only+egress-fallback exit 4`，**claude run 计数不增** |
-| 5 | **变异自证**（把判据短路成 `return $true` 后重跑） | 两条路径**各真跑出一个 claude run**（rc 从 4 变 6，即**真发出境请求**）且探针 **FAIL**；还原后 sha256 逐字节回到 `D00BBD5B…` |
-| 6 | 全量门禁 `rpc.ps1 check` | 见提交信息（15 绿 / 1 黄[已登记漂移] / 0 红） |
+| 1 | 阶段 0.5 夹具 `_fm_golden_test.ps1` | **63/63 PASS**（真值表 7 条 + 覆盖 3 条 + 备路型号仍为 `:free` 的前提断言） |
+| 2 | 实弹探针正向（`public` 卡） | 兜底触发、证据面 v2、`accept` 在 Git Bash 下 `ACCEPT_RC[1]=0` ⇒ **原路径未被破坏** |
+| 3 | 负例 **A**：`local-only` + `-cli claude`（直接入口） | `REJECT local-only+egress (claude-direct, …)`，`rc=4`，claude run 计数**不增** |
+| 4 | 负例 **B**：`local-only` + 站上本地型号 + `AutoFallback`（兜底入口） | `REFUSED` + `REJECT local-only+egress (fallback, …)`，`rc=4`，**不增** |
+| 5 | 负例 **C**：`sanitized` + `-cli claude` | `REJECT sanitized+trains (claude-direct, …)`，`rc=4`，**不增** |
+| 6 | 负例 **D**：`sanitized` + 站上本地型号 + `AutoFallback` | `REFUSED` + `REJECT sanitized+trains (fallback, …)`，`rc=4`，**不增** |
+| 7 | **变异自证 × 2** | 拆规则① ⇒ 只 **A/B 红**（rc 4→6 且**各真跑出一个 claude run** = 真出境）；拆规则② ⇒ 只 **C/D 红**；均还原到逐字节一致 |
+| 8 | 全量门禁 `rpc.ps1 check` | 见提交信息（15 绿 / 1 黄[已登记漂移] / 0 红） |
 
-⇒ **第 3/4 条给出"未被拒时确实会出网"的反证（第 5 条）** —— 该洞**不是理论上的**，是**当时真能发出去的**。这也是"探针不是结构性失明"的自证（此前教训：stub 型探针曾对真实 bug 完全免疫）。
+⇒ 第 3–6 条 + 第 7 条合起来证明两件事：该风险**不是理论上的**（拆掉闸就真发请求），且**两条规则各自被独立覆盖**（不是"有个闸在跑"）。这也是"探针不是结构性失明"的自证（此前教训：stub 型探针曾对真实 bug 完全免疫）。
+
+**副作用（诚实记录）**：`sanitized` 卡的 `:free` 备路**现在被拒** ⇒ sanitized 卡若主路死锁**不再有云端兜底**，直接 `rc=4`。属有意的失败关闭；替代路见 §3.3③ 与 [P1 核对报告 §7](../security/2026-09-21_OpenRouter数据策略与隐私开关核对.md)。
 
 ## 5. 风险与诚实边界
-- **P0 只"止血"不"治本"**：现在两处 `$backendEgress` 是**硬编码 `$true`**，而判据的**根**（既有三处闸按型号前缀判"是否出网"）未动 ⇒ 下次再加一个云端后端**仍会漏一次**。治本是 P2。
-- **P0 的语义代价**：`local-only` 卡若主路死锁，现在**直接 `rc=4` 不再兜底**（原本会静默出网）。这是**有意**的：宁可失败关闭，不可静默外泄。但调用方需知道 `rc=4` 里可能含着一次"本该有的兜底"。
+- **P0/P1 只"止血"不"治本"**：两处 `$backendEgress` 是**硬编码 `$true`**、`$backendTrains` 靠 **`:free` 代理**，而判据的**根**（既有三处闸按型号前缀判"是否出网"）未动 ⇒ 下次再加一个云端后端**仍会漏一次**。治本是 P2。
+- **P0/P1 的语义代价**：`local-only` 卡主路死锁 ⇒ 直接 `rc=4` **不再兜底**（原本会静默出网）；`sanitized` 卡的 `:free` 备路**被拒** ⇒ 云端兜底归零。两者都是**有意**的失败关闭（宁可失败，不可静默外泄），但调用方需知道 `rc=4` 里可能含着一次"本该有的兜底"。
+- **`sanitized` 闸依赖"账户免费档允许训练 = 开"这一前提**（`:free` 代理判据的来源）：若哪天把该开关关掉，`:free` 请求会直接 404 ⇒ 备路先失败（**失败方向安全**），但那条代理判据届时**过严**，须重新审。
 - 站上化后**主控不再本地跑 claude** ⇒ 主控侧 `~/.claude/settings.json` 的 OpenRouter 配置（今天所改）**降级为"仅 review/research-lookup 使用"**，须在文档里同步，否则又是一处"文档与实况不符"
 - 站上跑 claude 会占用站上 CPU/内存（claude CLI 本身不重，但工具调用会跑构建/测试 ⇒ 与站上推理争资源）⇒ 需实测一次资源影响
 - `local-only` 的"不出网"是**本项目的策略要求**，非社区通行标准（社区多把 ZDR 当作"足够"）；本方案按**更严**的标准走
 
 ## 6. 关联
+- [OpenRouter 数据策略与隐私开关核对](../security/2026-09-21_OpenRouter数据策略与隐私开关核对.md)（**P1 全文**：三个开关 / 不可机读的证据 / 免费档 vs 付费档实测矩阵 / 关闭开关的影响 / `sanitized` 闸的决策）
 - [DESIGN.md §358 路由不变式](../../spec/d6-agent-standard/DESIGN.md)（被 §0.1 的洞破坏）
 - [ADR-0003 OpenRouter 密钥与 egress 路由管理](../../adr/ADR-0003-OpenRouter密钥与egress路由管理.md)（D5「明文面收敛」= §3.2 的否决依据）
 - [2026-09-14 OpenRouter 接入与 agentic-harness 门禁调研](2026-09-14_OpenRouter接入与agentic-harness门禁调研.md)（§8.5 主控沙箱实测；站上跑 claude 的先行实证）
