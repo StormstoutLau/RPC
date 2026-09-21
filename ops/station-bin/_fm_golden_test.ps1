@@ -27,7 +27,7 @@ Invoke-Expression $fn.Extent.Text   # 定义函数到当前会话
 # 它们是**纯函数**(只吃 $accept/$goldenActive/卡 subjects, 不碰站、不碰文件系统)
 # ⇒ 可离线单测; 这正是"派发路径改动"能被验证而不用每次都真派发的关键。
 # O-15/AUDIT (2026-09-21): 追加提取 claude 按路基线(Get-ClaudeFrameworkSubjects) 与 fallback 判定 (Test-FallbackEligible)。
-foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-FallbackEligible', 'Test-SensitivityEgressAllowed', 'Resolve-LocalBash', 'Invoke-LocalBashCmd')) {
+foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-FallbackEligible', 'Get-SensitivityBackendReject', 'Resolve-LocalBash', 'Invoke-LocalBashCmd')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -268,21 +268,33 @@ foreach ($rc in @(0, 1, 5, 9, 10, 12, 24, 13)) {
 }
 Assert-True "fallback: rc in {0,1,5,9,10,12,24,13} 均不触发(不掩盖真实错误)" $noFallback
 
-# --- P0 止血 (2026-09-21): local-only × 后端出网性(安全策略洞) ---
-# 洞: local-only 硬闸三处判据一律只判 `^opencode/`, 而 claude 备路(直接入口 + AUTO_FALLBACK
+# --- P0 止血 + P1 免费档闸 (2026-09-21): sensitivity × **后端属性** 硬闸 ---
+# 洞①(P0): local-only 硬闸三处判据一律只判 `^opencode/`, 而 claude 备路(直接入口 + AUTO_FALLBACK
 #   入口)无 sensitivity 判据 ⇒ local-only 卡的 prompt 可**实际出网**(破 DESIGN §358 不变式)。
-# 行为(真值表): 判据纯函数 —— 只有 local-only 撞上出网后端才拒
-Assert-True "egress: local-only + 出网后端 => 拒(false)" (-not (Test-SensitivityEgressAllowed -sensitivity 'local-only' -backendEgress $true))
-Assert-True "egress: local-only + 本地引擎 => 放行(true, 站上本地模型是合规后端)" (Test-SensitivityEgressAllowed -sensitivity 'local-only' -backendEgress $false)
-Assert-True "egress: sanitized + 出网后端 => 放行(只有 local-only 是硬闸)" (Test-SensitivityEgressAllowed -sensitivity 'sanitized' -backendEgress $true)
-Assert-True "egress: public + 出网后端 => 放行" (Test-SensitivityEgressAllowed -sensitivity 'public' -backendEgress $true)
-Assert-True "egress: 缺省(空 sensitivity) + 出网后端 => 放行(与既有三处闸'缺省=public'一致)" (Test-SensitivityEgressAllowed -sensitivity '' -backendEgress $true)
-# 覆盖(结构): 判据必须在**两个入口都真被调用** —— 只判一处会漏(这是本次洞的成因)
-$callSig = 'Test-SensitivityEgressAllowed -sensitivity $sens -backendEgress $true'
-Assert-True "egress: 判据在 Invoke-Task-Claude(直接入口)与 AUTO_FALLBACK(兜底入口)两处均被调用" (
+# 洞②(P1, 新登记): claude 备路两型号都是 **`:free`**, 而免费档端点**全部训练/不可 ZDR**
+#   (实测: `data_collection=deny` 与 `zdr` 均 404 `No endpoints found matching your data policy`)
+#   ⇒ `sanitized` 卡的 prompt 会进"可能训练/公开发布"的 provider ⇒ **脱敏 ≠ 同意进公开数据集**。
+# 判据纯函数, 返回 '' = 放行 / 否则**原因 token**(使证据行能指名哪条规则拦的):
+Assert-True "reject: local-only + 出网后端 => 'local-only+egress'" (
+    (Get-SensitivityBackendReject -sensitivity 'local-only' -backendEgress $true) -eq 'local-only+egress')
+Assert-True "reject: local-only + 本地引擎(不出网) => 放行" (
+    (Get-SensitivityBackendReject -sensitivity 'local-only' -backendEgress $false) -eq '')
+Assert-True "reject: sanitized + 可能训练的后端(:free) => 'sanitized+trains'" (
+    (Get-SensitivityBackendReject -sensitivity 'sanitized' -backendEgress $true -backendTrains $true) -eq 'sanitized+trains')
+Assert-True "reject: sanitized + 不训练的后端(付费/ZDR) => 放行" (
+    (Get-SensitivityBackendReject -sensitivity 'sanitized' -backendEgress $true -backendTrains $false) -eq '')
+Assert-True "reject: public + 出网 + 训练 => 放行(public 是唯一无闸档)" (
+    (Get-SensitivityBackendReject -sensitivity 'public' -backendEgress $true -backendTrains $true) -eq '')
+Assert-True "reject: 缺省(空 sensitivity) + 出网 + 训练 => 放行(与既有三处闸'缺省=public'一致)" (
+    (Get-SensitivityBackendReject -sensitivity '' -backendEgress $true -backendTrains $true) -eq '')
+# 覆盖(结构): 判据必须在**两个入口都真被调用** —— 只判一处会漏(这正是洞①的成因)
+$callSig = 'Get-SensitivityBackendReject -sensitivity $sens -backendEgress $true'
+Assert-True "reject: 判据在 Invoke-Task-Claude(直接入口)与 AUTO_FALLBACK(兜底入口)两处均被调用" (
     ([regex]::Matches($content, [regex]::Escape($callSig))).Count -ge 2)
-Assert-True "egress: 拒绝串在两条路径均存在(缺一即回归)" (
-    $content.Contains('REJECT local-only+claude-egress') -and $content.Contains('REJECT local-only+egress-fallback'))
+Assert-True "reject: 两条路径的拒绝串可分辨路径(claude-direct / fallback 均在)" (
+    $content.Contains('(claude-direct, $id)') -and $content.Contains('(fallback, $fbId)'))
+Assert-True "reject: 兜底入口先 Resolve-Model 取 id 再判属性(不能只看别名)" (
+    $content.Contains('$fbId = if ($fbR) { $fbR[''id''] } else { $fbModel }'))
 
 # --- O-15/AUDIT (2026-09-21): claude 本地备路的判据 shell 语义 = bash(本地 Git Bash) ---
 # 定案: 卡的 accept/accept-golden **一律 bash 语义**; 两条路只差执行机器与 cwd, 不差 shell。
@@ -310,6 +322,11 @@ Assert-True "route: claude/claude-opus 仍 cli='claude'" ("$($rtc.cli)" -eq 'cla
 # env AGENT_FALLBACK_MODEL 覆盖需能解析 ⇒ 必须有 full-id 直传条目
 Assert-True "route: 备路型号有 full-id 直传条目(env AGENT_FALLBACK_MODEL 才能解析)" (
     $Script:ROUTE_TABLE.ContainsKey("$($rtc.id)"))
+# ⚠ P1 免费档闸的**前提** (2026-09-21): `$backendTrains` 由 `$id -match ':free'` 派生, 而该代理的
+#   依据是"免费档端点实测全部训练(account 开关 A 站为开)"。若谁把备路换成**付费型号**, 这条会亮
+#   —— 那时必须**重新审**"sanitized 是否还该被拦"(而不是让旧判据静默失效)。
+Assert-True "route: 备路两型号均为 :free(⇒ backendTrains=true 的代理依据成立)" (
+    "$($rtc.id)" -match ':free' -and "$($rto.id)" -match ':free')
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"

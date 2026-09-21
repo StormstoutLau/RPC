@@ -5,9 +5,10 @@
 # claude CLI is installed but UNAUTHENTICATED in this env => the backup run FAILS, but
 # the v2 evidence (evidence_manifest + attach array + stderr/card/prompt archive) must
 # still be emitted => proves "evidence is judgeable on a real failure", not faked.
-# P0 (2026-09-21): also drives the **sensitivity egress gate** negatives - local-only cards must be
-# REJECTED (rc=4) on BOTH outbound paths (direct -cli claude, and AUTO_FALLBACK) with NO claude run
-# produced (the outbound-side evidence). Mutation-tested: removing the gate makes both cases FAIL.
+# P0+P1 (2026-09-21): also drives the **sensitivity x backend** hard gate - 4 cases over
+# (local-only | sanitized) x (direct -cli claude | AUTO_FALLBACK). All 4 must be REJECTED (rc=4)
+# with NO claude run produced (that count is the outbound-side evidence). Mutation-tested: dropping
+# either rule turns exactly its own 2 cases red while the other 2 stay green.
 # Exit: 0 = pass, 1 = fail. Comments kept ASCII to avoid PS5.1 BOM/GBK parse traps.
 # SilentlyContinue: bare collect scp to an OFFLINE site returns nonzero; under EAP=Stop that
 # would throw before the fallback gate is reached. This is the known BatchMode OPEN-ISSUE
@@ -27,7 +28,7 @@ $fns = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.
 foreach ($nm in @('Get-FrontMatter','Get-CardIdentity','Test-CardSafetyDeclared','Get-Sha256Text',
                   'Get-Sha256Lines','Get-NumOr','Invoke-Scrubber','Merge-EvidenceSubjects',
                   'Get-FrameworkSubjects','Get-ClaudeFrameworkSubjects','Test-FallbackEligible',
-                  'Test-SensitivityEgressAllowed',
+                  'Get-SensitivityBackendReject',
                   'Resolve-ClaudeSpawn','Invoke-ClaudeFly','Resolve-LocalBash','Invoke-LocalBashCmd','Invoke-Task-Claude')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found" }
@@ -207,22 +208,27 @@ if (Test-Path $rj2) { $cli2 = (Get-Content $rj2 -Raw | ConvertFrom-Json).cli }
 if ($code2 -eq 6 -and $cli2 -eq 'opencode') { Write-Host 'PASS  gate-off: returned 6, newest run cli=opencode (no fallback)' }
 else { Write-Host ("FAIL  gate-off: code=" + $code2 + " newest cli=" + $cli2); $ok = $false }
 
-# === P0 止血自证 (2026-09-21, 安全策略洞): local-only **不得经任一路径出网** ===
-# 洞: 既有三处闸只判 `^opencode/`(把"出网"等同于"opencode/*"), 而 claude 备路(主控本地 spawn
-#   → ANTHROPIC_BASE_URL=云端 OpenRouter)**没有** sensitivity 判据 ⇒ local-only 卡的 prompt 可
-#   实际出网(破 DESIGN §358 路由不变式)。两条路径各自是一条独立入口, 故**两条都要自证**。
+# === 硬闸自证 (2026-09-21): sensitivity × **后端属性**, 两条出网路径各自判 ===
+# 洞①(P0): 既有三处闸只判 `^opencode/`(把"出网"等同于"opencode/*"), 而 claude 备路(主控本地
+#   spawn → ANTHROPIC_BASE_URL=云端 OpenRouter)**没有** sensitivity 判据 ⇒ local-only 卡的
+#   prompt 可**实际出网**(破 DESIGN §358 路由不变式)。
+# 洞②(P1): claude 备路两型号都是 **`:free`**, 而免费档端点**全部训练/不可 ZDR**(P1 实测:
+#   `data_collection=deny` 与 `zdr` 均 404 `No endpoints found matching your data policy`)
+#   ⇒ sanitized 卡的 prompt 会进"可能训练/公开发布"的 provider。**脱敏 ≠ 同意进公开数据集**。
+# 两条路径(直接入口 / 自动兜底入口)是**独立入口** ⇒ 2 类 sensitivity × 2 条路径 = 4 例, 逐个自证。
 # 判据用**出网侧证据**: claude 通道在发请求**前**必先落 `.agent-run.json`(cli=claude) ⇒
-#   "claude run 计数不增"就是"未出网"的本地可判证据(计数若增, 说明真发了请求 —— claude 现已
-#   带 OpenRouter key 授权, 会真出网)。
+#   "claude run 计数不增"就是"未出网"的本地可判证据(计数若增 = 真发了请求; claude 现已带
+#   OpenRouter key 授权, 会真出网)。
 Write-Host ''
-Write-Host '=== P0 egress gate: local-only must NOT reach the claude (outbound) channel ==='
-$localOnlyCard = Join-Path $env:TEMP 'probe-localonly-card.md'
-@"
+Write-Host '=== sensitivity x backend gate: local-only/sanitized must NOT reach the :free claude channel ==='
+function New-ProbeCard([string]$name, [string]$sens) {
+    $p = Join-Path $env:TEMP "probe-$name-card.md"
+    @"
 ---
 proj: paper
-task: probe local-only egress gate (P0)
+task: probe $name backend gate
 model: claude
-sensitivity: local-only
+sensitivity: $sens
 timeout_s: 5
 continue-timeout-s: 3
 accept:
@@ -230,7 +236,11 @@ accept:
 ---
 ## probe
 reply with 'PASS'
-"@ | Set-Content -Path $localOnlyCard -Encoding utf8
+"@ | Set-Content -Path $p -Encoding utf8
+    return $p
+}
+$cardLocal = New-ProbeCard 'localonly' 'local-only'
+$cardSanit = New-ProbeCard 'sanitized' 'sanitized'
 
 function Count-ClaudeRuns {
     $n = 0
@@ -241,35 +251,34 @@ function Count-ClaudeRuns {
     return $n
 }
 
-# (7a) 出网路径① —— **直接入口**: local-only + cli=claude (从 L968 放行, 在 Invoke-Task-Claude 内拦)
-$b1 = Count-ClaudeRuns
-$codeA = Scalar (Invoke-Task -proj 'paper' -card $localOnlyCard -model 'claude' -sensitive 'local-only' -cli 'claude' -AutoFallback:$false)
-$a1 = Count-ClaudeRuns
-if ($codeA -eq 4 -and $a1 -eq $b1) {
-    Write-Host ('PASS  path-A(-cli claude 直接入口): rc=4 且 claude run 数 ' + $b1 + '->' + $a1 + ' 未增(未出网)')
-} else {
-    Write-Host ('FAIL  path-A: rc=' + $codeA + ' claude run 数 ' + $b1 + '->' + $a1 + ' (期望 rc=4 且不增)'); $ok = $false
+# 直接入口用 claude 型号; 兜底入口的主路用**站上本地引擎**型号(gpt-oss) —— 那正是洞②的真实场景
+#   (非 `opencode/*` ⇒ 旧三处闸不拦)。
+$cases = @(
+    @{ tag = 'A local-only + -cli claude (直接入口) '; card = $cardLocal; sens = 'local-only'; cli = 'claude';   model = 'claude';  fb = $false },
+    @{ tag = 'B local-only + AUTO_FALLBACK (兜底入口)'; card = $cardLocal; sens = 'local-only'; cli = 'opencode'; model = 'gpt-oss'; fb = $true  },
+    @{ tag = 'C sanitized  + -cli claude (直接入口) '; card = $cardSanit; sens = 'sanitized'; cli = 'claude';   model = 'claude';  fb = $false },
+    @{ tag = 'D sanitized  + AUTO_FALLBACK (兜底入口)'; card = $cardSanit; sens = 'sanitized'; cli = 'opencode'; model = 'gpt-oss'; fb = $true  }
+)
+foreach ($c in $cases) {
+    $before = Count-ClaudeRuns
+    $rc = Scalar (Invoke-Task -proj 'paper' -card $c.card -model $c.model -sensitive $c.sens -cli $c.cli -AutoFallback:$c.fb)
+    $after = Count-ClaudeRuns
+    if ($rc -eq 4 -and $after -eq $before) {
+        Write-Host ('     PASS  ' + $c.tag + ': rc=4 且 claude run 数 ' + $before + '->' + $after + ' 未增(未出网)')
+    } else {
+        Write-Host ('     FAIL  ' + $c.tag + ': rc=' + $rc + ' claude run 数 ' + $before + '->' + $after + ' (期望 rc=4 且不增)')
+        $ok = $false
+    }
 }
 
-# (7b) 出网路径② —— **自动兜底入口**: local-only + 站上本地引擎型号(主路 rc=6) + AutoFallback
-$b2 = Count-ClaudeRuns
-$codeB = Scalar (Invoke-Task -proj 'paper' -card $localOnlyCard -model 'gpt-oss' -sensitive 'local-only' -cli 'opencode' -AutoFallback:$true)
-$a2 = Count-ClaudeRuns
-if ($codeB -eq 4 -and $a2 -eq $b2) {
-    Write-Host ('PASS  path-B(AUTO_FALLBACK 兜底入口): rc=4 且 claude run 数 ' + $b2 + '->' + $a2 + ' 未增(未出网)')
-} else {
-    Write-Host ('FAIL  path-B: rc=' + $codeB + ' claude run 数 ' + $b2 + '->' + $a2 + ' (期望 rc=4 且不增)'); $ok = $false
-}
-
-# (7c) 覆盖: 两条路径**各自**的拒绝串必须都在 —— (7a)/(7b) 对"零出网"这一结果是**同构**的
-#      (任一处闸生效都成立) ⇒ 只有覆盖断言能把"哪一处闸在守"分辨开(与夹具的结构断言互补:
-#      判据必须报覆盖率, 而不是"有个闸在跑")。
-$callSig = 'Test-SensitivityEgressAllowed -sensitivity $sens -backendEgress $true'
+# (7e) 覆盖: 4 例对"零出网"这一结果是**同构**的(任一处闸生效都成立) ⇒ 只有覆盖断言能把
+#      "哪一处闸在守"分辨开(与夹具的结构断言互补: 判据必须报覆盖率, 而不是"有个闸在跑")。
+$callSig = 'Get-SensitivityBackendReject -sensitivity $sens -backendEgress $true'
 $nCalls = ([regex]::Matches($src, [regex]::Escape($callSig))).Count
-if ($nCalls -ge 2 -and $src.Contains('REJECT local-only+claude-egress') -and $src.Contains('REJECT local-only+egress-fallback')) {
-    Write-Host ('PASS  coverage: 判据在两条路径均被调用(实测调用点 ' + $nCalls + ' 处) + 两条拒绝串均在')
+if ($nCalls -ge 2 -and $src.Contains('(claude-direct, $id)') -and $src.Contains('(fallback, $fbId)')) {
+    Write-Host ('     PASS  coverage: 判据在两条路径均被调用(实测调用点 ' + $nCalls + ' 处) + 拒绝串可分辨路径')
 } else {
-    Write-Host ('FAIL  coverage: 调用点 ' + $nCalls + ' 处(期望 >=2) 或拒绝串缺失'); $ok = $false
+    Write-Host ('     FAIL  coverage: 调用点 ' + $nCalls + ' 处(期望 >=2) 或拒绝串缺失'); $ok = $false
 }
 
 Write-Host '--------------------------------'
