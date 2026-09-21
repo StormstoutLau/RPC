@@ -201,6 +201,7 @@ frozen_ops_scripts:
   - ops/station-bin/_r_sympy_provision.sh
   - ops/station-bin/_reload_ctx.sh
   - ops/station-bin/_runA.sh
+  - ops/station-bin/_scrubber_coverage_test.ps1
   - ops/station-bin/_switch_qwen_flavor.ps1
   - ops/station-bin/_switch_qwen_flavor.sh
   - ops/station-bin/_tmp_parse_check.ps1

@@ -882,7 +882,15 @@ function Invoke-Scrubber {
     $rules = @(
         @{ name = 'api-key';  re = 'sk-[A-Za-z0-9_\-]{16,}';                             repl = '[REDACTED-KEY]' },
         @{ name = 'email';    re = '[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}';   repl = '[REDACTED-EMAIL]' },
-        @{ name = 'win-path'; re = '(?i)\b[A-Z]:\\\S+';                                    repl = '[REDACTED-PATH]' }
+        # ⚠ 不能是 `\S+`: 空格即断 ⇒ `C:\Program Files\Git\bin\bash.exe` 只吃掉 `C:\Program`,
+        #   **残留** `Files\Git\bin\bash.exe` —— 而"看起来已处理过"的残留比不处理更危险
+        #   (夹具 `_scrubber_coverage_test.ps1` 第 ③ 态专抓此类)。
+        # ⚠ 也不能是"段内一律允许空格"(`(?:\\[^\\]+)+`): 贪心会把**路径后面的普通词一起吃**
+        #   (`C:\RPC\out.txt done` → 整段变 `[REDACTED-PATH]`) —— 本机 prompt 里句中路径极常见
+        #   ⇒ 这是**误伤任务输入**(静默破坏, 同族于静默降级)。夹具 §2b 专抓此类。
+        # 取舍: 只有当段后**还有 `\`**(即能证明它仍是路径)时才允许段内含空格; 末段遇空格即停。
+        #   代价 = "末段含空格"形态会**残留**(已知缺口, 见夹具 §4b), 消除它需再加规则=决策。
+        @{ name = 'win-path'; re = '(?i)\b[A-Z]:\\(?:[^\\/:*?"<>|\r\n\t]+\\+)*[^\\/:*?"<>|\r\n\t\s]*'; repl = '[REDACTED-PATH]' }
     )
     $hits = 0
     foreach ($r in $rules) {
