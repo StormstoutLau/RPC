@@ -1894,7 +1894,7 @@ exit `$RC
         }
         Write-Host "AUTO_FALLBACK: opencode rc=$code -> local claude backup (explicit -AutoFallback)"
         Write-Host "AUTO_FALLBACK_MODEL: $taskModel -> $fbModel"
-        return (Invoke-Task-Claude -proj $proj -card $card -model $fbModel -sensitive $sens -attach $attach -complexity $complexity -taskType $taskType)
+        return (Invoke-Task-Claude -proj $proj -card $card -model $fbModel -sensitive $sens -attach $attach -complexity $complexity -taskType $taskType -AvoidStation $station)
     }
     return $code
 }
@@ -2092,7 +2092,8 @@ function Invoke-Task-Claude {
         [string]$sensitive,
         [string[]]$attach,
         [string]$complexity,
-        [string]$taskType
+        [string]$taskType,
+        [string]$AvoidStation = ''
     )
     if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
         Write-Host "REJECT claude-not-installed (exit 13) - run: npm i -g @anthropic-ai/claude-code, then: claude auth login"
@@ -2171,13 +2172,13 @@ function Invoke-Task-Claude {
     #   `$useStation` 已在**上方**算好(见那条顺序注释 —— 它必须先于 `$stPref`)。
     $stHost = ''; $stUser = ''
     if ($useStation) {
-        $avoid = if ($env:AGENT_AVOID_STATION) { $env:AGENT_AVOID_STATION } else { '' }
-        $cands = Resolve-ClaudeStationCandidates -Avoid $avoid -Stations @('A', 'B', 'C')
-        if ($stPref) {
-            # 卡的 model 指向某站 ⇒ 该站**首选**(但仍按 avoid 规则重排: 它在 avoid 里就往后排)
-            $cands = @($cands | Where-Object { $_ -eq $stPref }) + @($cands | Where-Object { $_ -ne $stPref })
-            $cands = @($cands | Where-Object { $_ })
-        }
+        # ⚠ 2026-09-21 复查修正: `$avoid` **必须优先取参数** —— 原版只读 env, 而**没有人在运行时填
+        #   env** ⇒ "优先选与死锁站不同的一站"(P3 设计的一条) **实际未生效**: 兜底时会**优先选中
+        #   刚 rc=6 的那一站**(它的引擎"在服务" ⇒ 就绪探针通过, 而它可能已被 wedge)。
+        #   现在 AUTO_FALLBACK 调用点把主路死锁站 (`$station`) 传进来(`-AvoidStation`)。
+        #   env `AGENT_AVOID_STATION` 保留为**手工覆盖**通道(用于运维/探针)。
+        $avoid = if ($AvoidStation) { $AvoidStation } elseif ($env:AGENT_AVOID_STATION) { $env:AGENT_AVOID_STATION } else { '' }
+        $cands = Resolve-ClaudeStationCandidates -Avoid $avoid -Stations @('A', 'B', 'C') -Preferred $stPref
         Write-Host "P3_CANDIDATES: $(($cands) -join ',') (pref=$stPref avoid=$avoid)"
         foreach ($st in $cands) {
             $h = Get-TargetHost $st
@@ -2545,16 +2546,29 @@ function Invoke-ClaudeFly {
 
 function Resolve-ClaudeStationCandidates {
     # P3 (2026-09-21): 为 `local-only` 的 claude 通道**排候选站**。纯函数 ⇒ 夹具可离线单测。
-    # 顺序语义: **优先排除 $Avoid**(通常 = 主路刚 rc=6 的那一站 —— 它的引擎可能已被 wedge),
-    #   但**把它放最后**而不是丢掉 —— 若只有它可用, 试一次仍不如"直接失败"差, 且**绝不越界**
-    #   (它仍是站上本地引擎 ⇒ 不出网)。⇒ 既尊重"选异站", 又不浪费最后一次机会。
-    # 返回 '' = 无候选 ⇒ 调用方必须 **fail-closed**(绝不退回主控本地 spawn = 那会出网)。
-    param([string]$Avoid, [string[]]$Stations)
+    # 顺序语义(两条规则, **次序不可交换**):
+    #   ① `$Avoid`(通常 = 主路刚 rc=6 的那一站, 引擎可能已 wedge) ⇒ **移到最末**而不是丢掉 ——
+    #      若只有它可用, 试一次仍不比"直接失败"差, 且**绝不越界**(仍是站上本地引擎 ⇒ 不出网)。
+    #   ② `$Preferred`(卡的 model 指向的站) ⇒ 提前, **但不得覆盖 ①** —— ⚠ 2026-09-21 复查发现的
+    #      交互缺陷: 兜底场景下卡的 model 常正指向**刚死锁的那一站** ⇒ 若 pref 无条件提前,
+    #      "避免死锁站"就被架空(回到原缺陷)。故 pref == avoid 时它**只能垫底**。
+    # 返回空数组 = 无候选 ⇒ 调用方必须 **fail-closed**(绝不退回主控本地 spawn = 那会出网)。
+    param([string]$Avoid, [string[]]$Stations, [string]$Preferred = '')
     $all = @($Stations | Where-Object { $_ })
     if ($all.Count -eq 0) { return @() }
-    $others = @($all | Where-Object { $_ -ne $Avoid })
-    if ($Avoid -and ($all -contains $Avoid)) { return @($others + @($Avoid)) }
-    return @($all)
+    $order = $all
+    if ($Avoid -and ($all -contains $Avoid)) {
+        $order = @($all | Where-Object { $_ -ne $Avoid }) + @($Avoid)
+    }
+    if ($Preferred -and ($order -contains $Preferred)) {
+        $rest = @($order | Where-Object { $_ -ne $Preferred })
+        if ($Avoid -and $Preferred -eq $Avoid) {
+            $order = @($rest + @($Preferred))     # 偏好站 = 被 avoid 的那一站 ⇒ 垫底(规则①胜)
+        } else {
+            $order = @(@($Preferred) + $rest)
+        }
+    }
+    return $order
 }
 
 function Test-StationEngineReady {
