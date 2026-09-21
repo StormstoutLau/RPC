@@ -4380,11 +4380,13 @@ def _p3_pin_notes() -> dict:
 
 
 def _p4_mirror(st: str) -> dict:
-    """P4（2026-09-21）: 把冷镜像链推送到站 `st` 的 `evidence-mirror/`（只读近似）。
+    """P4（2026-09-21）: 把冷镜像链推送到站 `st` 的 `evidence-mirror/`（滚动快照）。
 
-    镜像侧 chmod 555/444 ⇒ "写入方不能改删已有件"的近似。
-    ⚠ **诚实边界（调研 §14.5）**: 3 台机**同一运营者** ⇒ 这只是**冗余/可用性**（抗磁盘故障），
-      **不是不可否认**；且"只读"可被同运营者解除 ⇒ 强度 = 定期的于册副本，非安全边界。
+    ⚠ **诚实边界（调研 §14.5，含 2026-09-21 修正）**: 3 台机**同一运营者** ⇒ 这只是**冗余/可用性**，
+      **不是不可否认**。最初版本把远端 chmod 成只读(555/444)想模拟 append-only —— **实测自伤**:
+      只读后下一次 `--mirror` 自己就写不进去(PermissionError)，同运营者也照样能解除 ⇒ "假只读"
+      既非不可否认、又挡更新。故**改成可更新的滚动快照**、写入前置 best-effort 恢复可写。
+      "密码学级只读/不可否认"需外部独立托管(方案 P4 已记), 不在同一运营者内假装。
     """
     src = AGENT_CHAIN_COLD
     if not src.is_file():
@@ -4393,13 +4395,14 @@ def _p4_mirror(st: str) -> dict:
         cli = _connect(st)
         sftp = cli.open_sftp()
         _p4_mkdir(sftp, "evidence-mirror")
+        # 写入前 best-effort 恢复可写(自愈: 曾 chmod 555/444 的老镜像可被本命令再写)
+        _p4_writable(sftp, "evidence-mirror")
         remote = "evidence-mirror/agent-chain.json"
+        _p4_writable(sftp, remote)
         with sftp.open(remote, "wb") as f, open(src, "rb") as lf:
             f.write(lf.read())
         with sftp.open(remote, "rb") as f:
             got = f.read()
-        sftp.chmod(remote, 0o444)
-        sftp.chmod("evidence-mirror", 0o555)
         sftp.close()
         cli.close()
         return {"ok": True, "station": st, "remote": f"{st}:{remote}", "bytes": len(got),
@@ -4418,6 +4421,79 @@ def _p4_mkdir(sftp, path: str) -> None:
         sftp.mkdir(path)
     except OSError:
         pass
+
+
+def _p4_writable(sftp, path: str) -> None:
+    """写入前 best-effort 恢复远端可写（自愈曾 chmod 555/444 的老镜像）。失败静默忽略。"""
+    try:
+        sftp.chmod(path, 0o755 if path.endswith("/") or "." not in path.split("/")[-1] else 0o644)
+    except (OSError, IOError):
+        # 文件可能不存在 — 交给后续 open→write 真正报错
+        pass
+
+
+def _p4_run_mirror(st: str) -> dict:
+    """P4（2026-09-21）runDir 对账镜像: 把各项目 `agent-out/` 打进单一 tar.gz, SFTP 推站
+    `evidence-mirror/runs/agent-out-current.tar.gz`（滚动覆盖） + `MANIFEST.txt`。
+
+    为什么: 链的**对账对象**（runDir）只主控单份 ⇒ 磁盘故障后链还在、但无法对账
+      （`verify` 重算 digest 对链 / `audit` 判可重放性）。体量实测：Paper 90 run=398 件
+      **0.7 MB**、Cpp_Hub ≈0 ⇒ 整快照极小，**每次全量即可**（不做增量）。
+    ⚠ honest boundary 同 P4（调研 §14.5）: 同一运营者 ⇒ 冗余/可用性, **非不可否认**。
+    """
+    import tarfile
+    import hashlib as _h
+    import io
+    roots, note = _agent_proj_roots()
+    if not roots:
+        return {"ok": False, "error": note or "PROJECTS 解析为空"}
+    manifest = []
+    try:
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            for proj, root in sorted(roots.items()):
+                ao = root / "agent-out"
+                if not ao.is_dir():
+                    continue
+                tar.add(ao, arcname=f"agent-out/{proj}", recursive=True)
+                nf = sum(1 for _ in ao.rglob("*") if _.is_file())
+                manifest.append(f"{proj}: {nf} files")
+        blob = buf.getvalue()
+    except OSError as e:
+        return {"ok": False, "error": f"tar 失败: {e.__class__.__name__}"}
+    sha = _h.sha256(blob).hexdigest()
+    manifest_txt = (f"# agent-out 对账镜像 (P4 runDir, {time.strftime('%Y-%m-%dT%H:%M:%S')})\n"
+                    + "\n".join(manifest)
+                    + f"\ntotal_bytes={len(blob)}\nsha256={sha}\n"
+                    + (f"note={note}\n" if note else ""))
+    try:
+        cli = _connect(st)
+        sftp = cli.open_sftp()
+        _p4_mkdir(sftp, "evidence-mirror")
+        _p4_mkdir(sftp, "evidence-mirror/runs")
+        _p4_writable(sftp, "evidence-mirror")          # 自愈曾 555/444 的老镜像
+        _p4_writable(sftp, "evidence-mirror/runs")
+        tar_path, man_path = "evidence-mirror/runs/agent-out-current.tar.gz", \
+                             "evidence-mirror/runs/MANIFEST.txt"
+        _p4_writable(sftp, tar_path)
+        _p4_writable(sftp, man_path)
+        with sftp.open(tar_path, "wb") as f:
+            f.write(blob)
+        with sftp.open(man_path, "wb") as f:
+            f.write(manifest_txt.encode("utf-8"))
+        with sftp.open(tar_path, "rb") as f:
+            got = f.read()
+        sftp.close()
+        cli.close()
+        return {"ok": True, "station": st, "remote": f"{st}:evidence-mirror/runs",
+                "projects": len(manifest), "total_bytes": len(blob), "sha": sha,
+                "match_roundtrip": _h.sha256(got).hexdigest() == sha}
+    except Exception as e:
+        try:
+            cli.close()
+        except Exception:
+            pass
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
 def cmd_agent(argv) -> int:
@@ -4506,10 +4582,16 @@ def cmd_agent(argv) -> int:
         if mirror_st:
             rm = _p4_mirror(mirror_st)
             if rm.get("ok"):
-                print(f"  P4 只读镜像: ✅ {rm['remote']} · {rm['bytes']}B · 回读一致="
-                      f"{rm.get('match_roundtrip')}（诚实: 同运营者 ⇒ 冗余非不可否认）")
+                print(f"  P4 链镜像: ✅ {rm['remote']} · {rm['bytes']}B · 回读一致="
+                      f"{rm.get('match_roundtrip')}（诚实: 同运营者 ⇒ 冗余非不可否认")
             else:
-                print(f"  P4 只读镜像: ✗ {rm.get('error')}")
+                print(f"  P4 链镜像: ✗ {rm.get('error')}")
+            rr = _p4_run_mirror(mirror_st)
+            if rr.get("ok"):
+                print(f"  P4 runDir 对账镜像: ✅ {rr['remote']} · {rr['projects']} 项目 · "
+                      f"{rr['total_bytes']}B · 回读一致={rr.get('match_roundtrip')}（sha={rr['sha'][:12]}…）")
+            else:
+                print(f"  P4 runDir 对账镜像: ✗ {rr.get('error')}")
         return 0
 
     if act == "audit":
