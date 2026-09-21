@@ -192,7 +192,29 @@ upstream: \[ADR-0002]
 - 429 响应带 `X-RateLimit-*` 头（服务器真值）；**429/失败请求仍计入每日配额**；**跨 key 全局治理**（多建 key 不能绕过）。
 - **关键：OpenRouter 不提供"免费请求剩余数"的可查询 API** —— `GET /api/v1/key` 的 `usage` 是 **credits 用量**（免费档恒 0），不反映免费请求数。官方"检查限额"指引实际只覆盖 credits/402。
 
-**结论：可以建，但只能"本地自建"计数**（无服务器剩余 API）：
+> ### ⚠ 更正（2026-09-21，实测推翻上一条）—— **服务端现已提供按 key 的免费请求计数**
+>
+> 上文"**不提供**"**已过时**。实测 `GET /api/v1/key`（Bearer = 该端 key）现返回：
+> ```json
+> {"creator_user_id":"user_…",                          // 账户身份（拆分验收判据）
+>  "is_free_tier":false,
+>  "free_model_daily_requests":{"used":8,"limit":1000,"remaining":992},   // ← 就是"免费请求剩余数"
+>  "usage_daily":0,"usage_weekly":0,"usage_monthly":0,  // 付费 credits 口径（:free 模型恒 0）
+>  "limit":None,"limit_remaining":None}                 // 信贷额度（新账号可能非 null）
+> ```
+> **实测要点（四条，均 2026-09-21 采）**
+> 1. **确实计数 `:free` 模型请求**：B 站一次 `opencode -m openrouter/…:free` + 一次裸 `POST /v1/chat/completions`（`nvidia/…:free`）⇒ B **0→2**；C 站一次 ⇒ **0→1**；而 console/A **保持 8 不变**（证明**按账户隔离**）。同两次调用 `usage*` 仍为 0（`:free` 模型无 credits 成本）。
+> 2. **⚠ 有分钟级延迟（要紧）**：调用后 **20 秒内读仍为 0**，约 **4 分钟后**才显示 2/1。⇒ 该字段**不能当"调用前实时闸门"**（会造成"以为没用额度而超额"），**只适合巡检/预警/事后对账**。
+> 3. **口径必须分开**：`:free` 请求数看 `free_model_daily_requests`；付费模型看 `usage_daily`/`usage_monthly`（credits）。**两者不可混算**。
+> 4. **账户级 vs key 级未区分**：该字段随 key 返回，与上文"跨 key 全局治理"一致（**账户级**）；本次**未能实测区分**（console/A 本就是同一把 key），不冒认。
+> 其它：`GET /api/v1/activity` → **403**（不可用）；`GET /api/v1/credits` → `{total_credits,total_usage}`（**账户级**，非 key 级）。
+>
+> **⇒ 修正结论**：**"本地自建计数"不再是唯一手段**；服务端计数**已可用但延迟分钟级** ⇒ 设计上应**两者并用**：服务端为**权威（巡检/预警/对账）**，本地 `.egress_daily.json` 降级为**实时近似 + 交叉验证**（可发现"未被记录的调用方"）。
+> **⚠ 已知待改（`egress` 显示）**：`_parse_egress`（`cluster.py` L1106）现在读的是 **`limit_remaining`（信贷余量）** 却显示成"**余 N**"，易被误读为"配额剩余"；且 L1253 仍打印"OpenRouter 无免费请求剩余 API"的**过时提示**。两处应随本次更正一并改（读 `free_model_daily_requests` + 双口径展示）。
+> **现状（本次分配后）**：console+A = 账户 `…KMUr`（共用一把，8/1000/992）；B = 新账户 `…LEF3y`（0/1000/1000）；C = 新账户 `…svcX`（同）—— 三者 `paid`、各自 1000/天，**已实测按账户隔离**。详见 [多账户配额分配与调配设计](../../docs/security/2026-09-21_OpenRouter多账户配额分配与调配设计.md)。
+
+
+**结论（2026-09-16；⚠ 已被上方 2026-09-21 更正部分推翻："**无服务器剩余 API**"不再成立）**：可以建，但只能"本地自建"计数（无服务器剩余 API）：
 - 统一入口 `egress` 增强：读 `GET /api/v1/key` 的 **`is_free_tier`**（True→日限额 50 / False→1000），并显示**主控本地每日计数**（`.egress_daily.json`，UTC 日滚动归零）+ 达 80% 预警。
 - 写入手 `_egress_bump()`：由真正发 OpenRouter 免费请求的调用方（`opencode -m openrouter/...` / review 免费源）在发请求前自增。
 - **实证（2026-09-16）**：主控 + A/B/C 四端 `tier=paid`（`is_free_tier=false`）→ **本账户已曾充 ≥$10，免费档日限额 = 1000/天**；四端同账户（`label` 一致）印证跨 key 全局治理。

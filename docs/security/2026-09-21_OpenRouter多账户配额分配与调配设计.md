@@ -22,7 +22,31 @@
 
 ⇒ **distinct accounts = 1**。今天全集群只用了 **8 次**免费档请求。
 
-### 1.1 既有的分发管道（可直接复用，无需改代码）
+### 1.1 ✅ 执行结果（2026-09-21，**已落地并端到端验收**）
+
+**分配**：**console + A 共用旧账户那把**（按用户裁定），**B / C 各用一把新账户 key**。
+
+| 端 | 正本 | key 指纹(前12) | `creator_user_id` | tier | 免费请求配额 | 信贷 `limit/remaining` |
+|---|---|---|---|---|---|---|
+| console | `secrets/openrouter.key` | `5847f7de8218` | `user_3BqB4s…KMUr` | paid | 8 / 1000 / 992 | None（无限额） |
+| A | `secrets/stations/A/openrouter.key` | `5847f7de8218` | 同上（**共用**） | paid | 8 / 1000 / 992 | None |
+| **B** | `secrets/stations/B/openrouter.key` | **`1316f2bb6ba3`** | **`user_3JdIo7…LEF3y`** | paid | **0 / 1000 / 1000** | 100 / 100 |
+| **C** | `secrets/stations/C/openrouter.key` | **`9d2a94f8367f`** | **`user_3JdKFmk…svcX`** | paid | **0 / 1000 / 1000** | 50 / 50 |
+
+**⚠ 充值的坑已避开**：两个新账号**都是 `paid`**（`is_free_tier=false`）⇒ 日限额 **1000**（不是 50）。若未充值，新账号会是 50/天，拆分反而降级。
+
+**执行步骤与验收（全部实测）**
+1. 写正本：B/C 两文件 = 73 B / 1 行 / 无注释 / 无尾换行（与既有约定一致）
+2. `secrets push` ⇒ A 3 件 / B 2 件 / C 2 件；**`unsloth.key` 按预期被跳过**（站内重铸产物）
+3. **逐站指纹 MATCH**：master == live（A `5847f7de8218` / B `1316f2bb6ba3` / C `9d2a94f8367f`），权限 **600**
+4. `egress` 四端 **http=200**
+5. **无需重启站内 agent**（实测）：站上直接 `opencode run -m "openrouter/thinkingmachines/inkling:free"` ⇒ 返回 `OC_B_OK` / `OC_C_OK`；`{file:}` 是**每次调用解析**的。（旧流程里的"重启站内 agent"对本项**非必需**）
+6. **决定性：按账户隔离已证** —— 两站各发一次请求后（计数器**分钟级延迟**到位）：
+   - **B `0→2`**（其 opencode 调用 1 + 我另做的 1 次裸 `:free` 调用）、**C `0→1`**
+   - **console+A 保持 `8` 不变** ⇒ B/C 的调用**没有**碰 A 的账户
+7. **全量门禁 PASS**：`三站一致: opencode.jsonc A=3cd0ab558c3c0838 B=… C=…` ⇒ **每站不同 key 完全不影响"三站配置一致"判据**（§1.2 的判断被实证）
+
+### 1.2 既有的分发管道（可直接复用，无需改代码）
 | 环节 | 事实 |
 |---|---|
 | 正本 | `secrets/stations/{A,B,C}/openrouter.key`（**文件已存在**，现装同一把；`.gitignore` 覆盖 `secrets/`） |
@@ -132,12 +156,24 @@
 - `/api/v1/activity` → **403**（不可用，勿依赖）
 - `/api/v1/credits` → `{total_credits, total_usage}`（账户级，非 key 级）
 
+### 5.1b ⚠ 实测限度：服务端计数**有分钟级延迟**（**决定"怎么用"**）
+
+2026-09-21 隔离实验（B 站 key）：一次成功 `:free` 调用（HTTP 200、真回复）后 ——
+- **立刻读**：`used` 仍 0
+- **+20s 读**：仍 0
+- **约 +4min 读**：`0 → 2`（两笔：opencode 一笔 + 裸 API 一笔）
+
+⇒ **该字段不能当"调用前实时闸门"**（会"以为没用额度"而超额）；**只能用于巡检/预警/事后对账**。本地计数器（实时近似）因此**仍有存在价值**，二者**并用**：服务端为权威、本地为实时与交叉验证。
+
 ### 5.2 设计
+
+0. **先修两处现状缺陷**（实测发现，见 ADR-0003 的更正块）：`_parse_egress` 读的是 **`limit_remaining`（信贷余量）** 却标成"**余 N**"（易误读为配额）；L1253 仍打印"OpenRouter 无免费请求剩余 API"的**过时提示**。
 1. **`cluster.py egress` 增强**（唯一入口，不新增命令）：
-   - 每端输出：`owner=<creator_user_id 短哈希>` · `free <used>/<limit> (<remaining>, <pct>%)` · `tier` · `rpm`
+   - 每端输出：`owner=<creator_user_id 短哈希>` · `free <used>/<limit> (<remaining>, <pct>%)` · `credits <limit_remaining>` · `tier`
    - **4 端并排**，一眼看出"是否已拆成 3 个账户"（`distinct owners`）
    - 80% 预警（沿用既有约定）、100% 标红/标"已到顶"
-   - **口径分离**：`:free` 请求数（`free_model_daily_requests`）vs **付费 credits**（`usage_daily`/`credits.total_usage`）—— 两者不可混算
+   - **口径分离**：`:free` 请求数（`free_model_daily_requests`）vs **付费 credits**（`usage_daily`/`credits.total_usage`/`limit_remaining`）—— 两者不可混算
+   - **标注延迟**：输出里注明"服务端计数约分钟级延迟，非实时"（防止误用为闸门）
 2. **本地计数器 `.egress_daily.json` 的去留**：**降级为旁证**（服务端是快照、本地是流；两者可交叉验证"是否有未记录的调用方"），**不再作为唯一依据**；`_egress_bump()` 保留但不再是权威
 3. **站上用量无需自计数**：服务端**按 key**统计 ⇒ 站上 opencode 的用量天然可见（**省掉一整块站上埋点工作**）
 4. **预警阈值与动作**：`>=80%` 黄、`>=95%` 红、`<=0` 触发 §4 借用流程
@@ -161,7 +197,7 @@
 
 ## 7. 关联
 
-- [ADR-0003 OpenRouter 密钥与 egress 路由管理](../../adr/ADR-0003-OpenRouter密钥与egress路由管理.md)（D5「受控分发 + 引用化」；本文 §1.1 是对它的现状印证）
+- [ADR-0003 OpenRouter 密钥与 egress 路由管理](../../adr/ADR-0003-OpenRouter密钥与egress路由管理.md)（D5「受控分发 + 引用化」；本文 §1.2 是对它的现状印证）
 - [密钥轮换清单（2026-09-13）](2026-09-13_密钥轮换清单.md)（轮换流程与落点表）
 - [2026-09-14 OpenRouter 接入与 agentic-harness 门禁调研](../research/2026-09-14_OpenRouter接入与agentic-harness门禁调研.md)（`:free` 门禁、`is_free_tier` 与日限额 1000 的由来）
 - [2026-09-21 claude 备路免登录与后端选型调研](../research/2026-09-21_claude备路免登录与后端选型调研.md)（主控为何现在也需要 OpenRouter：① D6 备路）
