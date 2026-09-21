@@ -27,7 +27,7 @@ Invoke-Expression $fn.Extent.Text   # 定义函数到当前会话
 # 它们是**纯函数**(只吃 $accept/$goldenActive/卡 subjects, 不碰站、不碰文件系统)
 # ⇒ 可离线单测; 这正是"派发路径改动"能被验证而不用每次都真派发的关键。
 # O-15/AUDIT (2026-09-21): 追加提取 claude 按路基线(Get-ClaudeFrameworkSubjects) 与 fallback 判定 (Test-FallbackEligible)。
-foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-FallbackEligible', 'Get-SensitivityBackendReject', 'Resolve-ClaudeBudget', 'Resolve-LocalBash', 'Invoke-LocalBashCmd')) {
+foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-FallbackEligible', 'Test-CtxOverflowError', 'Resolve-CtxOverflowCode', 'Get-SensitivityBackendReject', 'Resolve-ClaudeBudget', 'Resolve-LocalBash', 'Invoke-LocalBashCmd')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -267,6 +267,45 @@ foreach ($rc in @(0, 1, 5, 9, 10, 12, 24, 13)) {
     if (Test-FallbackEligible $rc) { $noFallback = $false }
 }
 Assert-True "fallback: rc in {0,1,5,9,10,12,24,13} 均不触发(不掩盖真实错误)" $noFallback
+
+# --- C1 (2026-09-21): 「引擎**明确拒绝**」(ctx 超限 400) 必须从 rc=6 里分出来 → rc=14 ---
+# 为什么: rc=6 的语义是"引擎在预算内产不出终态" ⇒ 备路该兜; 而 ctx 超限是**引擎秒回 400、
+#   客户端不识别而挂死**(O-21/O-23 + 社区 anomalyco/opencode#11286 已定性) ⇒ **换后端也兜不住**
+#   (ctx 不够, 换到哪都不够) ⇒ 让备路兜它 = 白烧一轮 + 把配置问题伪装成引擎问题。
+Assert-True "ctxoverflow: llama.cpp 逐字串 ⇒ true" (
+    Test-CtxOverflowError 'Error: request (12536 tokens) exceeds the available context size (8192 tokens)')
+Assert-True "ctxoverflow: 异常类名 ContextOverflowError ⇒ true" (
+    Test-CtxOverflowError 'ContextOverflowError: request (62079 tokens) exceeds ...')
+Assert-True "ctxoverflow: 普通 agent 输出 ⇒ false(不误判)" (
+    -not (Test-CtxOverflowError "I finished the task. All tests pass. context was sufficient."))
+Assert-True "ctxoverflow: 空/null ⇒ false(不抛)" (
+    (-not (Test-CtxOverflowError '')) -and (-not (Test-CtxOverflowError $null)))
+Assert-True "ctxoverflow: 只提到 context 但非该串 ⇒ false(判据刻意不宽泛)" (
+    -not (Test-CtxOverflowError 'the context window is large enough; timeout after 10s'))
+# ⚠ 实弹 (2026-09-21) 逐字取自真实站的 opencode 错误体 —— **形态 B**(客户端/SDK 侧长度校验)。
+#   它与形态 A(引擎侧 llama.cpp 400)**落点不同**: B 是**快速失败 rc=1**, A 是**挂死 ⇒ rc=6**。
+#   两类都要认(否则形态 B 混在"agent 自己失败"里看不出), 但**只有 A 才改 rc**(见下)。
+$formBReal = 'Error: {"message":"Message too long: 104003 tokens exceeds the 32768-token context window. Try increasing the Context Length in Model settings, or shorten the conversation.","type":"invalid_request_error","param":"messages","code":"context_length_exceeded"}'
+Assert-True "ctxoverflow: 形态B 真实错误体 ⇒ true(实弹逐字)" (Test-CtxOverflowError $formBReal)
+Assert-True "ctxoverflow: 形态B 错误码单独出现也认" (Test-CtxOverflowError '{"code":"context_length_exceeded"}')
+# 是否改写 rc —— 纯函数, 正负双向 + 不掩盖性
+Assert-True "ctxcode: 形态A(rc=6)+命中 ⇒ 14(分出来, 阻止备路兜错)" (
+    (Resolve-CtxOverflowCode -code 6 -isOverflow $true) -eq 14)
+Assert-True "ctxcode: 形态B(rc=1)+命中 ⇒ **维持 1**(不掩盖 rc=1 的其它含义)" (
+    (Resolve-CtxOverflowCode -code 1 -isOverflow $true) -eq 1)
+Assert-True "ctxcode: 未命中 ⇒ 原码不变(6/1/0/9 抽查)" (
+    ((Resolve-CtxOverflowCode -code 6 -isOverflow $false) -eq 6) -and
+    ((Resolve-CtxOverflowCode -code 1 -isOverflow $false) -eq 1) -and
+    ((Resolve-CtxOverflowCode -code 0 -isOverflow $false) -eq 0) -and
+    ((Resolve-CtxOverflowCode -code 9 -isOverflow $false) -eq 9))
+# 位置断言(结构性, 守"四处一致"的不变式): 检测必须**早于**台账 `$line = …$code…` —— 否则
+#   台账说 6、进程返 14(以及 run.json/TASK_DONE 与 fallback 判定各自打架) ⇒ 自己造一次"rc 不可信"。
+$iCtx = $content.IndexOf('Test-CtxOverflowError $agentOutText')
+$iLed = $content.IndexOf('$line = "$ts,$proj,$id,$sens,$code,$queue_s,$run_s"')
+Assert-True "ctxoverflow: 检测点存在且**早于台账行**(四处 $code 一致性)" (
+    $iCtx -gt 0 -and $iLed -gt 0 -and $iCtx -lt $iLed)
+Assert-True "ctxoverflow: 检测**早于** AUTOFALLBACK 判定点(否则备路仍会被触发)" (
+    $iCtx -lt $content.IndexOf('$AutoFallback -and $effectiveCli -eq ''opencode'''))
 
 # --- P0 止血 (2026-09-21): sensitivity × **后端出网性** 硬闸 ---
 # 洞: local-only 硬闸三处判据一律只判 `^opencode/`, 而 claude 备路(直接入口 + AUTO_FALLBACK

@@ -1653,11 +1653,55 @@
    },
    "recipe": "v2",
    "chained_at": "2026-09-21 21:22:10"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609212137317595",
+   "digest": "53a72985186f959f32385501a6ab99a3b8c6fae51eb9983628076cf6f5b6fcf0",
+   "prev": "1b3b4b812e047d5dfb0a20d3300204ed8dbfa49330a221b6747c44f41e785659",
+   "files": {
+    ".agent-run.json": "d3a4d9b1837a8c8d2f56d5735b38ebb37e3f748e22b458c553c0a803510f0399",
+    "agent-output": "3d1c2a164f94d45063ad863405d16b9c9d5c8baa5ddebda6a88d7c0b0983a9d6",
+    "judgment-record": "e1b575d09a5f81708cb9b5be082e10bd2c9b2d8a2eb738b07858d3197aa6d314",
+    "prompt": "f671f90de34e66625363aa8bbee0c8cee1bed7fabb20f9829f1d343de24ad186",
+    "accept-cmds": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+    "golden-cmd": "7db3fbadc46a9b58757ab0a5055c184dde25c5577375c6f37dc7d9b76813f83b",
+    "progress-trace": "0413016884cf2e324d6be1e584c252de6ac35b4429b671464acdcbd21ce40a18",
+    "session-meta": "9182717e9334a11c017842e9b3b9b018fd03107aa6f10c5472a8c9077e1ab205",
+    "attach-manifest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "workspace-diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "card": "b7f142b2d190e42343027668cfdf2b26616300be39c6cd6a1f80f3bc67933fd0",
+    "accept-output": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-21 21:40:40"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609212139005308",
+   "digest": "27668383a396c2fba86b63a39a2276ca66f0aad8e330d1a0949d7ff8d9e43c6a",
+   "prev": "53a72985186f959f32385501a6ab99a3b8c6fae51eb9983628076cf6f5b6fcf0",
+   "files": {
+    ".agent-run.json": "70ce0aee0e7951368fba99bdd1e76624f755802062512adef0eaa30a8ef672d3",
+    "agent-output": "3d1c2a164f94d45063ad863405d16b9c9d5c8baa5ddebda6a88d7c0b0983a9d6",
+    "judgment-record": "167c660f16620b98c2040f8efea7faf92b62de5cbe3758ce11068c1ae08c5cd8",
+    "prompt": "f671f90de34e66625363aa8bbee0c8cee1bed7fabb20f9829f1d343de24ad186",
+    "accept-cmds": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+    "golden-cmd": "7db3fbadc46a9b58757ab0a5055c184dde25c5577375c6f37dc7d9b76813f83b",
+    "progress-trace": "37f6ded61405414f998813a15a47825daf405f32abe22e822c05109b707b217c",
+    "session-meta": "e947f659b639c4884c98bdbe55ea74b6b210b27c944e9eb234c985c40d17ada2",
+    "attach-manifest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "workspace-diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "card": "b7f142b2d190e42343027668cfdf2b26616300be39c6cd6a1f80f3bc67933fd0",
+    "accept-output": "9b084803c75dbfcf887bfda1a24a97f9f8b2c532fa82690f4bb0c0c93fd5b82e"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-21 21:40:40"
   }
  ],
  "head": {
   "proj": "paper",
-  "run_id": "202609212120049384",
-  "digest": "1b3b4b812e047d5dfb0a20d3300204ed8dbfa49330a221b6747c44f41e785659"
+  "run_id": "202609212139005308",
+  "digest": "27668383a396c2fba86b63a39a2276ca66f0aad8e330d1a0949d7ff8d9e43c6a"
  }
 }
