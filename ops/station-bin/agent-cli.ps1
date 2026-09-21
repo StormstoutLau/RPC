@@ -2141,15 +2141,62 @@ function Invoke-Task-Claude {
     $r = Resolve-Model $m
     if (-not $r) { Write-Host "REJECT unknown-model ($m) exit 2 - not in route table"; return 2 }
     $id = $r['id']
-    if ($r['station']) { Write-Host "REJECT claude-station=$($r['station']) (exit 4) - claude channel must run local (station='')"; return 4 }
-    # ⚠ P0 止血 (2026-09-21, 安全策略洞 · 出网路径①): **local-only 不走本通道** —— 本函数是
-    #   **主控本地** spawn claude, 其 ANTHROPIC_BASE_URL(主控 settings.json)= 云端 OpenRouter
-    #   ⇒ 出网。此前本函数**没有任何** sensitivity 判据, 而既有三处闸(Resolve-Model L435 /
-    #   Invoke-Task L987 / route cmd L1837)一律只判 `^opencode/` ⇒ 卡写 `sensitivity: local-only`
-    #   + `cli: claude` 会从 L987 **放行**并在本函数出网; 该洞此前**惰性**(备路不可用
+    # P3: 分流判据 **必须先算** —— 下面 `$stPref` 与硬闸都要用它。⚠ 2026-09-21 实弹踩到:
+    #   初版把 `$stPref` 块放在本行**之前** ⇒ PS 里未定义变量为 `$null` ⇒ `if ($useStation)` 为假
+    #   ⇒ 走了旧的 `REJECT claude-station` 分支(local-only 卡被旧语义误拒)。夹具只查"串在不"，
+    #   **查不出顺序** ⇒ 已补位置断言(见 _fm_golden_test.ps1)。
+    $useStation = ($sens -eq 'local-only')
+    # ⚠ P3 (2026-09-21) 探查期发现的**真实缺口**: `$r['station']` 的语义**按分支不同** ——
+    #   · **主控本地** spawn(= 云端后端) ⇒ 非空 station 是**跨站违规** ⇒ REJECT(原有语义, 保留)
+    #   · **站上**分支(= 站上本地引擎)   ⇒ 非空 station 是**偏好站** —— 卡若写 `model: gpt-oss-20b`
+    #     (自然的写法: "我只用本地模型"), `Resolve-Model` 必然给出 `station='B'`。
+    #     若仍按旧语义拒绝, 则 `local-only` 卡**无解**: 写本地型号被拦, 写云端型号名语义错。
+    #     ⇒ 站上分支把它当**首选站**, 不是违规。
+    $stPref = ''
+    if ($useStation) {
+        $stPref = $r['station']
+    } elseif ($r['station']) {
+        Write-Host "REJECT claude-station=$($r['station']) (exit 4) - claude channel must run local (station='')"
+        return 4
+    }
+    # ⚠ P0 止血 (2026-09-21, 安全策略洞 · 出网路径①) —— **P3 已把它从"一律拒绝"升级为"分流"**：
+    #   原语义: `local-only` 一律不进本通道(本函数是**主控本地** spawn claude, 其
+    #   ANTHROPIC_BASE_URL = 云端 OpenRouter ⇒ 出网)。该洞此前**惰性**(备路不可用
     #   `Not logged in`), 2026-09-21 备路修通后**变活** ⇒ 破 DESIGN §358。
-    #   → 与既有三处同族: REJECT + exit 4, 无覆写通道。
-    $rej = Get-SensitivityBackendReject -sensitivity $sens -backendEgress $true
+    #   **P3 (2026-09-21, 用户裁定"按 sensitivity 分流")**:
+    #     · `local-only`  ⇒ **站上**跑 claude + **站上本地引擎**(127.0.0.1:8080) ⇒ **物理不出网**;
+    #                       站上不可用 ⇒ **fail-closed**(绝不退回主控本地 = 那会出网)
+    #     · 其余         ⇒ **主控本地** spawn(现状, 已实弹验证) ⇒ 后端 = OpenRouter = 出网
+    #   站上 claude 打本地引擎的能力已实测(2026-09-21): `claude -p` ⇒ `LOCAL-OK`。
+    #   `$useStation` 已在**上方**算好(见那条顺序注释 —— 它必须先于 `$stPref`)。
+    $stHost = ''; $stUser = ''
+    if ($useStation) {
+        $avoid = if ($env:AGENT_AVOID_STATION) { $env:AGENT_AVOID_STATION } else { '' }
+        $cands = Resolve-ClaudeStationCandidates -Avoid $avoid -Stations @('A', 'B', 'C')
+        if ($stPref) {
+            # 卡的 model 指向某站 ⇒ 该站**首选**(但仍按 avoid 规则重排: 它在 avoid 里就往后排)
+            $cands = @($cands | Where-Object { $_ -eq $stPref }) + @($cands | Where-Object { $_ -ne $stPref })
+            $cands = @($cands | Where-Object { $_ })
+        }
+        Write-Host "P3_CANDIDATES: $(($cands) -join ',') (pref=$stPref avoid=$avoid)"
+        foreach ($st in $cands) {
+            $h = Get-TargetHost $st
+            if (Test-StationEngineReady -hostName $h -remoteUser $Script:REMOTE_USER -alias 'main') {
+                $stHost = $h; $stUser = $Script:REMOTE_USER
+                Write-Host "P3_STATION_SELECT: station=$st host=$h (local engine ready) avoid=$avoid"
+                break
+            }
+            Write-Host "P3_STATION_SKIP: station=$st 引擎未就绪 ⇒ 试下一候选"
+        }
+        if (-not $stHost) {
+            Write-Host "REJECT local-only-no-station-engine (exit 4) - 无可用的站上本地引擎 ⇒ fail-closed；**绝不**退回主控本地(会出网)"
+            return 4
+        }
+    }
+    # 硬闸（P2 的核心: 判据输入从"型号前缀"改为"**后端出网属性**"）。站上本地 ⇒ 不出网(放行 local-only);
+    #   主控本地 ⇒ 出网 ⇒ local-only 必须被拒。**保留本闸是防线**: 若将来有人加了新的云端 claude
+    #   后端却忘了同步 `$useStation`, 它仍会拦(而不是静默放行)。
+    $rej = Get-SensitivityBackendReject -sensitivity $sens -backendEgress (-not $useStation)
     if ($rej) {
         Write-Host "REJECT $rej (claude-direct, $id) exit 4 - no override channel (owner-policy)"
         return 4
@@ -2238,7 +2285,14 @@ function Invoke-Task-Claude {
     $stateFile = Join-Path $scratch '.agent-state.json'
     [IO.File]::WriteAllText($stateFile, '{"state":"running","task_id":"' + $ts + '","host":"agent-cli-claude"}', $utf8NoBom)
 
-    $rcov = Invoke-ClaudeFly -argStr ('-p "" --model "' + $id + '"') -stdin $promptIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $timeout
+    # P3: **只换 runner**, 上层编排(归档/accept/golden/usage/证据面/resume)零改动 —— 两者同契约。
+    #   站上分支的型号用引擎接受的别名 `main`(站上既有 settings 也是这么做的:
+    #   `modelOverrides: claude-opus-4-6 -> main`) ⇒ 与云端分支的 `$id` 语义不同, 故分开传。
+    if ($useStation) {
+        $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('-p "" --model "main"') -stdin $promptIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $timeout
+    } else {
+        $rcov = Invoke-ClaudeFly -argStr ('-p "" --model "' + $id + '"') -stdin $promptIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $timeout
+    }
     $rc = $rcov['code']; $rcMsg = $rcov['msg']; if ($rcMsg) { Write-Host "CLAUDE_RUN_WARN: $rcMsg" }
     Write-Host "claude first rc=$rc"
 
@@ -2249,7 +2303,11 @@ function Invoke-Task-Claude {
         $contAttempt++
         Add-Content $outTxt "`n=== RESUME[$contAttempt] prev_rc=$rc ==="
         [IO.File]::WriteAllText($contIn, ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($contB64))), $utf8NoBom)
-        $rcov = Invoke-ClaudeFly -argStr ('--continue -p "" --model "' + $id + '"') -stdin $contIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $continueTimeout
+        if ($useStation) {
+            $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('--continue -p "" --model "main"') -stdin $contIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $continueTimeout
+        } else {
+            $rcov = Invoke-ClaudeFly -argStr ('--continue -p "" --model "' + $id + '"') -stdin $contIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $continueTimeout
+        }
         $rc = $rcov['code']; $rcMsg = $rcov['msg']; if ($rcMsg) { Write-Host "CLAUDE_RESUME_WARN: $rcMsg" }
         Add-Content $outTxt "`n=== RESUME[$contAttempt] rc=$rc ==="
         Write-Host "claude resume[$contAttempt] rc=$rc"
@@ -2482,6 +2540,108 @@ function Invoke-ClaudeFly {
     catch { return @{ code = 7; msg = $_.Exception.Message } }
     finally {
         foreach ($fs in @($fsIn, $fsOut, $fsErr)) { if ($fs) { try { $fs.Dispose() } catch { } } }
+    }
+}
+
+function Resolve-ClaudeStationCandidates {
+    # P3 (2026-09-21): 为 `local-only` 的 claude 通道**排候选站**。纯函数 ⇒ 夹具可离线单测。
+    # 顺序语义: **优先排除 $Avoid**(通常 = 主路刚 rc=6 的那一站 —— 它的引擎可能已被 wedge),
+    #   但**把它放最后**而不是丢掉 —— 若只有它可用, 试一次仍不如"直接失败"差, 且**绝不越界**
+    #   (它仍是站上本地引擎 ⇒ 不出网)。⇒ 既尊重"选异站", 又不浪费最后一次机会。
+    # 返回 '' = 无候选 ⇒ 调用方必须 **fail-closed**(绝不退回主控本地 spawn = 那会出网)。
+    param([string]$Avoid, [string[]]$Stations)
+    $all = @($Stations | Where-Object { $_ })
+    if ($all.Count -eq 0) { return @() }
+    $others = @($all | Where-Object { $_ -ne $Avoid })
+    if ($Avoid -and ($all -contains $Avoid)) { return @($others + @($Avoid)) }
+    return @($all)
+}
+
+function Test-StationEngineReady {
+    # P3: 探"某站本地引擎是否在服务"（这是选站的**唯一硬判据** —— 引擎不在 ⇒ 该站不可用）。
+    # 复用既有站上件 `_station_ready.sh`（它已能区分 ERR_NO_ENGINE(10) / ERR_CHAT(12) / CHAT_OK）。
+    # 归零纪律: 本函数只有 bool 进管道 ⇒ 内部一切输出必须 Write-Host 或 Out-Null。
+    param([string]$hostName, [string]$remoteUser, [string]$alias = 'main')
+    try {
+        $scpArgs = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', "$Script:REPO_ROOT/ops/station-bin/_station_ready.sh", "${remoteUser}@${hostName}:/tmp/_station_ready.sh")
+        Start-Process -FilePath 'scp' -ArgumentList $scpArgs -NoNewWindow -Wait -ErrorAction Stop | Out-Null
+        $out = & ssh -o BatchMode=yes -o ConnectTimeout=8 "${remoteUser}@${hostName}" "bash /tmp/_station_ready.sh $alias" 2>&1
+        $rc = $LASTEXITCODE
+        foreach ($l in @($out)) { Write-Host "  [station-ready $hostName] $l" }
+        return ($rc -eq 0)
+    } catch {
+        Write-Host "  [station-ready $hostName] EXC: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Invoke-ClaudeFly-Station {
+    # P3 (2026-09-21): claude 通道的**站上**执行器。与 Invoke-ClaudeFly **严格同契约**
+    #   (argStr/stdin/stdout/stderr/scratch/budgetS ⇒ @{code;msg}; 超时 ⇒ 124),
+    #   以便上层编排(**归档 / accept / golden / usage / 证据面 / resume 循环**)**零改动** ——
+    #   这是本次站上化最省的路径: 换的是**运行位置**, 不是整条链。
+    # 为什么必须站上: `local-only` 卡的 claude 通道**不得**在主控本地 spawn —— 主控
+    #   ~/.claude/settings.json 指向**云端 OpenRouter** ⇒ 会出网。站上跑 + 指向站上本地引擎
+    #   = **物理不出网**(不变式②)。站上 claude 的能力已实测(2026-09-21): `claude -p` ⇒ LOCAL-OK。
+    # ⚠ **显式落一份临时 settings, 不依赖站上既有那份** —— 理由有二:
+    #   ① 既有那份的 ANTHROPIC_BASE_URL 虽已指向 127.0.0.1:8080, 但**依赖"恰好"不可判**;
+    #   ② 既有那份 `CLAUDE_CODE_MAX_CONTEXT_TOKENS = 120000`, 而引擎 ctx 实测 32768
+    #      ⇒ claude 会**以为有 120k** 并把超限请求发出去 ⇒ 引擎 400(自造"预算不可信", O-23 同构)。
+    #      故本函数**从引擎 /props 现读 n_ctx** 并对齐(留输出余量) ⇒ 自对齐, 不靠外部传参。
+    param([string]$hostName, [string]$remoteUser, [string]$argStr, [string]$stdin,
+          [string]$stdout, [string]$stderr, [string]$scratch, [int]$budgetS)
+    if (-not (Test-Path $stdin)) { [IO.File]::WriteAllText($stdin, '', (New-Object System.Text.UTF8Encoding $false)) }
+    $ru = "$remoteUser@$hostName"
+    $rIn = '/tmp/_p3_claude_in.txt'; $rOut = '/tmp/_p3_claude_out.txt'; $rErr = '/tmp/_p3_claude_err.txt'
+    try {
+        # [1] 落盘站上运行脚本(R14: 远程命令一律脚本落盘, 免引号地狱)
+        $runSh = @'
+#!/bin/bash
+# _p3_claude_run.sh — 站上跑 claude headless 并指向**站上本地引擎**(物理不出网)
+# 由 agent-cli.ps1 的 Invoke-ClaudeFly-Station 生成; 参数: $1=argStr  $2=budgetS
+set -uo pipefail
+ARGSTR="$1"; BUDGET="$2"
+KEYF="$HOME/.config/rpc/unsloth.key"
+K=""; [ -f "$KEYF" ] && K=$(tr -d '[:space:]' < "$KEYF")
+# 引擎真实 ctx(自对齐; 取不到则退回保守值)
+CTX=$(curl -s -m 10 -H "Authorization: Bearer $K" http://127.0.0.1:8080/props \
+      | grep -oE '"n_ctx":[0-9]+' | head -1 | cut -d: -f2)
+[ -z "$CTX" ] && CTX=32768
+# 留输出余量: claude 的 MAX_CONTEXT_TOKENS 是**输入侧**上限, 而引擎 ctx 含输入+输出
+MAXC=$((CTX - 4096)); [ "$MAXC" -lt 2048 ] && MAXC=2048
+SET="/tmp/_p3_settings_$$.json"
+cat > "$SET" <<JSON
+{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8080","CLAUDE_CODE_MAX_CONTEXT_TOKENS":"$MAXC","DISABLE_AUTOUPDATER":"1"},
+ "apiKeyHelper":"/bin/cat $KEYF","model":"main","modelOverrides":{"main":"main"}}
+JSON
+echo "P3_STATION: engine_ctx=$CTX max_context_tokens=$MAXC base_url=http://127.0.0.1:8080"
+cd "$HOME" || exit 8
+timeout "$BUDGET" claude --settings "$SET" $ARGSTR < /tmp/_p3_claude_in.txt \
+  > /tmp/_p3_claude_out.txt 2> /tmp/_p3_claude_err.txt
+RC=$?
+rm -f "$SET"
+echo "P3_STATION_RC=$RC"
+exit $RC
+'@
+        $localSh = Join-Path $scratch '_p3_claude_run.sh'
+        [IO.File]::WriteAllText($localSh, $runSh, (New-Object System.Text.UTF8Encoding $false))
+        # [2] scp: 运行脚本 + stdin 上站（两次显式调用 —— 多源 scp 在不同版本上语义不一致）
+        & scp -q -o BatchMode=yes -o ConnectTimeout=8 $localSh "${ru}:/tmp/_p3_run.sh" 2>&1 | Out-Null
+        & scp -q -o BatchMode=yes -o ConnectTimeout=8 $stdin "${ru}:${rIn}" 2>&1 | Out-Null
+        # [3] 执行(预算在**站上** timeout 里; ssh 自身不设超时以免掩盖真实 rc)
+        $out = & ssh -o BatchMode=yes -o ConnectTimeout=8 $ru "bash /tmp/_p3_run.sh '$argStr' $budgetS" 2>&1
+        $rc = $LASTEXITCODE
+        foreach ($l in @($out)) { Write-Host "  [station-claude $hostName] $l" }
+        # [4] 收 stdout/stderr(上层编排只看这两个文件)
+        & scp -q -o BatchMode=yes -o ConnectTimeout=8 "${ru}:${rOut}" $stdout 2>&1 | Out-Null
+        & scp -q -o BatchMode=yes -o ConnectTimeout=8 "${ru}:${rErr}" $stderr 2>&1 | Out-Null
+        if (-not (Test-Path $stdout)) { [IO.File]::WriteAllText($stdout, '', (New-Object System.Text.UTF8Encoding $false)) }
+        if (-not (Test-Path $stderr)) { [IO.File]::WriteAllText($stderr, '', (New-Object System.Text.UTF8Encoding $false)) }
+        # [5] rc 语义与本地版一致: timeout ⇒ 124
+        if ($null -eq $rc) { $rc = 7 }
+        return @{ code = [int]$rc; msg = '' }
+    } catch {
+        return @{ code = 7; msg = $_.Exception.Message }
     }
 }
 
