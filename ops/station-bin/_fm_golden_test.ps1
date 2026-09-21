@@ -27,7 +27,7 @@ Invoke-Expression $fn.Extent.Text   # 定义函数到当前会话
 # 它们是**纯函数**(只吃 $accept/$goldenActive/卡 subjects, 不碰站、不碰文件系统)
 # ⇒ 可离线单测; 这正是"派发路径改动"能被验证而不用每次都真派发的关键。
 # O-15/AUDIT (2026-09-21): 追加提取 claude 按路基线(Get-ClaudeFrameworkSubjects) 与 fallback 判定 (Test-FallbackEligible)。
-foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-FallbackEligible', 'Resolve-LocalBash', 'Invoke-LocalBashCmd')) {
+foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-FallbackEligible', 'Test-SensitivityEgressAllowed', 'Resolve-LocalBash', 'Invoke-LocalBashCmd')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -267,6 +267,22 @@ foreach ($rc in @(0, 1, 5, 9, 10, 12, 24, 13)) {
     if (Test-FallbackEligible $rc) { $noFallback = $false }
 }
 Assert-True "fallback: rc in {0,1,5,9,10,12,24,13} 均不触发(不掩盖真实错误)" $noFallback
+
+# --- P0 止血 (2026-09-21): local-only × 后端出网性(安全策略洞) ---
+# 洞: local-only 硬闸三处判据一律只判 `^opencode/`, 而 claude 备路(直接入口 + AUTO_FALLBACK
+#   入口)无 sensitivity 判据 ⇒ local-only 卡的 prompt 可**实际出网**(破 DESIGN §358 不变式)。
+# 行为(真值表): 判据纯函数 —— 只有 local-only 撞上出网后端才拒
+Assert-True "egress: local-only + 出网后端 => 拒(false)" (-not (Test-SensitivityEgressAllowed -sensitivity 'local-only' -backendEgress $true))
+Assert-True "egress: local-only + 本地引擎 => 放行(true, 站上本地模型是合规后端)" (Test-SensitivityEgressAllowed -sensitivity 'local-only' -backendEgress $false)
+Assert-True "egress: sanitized + 出网后端 => 放行(只有 local-only 是硬闸)" (Test-SensitivityEgressAllowed -sensitivity 'sanitized' -backendEgress $true)
+Assert-True "egress: public + 出网后端 => 放行" (Test-SensitivityEgressAllowed -sensitivity 'public' -backendEgress $true)
+Assert-True "egress: 缺省(空 sensitivity) + 出网后端 => 放行(与既有三处闸'缺省=public'一致)" (Test-SensitivityEgressAllowed -sensitivity '' -backendEgress $true)
+# 覆盖(结构): 判据必须在**两个入口都真被调用** —— 只判一处会漏(这是本次洞的成因)
+$callSig = 'Test-SensitivityEgressAllowed -sensitivity $sens -backendEgress $true'
+Assert-True "egress: 判据在 Invoke-Task-Claude(直接入口)与 AUTO_FALLBACK(兜底入口)两处均被调用" (
+    ([regex]::Matches($content, [regex]::Escape($callSig))).Count -ge 2)
+Assert-True "egress: 拒绝串在两条路径均存在(缺一即回归)" (
+    $content.Contains('REJECT local-only+claude-egress') -and $content.Contains('REJECT local-only+egress-fallback'))
 
 # --- O-15/AUDIT (2026-09-21): claude 本地备路的判据 shell 语义 = bash(本地 Git Bash) ---
 # 定案: 卡的 accept/accept-golden **一律 bash 语义**; 两条路只差执行机器与 cwd, 不差 shell。
