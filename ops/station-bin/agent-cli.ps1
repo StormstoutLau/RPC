@@ -794,7 +794,30 @@ function Get-FrameworkSubjects($accept, [bool]$goldenActive) {
     return $list
 }
 
-function Merge-EvidenceSubjects($cardSubjects, $accept, [bool]$goldenActive) {
+function Get-ClaudeFrameworkSubjects($accept, [bool]$goldenActive) {
+    # O-15/AUDIT (2026-09-21): **claude 备路按路的框架基线**。该路归档件集**与主路不同**:
+    #   有 `stderr.txt`(本地 Start-Process 捕获), 而无主路的 `judgment-record`(本地无站上 .meta 回收)、
+    #   无 `accept-cmds`/`prompt…`之外的 `progress-trace`/`session-meta`/`attach-manifest`/`workspace-diff`
+    #   (那些是远端合成批产物, claude 本地路径不产)。
+    #   ⇒ 复用主路基线会让每个 claude run 都假报 `missing-artifact`, 把判据变噪声 —— 审查总账早已提醒
+    #   该路 run 恒 v1、"需按路各一份基线、单独立项"; 本次即把该条落地(recipe v2 的关键)。
+    # 与主路 Get-FrameworkSubjects 同纪律: **只列该次派发必产出的件**(accept/golden 件按激活与否条件列)。
+    $list = @(
+        @{ name = 'agent-output';       path = 'agent-output.txt' }
+        @{ name = 'prompt';             path = 'prompt.txt' }
+        @{ name = 'stderr';             path = 'stderr.txt' }
+        @{ name = 'card';               path = 'card.md' }
+    )
+    $hasAccept = $false
+    foreach ($a in @($accept)) { if ("$a".Trim()) { $hasAccept = $true } }
+    if ($hasAccept) { $list += @{ name = 'accept-output'; path = 'accept-output.txt' } }
+    if ($goldenActive) { $list += @{ name = 'accept-golden-output'; path = 'accept-golden-output.txt' } }
+    return $list
+}
+
+function Merge-EvidenceSubjects($cardSubjects, $accept, [bool]$goldenActive, $baselineFn = $null) {
+    # baselineFn(2026-09-21): 可选**按路基线函数**(脚本块, 签名 (accept, goldenActive))。
+    #   缺省 = 主路 Get-FrameworkSubjects; claude 备路传入 Get-ClaudeFrameworkSubjects(归档件集不同)。
     # 合并: **基线在前、卡声明在后**, 同 path(collect 型按同 name)**以先到者为准**。
     #   去重的理由: 夹具卡里还留着历史遗留的框架件声明(逐卡手写时代的产物), 不去重就会双份
     #   ⇒ 链上同一件出现两次、audit 的 covered 集合语义含糊。去重后**改卡与否都不影响结论**。
@@ -802,7 +825,8 @@ function Merge-EvidenceSubjects($cardSubjects, $accept, [bool]$goldenActive) {
     #   免得下游按 subject 取键时遇到缺键(PS 哈希表缺键取值为 $null, 会静默传播)。
     $seen = New-Object 'System.Collections.Generic.HashSet[string]'
     $out = New-Object System.Collections.ArrayList
-    foreach ($s in @(Get-FrameworkSubjects $accept $goldenActive) + @($cardSubjects)) {
+    $baselineItems = if ($baselineFn) { @(& $baselineFn $accept $goldenActive) } else { @(Get-FrameworkSubjects $accept $goldenActive) }
+    foreach ($s in @($baselineItems) + @($cardSubjects)) {
         if ($null -eq $s) { continue }
         $p = ([string]$s['path']).Trim()
         $n = ([string]$s['name']).Trim()
@@ -857,6 +881,17 @@ function Invoke-Scrubber {
     return $text
 }
 
+function Test-FallbackEligible([int]$code) {
+    # O-15/AUDIT (2026-09-21): 主路(opencode)失败中**哪一类才值得自动切 claude 备路**。
+    # 只认 rc=6(= 远程 `timeout` sentinel→124→6, 及本地 resume 耗尽后的超时) —— 这正是 claude
+    # 备路注释里"站内引擎/opencode 死锁时本地兜底"的场景(如 #17307 超时死锁: 引擎在预算内产不出
+    # 终态输出 ⇒ 死锁, 重温和继续都无效 ⇒ 换本地 claude 重跑是合理的)。
+    # **刻意不认** 1/5/10/12/24/9(任务真实结果: accept 失败/net 挂/station 未就绪/sandbox 不可写/
+    # slot/engine 拒绝) —— 换 claude 重跑会**掩盖真实错误**(用户纪律: 自动 fallback 默认关、显式
+    # 开启; 即便开启也只对"引擎死锁"这一类兜底, 不对"任务失败"兜底)。
+    return ($code -eq 6)
+}
+
 function Invoke-Task {
     # D6 M2: full chain sync->lock->run->collect->unlock for a single task card.
     # prompt is transferred via base64 (immune to quote hell); remote reads it and
@@ -872,7 +907,8 @@ function Invoke-Task {
         [string]$complexity, # 6.4: auto|short|standard|long
         [string]$taskType,   # 6.4: code|reason|concept|numeric|doc
         [string]$cli,        # O-15 executor: ''(auto by route/card) | opencode | claude (控制台本地备路)
-        [switch]$SlotAllowBusy   # O-25 P1: allow dispatch even if target engine /slots busy
+        [switch]$SlotAllowBusy,  # O-25 P1: allow dispatch even if target engine /slots busy
+        [switch]$AutoFallback    # O-15/AUDIT: opencode 引擎死锁/超时(rc=6)时自动转本地 claude 备路 (默认关, 显式开启)
     )
     if (-not $card) { Write-Host 'task requires --card <task.md>'; return 2 }
     if (-not (Test-Path $card)) { throw "card not found: $card" }
@@ -1682,6 +1718,15 @@ exit `$RC
     # (ledger already written above, before collect - G13/O-04)
     Write-Host "TASK_DONE dir=$runDir exit=$code prompt_sha256=sha256:$promptSha content_digest=sha256:$contentSha"
     Write-Host "ledger+=$line"
+    # O-15/AUDIT (2026-09-21): **自动 fallback** —— 仅当显式 -AutoFallback 且主路确走 opencode
+    #   ($effectiveCli='opencode')且 rc 命中"引擎死锁/超时"(rc=6)时才转本地 claude 备路。
+    #   ⚠ 归零纪律: 本函数只有返回值进管道(见 L1634 注); Invoke-Task-Claude 自身已 Out-Null 收敛,
+    #   `return (…)` 只会吐其 int 返回值, 不会污染调用方 `$code = Invoke-Task …`。
+    #   ⚠ 刻意只对 `effectiveCli -eq 'opencode'`: 若卡/路由本就选 claude(或其自身超时)则**不二次转发**。
+    if ($AutoFallback -and $effectiveCli -eq 'opencode' -and (Test-FallbackEligible $code)) {
+        Write-Host "AUTO_FALLBACK: opencode rc=$code -> local claude backup (explicit -AutoFallback)"
+        return (Invoke-Task-Claude -proj $proj -card $card -model $m -sensitive $sens -attach $attach -complexity $complexity -taskType $taskType)
+    }
     return $code
 }
 
@@ -1933,6 +1978,7 @@ function Invoke-Task-Claude {
     # ---- prompt assembly (镜像远程分支; claude 本地不需要 base64, 直写 UTF-8 文件喂 stdin) ----
     $promptFull = "[proj:$proj]`n$($fm['task'])"
     if ($fm['body']) { $promptFull += "`n`n" + $fm['body'] }
+    $attachEntries = @()
     if ($attach.Count -gt 0) {
         # claude cwd=projRoot -> attach 复制到 projRoot\.attach (与远程 workspace 语义一致)
         $attachLocal = Join-Path $projRoot '.attach'
@@ -1941,7 +1987,26 @@ function Invoke-Task-Claude {
         foreach ($a in $attach) {
             if (-not (Test-Path $a)) { Write-Host "attach missing (skip): $a"; continue }
             $name = Split-Path $a -Leaf
-            try { Copy-Item $a (Join-Path $attachLocal $name) -Recurse -Force -EA Stop; $names += $name } catch { Write-Host "ATTACH_WARN: local copy failed: $a ($($_.Exception.Message))" }
+            $isDir = Test-Path $a -PathType Container
+            $srcAbs = $a
+            try { $srcAbs = (Resolve-Path -LiteralPath $a -EA Stop).Path } catch { }
+            try { Copy-Item $a (Join-Path $attachLocal $name) -Recurse -Force -EA Stop; $names += $name } catch { Write-Host "ATTACH_WARN: local copy failed: $a ($($_.Exception.Message))"; continue }
+            # O-15/AUDIT (2026-09-21): 附件身份 —— 与主路缺口 5 同目标, 但**无远端 attach-manifest**
+            #   (claude 本地执行不产该件) ⇒ 摘要取自**本地源文件**哈希(复制到 .attach/ 的注入字节)。
+            #   单文件 = 其字节哈希; 目录 = 对 `relpath:sha256` 行整体哈希的**树摘要**(Get-Sha256Lines)。
+            $lines = New-Object System.Collections.ArrayList
+            if (-not $isDir) {
+                [void]$lines.Add("$name`:" + (Get-FileHash -Algorithm SHA256 $srcAbs).Hash.ToLower())
+                $files = 1
+            } else {
+                $files = 0
+                foreach ($f in @(Get-ChildItem -LiteralPath $srcAbs -Recurse -File -EA SilentlyContinue)) {
+                    $files++
+                    $rel = Join-Path $name ($f.FullName.Substring($srcAbs.Length).TrimStart('\','/'))
+                    [void]$lines.Add("$rel`:" + (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLower())
+                }
+            }
+            $attachEntries += [ordered]@{ name=$name; src=$srcAbs; kind=$(if($isDir){'dir'}else{'file'}); files=$files; sha256=Get-Sha256Lines $lines }
         }
         if ($names.Count -gt 0) {
             $promptFull += "`n`n[attachments in workspace .attach/]: " + ($names -join ', ')
@@ -2065,7 +2130,7 @@ function Invoke-Task-Claude {
         queue_s = 0; run_s = $runS; slot = $null
         output_bytes = $outputBytes; output_bps = $outputBps
         timestamp_start = ''; timestamp_end = ''
-        prompt_sha256 = "sha256:$promptSha"; attach = @($attach)
+        prompt_sha256 = "sha256:$promptSha"; attach = $attachEntries
         # ADR-0007 前置(2026-09-18): 卡身份(与主路同一处置)
         card = $cardId
         profile = [ordered]@{ name=$prof.profile; context=$prof.context; max_output=$prof.max_output;
@@ -2076,6 +2141,19 @@ function Invoke-Task-Claude {
     if ($goldenActive) {
         $run['accept_golden'] = [ordered]@{ cmd = @($g.cmd); passed = ($acceptGoldenOk -eq 1); source = 'golden'; hidden_from_model = $true
                                             sha256 = $goldenSha; base = $goldenBase }   # ADR-0005 D3: 当次权威 checksum 只记于此
+    }
+    # O-15/AUDIT (2026-09-21): **claude 备路证据面到齐 → recipe v2**(此前该路 run 恒 v1 = 零声明,
+    #   audit 不可判 —— 审查总账"该路 run 恒 v1, 需按路各一份基线, 单独立项"; 本次落地)。
+    #   复用主路 Merge-EvidenceSubjects(基线在前、卡声明在前者去重), 但**按本路归档件集**给基线
+    #   (Get-ClaudeFrameworkSubjects): 有 stderr.txt、无 judgment-record/accept-cmds/progress-trace/
+    #   session-meta/attach-manifest/workspace-diff ⇒ 不能复用 opencode 基线(否则每个 claude run
+    #   都假报缺件)。遥测 usage 维持明标 `not-collected-claude-path`(claude 无 opencode 会话库, 不猜数)。
+    $evmC = $fm['evidence-manifest']
+    $mergedSubjects = @(Merge-EvidenceSubjects @($evmC['subjects']) $accept $goldenActive { param($ac,$ga) Get-ClaudeFrameworkSubjects $ac $ga })
+    if ($mergedSubjects.Count -gt 0) {
+        $mergedVer = "$($evmC['version'])".Trim()
+        if (-not $mergedVer) { $mergedVer = '1' }
+        $run['evidence_manifest'] = [ordered]@{ version = $mergedVer; subjects = $mergedSubjects }
     }
     if ($collectOk) {
         try {
@@ -2517,7 +2595,11 @@ try {
     }
     elseif ($Command -eq 'task') {
         # M2 full chain. usage: agent-cli task <proj> --card <task.md> [--model <m>] [--sensitivity <x>] [--complexity <auto|short|standard|long>] [--task-type <code|reason|concept|numeric|doc>]
-        $code = Invoke-Task -proj $Proj -card $Card -model $Model -sensitive $Sensitivity -type $Type -hostName $RemoteHost -attach $Attach -complexity $Complexity -taskType $TaskType -SlotAllowBusy:$SlotAllowBusy -cli $Cli
+        # O-15/AUDIT: 自动 fallback 的**显式开关走 env `AGENT_AUTO_FALLBACK=1`**(默认关、显式开启)。
+        #   ⚠ 不放顶/函数单项 switch 到脚本 param(): 实测 top-level param 块在此 PS5.1 环境**无法再新增一个
+        #   param**(pristine HEAD 单加一行也报 Missing-')') ⇒ 走 Invoke-Task 的**函数级** switch, 由 env 桥接。
+        $autoFb = ($env:AGENT_AUTO_FALLBACK -eq '1')
+        $code = Invoke-Task -proj $Proj -card $Card -model $Model -sensitive $Sensitivity -type $Type -hostName $RemoteHost -attach $Attach -complexity $Complexity -taskType $TaskType -SlotAllowBusy:$SlotAllowBusy -cli $Cli -AutoFallback:$autoFb
         exit $code
     }
     elseif ($Command -eq 'split') {
