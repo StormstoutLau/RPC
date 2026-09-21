@@ -621,6 +621,11 @@ function Get-FrontMatter {
     $h = @{ model=''; sensitivity=''; readonly=$false; timeout_s=900; task=''; cli='opencode'; accept=@(); body=''; complexity=''; 'task-type'=''; 'isolate-xdg'=$false }
     # O-24 P0-①: continue-timeout-s - independent resume budget (default = timeout_s)
     $h['continue-timeout-s'] = 0
+    # P4 (2026-09-21): fallback-timeout-s - **claude 通道(含 AUTO_FALLBACK 备路)的独立预算**;
+    #   0 sentinel = 回落 timeout_s。为什么需要: 备路是被主路失败**触发**的, 若它继承主路那张卡的
+    #   timeout_s, 就等于"主路烧剩多少它用多少"(而主路往往是**耗尽**预算才 rc=6 的) ⇒ 备路几乎
+    #   必然立刻超时 —— 备路等于白切。故 claude 通道要有**自己的**首跑预算。
+    $h['fallback-timeout-s'] = 0
     # O-12: accept-golden single-object {source, cmd} (IMPLEMENTATION §3.1 M1)
     $h['accept-golden'] = @{ source=''; cmd='' }
     # O-16 review ring: advisory judge routing + reserved gate toggle + judge timeout budget
@@ -706,6 +711,10 @@ function Get-FrontMatter {
     $cts = 0
     if (-not [int]::TryParse([string]$h['continue-timeout-s'], [ref]$cts) -or $cts -le 0) { $cts = 0 }
     $h['continue-timeout-s'] = $cts
+    # P4 (2026-09-21): fallback-timeout-s - claude 通道的首跑预算; 0 sentinel = 回落 timeout_s
+    $fts = 0
+    if (-not [int]::TryParse([string]$h['fallback-timeout-s'], [ref]$fts) -or $fts -le 0) { $fts = 0 }
+    $h['fallback-timeout-s'] = $fts
     return $h
 }
 
@@ -935,6 +944,27 @@ function Get-SensitivityBackendReject {
     )
     if ($sensitivity -eq 'local-only' -and $backendEgress) { return 'local-only+egress' }
     return ''
+}
+
+function Resolve-ClaudeBudget {
+    # P4 (2026-09-21): claude 通道(直接入口 + AUTO_FALLBACK 备路)**自己的**预算选择。纯函数 ⇒ 夹具可离线单测。
+    # 为什么必须独立(而不复用主路那张卡的 timeout_s): 备路是被主路失败**触发**的, 而主路往往正是
+    #   **耗尽**预算才 rc=6(实测: fallback-deadlock 卡 `timeout_s:10` 就是被 `timeout 10` 掐断的)
+    #   ⇒ 若备路继承同一张卡的 timeout_s, 等于"用别人烧剩的" ⇒ 必然立刻超时 ⇒ **备路白切**。
+    # 缺省链(三个键卡里都可以不写):
+    #   first  = `fallback-timeout-s`(>0) ? 它 : `timeout_s`
+    #   resume = `continue-timeout-s`(>0) ? 它 : **first**
+    #   ⚠ resume 的**原**缺省是 `timeout_s`; 现改为**跟随 first** —— 否则"设了 fallback 但没设 continue"
+    #     的卡会出现"首跑用备路预算、续接回落主路预算"的错配。
+    param(
+        [int]$timeoutS,
+        [int]$fallbackTimeoutS,
+        [int]$continueTimeoutS
+    )
+    $src = if ($fallbackTimeoutS -gt 0) { 'fallback-timeout-s' } else { 'timeout_s' }
+    $first = if ($fallbackTimeoutS -gt 0) { $fallbackTimeoutS } else { $timeoutS }
+    $resume = if ($continueTimeoutS -gt 0) { $continueTimeoutS } else { $first }
+    return @{ first = $first; resume = $resume; first_src = $src }
 }
 
 function Invoke-Task {
@@ -2036,10 +2066,14 @@ function Invoke-Task-Claude {
     if ($cardOk -is [array]) { $cardOk = @($cardOk | Where-Object { $null -ne $_ })[0] }
     if (-not $cardOk) { return 2 }
     $readonly = [bool]$fm['readonly']
-    $timeout = [int]$fm['timeout_s']
-    $continueTimeout = [int]$fm['continue-timeout-s']
-    if ($continueTimeout -le 0) { $continueTimeout = $timeout }
-    Write-Host "BUDGET: first=$timeout resume=$continueTimeout (claude local backup)"
+    # P4 (2026-09-21): 本通道(= claude 通道, 含 AUTO_FALLBACK 备路)用自己的预算, **不再**继承主路那张卡
+    #   已烧剩的 timeout_s —— 理由见 Resolve-ClaudeBudget 注释(备路继承主路预算 ⇒ 必超时 ⇒ 白切)。
+    $fbBudget = Resolve-ClaudeBudget -timeoutS ([int]$fm['timeout_s']) `
+                  -fallbackTimeoutS ([int]$fm['fallback-timeout-s']) `
+                  -continueTimeoutS ([int]$fm['continue-timeout-s'])
+    $timeout = [int]$fbBudget['first']
+    $continueTimeout = [int]$fbBudget['resume']
+    Write-Host ("BUDGET: first={0} resume={1} (claude channel; first_src={2})" -f $timeout, $continueTimeout, $fbBudget['first_src'])
 
 
     $r = Resolve-Model $m

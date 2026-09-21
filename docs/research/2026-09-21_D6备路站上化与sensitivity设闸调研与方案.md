@@ -187,7 +187,7 @@
 | P1 | 核对 OpenRouter 隐私设置（opt-in 日志必须关）+ 登记 | 运维 | ✅ **核对面已完成**：开关**不可机读**（故只能人工读表）；四开关实况入档；免费/付费档策略矩阵实测。**结论**：① 已关；**免费档 train 开** ⇒ 加 `sanitized` 闸后**同日撤回**，改登记为已知风险。[全文](../security/2026-09-21_OpenRouter数据策略与隐私开关核对.md) |
 | P2 | 判据统一：`local-only` 闸改为"后端 `egress` 属性" | 代码 | 结构性，防"再加云端后端又漏" |
 | P3 | claude 备路**站上化**（ssh + 脚本落盘；后端按 sensitivity 分流；选站排除死锁站；fail-closed） | 代码 | 本方案主体。**前置已部分去风险**：§3.5 测量 3 已证「信号类 rc=6 后引擎健康」⇒ **P3 不再为那类兜底**，理由收敛为绕开沙箱 / local-only 合规兜底 / 故障域多样性。⚠ `public`/`sanitized` 默认后端**仍未定**（§3.4 的 1/2/3/4 维未做） |
-| P4 | 备路独立预算 `fallback-timeout-s` | 代码 | 独立缺陷，可与 P3 同批 |
+| P4 | 备路独立预算 `fallback-timeout-s` | 代码 | ✅ **2026-09-21 已实施**：新增卡键 `fallback-timeout-s`（0 sentinel = 沿用 `timeout_s`）+ 纯函数 `Resolve-ClaudeBudget`（`first = fallback>0 ? fallback : timeout_s`；`resume = continue>0 ? continue : **first**` ← 该回落目标由 `timeout_s` 改为 `first`，防"首跑用备路、续接回落主路"错配）。自证：夹具 **69/69**（+8 条）+ **实弹双卡**（同一进程里卡未设 ⇒ `first=5 … first_src=timeout_s`；卡设 8 ⇒ `first=8 … first_src=fallback-timeout-s`）+ **变异自证**（让纯函数忽略 fallback ⇒ 恰 2 条相关断言变红）。⚠ **但它只覆盖"备路跑批"** —— **不覆盖**"换站/加载/就绪校验/sync-collect"那三段（见 §3.5 与 OPEN-ISSUES「总墙钟预算缺失」行） |
 | P5 | `public`/`sanitized` 开 ZDR（账户级/guardrail） | 运维 | 补充防线 |
 
 **验收判据（必须双向自证）**

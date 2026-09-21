@@ -212,6 +212,7 @@ sensitivity: public | sanitized | local-only              # 默认 public
 audit: true | false                                       # true 时 prompt 尾注 assertion-audit 契约
 readonly: true | false                                    # MVP 仅记录（4.1 层2）
 timeout_s: 900                                            # 可选覆盖
+fallback-timeout-s: 0                                     # claude 通道(含 AUTO_FALLBACK 备路)的独立首跑预算; 0=沿用 timeout_s (P4, 2026-09-21)
 accept:                                                   # 验收判据（可执行）
   - python -m pytest paper_cli/tests/ -q
 ---

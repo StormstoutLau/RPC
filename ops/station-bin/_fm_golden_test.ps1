@@ -27,7 +27,7 @@ Invoke-Expression $fn.Extent.Text   # 定义函数到当前会话
 # 它们是**纯函数**(只吃 $accept/$goldenActive/卡 subjects, 不碰站、不碰文件系统)
 # ⇒ 可离线单测; 这正是"派发路径改动"能被验证而不用每次都真派发的关键。
 # O-15/AUDIT (2026-09-21): 追加提取 claude 按路基线(Get-ClaudeFrameworkSubjects) 与 fallback 判定 (Test-FallbackEligible)。
-foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-FallbackEligible', 'Get-SensitivityBackendReject', 'Resolve-LocalBash', 'Invoke-LocalBashCmd')) {
+foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-FallbackEligible', 'Get-SensitivityBackendReject', 'Resolve-ClaudeBudget', 'Resolve-LocalBash', 'Invoke-LocalBashCmd')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -290,6 +290,43 @@ Assert-True "reject: 判据在 Invoke-Task-Claude(直接入口)与 AUTO_FALLBACK
     ([regex]::Matches($content, [regex]::Escape($callSig))).Count -ge 2)
 Assert-True "reject: 两条路径的拒绝串可分辨路径(claude-direct / fallback 均在)" (
     $content.Contains('(claude-direct, $id)') -and $content.Contains('(fallback, $fbModel)'))
+
+# --- P4 (2026-09-21): claude 通道的**独立预算** `fallback-timeout-s` ---
+# 缺陷: 备路是被主路失败**触发**的, 却继承同一张卡的 `timeout_s`; 而主路往往正是**耗尽**预算才
+#   rc=6(实测 fallback-deadlock 卡 `timeout_s:10` 就是被 `timeout 10` 掐断) ⇒ 备路 = "用别人烧剩的"
+#   ⇒ 必然立刻超时 ⇒ **白切**。修法: claude 通道用自己的首跑预算。
+$bA = Resolve-ClaudeBudget -timeoutS 900 -fallbackTimeoutS 0 -continueTimeoutS 0
+Assert-True "budget: 卡未设 fallback => first 回落 timeout_s(不回归)" (
+    $bA['first'] -eq 900 -and $bA['first_src'] -eq 'timeout_s')
+Assert-True "budget: 卡未设 fallback => resume 跟随 first(=900)" ($bA['resume'] -eq 900)
+$bB = Resolve-ClaudeBudget -timeoutS 10 -fallbackTimeoutS 120 -continueTimeoutS 0
+Assert-True "budget: 卡设了 fallback => first 用它(120) 且来源可判" (
+    $bB['first'] -eq 120 -and $bB['first_src'] -eq 'fallback-timeout-s')
+# ⚠ 行为变更点: resume 的**原**缺省是 timeout_s, 现改为跟随 first —— 否则"设了 fallback 但没设
+#   continue"的卡会"首跑用备路预算、续接回落主路预算"(错配)。此断言守住该变更。
+Assert-True "budget: fallback 生效时 resume 跟随 first(120), **不**回落主路 10" ($bB['resume'] -eq 120)
+$bC = Resolve-ClaudeBudget -timeoutS 10 -fallbackTimeoutS 120 -continueTimeoutS 30
+Assert-True "budget: continue-timeout-s > 0 时优先(30)" ($bC['resume'] -eq 30)
+Assert-True "budget: 畸形/非正值一律回落(fallback=-1 => 取 timeout_s 7)" (
+    (Resolve-ClaudeBudget -timeoutS 7 -fallbackTimeoutS -1 -continueTimeoutS -1)['first'] -eq 7)
+# ⚠ 卡键必须同时进 `Get-FrontMatter` 的**预置键集** —— 通用键分支有 `ContainsKey` 白名单门,
+#   否则卡里写了也会被**静默丢弃**(该门的历史坑见 evidence-manifest/accept-golden 注释)。
+$ftsCard = Join-Path $tmpCards 'fallback-budget.md'
+@"
+---
+proj: paper
+task: budget parse test
+model: claude
+sensitivity: public
+timeout_s: 10
+fallback-timeout-s: 77
+---
+body
+"@ | Set-Content $ftsCard -Encoding utf8
+Assert-True "budget: 卡里的 fallback-timeout-s 真能解析进 front-matter(白名单不丢)" (
+    ([int]((Get-FrontMatter $ftsCard)['fallback-timeout-s'])) -eq 77)
+Assert-True "budget: 未写该键的卡 => 归一为 0 sentinel(不是空串/异常)" (
+    ([int]((Get-FrontMatter $plainCard)['fallback-timeout-s'])) -eq 0)
 
 # --- O-15/AUDIT (2026-09-21): claude 本地备路的判据 shell 语义 = bash(本地 Git Bash) ---
 # 定案: 卡的 accept/accept-golden **一律 bash 语义**; 两条路只差执行机器与 cwd, 不差 shell。
