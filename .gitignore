@@ -28,6 +28,9 @@ Desktop.ini
 # D2 运行时生成物
 ops/cluster_status.html
 ops/.egress_daily.json
+# 2026-09-21: OpenRouter 额度借用台账 —— 运行时状态(谁在借、借自谁、起于何日), 由
+# `cluster.py egress borrow --go/--restore --go` 读写; 无密钥内容, 但属环境态 ⇒ 同 .egress_daily.json 不入库。
+ops/.or-borrow.json
 # ADR-0007 路A: 审计增量水印 —— 主控本地状态(单机单贡献者, 入仓换来的"跨机一致"当前无收益);
 # 由显式命令 `cluster.py agent audit --accept` 推进, 门禁只读不改它。
 ops/.audit-baseline.json
