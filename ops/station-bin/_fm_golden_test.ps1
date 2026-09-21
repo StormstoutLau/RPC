@@ -33,6 +33,17 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
     Invoke-Expression $f.Extent.Text
 }
 
+# --- 2026-09-21: 提取**真实 ROUTE_TABLE**(它是赋值语句, 不是函数) ---
+# 为什么必须测真表: `_probe_fallback.ps1` 的 `Resolve-Model` 是 **stub** ⇒ 守护不到真表;
+#   而 claude 备路型号一旦回退成 **Claude 原生 id**, 经 OpenRouter 会 **403 地区墙**(2026-09-21 实测)
+#   —— 这条回归**没有别的守卫**。
+$rtAst = @($ast.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+    $n.Left.Extent.Text -eq '$Script:ROUTE_TABLE' }, $true)) | Select-Object -First 1
+if (-not $rtAst) { throw '$Script:ROUTE_TABLE assignment not found in agent-cli.ps1' }
+Invoke-Expression $rtAst.Extent.Text
+Write-Host "DEBUG ROUTE_TABLE keys=$(@($Script:ROUTE_TABLE.Keys).Count)"
+
 $pass = 0; $fail = 0
 function Assert-True($name, $cond) {
     if ($cond) { $script:pass++; Write-Host "PASS  $name" }
@@ -269,6 +280,20 @@ Assert-True "bash: 'true' => rc 0 (PS Invoke-Expression 会得 1 = 本次修的 
 Assert-True "bash: 'false' => rc 非 0(判据真能 FAIL, 非恒过)" (
     (Invoke-LocalBashCmd -bashPath $lb -cmd 'false' -cwd $env:TEMP -logFile $fmLog) -ne 0)
 Remove-Item $fmLog -ErrorAction SilentlyContinue
+
+# --- 2026-09-21: claude 备路型号必须**经 OpenRouter 可服务**(不能是 Claude 原生 id) ---
+# 实测依据: claude-opus-4-7 / claude-sonnet-4-5 / claude-opus-4-1 经 OpenRouter **全部 403**
+#   `This model is not available in your region.`(Claude 原生 id 被路由到真实 Anthropic 上游);
+#   而 thinkingmachines/*:free 与 nvidia/*:free 可用。故这里守的是**不变量**而非具体型号。
+$rtc = $Script:ROUTE_TABLE['claude']; $rto = $Script:ROUTE_TABLE['claude-opus']
+Assert-True "route: claude 备路型号非 Claude 原生 id(否则经 OpenRouter 403 地区墙)" ("$($rtc.id)" -notmatch '^claude-')
+Assert-True "route: claude-opus 备路型号非 Claude 原生 id" ("$($rto.id)" -notmatch '^claude-')
+Assert-True "route: 备路型号形如 OpenRouter id(含 /)" ("$($rtc.id)" -match '/' -and "$($rto.id)" -match '/')
+Assert-True "route: claude/claude-opus 仍 station=''(本地执行, 不走 ssh)" ("$($rtc.station)" -eq '' -and "$($rto.station)" -eq '')
+Assert-True "route: claude/claude-opus 仍 cli='claude'" ("$($rtc.cli)" -eq 'claude' -and "$($rto.cli)" -eq 'claude')
+# env AGENT_FALLBACK_MODEL 覆盖需能解析 ⇒ 必须有 full-id 直传条目
+Assert-True "route: 备路型号有 full-id 直传条目(env AGENT_FALLBACK_MODEL 才能解析)" (
+    $Script:ROUTE_TABLE.ContainsKey("$($rtc.id)"))
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"

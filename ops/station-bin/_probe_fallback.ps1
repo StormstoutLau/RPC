@@ -36,7 +36,11 @@ Invoke-Expression $it.Extent.Text
 
 # --- stub site/remote deps so opencode main path returns rc=124 -> 6 without a live site ---
 function Get-TargetHost([string]$station) { return 'PROBE-A' }
-function Resolve-Model([string]$m) { if ($m -eq 'claude') { return @{ id='claude-sonnet-4-5'; station=''; cli='claude' } } return $null }
+function Resolve-Model([string]$m) {
+    # mirror the real ROUTE_TABLE claude entries (2026-09-21: OpenRouter-served ids, NOT Claude-native)
+    if ($m -eq 'claude' -or $m -eq 'thinkingmachines/inkling:free') { return @{ id='thinkingmachines/inkling:free'; station=''; cli='claude' } }
+    return $null
+}
 function Resolve-Profile { param() return [pscustomobject]@{ profile='reason'; context=8192; max_output=1000; thinking='OFF'; template=''; reasoning_format=''; flavor=''; source='stub' } }
 function Get-ThroughputEstimate { param() return @{ hit = $false } }
 function Assert-AgentOutWritable { param() return $true }
@@ -138,12 +142,12 @@ else {
     if ($claudeRun.status -ne 'failed' -and $claudeRun.status -ne 'timeout') {
         Write-Host ('WARN  claude run status=' + $claudeRun.status + ' (expected failed/timeout under unauth claude)')
     } else { Write-Host ('PASS  claude run status=' + $claudeRun.status + ' (honest failure, unauth claude)') }
-    # (2b) 备路型号映射: 必须落到 claude 路由解析出的 id, **不能**是主路模型别名、更不能是 .meta 文本。
-    #      (真实站实弹踩过: `$m` 被 collect 段改写 ⇒ 传 meta 文本 ⇒ REJECT; 见 ssh stub 处注释)
-    if ($claudeRun.model -eq 'claude-sonnet-4-5') {
-        Write-Host 'PASS  claude run model=claude-sonnet-4-5 (备路型号映射正确, 未被 .meta 文本污染)'
+    # (2b) 备路型号映射: 必须落到 claude 路由解析出的 id, **不能**是主路模型别名、更不能是 .meta 文本;
+    #      且必须是 **OpenRouter 可服务的 id**(2026-09-21 实测: Claude 原生 id 经 OpenRouter 必 403 地区墙)。
+    if ($claudeRun.model -eq 'thinkingmachines/inkling:free') {
+        Write-Host 'PASS  claude run model=thinkingmachines/inkling:free (备路型号映射正确, 非 .meta 文本/非 Claude 原生 id)'
     } else {
-        Write-Host ('FAIL  claude run model=' + $claudeRun.model + ' (期望 claude-sonnet-4-5)'); $ok = $false
+        Write-Host ('FAIL  claude run model=' + $claudeRun.model + ' (期望 thinkingmachines/inkling:free)'); $ok = $false
     }
     # (3) evidence_manifest present => recipe v2 (the headline of this change)
     $evm = $claudeRun.evidence_manifest
