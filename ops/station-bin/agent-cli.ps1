@@ -2178,12 +2178,37 @@ function Invoke-Task-Claude {
     return $finalCode
 }
 
+function Resolve-ClaudeSpawn {
+    # O-15/AUDIT (2026-09-21): 把 `claude` 解析为"可直接 Start-Process 的原生可执行", 绕开 Windows npm shim。
+    # 现象: Get-Command claude 命中 ExternalScript=`...\npm\claude.ps1`; 因 Invoke-ClaudeFly 用了
+    #   `-RedirectStandardInput` ⇒ PS 强制 `UseShellExecute=$false` ⇒ Start-Process 走 CreateProcess 直接
+    #   把该 .cmd/.ps1 shim 当 Win32 程序加载 ⇒ 报 "%1 不是有效的 Win32 应用程序"(2026-09-21 实测,
+    #   rc=7, 备路即便登录也在 exec 级失败)。
+    # 处置: 定位 npm 同时生成的**原生二进制** `node_modules\@anthropic-ai\claude-code\bin\claude.exe`
+    #   (本环境实测存在; --version headless 正常)。直调该 exe ⇒ 与 shim 等效但可被 CreateProcess 加载,
+    #   stdin/stdout/stderr 重定向无碍。纯 JS 部署(无 .exe)则保留原样走 PATH(可能复现旧失败, 少见)。
+    $cmd = Get-Command claude -ErrorAction SilentlyContinue
+    if (-not $cmd) { return 'claude' }
+    $src = "$($cmd.Source)"
+    try { $src = (Get-Item -LiteralPath $src -ErrorAction Stop).FullName } catch { }
+    $ext = [IO.Path]::GetExtension($src).ToLower()
+    if ($ext -eq '.exe') { return $src }                       # 真 exe(PATH 层级已是原生)
+    if ($ext -eq '') { return 'claude' }                       # bash shebang / Unix 直 exec
+    # Windows npm shim(.ps1/.cmd): 与 shim 同 npmRoot 下的原生 bin
+    $base = Split-Path $src -Parent
+    $native = Join-Path $base 'node_modules\@anthropic-ai\claude-code\bin\claude.exe'
+    if (Test-Path $native) { return $native }
+    return $src                                                # 兜底(可能复现旧 exec 失败)
+}
+
 function Invoke-ClaudeFly {
     # 用 Start-Process 把 stdin 文件喂给 claude headless, stdout/stderr 落盘; 超时 kill 返回 124.
     param([string]$argStr, [string]$stdin, [string]$stdout, [string]$stderr, [string]$scratch, [int]$budgetS)
     if (-not (Test-Path $stdin)) { [IO.File]::WriteAllText($stdin, '', (New-Object System.Text.UTF8Encoding $false)) }
     try {
-        $p = Start-Process -FilePath 'claude' -ArgumentList $argStr -NoNewWindow -PassThru `
+        $spawn = Resolve-ClaudeSpawn
+        Write-Host "CLAUDE_SPAWN=$spawn"
+        $p = Start-Process -FilePath $spawn -ArgumentList $argStr -NoNewWindow -PassThru `
             -RedirectStandardInput $stdin -RedirectStandardOutput $stdout -RedirectStandardError $stderr
         if (-not $p.WaitForExit($budgetS * 1000)) { $p.Kill(); $p.WaitForExit(); return @{ code = 124; msg = "timeout after ${budgetS}s (killed)" } }
         return @{ code = $p.ExitCode; msg = '' }

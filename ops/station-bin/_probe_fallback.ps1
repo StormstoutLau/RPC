@@ -24,7 +24,7 @@ $fns = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.
 foreach ($nm in @('Get-FrontMatter','Get-CardIdentity','Test-CardSafetyDeclared','Get-Sha256Text',
                   'Get-Sha256Lines','Get-NumOr','Invoke-Scrubber','Merge-EvidenceSubjects',
                   'Get-FrameworkSubjects','Get-ClaudeFrameworkSubjects','Test-FallbackEligible',
-                  'Invoke-ClaudeFly','Invoke-Task-Claude')) {
+                  'Resolve-ClaudeSpawn','Invoke-ClaudeFly','Invoke-Task-Claude')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found" }
     Invoke-Expression $f.Extent.Text
