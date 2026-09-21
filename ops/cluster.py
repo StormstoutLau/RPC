@@ -4344,6 +4344,82 @@ def agent_audit_judge(audit: dict, max_tokens: int = 400, rounds: int = 3, save:
     return res
 
 
+def _p3_pin_notes() -> dict:
+    """P3（2026-09-21）: 把冷镜像链存进 git notes ref `refs/notes/evidence-chain` 并 push 到 origin。
+
+    给"链本体"再一份 off-machine 副本（SLSA E2E 的 VSA-in-commit-notes 同款形态）。
+    ⚠ **诚实边界（与调研 §14 一致）**:
+      · P2 已把同一字节的冷镜像诤在 `main`（且 P1 ruleset 保护）⇒ P3 本质是**冗余副本**；
+      · git notes **默认不被 clone/fetch**，离机读者须显式 `git fetch origin refs/notes/evidence-chain`
+        再 `git notes --ref=evidence-chain show <commit>` ⇒ **比 P2 隐蔽、更易被忘**。
+      只在 `agent chain --pin-notes` 时显式做，不默认每次派发自动跑。
+    """
+    import shutil, subprocess
+    root = Path(__file__).resolve().parent.parent
+    src = AGENT_CHAIN_COLD
+    git, note_ref = shutil.which("git"), "evidence-chain"
+    if not git:
+        return {"ok": False, "error": "无 git 可执行"}
+    if not src.is_file():
+        return {"ok": False, "error": f"{src.name} 不存在（先跑 `agent chain`）"}
+
+    def _g(*a):
+        return subprocess.run([git, *a], cwd=str(root), capture_output=True)
+
+    r = _g("notes", "--ref", note_ref, "add", "-f", "-F", str(src), "HEAD")
+    if r.returncode != 0:
+        return {"ok": False, "error": (r.stderr or r.stdout).decode("utf-8", "replace").strip()[:200]}
+    p = _g("push", "origin", f"refs/notes/{note_ref}:refs/notes/{note_ref}")
+    if p.returncode != 0:
+        return {"ok": False, "partial": True,
+                "error": "本地 note 已写，push 失败: "
+                         + (p.stderr or p.stdout).decode("utf-8", "replace").strip()[:200]}
+    s = _g("notes", "--ref", note_ref, "show", "HEAD")
+    return {"ok": True, "ref": f"refs/notes/{note_ref}", "pushed": True,
+            "offline_roundtrip": bool(s.returncode == 0 and s.stdout == src.read_bytes())}
+
+
+def _p4_mirror(st: str) -> dict:
+    """P4（2026-09-21）: 把冷镜像链推送到站 `st` 的 `evidence-mirror/`（只读近似）。
+
+    镜像侧 chmod 555/444 ⇒ "写入方不能改删已有件"的近似。
+    ⚠ **诚实边界（调研 §14.5）**: 3 台机**同一运营者** ⇒ 这只是**冗余/可用性**（抗磁盘故障），
+      **不是不可否认**；且"只读"可被同运营者解除 ⇒ 强度 = 定期的于册副本，非安全边界。
+    """
+    src = AGENT_CHAIN_COLD
+    if not src.is_file():
+        return {"ok": False, "error": f"{src.name} 不存在（先跑 `agent chain`）"}
+    try:
+        cli = _connect(st)
+        sftp = cli.open_sftp()
+        _p4_mkdir(sftp, "evidence-mirror")
+        remote = "evidence-mirror/agent-chain.json"
+        with sftp.open(remote, "wb") as f, open(src, "rb") as lf:
+            f.write(lf.read())
+        with sftp.open(remote, "rb") as f:
+            got = f.read()
+        sftp.chmod(remote, 0o444)
+        sftp.chmod("evidence-mirror", 0o555)
+        sftp.close()
+        cli.close()
+        return {"ok": True, "station": st, "remote": f"{st}:{remote}", "bytes": len(got),
+                "match_roundtrip": got == src.read_bytes()}
+    except Exception as e:
+        try:
+            cli.close()
+        except Exception:
+            pass
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def _p4_mkdir(sftp, path: str) -> None:
+    """幂等建远端目录（paramiko mkdir 已存在会抛）。"""
+    try:
+        sftp.mkdir(path)
+    except OSError:
+        pass
+
+
 def cmd_agent(argv) -> int:
     """cluster.py agent {runs|live|tail|chain|verify|audit} [--limit N] [--station A|B|C] [--json] [--reanchor]
 
@@ -4366,9 +4442,10 @@ def cmd_agent(argv) -> int:
     act = (argv[0] if argv else "runs").lower()
     if act not in ("runs", "live", "tail", "chain", "verify", "audit", "audit-judge"):
         print("用法: cluster.py agent {runs|live|tail|chain|verify|audit|audit-judge} [--limit N] "
-              "[--station A|B|C] [--json] [--save] [chain 可加 --reanchor; audit 可加 --accept]")
+              "[--station A|B|C] [--json] [--save] [chain 可加 --reanchor/--pin-notes/--mirror <站>; "
+              "audit 可加 --accept]")
         return 1
-    limit, only, as_json = 20, None, ("--json" in argv)
+    limit, only, as_json, mirror_st = 20, None, ("--json" in argv), None
     i = 1
     while i < len(argv):
         if argv[i] == "--limit" and i + 1 < len(argv):
@@ -4383,9 +4460,16 @@ def cmd_agent(argv) -> int:
             only = argv[i + 1].upper()
             i += 2
             continue
+        if argv[i] == "--mirror" and i + 1 < len(argv):
+            mirror_st = argv[i + 1].upper()
+            i += 2
+            continue
         i += 1
     if only and only not in STATIONS:
         print(f"未知站 '{only}' (可选: {', '.join(STATIONS)})")
+        return 1
+    if mirror_st and mirror_st not in STATIONS:
+        print(f"未知镜像站 '{mirror_st}' (可选: {', '.join(STATIONS)})")
         return 1
     stations = [only] if only else ["A", "B", "C"]
 
@@ -4411,6 +4495,21 @@ def cmd_agent(argv) -> int:
         print("  判据: 本命令**唯一**写动作为链文件+冷路径镜像+外部锚; run 目录一律只读。")
         if not r.get("anchor_written") and not (r.get("added") or []):
             print("  提示: 锚与链**不符**时本命令刻意不动锚(避免抹掉篡改信号); 确要重锚用 --reanchor。")
+        # ── P3 / P4 (2026-09-21): 用户裁定"两者都做"; 显式一次性命令, 非默认自动跑 ──
+        if "--pin-notes" in argv:
+            rt = _p3_pin_notes()
+            if rt.get("ok"):
+                print(f"  P3 git-notes 镜像: ✅ 已 push `{rt['ref']}` · 本地回读一致="
+                      f"{rt.get('offline_roundtrip')}（诚实: P2 已冗余, notes 更隐蔽）")
+            else:
+                print(f"  P3 git-notes 镜像: ✗ {rt.get('error')}" + ("（本地已写、未 push）" if rt.get("partial") else ""))
+        if mirror_st:
+            rm = _p4_mirror(mirror_st)
+            if rm.get("ok"):
+                print(f"  P4 只读镜像: ✅ {rm['remote']} · {rm['bytes']}B · 回读一致="
+                      f"{rm.get('match_roundtrip')}（诚实: 同运营者 ⇒ 冗余非不可否认）")
+            else:
+                print(f"  P4 只读镜像: ✗ {rm.get('error')}")
         return 0
 
     if act == "audit":
