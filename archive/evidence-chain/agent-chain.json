@@ -1561,11 +1561,27 @@
    },
    "recipe": "v2",
    "chained_at": "2026-09-21 17:12:15"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609211739020633",
+   "digest": "b94a1e35600d71fc39ef25c2d2d6d1aa9829dc4181708302719925e151695d05",
+   "prev": "14c2f6fce42251d3384364c655b10981990906d01f2cd269ffcb8ab115f86db6",
+   "files": {
+    ".agent-run.json": "7be1d5ddfb664b94bea76871db0ba70273b44bda316977ebfdb99bd9aa5493b9",
+    "agent-output": "5678bc930796e2b7bd298461ce07b738e4cd2374e17d0feada291dd512d9f8d6",
+    "prompt": "5d3906531fbbaa41e36831aa20627bf1c4e005adbbcc341d2f0115750ab4ed8e",
+    "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "card": "f106ebd207ee4d777a7fea3d04824547599a514e44ba74bd48346bb32a80d031",
+    "accept-output": "c0a024032a487ae3eb4dcfe1da0c0f833822cabbb688e49b25670e4ee3474faf"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-21 17:39:57"
   }
  ],
  "head": {
   "proj": "paper",
-  "run_id": "202609211711138716",
-  "digest": "14c2f6fce42251d3384364c655b10981990906d01f2cd269ffcb8ab115f86db6"
+  "run_id": "202609211739020633",
+  "digest": "b94a1e35600d71fc39ef25c2d2d6d1aa9829dc4181708302719925e151695d05"
  }
 }
