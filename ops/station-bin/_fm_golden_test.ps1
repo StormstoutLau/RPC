@@ -27,7 +27,7 @@ Invoke-Expression $fn.Extent.Text   # 定义函数到当前会话
 # 它们是**纯函数**(只吃 $accept/$goldenActive/卡 subjects, 不碰站、不碰文件系统)
 # ⇒ 可离线单测; 这正是"派发路径改动"能被验证而不用每次都真派发的关键。
 # O-15/AUDIT (2026-09-21): 追加提取 claude 按路基线(Get-ClaudeFrameworkSubjects) 与 fallback 判定 (Test-FallbackEligible)。
-foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-FallbackEligible')) {
+foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-FallbackEligible', 'Resolve-LocalBash', 'Invoke-LocalBashCmd')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -256,6 +256,19 @@ foreach ($rc in @(0, 1, 5, 9, 10, 12, 24, 13)) {
     if (Test-FallbackEligible $rc) { $noFallback = $false }
 }
 Assert-True "fallback: rc in {0,1,5,9,10,12,24,13} 均不触发(不掩盖真实错误)" $noFallback
+
+# --- O-15/AUDIT (2026-09-21): claude 本地备路的判据 shell 语义 = bash(本地 Git Bash) ---
+# 定案: 卡的 accept/accept-golden **一律 bash 语义**; 两条路只差执行机器与 cwd, 不差 shell。
+#   (原用 PowerShell Invoke-Expression ⇒ 实测 `true` 得 rc=1 ⇒ 即使 claude 成功 accept 也必判失败)
+$lb = Resolve-LocalBash
+Assert-True "bash: 解析到本地 Git Bash 且**不是** WSL 的 system32\bash.exe" ($lb -ne '' -and $lb -notmatch 'system32')
+# `true` 是 bash 内建; 在 PS 里 `Invoke-Expression 'true'` 会抛 ⇒ 这正是本次修掉的"判据级假红灯"
+$fmLog = Join-Path $env:TEMP 'fm_bash_semantics.log'
+Assert-True "bash: 'true' => rc 0 (PS Invoke-Expression 会得 1 = 本次修的 bug)" (
+    (Invoke-LocalBashCmd -bashPath $lb -cmd 'true' -cwd $env:TEMP -logFile $fmLog) -eq 0)
+Assert-True "bash: 'false' => rc 非 0(判据真能 FAIL, 非恒过)" (
+    (Invoke-LocalBashCmd -bashPath $lb -cmd 'false' -cwd $env:TEMP -logFile $fmLog) -ne 0)
+Remove-Item $fmLog -ErrorAction SilentlyContinue
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"

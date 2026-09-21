@@ -34,3 +34,17 @@ accept:
 > ```
 > 预期：主路 rc=6 → 打印 `AUTO_FALLBACK: opencode rc=6 -> local claude backup` → 转
 > `Invoke-Task-Claude`（claude 未登录时该 run 记 `failed`，但**证据面 v2 照常归档**）。
+>
+> ## 判据（accept / accept-golden）的 shell 语义 —— **卡作者必读**
+>
+> **定案（2026-09-21）：卡里的 `accept` / `accept-golden` 一律是 bash 语义。**
+> 主路在**远端 bash** 跑（cwd = 站上工作区）；claude 本地备路在**本地 Git Bash** 跑
+> （cwd = `projRoot`）。**两条路只差执行机器与 cwd，不差 shell。**
+>
+> ⇒ **本卡要两路都能过，判据就必须跨环境可移植**：
+> - ✅ 可以：`true` / `test -f <在两处都存在且同相对路径的文件>` / `bash .golden/xxx.sh`
+> - ⚠ 不可以：`./.venv/bin/python …`（Linux 专属路径；Windows 上 venv 布局是 `.venv/Scripts/python.exe`）
+>   或依赖远端工作区独有目录（如站上 `out/`）的判据 —— 这类命令**只在主路有意义**。
+>
+> 备路缺 Git Bash 时**提前**拒绝（`REJECT local-bash-missing (exit 13)`），
+> 刻意**不**退回 PowerShell（那会把 bash 语义判据一律判成失败 = 判据假红灯）。
