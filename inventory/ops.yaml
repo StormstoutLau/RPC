@@ -176,6 +176,7 @@ frozen_ops_scripts:
   - ops/station-bin/_probeN_B.sh
   - ops/station-bin/_probe_arch.sh
   - ops/station-bin/_probe_ctx3.sh
+  - ops/station-bin/_probe_fallback.ps1
   - ops/station-bin/_probe_glm2.sh
   - ops/station-bin/_probe_glm_A.sh
   - ops/station-bin/_probe_glm_arch_A.sh
