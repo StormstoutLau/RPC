@@ -185,10 +185,22 @@ def resolve_host(st: str) -> str:
 
 
 def _connect(st: str, timeout: int = SSH_TIMEOUT) -> paramiko.SSHClient:
+    """建连的**唯一入口** —— 三个调用点都走它, 别在别处再 `paramiko.SSHClient()`(配置会漂)。
+
+    三个超时都必须显式给 (2026-09-22 统一) —— 这是 OpenSSH 侧
+    `-o BatchMode=yes -o ConnectTimeout=N` 的 **paramiko 对应物**:
+      · `timeout`        = TCP 建连超时
+      · `banner_timeout` = 等 SSH banner
+      · `auth_timeout`   = 等认证完成 —— **paramiko 默认 30s** (实测 paramiko 5.0.0 源码:
+        `self.banner_timeout = 15` / `self.auth_timeout = 30`), 与 `banner_timeout` **不同源**;
+        不显式给 ⇒ "认证阶段卡住"要等 30s 而不是我们的 `SSH_TIMEOUT`, 与 ConnectTimeout 的意图相悖。
+    注意差异: paramiko **不会**像 OpenSSH 那样弹口令阻塞等 stdin(它无 BatchMode 选项, 也**没有**
+    "挂死"这一形态, 认证失败是抛异常) ⇒ 这一侧要补的只是"把卡住的上界压到 SSH_TIMEOUT"。
+    """
     cli = paramiko.SSHClient()
     cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     cli.connect(resolve_host(st), username=STATIONS[st]["user"],
-                timeout=timeout, banner_timeout=timeout)
+                timeout=timeout, banner_timeout=timeout, auth_timeout=timeout)
     return cli
 
 
@@ -827,10 +839,7 @@ def cmd_secrets(action: str = "status", extra: list = None) -> int:
 def _remote_secret(st: str, name: str):
     """读站上 ~/.config/rpc/<name> 的**原始字节**; 不存在返回 None。仅用于"站内产物"型凭据。"""
     try:
-        cli = paramiko.SSHClient()
-        cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        cli.connect(resolve_host(st), username=STATIONS[st]["user"],
-                    timeout=SSH_TIMEOUT, banner_timeout=SSH_TIMEOUT)
+        cli = _connect(st)          # 统一入口(勿在此处再 new SSHClient: 超时/策略会与 _connect 漂)
         sftp = cli.open_sftp()
         try:
             with sftp.open(f"/home/{STATIONS[st]['user']}/.config/rpc/{name}", "rb") as fh:
@@ -899,10 +908,7 @@ def _secrets_push(force: bool = False, only: str = None) -> int:
             print(f"[secrets] {st} 站: 跳过 (无正本 {src})")
             continue
         try:
-            cli = paramiko.SSHClient()
-            cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            cli.connect(resolve_host(st), username=STATIONS[st]["user"],
-                        timeout=SSH_TIMEOUT, banner_timeout=SSH_TIMEOUT)
+            cli = _connect(st)          # 统一入口(勿在此处再 new SSHClient: 超时/策略会与 _connect 漂)
             ssh_run(st, f"mkdir -p {RPC_DIR} && chmod 700 {RPC_DIR}")   # 复用 ssh_run 建目录
             sftp = cli.open_sftp()
             names = []

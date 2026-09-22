@@ -128,6 +128,13 @@ function Get-TargetHost([string]$station) {
     return 'scott-lau-GTR-Pro.local'   # B default (memory master)
 }
 
+# ── ssh/scp 调用纪律 (2026-09-22 统一) ───────────────────────────────────────
+# 本文件**每个** ssh/scp 调用点都必须带 `-o BatchMode=yes`（并显式给 `-o ConnectTimeout=N`）。
+# 为什么: 认证异常时（典型 = `~/.ssh/config` 缺对应身份块 ⇒ 用户名退化为本机用户）
+#   OpenSSH 会**弹口令提示并阻塞等 stdin** ⇒ 在自动化里表现为"卡住"（实测挂起 >90s），
+#   而不是"失败"。`BatchMode=yes` 让它立刻失败 ⇒ 把"卡住"变成"快速失败"。
+# 守卫: `_fm_golden_test.ps1` 有 AST 断言（本文件全部 ssh/scp 调用点必须含 BatchMode=yes）
+#   —— 新增调用点漏加会当场红，不必靠人记。
 function Test-RemoteReach([string]$hostName) {
     # PS5.1 landmine (confirmed 2026-09-03): native stderr redirect (2>$null) under EAP=Stop
     # throws NativeCommandError (e.g. DNS failure text) instead of returning - treat any throw as unreachable.
@@ -164,13 +171,13 @@ function Invoke-RemoteScript {
     $utf8NoBom = New-Object System.Text.UTF8Encoding $false
     [System.IO.File]::WriteAllText($localPath, $ScriptBody, $utf8NoBom)
 
-    scp -q -o ConnectTimeout=10 $localPath "${HostName}:/tmp/${LocalName}"
+    scp -q -o BatchMode=yes -o ConnectTimeout=10 $localPath "${HostName}:/tmp/${LocalName}"
     if ($LASTEXITCODE -ne 0) { throw "NETFAIL: scp failed: $LocalName" }
 
     # PS5.1: 2>&1 under EAP=Stop throws NativeCommandError when ssh writes stderr (network fail
     # confirmed 2026-09-03) - catch and classify by message, then by rc.
     try {
-        $sshOut = ssh -o ConnectTimeout=10 $HostName "bash /tmp/${LocalName}" 2>&1
+        $sshOut = ssh -o BatchMode=yes -o ConnectTimeout=10 $HostName "bash /tmp/${LocalName}" 2>&1
         $code = $LASTEXITCODE
     }
     catch {
@@ -182,7 +189,7 @@ function Invoke-RemoteScript {
         Write-Host "[retry] ssh network failure (rc=$code), retry once (gate-cache: scrubber not re-run)"
         Start-Sleep -Seconds 2
         try {
-            $sshOut = ssh -o ConnectTimeout=10 $HostName "bash /tmp/${LocalName}" 2>&1
+            $sshOut = ssh -o BatchMode=yes -o ConnectTimeout=10 $HostName "bash /tmp/${LocalName}" 2>&1
             $code = $LASTEXITCODE
         }
         catch {
@@ -221,11 +228,11 @@ function Invoke-StationReady {
     $tmp = Join-Path $Script:TMP_ROOT '_station_ready.sh'
     New-Item -ItemType Directory -Path $Script:TMP_ROOT -Force | Out-Null
     Copy-Item $local $tmp -Force | Out-Null   # ⚠ 归零纪律: 本函数返回哈希表, 非返回值输出必须吸收(见 Invoke-RemoteScript 注)
-    scp -q -o ConnectTimeout=10 $tmp "${HostName}:/tmp/_station_ready.sh"
+    scp -q -o BatchMode=yes -o ConnectTimeout=10 $tmp "${HostName}:/tmp/_station_ready.sh"
     if ($LASTEXITCODE -ne 0) { throw "NETFAIL: scp _station_ready.sh failed" }
     $arg = if ($Alias) { " '$Alias'" } else { '' }
     try {
-        $out = ssh -o ConnectTimeout=10 $HostName "bash /tmp/_station_ready.sh$arg" 2>&1
+        $out = ssh -o BatchMode=yes -o ConnectTimeout=10 $HostName "bash /tmp/_station_ready.sh$arg" 2>&1
         $code = $LASTEXITCODE
     }
     catch {
@@ -262,10 +269,10 @@ function Invoke-SlotGate {
     $tmp = Join-Path $Script:TMP_ROOT '_slot_gate.sh'
     New-Item -ItemType Directory -Path $Script:TMP_ROOT -Force | Out-Null
     Copy-Item 'D:\RPC\ops\station-bin\_slot_gate.sh' $tmp -Force | Out-Null   # ⚠ 归零纪律(见 Invoke-RemoteScript 注)
-    scp -q -o ConnectTimeout=10 $tmp "${HostName}:/tmp/_slot_gate.sh"
+    scp -q -o BatchMode=yes -o ConnectTimeout=10 $tmp "${HostName}:/tmp/_slot_gate.sh"
     if ($LASTEXITCODE -ne 0) { return $na }
     try {
-        $out = ssh -o ConnectTimeout=10 $HostName "bash /tmp/_slot_gate.sh $Port" 2>&1
+        $out = ssh -o BatchMode=yes -o ConnectTimeout=10 $HostName "bash /tmp/_slot_gate.sh $Port" 2>&1
         $code = $LASTEXITCODE
     }
     catch {
@@ -344,7 +351,7 @@ function Invoke-Workspace {
         } finally { Pop-Location }
 
         # 3. scp
-        scp -q -o ConnectTimeout=10 $tarFile "${hostName}:/tmp/agent-cli-create-$proj.tar"
+        scp -q -o BatchMode=yes -o ConnectTimeout=10 $tarFile "${hostName}:/tmp/agent-cli-create-$proj.tar"
         if ($LASTEXITCODE -ne 0) { throw "NETFAIL: scp skeleton failed" }
 
         # 4. remote mkdir + extract
@@ -381,7 +388,7 @@ md5sum AGENTS.md CLAUDE.md .agentsync
         } finally { Pop-Location }
         $size = (Get-Item $tarFile).Length
         if ($size -gt 200MB) { throw "sync pkg $([math]::Round($size/1MB,1))MB > 200MB cap, add excludes (G4)" }
-        scp -q -o ConnectTimeout=10 $tarFile "${hostName}:/tmp/agent-cli-sync-$proj.tar"
+        scp -q -o BatchMode=yes -o ConnectTimeout=10 $tarFile "${hostName}:/tmp/agent-cli-sync-$proj.tar"
         if ($LASTEXITCODE -ne 0) { throw "NETFAIL: scp sync failed (rc=$LASTEXITCODE) - station likely down" }
         $body = @"
 set -eu
@@ -1438,10 +1445,10 @@ W="$Script:WORKSPACE_ROOT/$proj"
 mkdir -p "`$W/.attach/$name"
 "@
                 Invoke-RemoteScript -HostName $hostName -ScriptBody $bodyDir -LocalName "agent-cli-attach-mkdir-dir.sh" | Out-Null
-                scp -q -r -o ConnectTimeout=10 $a "${hostName}:$Script:WORKSPACE_ROOT/$proj/.attach/" 2>$null
+                scp -q -r -o BatchMode=yes -o ConnectTimeout=10 $a "${hostName}:$Script:WORKSPACE_ROOT/$proj/.attach/" 2>$null
             }
             else {
-                scp -q -o ConnectTimeout=10 $a "${hostName}:$Script:WORKSPACE_ROOT/$proj/.attach/" 2>$null
+                scp -q -o BatchMode=yes -o ConnectTimeout=10 $a "${hostName}:$Script:WORKSPACE_ROOT/$proj/.attach/" 2>$null
             }
             if ($LASTEXITCODE -ne 0) { Write-Host "NETFAIL: attach scp failed: $a"; return 5 }
             $attachNames += $name
@@ -1510,7 +1517,7 @@ mkdir -p "`$W/.attach/$name"
         $goldenTgz = Join-Path $env:TEMP "agent-cli-golden-$ts.tgz"
         & $Script:GNU_TAR --force-local -C (Split-Path $gSrc) -cf $goldenTgz $goldenBase
         if ($LASTEXITCODE -ne 0) { Write-Host "GOLDEN_TAR_FAIL: $($g.source)"; Remove-Item $goldenTgz -ErrorAction SilentlyContinue; return 2 }
-        scp -q -o ConnectTimeout=10 $goldenTgz "${hostName}:$W/.golden.tgz"
+        scp -q -o BatchMode=yes -o ConnectTimeout=10 $goldenTgz "${hostName}:$W/.golden.tgz"
         if ($LASTEXITCODE -ne 0) { Write-Host "NETFAIL: golden scp failed"; Remove-Item $goldenTgz -ErrorAction SilentlyContinue; return 5 }
         Remove-Item $goldenTgz -ErrorAction SilentlyContinue
         # clean-inject (inv 3, P2-3): rm -rf .golden THEN extract -> golden path equals current injection
@@ -1724,7 +1731,7 @@ exit `$RC
         $tmpSm = Join-Path $Script:TMP_ROOT '_oc_session_meta.sh'
         New-Item -ItemType Directory -Path $Script:TMP_ROOT -Force | Out-Null
         Copy-Item $localSm $tmpSm -Force | Out-Null
-        scp -q -o ConnectTimeout=10 $tmpSm "${hostName}:/tmp/_oc_session_meta.sh" 2>$null
+        scp -q -o BatchMode=yes -o ConnectTimeout=10 $tmpSm "${hostName}:/tmp/_oc_session_meta.sh" 2>$null
         if ($LASTEXITCODE -ne 0) { Write-Host "SESSION_META_WARN: scp helper failed" }
         else {
             # 窗口起点 = 本 run 的 ts − 5min 裕度 ⇒ 只取"本次新建"的会话(同工作区的旧会话被 since 排除)
@@ -1734,7 +1741,7 @@ exit `$RC
             #   但**不能靠兜底当正常路径**。
             $runStart = [DateTimeOffset]::ParseExact($ts.Substring(0, 14), 'yyyyMMddHHmmss', [Globalization.CultureInfo]::InvariantCulture)
             $sinceMs = $runStart.ToUnixTimeMilliseconds() - 300000
-            & ssh -o ConnectTimeout=10 $hostName "bash /tmp/_oc_session_meta.sh '$W' $sinceMs '$W/out/.session-meta.txt'" 2>$null | Out-Null
+            & ssh -o BatchMode=yes -o ConnectTimeout=10 $hostName "bash /tmp/_oc_session_meta.sh '$W' $sinceMs '$W/out/.session-meta.txt'" 2>$null | Out-Null
         }
     }
     catch { Write-Host "SESSION_META_WARN: $($_.Exception.Message)" }
@@ -1756,8 +1763,8 @@ exit `$RC
     $progressTxt = Join-Path $evDir '.progress'
     $accCmdTxt = Join-Path $evDir '.accept-cmds.txt'
     $goldCmdTxt = Join-Path $evDir '.golden-cmd.txt'
-    scp -q -o ConnectTimeout=10 "${hostName}:$W/out/.agent-output.txt" "$outTxt" 2>$null
-    if ($accept.Count -gt 0) { scp -q -o ConnectTimeout=10 "${hostName}:$W/out/.accept-output.txt" "$accTxt" 2>$null }
+    scp -q -o BatchMode=yes -o ConnectTimeout=10 "${hostName}:$W/out/.agent-output.txt" "$outTxt" 2>$null
+    if ($accept.Count -gt 0) { scp -q -o BatchMode=yes -o ConnectTimeout=10 "${hostName}:$W/out/.accept-output.txt" "$accTxt" 2>$null }
     try {
         # 逐件 `marker + base64`（**刻意不用 tar**）: Windows 侧 GNU tar 对 `C:\...` 会按 host:path 去连
         #   "C" 主机(需 --force-local), 而 --force-local 又不认反斜杠路径 —— 两坑皆实测踩到。base64
@@ -1769,7 +1776,7 @@ exit `$RC
         # ADR-0007 缺口 8: 增 `.session-meta.txt`(站上会话库遥测; helper **一定**产出该件, 含"取不到"情形)。
         $evNames = @('.meta', '.prompt.txt', '.progress', '.accept-cmds.txt', '.golden-cmd.txt', '.workspace-diff.txt', '.attach-manifest.txt', '.session-meta.txt')
         $evCmd = (($evNames | ForEach-Object { "if [ -f $W/out/$_ ]; then echo FILE:$_ ; base64 -w0 $W/out/$_ ; echo ; fi" }) -join ' ; ')
-        $evRaw = @(& ssh -o ConnectTimeout=10 $hostName $evCmd 2>$null)
+        $evRaw = @(& ssh -o BatchMode=yes -o ConnectTimeout=10 $hostName $evCmd 2>$null)
         $evBuf = @{}; $evCur = ''
         foreach ($ln in $evRaw) {
             $t = "$ln".Trim()
@@ -1790,7 +1797,7 @@ exit `$RC
     # O-12 M4 P2-2: golden output pulled; TAMPERED path does NOT create the file -> scp NativeCommandError under
     # EAP=Stop would pollute exit (V0 real-run finding 2026-09-09) -> silent catch (missing file is expected there)
     if ($goldenActive) {
-        try { scp -q -o ConnectTimeout=10 "${hostName}:$W/out/.accept-golden-output.txt" "$accGoldTxt" 2>$null }
+        try { scp -q -o BatchMode=yes -o ConnectTimeout=10 "${hostName}:$W/out/.accept-golden-output.txt" "$accGoldTxt" 2>$null }
         catch { $accGoldTxt = $null; Write-Host "(golden output absent - expected when TAMPERED/FAIL pre-write)" }
     }
     $queue_s = 0; $run_s = 0; $accept_ok = $null; $accept_golden_ok = $null
@@ -3098,9 +3105,9 @@ function Invoke-RemoteCapture {
     if (-not (Test-Path $Script:TMP_ROOT)) { New-Item -ItemType Directory -Path $Script:TMP_ROOT -Force | Out-Null }
     $utf8NoBom = New-Object System.Text.UTF8Encoding $false
     [System.IO.File]::WriteAllText($localPath, $ScriptBody, $utf8NoBom)
-    scp -q -o ConnectTimeout=10 $localPath "${HostName}:/tmp/${LocalName}"
+    scp -q -o BatchMode=yes -o ConnectTimeout=10 $localPath "${HostName}:/tmp/${LocalName}"
     if ($LASTEXITCODE -ne 0) { throw "NETFAIL: scp failed: $LocalName" }
-    try { $sshOut = ssh -o ConnectTimeout=10 $HostName "bash /tmp/${LocalName}" 2>&1 }
+    try { $sshOut = ssh -o BatchMode=yes -o ConnectTimeout=10 $HostName "bash /tmp/${LocalName}" 2>&1 }
     catch { $sshOut = @("$($_.Exception.Message)"); $LASTEXITCODE = 255 }
     # 同上(归零纪律): 本函数返回**文本**, 故收尾的 Remove-Item 必须 `| Out-Null`。
     Remove-Item $localPath -ErrorAction SilentlyContinue | Out-Null
