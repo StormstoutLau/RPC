@@ -579,3 +579,9 @@
 >   → **GTT**。UMA (AMD 8060S) 下权重驻留 **GTT**：77G 模型实测 `ps` RSS 仅 **217MB** 而 GTT **54.6GB**。
 >   `flow paths` 对照表内存列已改为 **GTT 增量**：单机 **+77.2G** / 双机 **+41.7G**
 >   —— 双机因把层分到两站而更省单站内存，与其"为省单站内存而存在"的定位一致。
+| 2026-09-23 00:18 | bench | gpt-oss-120b-b@B | API timings 口径 · max_tokens=128 · prompt 实测 468 tok | PASS | pp 468 tok 389.1 t/s · tg 128 tok 47.3 t/s |
+| 2026-09-23 00:18 | bench | gpt-oss-120b-b@B | API timings 口径 · max_tokens=128 · prompt 实测 1 tok | PASS | pp 1 tok 39.7 t/s · tg 128 tok 36.0 t/s |
+| 2026-09-23 00:18 | bench | gpt-oss-120b-b@B | API timings 口径 · max_tokens=128 · prompt 实测 1 tok | PASS | pp 1 tok 40.3 t/s · tg 128 tok 45.8 t/s |
+| 2026-09-23 00:19 | bench | gpt-oss-120b-c@C | API timings 口径 · max_tokens=128 · prompt 实测 468 tok | PASS | pp 468 tok 435.2 t/s · tg 128 tok 48.3 t/s |
+| 2026-09-23 00:19 | bench | gpt-oss-120b-c@C | API timings 口径 · max_tokens=128 · prompt 实测 1 tok | PASS | pp 1 tok 40.7 t/s · tg 128 tok 39.9 t/s |
+| 2026-09-23 00:19 | bench | gpt-oss-120b-c@C | API timings 口径 · max_tokens=128 · prompt 实测 1 tok | PASS | pp 1 tok 41.1 t/s · tg 128 tok 52.0 t/s |
