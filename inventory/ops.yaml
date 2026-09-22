@@ -171,6 +171,11 @@ frozen_ops_scripts:
   - ops/station-bin/_mema.sh
   - ops/station-bin/_o09_probe.py
   - ops/station-bin/_o17_rwlock_probe.sh
+  # 2026-09-22: 原在**仓库根** `_o26_reverify_loader.ps1`（O-11 L2 薄加载器工装）—— 根级脚本不在
+  #   `scripts` 门禁治理圈 ⇒ 与卡片/附件**互为引用的活体**却无人看管。按决策简报分类处置：整组迁入
+  #   受治理位置（卡片→spec/d6-agent-standard/test-cards/、附件→ops/station-bin/attach-test/），
+  #   并把硬编码绝对路径改为由脚本位置推算仓库根。
+  - ops/station-bin/_o26_reverify_loader.ps1
   - ops/station-bin/_opencode_bump.py
   - ops/station-bin/_probeN_A.sh
   - ops/station-bin/_probeN_B.sh

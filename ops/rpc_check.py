@@ -597,18 +597,28 @@ DOCLINK_LINK = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
 
 
 def _doclink_bad(p, base):
-    """返回 (是否失效, 是否可判定)。可判定=解析后落在仓库内。"""
+    """返回 (是否失效, 是否可判定, 原因)。可判定=解析后落在仓库内，**或相对链接越出仓库根**。
+
+    ⚠ 2026-09-22（决策简报 A）：原先"越界 ⇒ 不可判定"把**两类东西混进同一个桶** ——
+      (a) 合法但不可判的：http/占位词/Windows 绝对盘符/指向仓库外的**绝对**路径；
+      (b) **真错误：相对链接的 `..` 写多了、越出仓库根**。
+    (b) 用**纯路径运算**就能判（与目标文件是否存在无关），而 09-16 那 27 条 `../../` 漏网**正是落在它里**
+    ⇒ 故拆开：(b) 判 FAIL，(a) 仍保持不可判。**影响面实测 = 2 条、误报面 = 0**（"越界的非相对形态" 0 例）。
+    """
     if base.startswith(("http://", "https://", "mailto:", "file:///", "#")):
-        return False, False
+        return False, False, ""
     if not base or " " in base or "..." in base or base in ("url", "path", "link"):
-        return False, False
+        return False, False, ""
     if len(base) > 1 and base[1] == ":":          # Windows 绝对盘符
-        return False, False
+        return False, False, ""
     q = os.path.normpath(str(p.parent / base))
     root = os.path.normpath(str(ROOT))
     if not q.lower().startswith(root.lower() + os.sep):
-        return False, False                       # 落到仓库外 ⇒ 不可判定
-    return (not Path(q).exists()), True
+        flat = base.replace("\\", "/")
+        if flat.startswith("..") or "/.." in flat:
+            return True, True, "越出仓库根(相对链接层级写多)"
+        return False, False, ""                   # 落到仓库外的**非相对**形态 ⇒ 不可判定
+    return (not Path(q).exists()), True, ("目标不存在" if not Path(q).exists() else "")
 
 
 def check_doclinks(ctx):
@@ -624,7 +634,7 @@ def check_doclinks(ctx):
             for m in DOCLINK_LINK.finditer(line):
                 base = m.group(2).strip().split("#")[0]
                 n_link += 1
-                hit, judgeable = _doclink_bad(p, base)
+                hit, judgeable, reason = _doclink_bad(p, base)
                 if not judgeable:
                     n_skip += 1
                     continue
@@ -634,11 +644,11 @@ def check_doclinks(ctx):
                     n_allow += 1
                     continue
                 n_bad += 1
-                bad.append((f"{rel.as_posix()}:{i}", base))
+                bad.append((f"{rel.as_posix()}:{i}", base, reason))
 
     detail = []
-    for loc, base in bad:
-        detail.append(f"{loc}  ->  {base}")
+    for loc, base, why in bad:
+        detail.append(f"{loc}  ->  {base}" + (f"   【{why}】" if why else ""))
     note = (f"扫描 {n_md} 个 md · 链接 {n_link} 条 (其中非仓库内相对链接/占位词 {n_skip} 条不判) "
             f"· 已登记例外 {n_allow} · 失效 {n_bad}")
     return ("FAIL" if n_bad else "PASS"), note, detail

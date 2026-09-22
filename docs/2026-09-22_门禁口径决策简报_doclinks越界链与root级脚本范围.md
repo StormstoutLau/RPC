@@ -1,7 +1,7 @@
 ---
 id: rpc-decisions-2026-09-22-doclinks-root-scripts
 type: decision-brief
-status: 待裁
+status: 已裁定并实施（2026-09-22）
 date: 2026-09-22
 depends: [d6-agent-standard-OPEN-ISSUES, rpc_check]
 ---
@@ -123,3 +123,44 @@ depends: [d6-agent-standard-OPEN-ISSUES, rpc_check]
 | 4 | `_o26_reverify_loader` + 根级 `test-cards/` 的**去向**：迁 `ops/station-bin/`（推荐）还是归档？ | 迁移 / 归档（放弃复验能力） |
 | 5 | 是否**明确排除** `tests/b5q/` 与 `spec/**` 出治理圈（并在门禁注释写明）？ | 是 / 一并纳入 |
 | 6 | 扩范围后的**根级登记落点**：并入 `inventory/ops.yaml` 还是新开清单？ | 并入 / 新开 |
+
+---
+
+## 裁定与实施记录（2026-09-22）
+
+**用户裁定**：**采纳 ① 方案 A（并同批修那 2 条）**；**② 执行分类处置（方案 C 第一步）**。
+
+### ① `doclinks` 方案 A —— ✅ 已实施
+
+- [`_doclink_bad`](../ops/rpc_check.py) **拆开两类**：**相对形态**越界 ⇒ **失效且可判**（原因串 `越出仓库根(相对链接层级写多)`）；**非相对**形态越界 ⇒ 保持不可判。
+- 明细行**补原因**（原先只打 `位置 -> base`，读者无从知道"为什么算失效"）。
+- **对照（先验红）**：判据加入前后对**同一批真实数据** ⇒ 由 PASS 变 **FAIL 且点名那 2 条** —— 用的是**真实漏网**而非合成样例，故证明判据确实在判。
+- 修 2 条：`adr/ADR-0003:214`、`adr/ADR-0007:320`（`../../` ⇒ `../`；ADR-0007 处加注说明这是**链接层级**修正，不改写原结论）。
+- 复验：`doclinks` PASS，且**"不判"桶 740 → 738** —— 两条从"不可判"归位到"可判"，这正是桶划分改变的直接证据。
+
+### ② root 级分类处置 —— ✅ 已实施（第一步）
+
+**前置取证（三站，不可省）**：A/B/C 三站查 `/usr/local/bin`、`/etc/systemd`、`/etc/cron*`、`$HOME`（浅层）、`crontab` ⇒ **全部 none**（也含 O-11/O-26 的卡与附件）⇒ 迁移/归档**不会打断任何站上引用**。
+
+| 对象 | 处置 | 落点 |
+|---|---|---|
+| `audit_extra.sh` / `audit_gfx.sh` / `audit_llama.sh` | **归档**（全仓零引用 + 三站零引用） | `archive/root-scripts/` |
+| `_o26_reverify_loader.ps1` | **迁入受治理位置** + 登记 | `ops/station-bin/`（[`inventory/ops.yaml`](../inventory/ops.yaml) 的 `frozen_ops_scripts`，冻结存量 184→185） |
+| 4 张卡（`o26-split-fanout` / `o11-fanout-readonly` / `_o17_readonly` / `_o17_write`） | 迁入卡库 | `spec/d6-agent-standard/test-cards/` |
+| 2 个附件源（`_o26_src.txt` / `_o11_src.txt`） | 迁入附件夹具库 | `ops/station-bin/attach-test/`（与 `agent-cli.ps1` 注释里本来就列的清单一致） |
+| 根级 `test-cards/`（空） | 移除 | — |
+
+**配套两处硬化**（否则"移动"本身会变成新的静默断点）：
+1. **硬编码绝对路径 ⇒ 由脚本位置推算仓库根**（原 `d:\RPC\test-cards\...`）；
+2. **缺件即 `throw`** 的 fail-closed 守卫 —— 卡片若再被挪走会**当场报错**，而不是拿空路径去跑。
+
+⚠ 迁移后门禁**当场抓到**该文件"含中文却无 BOM"（`.ps1-bom:14文件/1失败`）⇒ 补 BOM 后 PASS —— 这条判据又一次证明了自己。
+
+**自证**：`scripts` PASS（未登记 0）；三条新路径 `Test-Path` 全 True 且**两条旧路径全 False**（防"静默指向旧位置"）；`syntax` PASS。
+
+### 仍未做（待裁，第二步）
+
+**扩门禁范围到仓库根** —— 前置**已就绪**（存量已清空 ⇒ 扩范围成本近零），但仍卡在待裁点 **#5**（是否明确排除 `tests/b5q/`、`spec/**`）与 **#6**（根级登记落点）。
+
+⚠ **本轮顺带发现（本简报未含，已另登记）**：仓库根还有 **2 个被 gitignore 的遗留物**（`llama.cpp-0.2.0.tar.gz`、`双机推理集群使用手册.md.bak.20260901`）—— 它们**不在 git 视野内**，故既不被门禁看、也不被本次"分类处置"覆盖；是否清理由你定（前者是源码包，可能是有意的本地缓存）。
+
