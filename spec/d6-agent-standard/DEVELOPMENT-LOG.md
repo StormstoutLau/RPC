@@ -121,7 +121,8 @@ upstream: \[d6-agent-standard-.* 全量文档]
 - **⑤ 上游注册：不必**（对用户原问题的答案）: 决定性因素在**服务端**；上游同族已有 **5+3 条**（`#29555`/`#37456` closed-completed、**`#37544` 被 `not_planned`**、`#35863`/`#40524`/`#38835`/`#40908` open）；`#41104`（本地 ctx 发现 PR）**已提未并入**；我们落后 **7 个 patch**（1.18.25→1.18.32@09-21）而**近 8 个 release notes 无相关修复** ⇒ **升级不是解法、新开 issue 只会重复**。
 - **⑥ 顺带查出（新登记）**: **压缩路径在本地 provider 上必然失败** —— `agent=compaction` 后紧跟 `level=ERROR … AI_TypeValidationError: Value: {"type":"reasoning_summary","duration_ms":9472}`（opencode 期望 `choices`/`error`）⇒ 累积超阈时任务**不是被压缩救回、而是直接 rc=1** ⇒ **"把 `limit.context` 对齐引擎档位"这一改进的收益，取决于先修此条**（实测该臂 turn2/turn3 均复现）。
 - **⑦ 现场纪律**: 四次配置实验**全部先备份 → 后还原 → 核 md5 回到原值**（`755975dba0ff28cf64dff0e106000cb6`）；探针临时文件已删；跑完 `cluster.py unload`（**三站 OK**）。
-- **关联**: [OPEN-ISSUES §O-23](OPEN-ISSUES.md)（结论已改写 + 新增"压缩必然失败"登记）。
+- **⑧ 根因定位（同日续做"先定位根因"）**: **根因不在 opencode，而在网关** —— ① **网关注入非标准 SSE 帧**：三方 curl 对照 ⇒ studio `:8080` **流式命中 1**（`data: {"type":"reasoning_summary","duration_ms":179}`）、studio **非流式 0**、**直连 `llama-server :47059` 流式 0** ⇒ 帧由 **studio 注入**；② **为何只有压缩路径炸**（DEBUG 对照）：**普通 turn 命中 0 / TypeValidation 0 / rc=0**，**压缩 turn 命中 3 / TypeValidation 2 / rc=1** ⇒ 普通对话路径**容错丢弃**、压缩路径**严格 union 校验** ⇒ 必失败；③ **上游已确认并已修**：`unslothai/unsloth#10362`（closed **09-08**）正文逐字即本例（"UI control frames … carry no `choices`, so strict OpenAI clients fail schema validation"），修法 = 控制帧收进 **`X-Unsloth-Events` opt-in**；其自测 **"8 of 13 streams throw outright today"**；④ **我方不含该修复**（站上 studio 目录 `grep -rl X-Unsloth-Events` **无命中**）。**修法结论**：**升级 station 的 unsloth studio** 是唯一治本；"加该头"是**反向**、"改 baseURL 直连引擎端口"与 `_station_ready.sh` 的 **C2** 相悖 ⇒ 均不采纳。**边界**：studio 版本号未取到 ⇒ "早于 #10362"为**推断**。
+- **关联**: [OPEN-ISSUES §O-23](OPEN-ISSUES.md)（结论已改写 + 新增"压缩必然失败"登记 + 根因定位）。
 
 ### 2026-09-16 — provider 命名漂移修复 / 新模型入网 / C2 引擎面统一日
 
