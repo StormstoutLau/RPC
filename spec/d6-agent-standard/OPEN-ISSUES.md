@@ -287,6 +287,10 @@ limit: { context: J.context_length ?? Y?.limit.context ?? 0,
 
 **📋 决策简报（取证底账 / A·B·C 三方案 / 试点 6 步与判据 / 回滚 / 待裁 6 项）**: [2026-09-22 决策简报_unsloth-studio升级方案](../../docs/2026-09-22_决策简报_unsloth-studio升级方案.md)
 
+**🚀 方案 A 执行（2026-09-22 当日；用户裁定"B 试点 → 通过后立即推 A、C"+"A 完成前禁止下调 `limit.context`"）**: **B 站试点【通过】** —— 三条判据：① 流内 `reasoning_summary` **1 → 0**；② 压缩两轮 **rc=1 / TypeValidation=2 → rc=0 / TypeValidation=0**（**压缩恢复可用**）；③ 引擎档位 `ctx 32768` / `:8080` **未变**。版本 `unsloth 2026.9.2 → 2026.9.7`、`unsloth_zoo → 2026.9.6`、`X-Unsloth-Events` 命中 **0 → 2**。
+**⚠ 但 B 的 update 未跑完**：卡在 `triton_kernels @ git+https://github.com/triton-lang/triton.git`（`git fetch` **零字节卡死**，git 默认无低速超时）⇒ **收口**（kill）⇒ **B 缺 `triton_kernels`**（A/C 本有 `1.0.0`）；**`pyarrow` 被降级 25.0.1→23.0.1**（待解释）。
+**⚠⚠ 范围外发现（简报原评估遗漏）**：`studio update` **不只升 Python 包 —— 它会把 `~/llama.cpp`（引擎）替换为 `unslothai/llama.cpp` 的 latest**（日志 `requested llama.cpp tag: latest`，下载 36.1 MiB 源码后**本地编译**；A 站实测 169 个 cmake/g++ 进程），且 **`--help` 无任何跳过开关** ⇒ **三站引擎版本将不一致**、需为 `~/llama.cpp` 面另立回滚点（**本次实测 `/opt/llama.cpp-9859` 等治理面未被触及**）。A 执行中、**C 已暂停**（freeze 与基线**零差异**）。详见 [决策简报 §七](../../docs/2026-09-22_决策简报_unsloth-studio升级方案.md)。
+
 **📌 上游注册：不必（2026-09-22 调查结论）** —— ① 本问题的**决定性因素在服务端**（引擎 `n_ctx`），不在 opencode；② 上游同族条目**已有 5+3 条**：`#29555` / `#37456`（closed-**completed**，多半只修显示）、`#37544`（`config: existing model limit override is ignored`，**closed-`not_planned`** ⇒ **再提同类会被关**）、`#35863`（context window 硬编码 200k，**open**）、`#40524`（catalog 与 `/models` 对账，**open**）、`#38835`（无 `limit.input` 时 `compaction.reserved` 被静默忽略，**open**）、`#40908`（要动态探测 ctx，**open**）；③ `#41104`（本地 ctx 发现 PR）**已提但未并入**（`merged=False`）；④ 我们落后 **7 个 patch**（1.18.25 → 1.18.32@09-21）而**近 8 个 release notes 无任何 limit/context/compaction 修复** ⇒ **升级不是解法、新开 issue 只会重复** ⇒ **不注册**（若将来要动上游，唯一有价值的形态是给 `#35863`/`#40908` 留一条限定角度的评论，非新 issue）。
 
 ### 附：agent-cli.ps1 PS5.1 编码隐患（2026-09-05 触发并修复）
