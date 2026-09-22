@@ -92,8 +92,9 @@ powershell -ExecutionPolicy Bypass -File ops\station-bin\agent-cli.ps1 task pape
 （加显式 `-cwd $projRoot`；回归守卫 = `_fm_golden_test.ps1` 的 `cwd:` 三条断言，且做过变异自证）。
 修前证据：转录目录是 `D--RPC`（cwd = 控制台 cwd）；修后变 `D--Paper` 且附件可读。
 
-**(A′) claude 路的站上变体更重**：站上脚本 `cd "$HOME"`（同样错位），且 **附件只复制到主控本地 `<projRoot>\.attach`、根本没同步到站上**
-⇒ `local-only` + 站上 claude + 附件时**附件完全缺失**。⏳ **未动，已登记待办**。
+**(A′) claude 路的站上变体** —— ✅ **已闭环（2026-09-22, W3 步 2）**。原先站上脚本 `cd "$HOME"`（错位）**且附件没同步到站上** ⇒ `local-only` + 站上 claude + 附件时**附件完全缺失**。
+**现机制**：站上分支**复用主路同一套** `Invoke-Workspace -act sync` 建/同步**项目工作区**（`cwd = <WSROOT>/<proj>`），并把附件 scp 到**同一处**的 `.attach/`；任一步失败 ⇒ 非零退出（fail-closed，宁可不跑也不在缺件下跑完）。
+**实测**（本卡 + `-Sensitivity local-only`）：run `202609221331304084` / `202609221340319598` / `202609221347542756` ⇒ 站上打印 `cwd=/home/scott-lau/agent-workspaces/paper`、`P3_STATION_RC=0`、`PROC_RC=0`，且 `agent-output.txt` 含附件里的**唯一 marker**。
 
 **(B) claude 路 spawn 不传任何工具/权限参数**（只有 `-p "" --model <id>`）⇒ headless 下工具是否可用**未验证**。
 现有证据：首跑 `tool_use blocks=0`（但那次的卡**禁止**用工具 ⇒ 无法归因）。⚠ 下次若要单测这条，得**去掉卡里的工具禁令**再跑一次。
@@ -109,6 +110,6 @@ powershell -ExecutionPolicy Bypass -File ops\station-bin\agent-cli.ps1 task pape
 
 - 本卡只证明**一种形态**（win-path）经附件旁路。`Invoke-Scrubber` 的调用点只有一处（只吃 `$promptFull`），
   故该结论**按机制外推**到其余 8 条规则；但"外推"就是外推，**不等于**逐条实测过。
-- **站上变体（`local-only` + 站上 claude）不适用本卡**：那是另一套机制（站上脚本 `cd "$HOME"`），且
-  claude 路的附件**只复制到主控本地 `<projRoot>\.attach`，根本没同步到站上** ⇒ 同类但更重，已登记待办。
+- **站上变体（`local-only` + 站上 claude）现在也适用本卡**（2026-09-22 起）：站上分支会同步项目工作区并把附件 scp 到同一处的 `.attach/` ⇒ 本卡的两行判据（`LINE1` 正文 / `LINE2` 附件）在站上同样成立。
+  ⚠ **跑站上变体时请把附件内容换成"只存在于附件"的唯一串**（如 `STATION-ATTACH-OK-<随机>`）：若用与卡正文相同的串，`LINE1 == LINE2` 会让"agent 真读了文件"与"照抄卡正文"**不可区分** ⇒ 判据不判别（2026-09-22 实测踩过这件事）。
 - `model: claude` 走的是 OpenRouter **免费档**（可能被训练）—— 这正是 P3 要量化的敞口，不是意外。
