@@ -279,6 +279,8 @@ limit: { context: J.context_length ?? Y?.limit.context ?? 0,
 
 **✅ 修法结论**: **升级 station 的 unsloth studio（唯一治本）**。另两条被否：**加 `X-Unsloth-Events` 头是反向**（加了才会收到控制帧）；**改 baseURL 直连引擎端口**虽实测无控制帧，但与 `_station_ready.sh` 的 **C2「端口固定 8080、本脚本不改写任何配置」**相悖（"就地改写 baseURL"正是当年留下死端口 + 三站 config 漂移而被废弃的旧实现）⇒ **不采纳**。**含义**：① 累积型长任务在本地引擎上**无法靠 compaction 自救** ⇒ 现有"agent-cli 档位 = 引擎档位"的 clamp 仍是**唯一防线**；② **"把 `limit.context` 对齐引擎档位"这一改进的收益，取决于先升级 studio**（故暂缓）。
 
+**🛠 缓解（方案 B，2026-09-22 当日实测成立）**: 根级 `compaction.auto=false` ⇒ **压缩不再触发**（3 轮同一 session 全 **rc=0**、`agent=compaction` 计数 **0**；基线 `auto=true` 时**第 2 轮即 compact=2 + rc=1**）；超引擎 ctx 时失败形态变为**明确的服务端 400**（单次 35 699 tok ⇒ `Message too long: 35699 tokens exceeds the 32768-token context window`, `code=context_length_exceeded`）⇒ **不依赖上游升级、零站上改动**；**但仍不替代 clamp**（引擎上限不变）。**同源附带发现**：`agent=title` 子请求亦受该控制帧影响（报错**但不致命** ⇒ 与基线"普通 turn `TypeValidation=1` 而 rc=0"吻合）。**⚠ 方法论**：首版实验把 `"compaction"` 插到 `"models": {` 之前，而顶层键中**没有 `models`**（它在 `provider.*` 下）⇒ 插成非法子键**被静默忽略**，该轮读数**无效** ⇒ **新纪律：配置类实验必须先 `json.load` 读回并断言新值生效，再跑行为**。
+
 **⚠ 诚实边界（2026-09-22 当日续做取证后更新）**: studio 版本**已取到** —— 三站**同为** `unsloth 2026.9.2`（PyPI 上传 **09-02 13:07**）+ `unsloth_zoo 2026.9.1`；而 **#10362 提于 09-05、关闭于 09-08**，上游 release `v0.1.806-beta` 亦 09-08 ⇒ **"我方不含修复"由"搜不到 header"的推断升级为日期直证**。**修复落点**：PyPI `2026.9.3`（**09-08 15:21**）为**第一个含修复的候选**（与关闭日/上游 release 同日），latest = `2026.9.7`（09-18）。**回滚可行**：`2026.9.2` 仍在 PyPI。**仍需试点验证**："修复真在该版"属**日期同期性推断**（未逐版核对变更内容）。
 
 **📋 决策简报（取证底账 / A·B·C 三方案 / 试点 6 步与判据 / 回滚 / 待裁 6 项）**: [2026-09-22 决策简报_unsloth-studio升级方案](../../docs/2026-09-22_决策简报_unsloth-studio升级方案.md)
