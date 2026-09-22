@@ -668,21 +668,22 @@ $bareRemote = @($ast.FindAll({ param($n)
 Assert-True "rc: 全仓无**裸调用** Invoke-RemoteScript(返回 int rc ⇒ 裸调用必污染调用方 `$code)(实测 $($bareRemote.Count) 处)" ($bareRemote.Count -eq 0)
 
 # --- 探针冒烟（2026-09-22）: 治"**守门人自己死了，而没有任何判据判它活着**" ---
-# `_probe_fallback.ps1` 有一处**硬编码提取清单**的腐烂面（已静默烂过一次，坏了 8 天没人知道 ——
-#   详见 OPEN-ISSUES 同名行）。它现在自带 `-SmokeOnly` 自检：**静态**判"`Invoke-Task`/`Invoke-Task-Claude`
-#   体内调用到的、`agent-cli.ps1` 里有定义的函数，是否都已提取或被 stub"。
-#   ⚠ 关键：它的失效**不在提取阶段**（清单里的名字都在、提取都成功），而在**运行阶段**（调到一个没提取的
-#   函数）⇒ "能 import"式冒烟**抓不到它**；本自检按**被调函数集合**判，才抓得到。
-# ⇒ 本夹具**跑它一遍**，把"探针还活着"接到一个**有调用点的判据**上（夹具是派发路径改动的指定验证手段）。
-# ⚠ 首跑即命中一个**潜伏漂移**（`Invoke-ClaudeFly-Station` 未提取；只因探针里站上候选探查必然失败
-#   才没爆）⇒ 这条判据**不是恒真的**（已当场修：加进提取清单）。
+# `_probe_fallback.ps1` 曾有一处**硬编码提取清单**的腐烂面（静默烂过一次，坏了 8 天没人知道）。
+# **2026-09-22 已改为"提取全部 `FunctionDefinitionAst`、再覆盖 stub"** ⇒ 清单不再存在，
+#   "漂移"这一失效模式**被构造性消除**；但它**换来一个新的失效模式**：**顺序**。
+#   （stub 必须在提取之后定义才生效；若被挪到提取之前就会被真函数覆盖 ⇒ 探针可能**真的去 ssh**。）
+# 探针自带 `-SmokeOnly` 静态自检，判两条：① `Invoke-Task`/`Invoke-Task-Claude` 存在；
+#   ② **顺序不变量** —— 本文件每个 `function` 都晚于提取边界。
+# ⇒ 本夹具**跑它一遍**，把"探针还活着"接到一个**有调用点的判据**上。
+# ⚠ 两次变异自证都当场红：① （旧的清单形状）拿掉 `Get-BackendEgress` ⇒ 旧自检红；
+#   ② （新的顺序形状）把一个 stub 放到提取边界**之前** ⇒ 自检红 + 本夹具红并点名。
 $probePath = Join-Path (Split-Path $cli -Parent) '_probe_fallback.ps1'
 $probeSmoke = @(); $probeSmokeRc = -1
 try {
     $probeSmoke = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $probePath -SmokeOnly 2>&1)
     $probeSmokeRc = $LASTEXITCODE
 } catch { $probeSmoke = @($_.Exception.Message) }
-Assert-True "probe: `-SmokeOnly` 通过(rc=0) —— 提取清单未漂移、探针没变成'死的守门人'" ($probeSmokeRc -eq 0)
+Assert-True "probe: `-SmokeOnly` 通过(rc=0) —— 探针可驱动那条链、且 stub 未被提取覆盖(顺序不变量)" ($probeSmokeRc -eq 0)
 if ($probeSmokeRc -ne 0) { Write-Host ('        smoke: ' + ((@($probeSmoke) | Select-Object -Last 3) -join ' / ')) }
 else { Write-Host ('        smoke: ' + ((@($probeSmoke) | Where-Object { "$_" -match 'PROBE_SMOKE_OK' }) -join '')) }
 
