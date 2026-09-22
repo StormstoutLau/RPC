@@ -18,6 +18,7 @@
   python ops/rpc_check.py --list           # 只列断言清单
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -1675,6 +1676,18 @@ ENGINE_PORTS = ("8080", "8081", "18080", "18081", "50052")
 # 故 2G 能把"真占住了"和"进程刚起/空跑"分开 (本会话真的踩到过 62.6G 残留污染判定)。
 RESIDUAL_RSS_MB = 2048
 
+# ── 站上件"部署一致性"跟踪清单 (2026-09-22 裁定接入 gates) ──────────────────────
+# 背景: 这些件是**站上件** —— 部署在 `/usr/local/bin/`, 仓库副本只是"快照"。
+#   ⇒ **改仓库副本不生效**, 必须重新部署; 而"站上跑的那份是不是仓库这份"此前**没有任何机器判据**
+#     (只靠 `ops/station-bin/README.md` 的**手工 md5 约定**) ⇒ 本清单把那条约定变成可判。
+# ⚠ **期望值不在此处写死**: 真值源 = 仓库副本 `ops/station-bin/<name>` 自身(运行期算 md5)
+#   ⇒ 不立第二定义点, 也免掉"改了仓库忘改表"这种漂移(与本仓"判据只在一处定义"同一条纪律)。
+# 为什么只列这 8 个: 它们是 `ops/station-bin/README.md` 文件清单里声明的站上件。
+# ⚠ 为什么敢判 FAIL(而非 WARN): 接入前实测过**误报面** —— 8 个件 × 三站里 7 个本来就逐字节一致,
+#   唯一不一致的 `wait-gtt-release` 是**真漂移**(A/B 落后一版且带 BOM), 已单独立项。
+STATION_BINS = ("infer-load", "infer-unload", "infer-list", "llama-serve-instance",
+                "cluster-ttl", "load-mem-gate", "wait-gtt-release", "load-gate")
+
 _HEALTH_CMD = (
     "echo '===ADDR==='; ip -o -4 addr show 2>/dev/null "
     "| awk '$4 ~ /^10\\.10\\./ {print $2, $4}'; "
@@ -1694,7 +1707,9 @@ _HEALTH_CMD = (
     "echo '===MEM==='; awk '/MemTotal/{printf \"total_mb=%d \", $2/1024} "
     "/MemAvailable/{printf \"avail_mb=%d\", $2/1024}' /proc/meminfo; "
     "printf ' load1=%s' \"$(cut -d' ' -f1 /proc/loadavg)\"; "
-    "printf ' loadgate=%s\\n' \"$(command -v load-gate >/dev/null 2>&1 && echo yes || echo no)\""
+    "printf ' loadgate=%s\\n' \"$(command -v load-gate >/dev/null 2>&1 && echo yes || echo no)\"; "
+    "echo '===BINMD5==='; for f in " + " ".join(STATION_BINS) + "; do "
+    "printf '%s=%s\\n' \"$f\" \"$(md5sum /usr/local/bin/$f 2>/dev/null | cut -d' ' -f1)\"; done"
 )
 
 _HEALTH_CACHE = {}
@@ -1709,7 +1724,7 @@ def _health_probe(st: str) -> dict:
     if st in _HEALTH_CACHE:
         return _HEALTH_CACHE[st]
     d = {"station": st, "reachable": False, "addr": {}, "link": {}, "route": {},
-         "ping": {}, "rss_mb": None, "listen": [], "mem": {}, "raw": ""}
+         "ping": {}, "rss_mb": None, "listen": [], "mem": {}, "binmd5": {}, "raw": ""}
     sys.path.insert(0, str(ROOT / "ops"))
     try:
         import cluster
@@ -1756,6 +1771,12 @@ def _health_probe(st: str) -> dict:
         if "=" in tok:
             k, _, v = tok.partition("=")
             d["mem"][k] = v
+    # 站上件副本 md5 (name=hash) —— 与本次探测**同一条命令**取回, 零额外连接。
+    # 值为空串 = 文件读不到(md5sum 失败) ⇒ 与"缺失"同义, 由判据那边报出来。
+    for line in sec.get("BINMD5", []):
+        if "=" in line:
+            k, _, v = line.strip().partition("=")
+            d["binmd5"][k] = v.strip()
     _HEALTH_CACHE[st] = d
     return d
 
@@ -2018,6 +2039,7 @@ def check_gates(ctx):
         if not live[st]["reachable"]:
             detail.append(f"{st} 站不可达/采集失败: {live[st].get('error')}")
 
+    bin_ok = bin_bad = 0
     for st in reach:
         mem = live[st]["mem"]
         try:
@@ -2041,8 +2063,35 @@ def check_gates(ctx):
             detail.append(f"{st} 站余量 {headroom}G ≤ 0 —— 当前**任何**模型都过不了门禁, "
                           f"需先卸载或清理残留")
 
+        # ── 站上件部署一致性 (2026-09-22 裁定接入) ──────────────────────
+        # 判据: `STATION_BINS` 里每个站上件, 三站副本必须**逐字节等于**仓库副本。
+        # 为什么判 FAIL 而不是 WARN: 这是"**站上跑的不是我们 review 过的那份**" ——
+        #   与本站 `stations` 断言(conf/凭据/端口不符即以站上实况改仓库侧)同一性质, 不是"判不准的噪声"。
+        # 快照语义: 期望值取**仓库副本当前内容**(运行期算 md5) ⇒ "改了仓库还没部署"也会被判出来 ——
+        #   这正是要的: 该件改仓库**不生效**, 必须走「改仓库 → 核对 → 部署」。
+        got = live[st].get("binmd5") or {}
+        for name in STATION_BINS:
+            src = ROOT / "ops" / "station-bin" / name
+            if not src.is_file():
+                bin_bad += 1
+                detail.append(f"STATION_BINS 里的 {name} 在仓库副本不存在 —— 清单该改(不是站上的问题)")
+                continue
+            exp = hashlib.md5(src.read_bytes()).hexdigest()
+            have = got.get(name, "")
+            if not have:
+                bin_bad += 1
+                detail.append(f"{st} 站 /usr/local/bin/{name} 取不到 md5 —— 站上缺件或读不到(权限)")
+            elif have != exp:
+                bin_bad += 1
+                detail.append(f"{st} 站 /usr/local/bin/{name} 与仓库副本**不一致** "
+                              f"(站上 {have[:8]}… / 仓库 {exp[:8]}…) —— 这是**站上件**, "
+                              f"改仓库副本不生效: 核对后二选一(部署仓库版 / 回滚站上版)")
+            else:
+                bin_ok += 1
+
     note = (f"内存门禁: 可达 {len(reach)}/3 站 · "
-            f"最小余量 {min([int(live[s]['mem'].get('avail_mb', 0)) // 1024 - 12 for s in reach] or [0])}G")
+            f"最小余量 {min([int(live[s]['mem'].get('avail_mb', 0)) // 1024 - 12 for s in reach] or [0])}G · "
+            f"站上件一致 {bin_ok}/{bin_ok + bin_bad}")
     if detail:
         return "FAIL", note, info + detail + [f"(WARN) {w}" for w in warn]
     if warn:
@@ -2273,7 +2322,9 @@ CHECKS = [
             "链路不通 => 先查 BIOS USB4 安全等级与是否冷启动(归档 §6.5)"},
     {"id": "gates", "title": "内存门禁", "fn": check_gates, "quick": False,
      "fix": "load-gate 缺失需补部署到 /usr/local/bin; 余量 ≤0 先卸载或清残留; "
-            "loadavg>8 等负载回落再加载"},
+            "loadavg>8 等负载回落再加载; 站上件与仓库副本不一致 => 这些件是站上件(改仓库不生效), "
+            "按明细走「备份(cp -a, 核备份 md5 == 原 md5) → install -m 755 → 核新 md5 == 仓库副本」, "
+            "或回滚站上版并改仓库侧; 清单见 rpc_check.py 的 STATION_BINS"},
     {"id": "engine", "title": "引擎态与残留", "fn": check_engine, "quick": False,
      "fix": "残留用 infer-unload 或清 llama/rpc 进程; 端口在听但 RSS 异常需查进程归属"},
     {"id": "backend", "title": "引擎后端与回滚基线", "fn": check_backend, "quick": False,
