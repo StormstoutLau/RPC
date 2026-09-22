@@ -195,8 +195,8 @@ agent-cli task <proj> [--card <task.md>] [--model <m>] [--cli auto|opencode]
     - **凭据类**（`sk-`/email/win 路径/GitHub PAT/AWS/Slack/JWT/Bearer）⇒ **抹掉继续**（脱敏后进远端，= §2.1 的"脱敏后远端"）：抹掉后卡仍自洽，下游（证据流/归档/验收/基线）看到的就是"已消毒"的 prompt。
     - **私钥块**（`-----BEGIN … PRIVATE KEY …-----`）⇒ **拒发、fail-closed**（退出码 4，= 上句的"命中即拦截"）：卡里贴了整把私钥说明**这张卡本身就不该出网**，抹掉它会让一张本该被作者修掉的卡**看起来正常**（同族于"看起来处理过了"）。
     - 规则清单的**单一真值源** = `agent-cli.ps1` 的 `Get-ScrubRules`（`Invoke-Scrubber` 抹 / `Get-ScrubBlockReason` 拒都从它取）；**主路与 claude 备路各判一次**（免得"主路守、备路漏"）。覆盖哪些/刻意不覆盖哪些、以及为什么，见该裁定 §3。
-    - **⚠ 附件不在消毒面内（2026-09-21 实测成立，此前是未写明的边界）**：`Invoke-Scrubber` 只作用于 `$promptFull`，而**附件内容**是 `scp`/`Copy-Item` **原文**（主路 L1227/1230、claude 路 L2290）⇒ 若卡同时满足「附件含敏感内容」+「模型指向云端」，**附件内容会原样进远端/云端上下文**。实测：探针卡 [`scrub-attach-probe.md`](test-cards/scrub-attach-probe.md)（自对照设计）**两路一致** —— 正文侧被抹（`[REDACTED-PATH]`）、**附件侧原样**；且 claude 转录显示 agent 真读了该文件（`tool_use`/`Read`）⇒ 不是模型猜的。⇒ **不变式②的"消毒面"目前不含附件**；要收口就得**把附件也纳入 scrubber**（或对"含敏感附件的卡"改走 `local-only`）。**⏳ 收口待人裁**（见 OPEN-ISSUES「消毒面 ≠ 出网面」待裁表 ①）。
-    - **⚠ 更一般地说：`sanitized` 的「消毒面」⊊「出网面」（2026-09-21 审计结论）** —— 上句承诺"未通过 scrubber 的任务绝不进入远端路径"，但 `Invoke-Scrubber` **全仓只有 2 个调用点、都在"派发"这一条路上** ⇒ **不经派发的出网内容不受该承诺约束**。已确认两个缺口：**① 附件**（上一条）；**② `review`/judge** —— `Invoke-Review` 把 **卡正文 + agent 产出原文**拼进判据提示词后送 **egress judge**（非 `local-only` 时默认 `ultra` = 第三方云），**既无 scrub 也无 fail-closed 判据** ⇒ 同一张 `sanitized` 卡**派发时被抹、`review` 时原样出网**。另有**一项声明未接线**：`JUDGE_TABLE.compliance`（设计意图 = 按敏感度限制 judge）**全仓无读取点**，实际生效的是只挡 `local-only` 的窄判据。⇒ **③ 已闭环（W1a）；① 与 ② 已裁定（2026-09-22，见 [REMEDIATION-PLAN §5.5](REMEDIATION-PLAN.md)）**：**① 附件 = 默认不出网 + 显式放行**（附件**形态不可判** ⇒ 抹不出可测覆盖率 ⇒ 只能靠"不出网"）；**② `review` = 复用同一套 scrub + block**（保持 `sanitized` 档"抹后可出网"的**定义**，避免同一张卡的含义取决于跑哪个子命令）。**⇒ 统一判据是"可判性"**：可判的载体（正文 / judge 提示词）抹后可出网；**不可判**的载体（附件）默认不出网。**实施项待人批**（§5.5.3）。
+    - **⚠ 附件不在消毒面内（2026-09-21 实测成立，此前是未写明的边界）**：`Invoke-Scrubber` 只作用于 `$promptFull`，而**附件内容**是 `scp`/`Copy-Item` **原文**（主路 L1227/1230、claude 路 L2290）⇒ 若卡同时满足「附件含敏感内容」+「模型指向云端」，**附件内容会原样进远端/云端上下文**。实测：探针卡 [`scrub-attach-probe.md`](test-cards/scrub-attach-probe.md)（自对照设计）**两路一致** —— 正文侧被抹（`[REDACTED-PATH]`）、**附件侧原样**；且 claude 转录显示 agent 真读了该文件（`tool_use`/`Read`）⇒ 不是模型猜的。⇒ **不变式②的"消毒面"目前不含附件**；要收口就得**把附件也纳入 scrubber**（或对"含敏感附件的卡"改走 `local-only`）。**✅ 已收口（2026-09-22，W4）**：**附件默认不出网 + 显式放行**（卡字段 `attach-egress: ok`，见 §6.1）—— 判据是**可判性**：附件形态不可判 ⇒ 抹不出可测覆盖率 ⇒ 只能靠"不出网"兜底（裁定见 [REMEDIATION-PLAN §5.5.2](REMEDIATION-PLAN.md)）。
+    - **⚠ 更一般地说：`sanitized` 的「消毒面」⊊「出网面」（2026-09-21 审计结论）** —— 上句承诺"未通过 scrubber 的任务绝不进入远端路径"，但 `Invoke-Scrubber` **全仓只有 2 个调用点、都在"派发"这一条路上** ⇒ **不经派发的出网内容不受该承诺约束**。已确认两个缺口：**① 附件**（上一条）；**② `review`/judge** —— `Invoke-Review` 把 **卡正文 + agent 产出原文**拼进判据提示词后送 **egress judge**（非 `local-only` 时默认 `ultra` = 第三方云），**既无 scrub 也无 fail-closed 判据** ⇒ 同一张 `sanitized` 卡**派发时被抹、`review` 时原样出网**。另有**一项声明未接线**：`JUDGE_TABLE.compliance`（设计意图 = 按敏感度限制 judge）**全仓无读取点**，实际生效的是只挡 `local-only` 的窄判据。⇒ **③ 已闭环（W1a）；① 与 ② 已裁定（2026-09-22，见 [REMEDIATION-PLAN §5.5](REMEDIATION-PLAN.md)）**：**① 附件 = 默认不出网 + 显式放行**（附件**形态不可判** ⇒ 抹不出可测覆盖率 ⇒ 只能靠"不出网"）；**② `review` = 复用同一套 scrub + block**（保持 `sanitized` 档"抹后可出网"的**定义**，避免同一张卡的含义取决于跑哪个子命令）。**⇒ 统一判据是"可判性"**：可判的载体（正文 / judge 提示词）抹后可出网；**不可判**的载体（附件）默认不出网。**✅ 均已于 2026-09-22 实施并自证**（`Resolve-ReviewPrompt` / `Get-AttachEgressReject`；实弹与变异自证见 [REMEDIATION-PLAN §5.5.3](REMEDIATION-PLAN.md)）—— 附件改为**默认不出网 + 显式放行**（卡字段见 §6.1 `attach-egress`）。
     - **✅ 判据只在一处定义（W1a 落地的规则，2026-09-21）**：**"某后端会不会出网"只由后端属性判，不按型号前缀判** —— `Get-BackendEgress`（route 侧，**fail-closed 默认：只有 `local/<flavor>` 不出网，其余一律出网**；claude 通道**豁免**，因其实施后端由 P3 运行时决定）、`Get-JudgeEgress`（judge 侧，读表里声明的 `egress`）、`Get-JudgeComplianceReject`（读表里声明的 `compliance`，**缺字段 ⇒ 拒**）。理由：旧的**白名单式前缀判据**（`^opencode/`）**每加一个云后端就漏一次**（已漏两次：claude 备路 / review judge）。⇒ **新增后端/judge 必须声明属性**（缺失走 fail-closed），且夹具对此设**覆盖率断言**（`JUDGE_TABLE` 全部条目都必须有 `egress`+`compliance`）+ **AST 断言**（全仓不得再出现按前缀判敏感度）+ ★**"假想云端后端自动纳管"**负例。
     - **⚠ 卡作者纪律（不是判据，是纪律 —— 裁定 §6-P4）**：**含 PII（手机号/身份证/银行卡）或本机拓扑（内网 IP/主机名/绝对路径）的卡必须声明 `sensitivity: local-only`**。理由：scrubber **刻意不覆盖**这些形态（判据会误伤 —— 长度判据会命中本仓 run ID、`.local`/内网 IP 是本项目的主要寻址方式），所以"它们不出网"这件事**只能由档位保证**，不能指望正则。
       - **✅ 消毒面收口已实施（2026-09-22，W1b+W4 裁定，见 [REMEDIATION-PLAN §5.5](REMEDIATION-PLAN.md)）**：**判据统一为「可判性」** —— ① **卡正文 / judge 提示词**（可判）⇒ `sanitized` 时**抹后可出网**；`Invoke-Review` 现在与派发**同规矩**（`Resolve-ReviewPrompt`：**先跑 `Get-ScrubBlockReason`**（任何档位都跑，命中**拒发**）→ 只对 `sanitized` 走 `Invoke-Scrubber` → **再发请求**；位置由夹具的位置断言守住）。② **附件**（不可判）⇒ **默认不出网 + 显式放行**：有附件且后端会出网时必须写 **`attach-egress: ok`**（`Get-AttachEgressReject`；opencode 通道按 `Get-BackendEgress $id` 判、claude 通道按运行时 `-not $useStation` 判 ⇒ 两个通道各判一次）。
@@ -222,6 +222,8 @@ audit: true | false                                       # true 时 prompt 尾�
 readonly: true | false                                    # MVP 仅记录（4.1 层2）
 timeout_s: 900                                            # 可选覆盖
 fallback-timeout-s: 0                                     # claude 通道(含 AUTO_FALLBACK 备路)的独立首跑预算; 0=沿用 timeout_s (P4, 2026-09-21)
+review-model:                                             # 可选: 把该卡的 review 钉到指定 judge（O-16；"显式接受出网"家族）
+attach-egress:                                            # 可选: 附件**默认不出网** —— 有附件且后端会出网时必须显式写 ok 才放行 (W4, 2026-09-22)
 accept:                                                   # 验收判据（可执行）
   - python -m pytest paper_cli/tests/ -q
 ---
@@ -261,7 +263,9 @@ M3 接受两种表示：完整 ID 直接查路由表；别名先经本表解析�
   "prompt_sha256": "", "attach": []        // Model-visible means logged（§9.8.1）：一切注入留哈希
   // ⚠ attach 形状（2026-09-18，缺口 5）：**有附件的新 run** ⇒ 对象数组
   //   [{name, src, kind: file|dir, files, sha256}]（sha256 = 该附件"注入字节"的摘要，依站上清单算出后
-  //   落进 run.json ⇒ **被链钉住**）；无附件 ⇒ []；**老 run 与 claude 备路 ⇒ 名字数组**（消费方须兼容两形）。
+  //   落进 run.json ⇒ **被链钉住**）；无附件 ⇒ []；**老 run ⇒ 名字数组**（消费方须兼容两形）。
+  //   ⚠ **2026-09-22 订正**：原文此处还写"**与 claude 备路 ⇒ 名字数组**" —— 实测**已不成立**（claude 路
+  //   本地支/站上支现在**都是对象数组**，与主路同形）⇒ 该分支的兼容负担消失。同句在 ARCHITECTURE §6 亦已订正。
   //   原始证据（逐文件 `<sha>  <relpath>`）另存 runDir 的 `attach-manifest.txt`。见 ADR-0007。
   // ADR-0007 前置（2026-09-18）：card = {path, sha256, bytes, front_matter}
   //   —— **卡是最大的注入物**（决定 prompt/验收/golden/manifest 本身）；sha256 取卡的**原始字节**
@@ -357,7 +361,7 @@ M3 接受两种表示：完整 ID 直接查路由表；别名先经本表解析�
 | 锁被占用                          | 报占用者 PID/task\_id 即退             | 3      |
 | sensitivity 冲突（local-only+远端） / **消毒失败**（卡内含不可安全抹除项，如私钥块） | 拒绝，无覆写通道（fail-closed，绝不"抹掉继续"） | 4      |
 | model 缺失/不在路由表                | 拒绝                               | 2      |
-| ssh 断连                        | 自动重试 1 次（门禁缓存不重审，Codex §9.7.2-1） | 5      |
+| ssh 断连                        | 自动重试 1 次（门禁缓存不重审，Codex §9.7.2-1）；**2026-09-22 起同一码也覆盖**：站上分支的**工作区 sync / 附件上站**事务失败（主路语义同源）⇒ **fail-closed、不派发**（宁可不跑，也不在缺件下跑完） | 5      |
 | 超时                            | kill → failed{timeout} → 释放锁     | 6      |
 | 引擎**明确拒绝**（ctx 超限 400 ⇒ 客户端挂死被 `timeout` 掐断） | 归档为 failed；**不触发**自动 fallback（换后端也兜不住） | 14     |
 | 孤儿状态（running+死 PID）           | 归档 out/ → orphaned → 允许重取锁       | 0（附警告） |
