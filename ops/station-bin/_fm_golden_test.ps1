@@ -667,6 +667,25 @@ $bareRemote = @($ast.FindAll({ param($n)
             $n.PipelineElements[0].GetCommandName() -eq 'Invoke-RemoteScript' }, $true))
 Assert-True "rc: 全仓无**裸调用** Invoke-RemoteScript(返回 int rc ⇒ 裸调用必污染调用方 `$code)(实测 $($bareRemote.Count) 处)" ($bareRemote.Count -eq 0)
 
+# --- 探针冒烟（2026-09-22）: 治"**守门人自己死了，而没有任何判据判它活着**" ---
+# `_probe_fallback.ps1` 有一处**硬编码提取清单**的腐烂面（已静默烂过一次，坏了 8 天没人知道 ——
+#   详见 OPEN-ISSUES 同名行）。它现在自带 `-SmokeOnly` 自检：**静态**判"`Invoke-Task`/`Invoke-Task-Claude`
+#   体内调用到的、`agent-cli.ps1` 里有定义的函数，是否都已提取或被 stub"。
+#   ⚠ 关键：它的失效**不在提取阶段**（清单里的名字都在、提取都成功），而在**运行阶段**（调到一个没提取的
+#   函数）⇒ "能 import"式冒烟**抓不到它**；本自检按**被调函数集合**判，才抓得到。
+# ⇒ 本夹具**跑它一遍**，把"探针还活着"接到一个**有调用点的判据**上（夹具是派发路径改动的指定验证手段）。
+# ⚠ 首跑即命中一个**潜伏漂移**（`Invoke-ClaudeFly-Station` 未提取；只因探针里站上候选探查必然失败
+#   才没爆）⇒ 这条判据**不是恒真的**（已当场修：加进提取清单）。
+$probePath = Join-Path (Split-Path $cli -Parent) '_probe_fallback.ps1'
+$probeSmoke = @(); $probeSmokeRc = -1
+try {
+    $probeSmoke = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $probePath -SmokeOnly 2>&1)
+    $probeSmokeRc = $LASTEXITCODE
+} catch { $probeSmoke = @($_.Exception.Message) }
+Assert-True "probe: `-SmokeOnly` 通过(rc=0) —— 提取清单未漂移、探针没变成'死的守门人'" ($probeSmokeRc -eq 0)
+if ($probeSmokeRc -ne 0) { Write-Host ('        smoke: ' + ((@($probeSmoke) | Select-Object -Last 3) -join ' / ')) }
+else { Write-Host ('        smoke: ' + ((@($probeSmoke) | Where-Object { "$_" -match 'PROBE_SMOKE_OK' }) -join '')) }
+
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
 exit $(if ($fail -eq 0) { 0 } else { 1 })

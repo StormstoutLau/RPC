@@ -15,6 +15,9 @@
 # would throw before the fallback gate is reached. This is the known BatchMode OPEN-ISSUE
 # (ssh/scp), not part of this change. We want the stubbed rc=6 path to COMPLETE and hit
 # the fallback gate, so swallow the offline-scp native errors in the probe.
+param(
+    [switch]$SmokeOnly   # 2026-09-22: 只跑"提取清单齐备性"自检, 不派发/不触站/不起 claude ⇒ 供夹具冒烟
+)
 $ErrorActionPreference = 'SilentlyContinue'
 $cliPath = 'd:\RPC\ops\station-bin\agent-cli.ps1'
 
@@ -30,18 +33,66 @@ $fns = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.
 #   实测踩到: P5 规则扩充新增 `Get-ScrubRules`、W1a 新增 `Get-BackendEgress`、W4 新增 `Get-AttachEgressReject`
 #   之后本探针**静默失效**（`Get-BackendEgress is not recognized` 直接抛），而它**无自动调用点** ⇒ 无人察觉。
 #   ⇒ 新增纯函数时同步此处；判据是"Invoke-Task / Invoke-Task-Claude 体内是否直接调用它"。
-foreach ($nm in @('Get-FrontMatter','Get-CardIdentity','Test-CardSafetyDeclared','Get-Sha256Text',
+$extractList = @('Get-FrontMatter','Get-CardIdentity','Test-CardSafetyDeclared','Get-Sha256Text',
                   'Get-Sha256Lines','Get-NumOr','Invoke-Scrubber','Merge-EvidenceSubjects',
                   'Get-FrameworkSubjects','Get-ClaudeFrameworkSubjects','Test-FallbackEligible',
                   'Get-SensitivityBackendReject',
                   'Get-ScrubRules','Get-ScrubBlockReason','Get-BackendEgress','Get-AttachEgressReject',
                   'Test-CtxOverflowError','Resolve-CtxOverflowCode',
                   'Resolve-ClaudeStationCandidates','Resolve-ClaudeBudget',
-                  'Resolve-ClaudeSpawn','Invoke-ClaudeFly','Resolve-LocalBash','Invoke-LocalBashCmd','Invoke-Task-Claude')) {
+                  'Resolve-ClaudeSpawn','Invoke-ClaudeFly','Resolve-LocalBash','Invoke-LocalBashCmd','Invoke-Task-Claude',
+                  # ⚠ 由下面的**自检**当场抓出来的**潜在漂移**(2026-09-22, 首跑即命中): 它被
+                  #   `Invoke-Task-Claude` 调用, 但一直没进清单 —— 没爆的原因是探针里站上候选探查
+                  #   必然失败(`Test-StationEngineReady` stub 恒 $false) ⇒ 走不到那一行。
+                  #   ⇒ 属"清单漂移"的**潜伏态**: 一旦有人把站就绪桩改成 $true, 探针立刻死。
+                  'Invoke-ClaudeFly-Station')
+foreach ($nm in $extractList) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found" }
     Invoke-Expression $f.Extent.Text
 }
+
+# ── 自检 (2026-09-22): **提取清单齐备性** —— 治"硬编码清单漂移"这个腐烂面, 并把"探针还活着"变成可判 ──
+# 为什么需要: 本探针从 agent-cli.ps1 抽纯函数进会话(硬编码名单), 而 P5 规则扩充 / W1a / W4 / C1 / O-13
+#   各加了纯函数 ⇒ 名单没同步 ⇒ `Invoke-Task` 一跑到新函数就抛 ⇒ **探针静默变死**; 它又**无自动调用点**
+#   ⇒ 无人察觉(实测坏了 8 天)。⚠ 注意它的失效**不在提取阶段**(清单里那些名字都在, 提取都成功),
+#   而在**运行阶段**(调用到一个没被提取的函数) ⇒ "能 import"式的冒烟**抓不到它**。
+# ⇒ 判据(静态, 零派发): 凡 `Invoke-Task` / `Invoke-Task-Claude` **体内调用的、agent-cli.ps1 里有定义**的
+#   函数, 必须**在 `$extractList` 里** 或 **被本探针 stub**(stub 也是 `function` 定义 ⇒ 从本文件 AST 读得到)。
+#   只判"有定义的函数" —— 原生命令(ssh/scp/curl…)与 cmdlet 不在本判据范围。
+# ⚠ 保守性: 它**不看**该调用在探针路径上是否真会执行 ⇒ 可能要求提取一个当前用不到的函数(代价≈0)。
+$smokeNeed = @(); $smokeMissing = @()
+try {
+    $probeTxt = [System.IO.File]::ReadAllText($MyInvocation.MyCommand.Path)
+    $probeErrs = $null
+    $probeAst = [System.Management.Automation.Language.Parser]::ParseInput($probeTxt, [ref]$null, [ref]$probeErrs)
+    $probeFns = @($probeAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) |
+                  ForEach-Object { $_.Name })
+    $covered = @($extractList) + @($probeFns)
+    $definedInCli = @($fns | ForEach-Object { $_.Name })
+    foreach ($tn in @('Invoke-Task', 'Invoke-Task-Claude')) {
+        $fnAst = @($fns | Where-Object { $_.Name -eq $tn }) | Select-Object -First 1
+        if (-not $fnAst) { continue }
+        foreach ($ca in $fnAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true)) {
+            # `& $var` 这类命令的 GetCommandName() 可能抛 ⇒ 单独兜住(否则自检会因"怪 AST"假红)
+            try { $cn = $ca.GetCommandName() } catch { $cn = $null }
+            if ($cn -and ($definedInCli -contains $cn)) { $smokeNeed += $cn }
+        }
+    }
+    $smokeNeed = @($smokeNeed | Sort-Object -Unique)
+    $smokeMissing = @($smokeNeed | Where-Object { $covered -notcontains $_ })
+} catch {
+    Write-Host ('PROBE_SMOKE_FAIL: 自检本身抛错: ' + $_.Exception.Message)
+    exit 1
+}
+if ($smokeMissing.Count -gt 0) {
+    Write-Host ('PROBE_SMOKE_FAIL: 提取清单漂移 —— 下列函数被 Invoke-Task/-Claude 调用、agent-cli.ps1 里有定义, 但本探针既没提取也没 stub: ' + ($smokeMissing -join ', '))
+    Write-Host '  ⇒ 修法: 把名字加进上面的 $extractList。**不要**为了过检把它们改成 stub —— 那会让探针跑的不是"真逻辑"。'
+    exit 1
+}
+Write-Host ('PROBE_SMOKE_OK: 需覆盖 ' + $smokeNeed.Count + ' 个函数, 全部已提取或已 stub (提取清单 ' + @($extractList).Count + ' 项)')
+if ($SmokeOnly) { exit 0 }
+
 # extract Invoke-Task (the dispatch under test)
 $it = @($fns) | Where-Object { $_.Name -eq 'Invoke-Task' } | Select-Object -First 1
 if (-not $it) { throw 'Invoke-Task not found' }
