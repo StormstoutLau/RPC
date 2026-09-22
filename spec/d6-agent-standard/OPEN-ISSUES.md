@@ -279,7 +279,9 @@ limit: { context: J.context_length ?? Y?.limit.context ?? 0,
 
 **✅ 修法结论**: **升级 station 的 unsloth studio（唯一治本）**。另两条被否：**加 `X-Unsloth-Events` 头是反向**（加了才会收到控制帧）；**改 baseURL 直连引擎端口**虽实测无控制帧，但与 `_station_ready.sh` 的 **C2「端口固定 8080、本脚本不改写任何配置」**相悖（"就地改写 baseURL"正是当年留下死端口 + 三站 config 漂移而被废弃的旧实现）⇒ **不采纳**。**含义**：① 累积型长任务在本地引擎上**无法靠 compaction 自救** ⇒ 现有"agent-cli 档位 = 引擎档位"的 clamp 仍是**唯一防线**；② **"把 `limit.context` 对齐引擎档位"这一改进的收益，取决于先升级 studio**（故暂缓）。
 
-**⚠ 诚实边界**: studio **版本号未取到**（`~/.unsloth/` 下无 VERSION 文件、远端 `pip list` 无输出）⇒ "早于 #10362"是**由"目录内搜不到该 header"推断**，**非版本号直证**；#10362 落入**哪个正式发布版未核**（issue 内锚点为 `v0.1.806-beta`）。
+**⚠ 诚实边界（2026-09-22 当日续做取证后更新）**: studio 版本**已取到** —— 三站**同为** `unsloth 2026.9.2`（PyPI 上传 **09-02 13:07**）+ `unsloth_zoo 2026.9.1`；而 **#10362 提于 09-05、关闭于 09-08**，上游 release `v0.1.806-beta` 亦 09-08 ⇒ **"我方不含修复"由"搜不到 header"的推断升级为日期直证**。**修复落点**：PyPI `2026.9.3`（**09-08 15:21**）为**第一个含修复的候选**（与关闭日/上游 release 同日），latest = `2026.9.7`（09-18）。**回滚可行**：`2026.9.2` 仍在 PyPI。**仍需试点验证**："修复真在该版"属**日期同期性推断**（未逐版核对变更内容）。
+
+**📋 决策简报（取证底账 / A·B·C 三方案 / 试点 6 步与判据 / 回滚 / 待裁 6 项）**: [2026-09-22 决策简报_unsloth-studio升级方案](../../docs/2026-09-22_决策简报_unsloth-studio升级方案.md)
 
 **📌 上游注册：不必（2026-09-22 调查结论）** —— ① 本问题的**决定性因素在服务端**（引擎 `n_ctx`），不在 opencode；② 上游同族条目**已有 5+3 条**：`#29555` / `#37456`（closed-**completed**，多半只修显示）、`#37544`（`config: existing model limit override is ignored`，**closed-`not_planned`** ⇒ **再提同类会被关**）、`#35863`（context window 硬编码 200k，**open**）、`#40524`（catalog 与 `/models` 对账，**open**）、`#38835`（无 `limit.input` 时 `compaction.reserved` 被静默忽略，**open**）、`#40908`（要动态探测 ctx，**open**）；③ `#41104`（本地 ctx 发现 PR）**已提但未并入**（`merged=False`）；④ 我们落后 **7 个 patch**（1.18.25 → 1.18.32@09-21）而**近 8 个 release notes 无任何 limit/context/compaction 修复** ⇒ **升级不是解法、新开 issue 只会重复** ⇒ **不注册**（若将来要动上游，唯一有价值的形态是给 `#35863`/`#40908` 留一条限定角度的评论，非新 issue）。
 

@@ -1,0 +1,92 @@
+# 升级决策简报 —— unsloth studio 升级（网关 UI 控制帧致本地 provider 压缩失效）
+
+- **日期**: 2026-09-22
+- **状态**: **待裁**（方案 A/B/C + 试点步骤与判据已备齐；本简报**不含未取证结论**）
+- **触发**: 用户问「opencode 遗留问题是否必须注册」⇒ 定位 compaction 失败根因 ⇒ 用户令「评估升级方案」「先取证 A 的未知项」⇒ 本简报
+- **关联**: [OPEN-ISSUES §O-23](../spec/d6-agent-standard/OPEN-ISSUES.md)（根因全文落档）· [DEVELOPMENT-LOG 2026-09-22 线二](../spec/d6-agent-standard/DEVELOPMENT-LOG.md)（第 ⑧ 条）
+
+---
+
+## 一、问题与根因（已定位，非推测）
+
+**症状**: 本地 provider 上，opencode 一旦会话累积超阈、进入 `agent=compaction`，**压缩必然失败**（`AI_TypeValidationError: Value: {"type":"reasoning_summary","duration_ms":9472}`，它期望 `choices` 或 `error`）⇒ 长任务**无法靠压缩自救**。
+
+**根因（三级，均有对照实验）**:
+
+| 级 | 事实 | 证据 |
+|---|---|---|
+| ① **网关**（unsloth studio `:8080`）在流式响应里**注入非标准 SSE 帧** | `data: {"type": "reasoning_summary", …}` | 三方 curl 同 prompt/model：studio 流式 **命中 1**／studio **非流式 0**／**直连 `llama-server :47059` 流式 0** ⇒ 帧由 **studio 注入** |
+| ② **客户端路径差异** | 普通对话**容错丢弃**、压缩路径**严格 union 校验** | DEBUG 对照：**普通 turn 命中 0 / `TypeValidation` 0 / rc=0**；**压缩 turn 命中 3 / `TypeValidation` 2 / rc=1** |
+| ③ **上游已确认并已修** | [unslothai/unsloth#10362](https://github.com/unslothai/unsloth/issues/10362)（**closed 2026-09-08**，16 评论）正文逐字即本例："UI control frames … **carry no `choices`, so strict OpenAI clients fail schema validation**"；修法 = 控制帧收进 **`X-Unsloth-Events` opt-in**（默认不发）；其自测 **"8 of 13 streams throw outright today"** | 站上 studio 目录 `grep -rl "X-Unsloth-Events"` **无命中** ⇒ 我方不含该修复 |
+
+**被否的两条修法**（勿再试）:
+- **加 `X-Unsloth-Events` 头** ⇒ **反向**（加了才会收到控制帧）；
+- **改 `baseURL` 直连引擎端口** ⇒ 实测确实无控制帧，但与 [`_station_ready.sh`](../ops/station-bin/_station_ready.sh) 的 **C2「端口固定 8080、本脚本不改写任何配置」**相悖（"就地改写 baseURL"正是当年**留下死端口 + 三站 config 漂移**而被废弃的旧实现）。
+
+---
+
+## 二、实测事实（本简报全部结论的取证底账）
+
+| 项 | 实测值 |
+|---|---|
+| **三站 studio 版本** | **A / B / C 全部** `unsloth 2026.9.2` + `unsloth_zoo 2026.9.1`（⇒ 门禁 `backend` 当前一致） |
+| studio 体量 / 耦合 | `~/.unsloth/studio` **7.3G**；引擎**独立**在 `~/llama.cpp-vulkan-b10715`（1.9G，日志证实由 studio 拉起）；`torch 2.11.0+rocm7.13.0` |
+| **升级入口** | **`unsloth studio update`** —— `--package <str>` **默认 `unsloth`** ⇒ **就是更新 `unsloth` 包本身**（非"只重建依赖"）；`--local` = 从本地 repo（反证默认 **PyPI**）；`--verify` **默认开**（更新后扫描损坏）；另有 `verify-install`（其**退出码**供官方 setup 走"已最新"快径） |
+| **PyPI 版本线** | `2026.9.2`（09-02 13:07，**我方**）→ **`2026.9.3`（09-08 15:21）** → `9.4`(09-09) → `9.5`(09-16) → `9.6`(09-17) → **`9.7`(09-18 16:21，latest)** |
+| **修复落点** | `2026.9.3` 与 **#10362 关闭日 + 上游 release `v0.1.806-beta` 发布日同日** ⇒ **第一个含修复的候选** |
+| **回滚可行性** | `2026.9.2` **仍在 PyPI** ⇒ 可重装复原 ⇒ 基线**只需记版本 + venv 清单 + 关键 md5**，**不必整 7.3G 备份** |
+
+**上游 release 线（studio）**: v0.1.804/805-beta(09-02) · **v0.1.806-beta(09-08)** · v0.1.807(09-09) · v0.1.808(09-16) · v0.1.810(09-17) · **v0.1.811-beta(09-18)**
+
+---
+
+## 三、方案与代价
+
+| 方案 | 内容 | 代价 / 风险 | 收益 |
+|---|---|---|---|
+| **A 升级** | 三站升至 `unsloth 2026.9.7`（先 B 站试点） | 7.3G 级 venv 重建（含依赖下载）· **牵连引擎启动参数**（studio 是引擎启动方，注入 `-c`/`--chat-template-kwargs`/`--jinja`）⇒ 需回归 D1 档位与 O-23 的 `ENGINE_CTX` · **必须三站同升**（否则门禁 `backend` FAIL） | **治本**：压缩路径恢复可用 |
+| **B 零站上改动** | 在 `opencode.jsonc` 设 **`compaction.auto=false`** ⇒ 让"注定失败"的压缩不再发生，超阈时**早失败**而非"9.4s 后炸" | 一处 config；⚠ **该配置项在 1.18.25 的语义未验证** | 失败形态更干净；**不依赖上游** |
+| **C 不动** | 维持现状（agent-cli clamp 为唯一防线），台账已记 | 零成本 | — |
+
+**⚠ 收益边界（三方案共用）**: 升级**只买到"累积型长任务能被压缩救回"**；**单次请求超引擎 `n_ctx` 仍被服务端拒** ⇒ **agent-cli clamp 无论如何都要保留**（O-23 架构结论不变）。
+
+---
+
+## 四、试点步骤与判据（若选 A）
+
+**B 站试点（6 步）**:
+1. **记基线**: `unsloth --version` / `pip freeze` 清单 / 关键文件 md5 / 门禁快照（`backend`·`stations`·`models`·`engine`）
+2. `unsloth studio update --verbose`
+3. `unsloth studio verify-install`（核退出码）
+4. **三条已建判据复验**（判据均在本轮已跑通）:
+   - **流内 `reasoning_summary` 计数必须 = 0**（三方 curl 法：studio 流式 / studio 非流式 / 直连引擎流式）
+   - **压缩两轮 rc=0**（多轮法：小 `limit.context` 探针 + 同 session 两轮）
+   - `infer-load` **档位口径**与 **`ENGINE_CTX` 探测**未变
+5. 门禁 `backend` / `stations` 复核（三站一致性断言）
+6. **通过后再推 A、C**（三站同步，最后统一门禁）
+
+**回滚**: `pip install unsloth==2026.9.2`（或 `update` 的对应机制）+ venv 清单复原。
+⚠ **待试点时确认**：`update --package` 接的是**包名**（未必接版本 specifier）⇒ "指定版本/回滚"可能需绕到 pip 直装。
+
+---
+
+## 五、诚实边界（未取证 / 未验证）
+
+1. **"修复在 `2026.9.3` 里"是日期同期性推断**（#10362 closed 09-08 + 该版 09-08 发布 + release v0.1.806-beta 同日），**未逐版核对变更内容**；最硬的验证就是试点第 4 步的"`reasoning_summary` 计数 = 0"。
+2. **`compaction.auto=false` 的语义未验证**（方案 B 的前提）。
+3. **`update` 能否指定版本**未验证（影响回滚路径的确定性）。
+4. 本轮**未执行任何 `update`**；所有站上操作均为**只读**（版本/help/源码 grep/日志）。
+5. **引擎面牵连程度未量化**：只知"studio 会注入启动参数"，**未**比对旧/新版的默认参数差异（试点第 4 步的"档位未变"是事后判据，非事前评估）。
+
+---
+
+## 六、待裁清单
+
+| # | 待裁项 | 选项 |
+|---|---|---|
+| 1 | 是否开 **A 的 B 站试点**（含上述 6 步） | 现在做 / 押后 |
+| 2 | 是否**先做 B**（`compaction.auto=false`，零站上改动、可当次验证） | 先做 / 不做 |
+| 3 | **目标版本** | `2026.9.3`（最小变更）/ **`2026.9.7`（latest，推荐）** |
+| 4 | **升级窗口** | 需三站**连续**窗口（B 试点 → A/C） |
+| 5 | **回滚机制**是否先确认（`update` 版本可指定性） | 先确认 / 试点中一并确认 |
+| 6 | 试点通过后**是否立即推 A、C** | 立即 / 另约窗口 |
