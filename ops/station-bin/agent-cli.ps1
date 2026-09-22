@@ -816,6 +816,17 @@ function Get-FrameworkSubjects($accept, [bool]$goldenActive) {
     #   `accept-output/accept-golden-output` 在无 accept/golden 的 run 上实测**不存在**
     #   (run `202609181751581972` = 无 front-matter 卡, 该两件 0/1 存在) ⇒ 若无条件列入,
     #   每个这类 run 都会假报 `missing-artifact`, 把缺口判据变成天天红的东西。
+    #   例外的**合法出路**是 `ephemeral = $true`(第三态): 它不是"必有", 而是"**可合法缺席**" ——
+    #   缺席时不报 `missing-artifact`、单列 `artifact-ephemeral-by-design`(cluster.py agent_audit)。
+    #
+    # W1b/W4 收口 (2026-09-22): 新增 `review` 件。为什么它**必须**进基线(门禁实测缺口):
+    #   `review` 子命令事后往 runDir 写 `review.json`(O-16 的"并行键"), 而门禁的 undeclared 判据
+    #   **动态枚举 runDir** ⇒ 只要 review 过一次, 该件就成了"已归档但未被任何 subject 覆盖"的
+    #   **可重放缺口**(实测 run `202609221131192690`: `已归档但未被任何 subject 覆盖: review.json`)。
+    #   为什么它**必须**带 `ephemeral` 而不能像其余件那样裸列: 它由 `review` **事后**写入、**非派发必有**
+    #   ⇒ 裸列会让每个没 review 过的 run 都假报 `missing-artifact`(正是上面那条警戒的同族错误)。
+    #   缺席的语义差别(要紧, 别混): `missing-artifact` = **该有却没有**(缺陷) /
+    #   `artifact-ephemeral-by-design` = **设计上可无**(注释) —— 两者在 audit 里严格分列。
     $list = @(
         @{ name = 'agent-output';    path = 'agent-output.txt' }
         @{ name = 'judgment-record'; path = 'judgment-record.txt' }
@@ -827,6 +838,7 @@ function Get-FrameworkSubjects($accept, [bool]$goldenActive) {
         @{ name = 'attach-manifest'; path = 'attach-manifest.txt' }
         @{ name = 'workspace-diff';  path = 'workspace-diff.txt' }
         @{ name = 'card';            path = 'card.md' }
+        @{ name = 'review';          path = 'review.json'; ephemeral = $true }
     )
     $hasAccept = $false
     foreach ($a in @($accept)) { if ("$a".Trim()) { $hasAccept = $true } }
@@ -843,11 +855,16 @@ function Get-ClaudeFrameworkSubjects($accept, [bool]$goldenActive) {
     #   ⇒ 复用主路基线会让每个 claude run 都假报 `missing-artifact`, 把判据变噪声 —— 审查总账早已提醒
     #   该路 run 恒 v1、"需按路各一份基线、单独立项"; 本次即把该条落地(recipe v2 的关键)。
     # 与主路 Get-FrameworkSubjects 同纪律: **只列该次派发必产出的件**(accept/golden 件按激活与否条件列)。
+    # W1b/W4 收口 (2026-09-22): 与主路**同步**补 `review` 件(带 `ephemeral`)。为什么本路也需要:
+    #   `Get-ReviewRunDir` 是按 `.agent-run.json` **动态选目录**、**不分路** ⇒ 本路 run 一样能被 review、
+    #   一样会落 `review.json` ⇒ 不补则本路必然重演同一条"已归档但未被任何 subject 覆盖"的缺口。
+    #   同理必须带 `ephemeral = $true`(事后写入、非派发必有), 否则没 review 过的 claude run 会假报缺件。
     $list = @(
         @{ name = 'agent-output';       path = 'agent-output.txt' }
         @{ name = 'prompt';             path = 'prompt.txt' }
         @{ name = 'stderr';             path = 'stderr.txt' }
         @{ name = 'card';               path = 'card.md' }
+        @{ name = 'review';             path = 'review.json'; ephemeral = $true }
     )
     $hasAccept = $false
     foreach ($a in @($accept)) { if ("$a".Trim()) { $hasAccept = $true } }
