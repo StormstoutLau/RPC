@@ -2389,6 +2389,23 @@ function Invoke-Task-Claude {
         Write-Host "REJECT claude-station=$($r['station']) (exit 4) - claude channel must run local (station='')"
         return 4
     }
+    # W3 步 1 (2026-09-22): **站上变体 + 有附件 ⇒ fail-closed 拒** —— 这是**能力缺口**, 不是策略选择。
+    # 为什么**必须拒**而不是"让它跑": 站上变体在**站上**执行 claude, 且站上脚本 `cd "$HOME"`
+    #   (见 `Invoke-ClaudeFly-Station` 生成的 `_p3_claude_run.sh`) —— 而附件只被复制到**主控本地**
+    #   `<projRoot>\.attach`(见下方 attach 块) ⇒ **站上根本读不到**。此时 agent 会在**缺件**的情况下
+    #   跑完并给出结论 = **假绿灯**。而"明确拒绝"是**可修的错误**(卡作者改走主控本地 / 等步 2 实现同步)
+    #   ⇒ 两者代价不对称: **假绿灯会被当成证据**。故优先拒, 不优先实现同步。
+    # ⚠ 与 W4 附件闸的分工(两个判据不同维度, 都要有): `Get-AttachEgressReject` 管的是
+    #   "附件**会不会出网**"(按后端出网属性判; 站上本地 ⇒ 不出网 ⇒ **放行**); 本闸管的是
+    #   "附件**到不到得了执行点**"。⇒ **W4 的放行不能被读成"站上+附件可用"**。
+    # ⚠ 位置刻意在此(**早于站上候选探查**): 该卡必被拒 ⇒ **不该为它触碰任何站**(判据里那条
+    #   "零触站"由此保证); 夹具对此设**位置断言**(AST, 见 _fm_golden_test.ps1)。
+    # **后置(步 2, 可选)**: 真正实现"附件同步到站上 + `cd` 到站上工作区"后可撤本闸 —— 撤之前
+    #   **必须**先有"附件在站上可读"的实弹证据(方法与 P3 探针卡相同), 别只凭代码看着对。
+    if ($useStation -and @($attach).Count -gt 0) {
+        Write-Host "REJECT claude-station-attach-unsupported (exit 4) - 站上变体不支持附件(附件只到主控本地, 站上 cwd=`$HOME 读不到) ⇒ fail-closed; 改走主控本地(需 public/sanitized)或等 W3 步 2 实现同步"
+        return 4
+    }
     # ⚠ P0 止血 (2026-09-21, 安全策略洞 · 出网路径①) —— **P3 已把它从"一律拒绝"升级为"分流"**：
     #   原语义: `local-only` 一律不进本通道(本函数是**主控本地** spawn claude, 其
     #   ANTHROPIC_BASE_URL = 云端 OpenRouter ⇒ 出网)。该洞此前**惰性**(备路不可用

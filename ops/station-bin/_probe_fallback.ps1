@@ -65,6 +65,19 @@ function Invoke-SlotGate { param() return @{ na = $true; slot_total = 0; slot_bu
 function Invoke-Workspace { param() return $null }
 function Invoke-RemoteScript { param() return 124 }   # simulate remote opencode timeout sentinel
 
+# W3 步 1 (2026-09-22): 站上候选探查的**可观测桩** —— 它给出一条**行为性**判据: "被拒的卡是否零触站"。
+#   为什么必须可观测: 探针环境里没有真实站 ⇒ 站上候选探查**本来就必然失败** ⇒ 若只用 "rc=4 + claude run
+#   计数不增" 判, **新闸不存在时该用例照样 PASS**(因为探查循环随后也会走到 `local-only-no-station-engine`
+#   并 rc=4) —— 那是"判据在跑, 但判的不是你以为的东西"(本项目已踩三次)。⇒ 用计数器把两者分开。
+#   ⚠ 同时它把此前**未定义**的 `Test-StationEngineReady`(PS 里未定义命令在 if 条件中为假 ⇒ 旧行为是
+#   "静默当假")变成显式 $false —— 行为等价, 但从此**可观测**。
+$script:probeStationProbes = 0
+function Test-StationEngineReady {
+    param([string]$hostName, [string]$remoteUser, [string]$alias)
+    $script:probeStationProbes++
+    return $false
+}
+
 # 2026-09-21 加固(真实站实弹教训): 也让"远端证据回收"产出一个 `.meta`。
 #   为什么必须加: 主路 collect 段有 `$m = Get-Content $metaTxt | Out-String`, 会把 `$m` **改写成
 #   .meta 全文**。若不产 `.meta`, 该行不执行 ⇒ `$m` 保持为模型别名 ⇒ **本夹具对"fallback 把
@@ -270,15 +283,24 @@ function Count-ClaudeRuns {
 
 # 直接入口用 claude 型号; 兜底入口的主路用**站上本地引擎**型号(gpt-oss) —— 那正是本洞的真实场景
 #   (非 `opencode/*` ⇒ 旧三处闸不拦)。
+# W3 用例 E 需要一个**真实存在**的附件文件(附件闸/能力闸都先看 `Test-Path`)。
+$attFile = Join-Path $env:TEMP 'probe-attach.txt'
+[IO.File]::WriteAllText($attFile, "probe-attach-payload`n", (New-Object System.Text.UTF8Encoding($false)))
+# ⚠ 每个用例都**显式**给 `attach`: 因为 `@($null).Count` 在 PS 里是 **1**(不是 0) —— 若让缺省值漏进来,
+#   A–D 会被误判成"有附件"而撞上 W3 的新闸(这正是"缺省值形状"类陷阱)。
 $cases = @(
-    @{ tag = 'A local-only + -cli claude (直接入口) '; card = $cardLocal; sens = 'local-only'; cli = 'claude';   model = 'claude';  fb = $false; expect = 'reject' },
-    @{ tag = 'B local-only + AUTO_FALLBACK (兜底入口)'; card = $cardLocal; sens = 'local-only'; cli = 'opencode'; model = 'gpt-oss'; fb = $true;  expect = 'reject' },
-    @{ tag = 'C sanitized  + -cli claude (直接入口) '; card = $cardSanit; sens = 'sanitized'; cli = 'claude';   model = 'claude';  fb = $false; expect = 'allow'  },
-    @{ tag = 'D sanitized  + AUTO_FALLBACK (兜底入口)'; card = $cardSanit; sens = 'sanitized'; cli = 'opencode'; model = 'gpt-oss'; fb = $true;  expect = 'allow'  }
+    @{ tag = 'A local-only + -cli claude (直接入口) '; card = $cardLocal; sens = 'local-only'; cli = 'claude';   model = 'claude';  fb = $false; expect = 'reject'; attach = @(); probes = 'gt0' },
+    @{ tag = 'B local-only + AUTO_FALLBACK (兜底入口)'; card = $cardLocal; sens = 'local-only'; cli = 'opencode'; model = 'gpt-oss'; fb = $true;  expect = 'reject'; attach = @() },
+    @{ tag = 'C sanitized  + -cli claude (直接入口) '; card = $cardSanit; sens = 'sanitized'; cli = 'claude';   model = 'claude';  fb = $false; expect = 'allow';  attach = @() },
+    @{ tag = 'D sanitized  + AUTO_FALLBACK (兜底入口)'; card = $cardSanit; sens = 'sanitized'; cli = 'opencode'; model = 'gpt-oss'; fb = $true;  expect = 'allow';  attach = @() },
+    # E: W3 步 1 的新闸 —— 站上变体 + 有附件 ⇒ fail-closed 拒, 且**零触站**(`noProbe`)。
+    #    ⚠ `noProbe` 是本用例的**判别性**所在: 没有它, "闸不存在"也会因探查循环 rc=4 而 PASS。
+    @{ tag = 'E local-only + -cli claude + 附件';      card = $cardLocal; sens = 'local-only'; cli = 'claude';   model = 'claude';  fb = $false; expect = 'reject'; attach = @($attFile); noProbe = $true }
 )
 foreach ($c in $cases) {
     $before = Count-ClaudeRuns
-    $rc = Scalar (Invoke-Task -proj 'paper' -card $c.card -model $c.model -sensitive $c.sens -cli $c.cli -AutoFallback:$c.fb)
+    $script:probeStationProbes = 0
+    $rc = Scalar (Invoke-Task -proj 'paper' -card $c.card -model $c.model -sensitive $c.sens -cli $c.cli -AutoFallback:$c.fb -attach $c.attach)
     $after = Count-ClaudeRuns
     if ($c.expect -eq 'reject') {
         if ($rc -eq 4 -and $after -eq $before) {
@@ -293,6 +315,25 @@ foreach ($c in $cases) {
         } else {
             Write-Host ('     FAIL  ' + $c.tag + ' [放行]: rc=' + $rc + ' claude run 数 ' + $before + '->' + $after + ' (期望计数增加且 rc<>4 ⇒ 不许把撤回的闸加回来)')
             $ok = $false
+        }
+    }
+    # W3 步 1: 判别性判据 —— 该用例被拒时**不得触碰任何站**(闸在候选探查之前)。
+    if ($c.noProbe) {
+        if ($script:probeStationProbes -eq 0) {
+            Write-Host ('     PASS  ' + $c.tag + ' [零触站]: 站上候选探查 0 次(闸在探查之前生效)')
+        } else {
+            Write-Host ('     FAIL  ' + $c.tag + ' [零触站]: 探查了 ' + $script:probeStationProbes + ' 次 ⇒ 闸没拦住, 或在探查之后(该卡会被实际派到站上)')
+            $ok = $false
+        }
+    }
+    # ⚠⚠ **正对照(没有它,"0 次"可能是恒真的)**: 若计数器/探查循环根本没在跑, 上面那条 `= 0` 会**永远 PASS**
+    #   ⇒ 那是"判据在跑, 但判的不是你以为的东西"(本项目已踩三次)。⇒ 必须有**一个已知会触碰站**的用例
+    #   (A: local-only + claude, 无附件 ⇒ 不过新闸 ⇒ 走到候选探查)把计数证明成 **> 0**。
+    if ($c.probes -eq 'gt0') {
+        if ($script:probeStationProbes -gt 0) {
+            Write-Host ('     PASS  ' + $c.tag + ' [正对照]: 站上候选探查 ' + $script:probeStationProbes + ' 次(>0) ⇒ 计数器是活的, 故 E 的"0 次"有意义')
+        } else {
+            Write-Host ('     FAIL  ' + $c.tag + ' [正对照]: 站上候选探查 0 次(期望 >0) ⇒ 计数器或探查循环没在跑 ⇒ E 的"零触站"断言恒真、不可信'); $ok = $false
         }
     }
 }

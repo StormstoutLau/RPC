@@ -596,6 +596,38 @@ $attCalls = ([regex]::Matches($cliText, 'Get-AttachEgressReject -attachCount')).
 Assert-True "attach: 两个通道各判一次 = 2(实测 $attCalls)(opencode 通道 + claude 运行时通道)" ($attCalls -eq 2)
 Assert-True "attach: 前端 schema 已加预置键 attach-egress" ($cliText -match "\`$h\['attach-egress'\] = ''")
 
+# --- W3 步 1（2026-09-22）: 站上变体 + 有附件 ⇒ fail-closed 拒（**能力缺口，不是策略选择**）---
+# 为什么必须拒: 站上变体在**站上**跑 claude 且站上脚本 `cd "$HOME"`，而附件只复制到**主控本地**
+#   `<projRoot>\.attach` ⇒ 站上读不到 ⇒ agent 在**缺件**下跑完 = **假绿灯**。代价不对称：
+#   **假绿灯会被当成证据**，而"明确拒绝"是可修的错误。
+# 与 W4 的 `Get-AttachEgressReject` **不同维度**（那道管"附件会不会出网"，站上本地 ⇒ 放行；
+#   本闸管"附件到不到得了执行点"）⇒ **两个都要有**，不能互相替代。
+$ccFn = @($fns) | Where-Object { $_.Name -eq 'Invoke-Task-Claude' } | Select-Object -First 1
+Assert-True "w3: Invoke-Task-Claude 函数体可被 AST 定位" ([bool]$ccFn)
+$ccCmds = @($ccFn.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true))
+$w3Gate = @($ccCmds | Where-Object { $_.Extent.Text -match 'claude-station-attach-unsupported' }) | Select-Object -First 1
+Assert-True "w3: 存在 fail-closed 闸(REJECT claude-station-attach-unsupported)" ([bool]$w3Gate)
+# 判据形状: 必须键在 `$useStation` **且** 有附件上 —— 防它被改成恒真/恒假而断言照样绿
+$w3If = @($ccFn.FindAll({ param($n)
+            $n -is [System.Management.Automation.Language.IfStatementAst] -and
+            $n.Extent.Text -match 'claude-station-attach-unsupported' }, $true)) | Select-Object -First 1
+Assert-True "w3: 闸的判据 = useStation + 有附件(不是恒真/恒假)" (
+    [bool]$w3If -and $w3If.Clauses.Count -gt 0 -and
+    ($w3If.Clauses[0].Item1.Extent.Text -match '\$useStation') -and
+    ($w3If.Clauses[0].Item1.Extent.Text -match 'attach'))
+# 位置断言（**AST**，不是文本 —— 文本会被注释骗，本项目已踩两次）: 闸必须**早于站上候选探查**
+#   与**早于站上 spawn** ⇒ 被拒的卡**零触站**（探针另有一条行为性的零触站断言）。
+$w3Probe = @($ccCmds | Where-Object { $_.GetCommandName() -eq 'Test-StationEngineReady' }) | Select-Object -First 1
+$w3Spawn = @($ccCmds | Where-Object { $_.GetCommandName() -eq 'Invoke-ClaudeFly-Station' }) | Select-Object -First 1
+$iW3Gate  = if ($w3Gate)  { $w3Gate.Extent.StartOffset  - $ccFn.Extent.StartOffset } else { -1 }
+$iW3Probe = if ($w3Probe) { $w3Probe.Extent.StartOffset - $ccFn.Extent.StartOffset } else { -1 }
+$iW3Spawn = if ($w3Spawn) { $w3Spawn.Extent.StartOffset - $ccFn.Extent.StartOffset } else { -1 }
+Assert-True "w3: 位置断言(AST) —— 闸($iW3Gate) 早于 站上候选探查($iW3Probe)（⇒ 零触站）" ($iW3Gate -gt 0 -and $iW3Probe -gt 0 -and $iW3Gate -lt $iW3Probe)
+Assert-True "w3: 位置断言(AST) —— 闸($iW3Gate) 早于 站上 spawn($iW3Spawn)" ($iW3Gate -gt 0 -and $iW3Spawn -gt 0 -and $iW3Gate -lt $iW3Spawn)
+# 计数断言: 该闸只应有一处（防"加了个新入口又漏"；与 attach 双通道那种"必须两处"的情形要分清）
+$w3Cnt = ([regex]::Matches($cliText, 'claude-station-attach-unsupported')).Count
+Assert-True "w3: 闸的判据串只出现 1 次(实测 $w3Cnt)" ($w3Cnt -eq 1)
+
 # --- W2（2026-09-22）: 进程退出码可信性 —— `exit $数组` 会把 rc 抹成 0 ---
 # 实测（临时脚本直测进程 rc）: exit 4 ⇒ 4 / exit @($null,4) ⇒ **0** / exit @(0,4) ⇒ **0**
 #   ⇒ 数组一律取不到真值。真例: `Invoke-Task` 内一处**裸调用** `Invoke-RemoteScript`
