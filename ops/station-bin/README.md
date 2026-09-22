@@ -23,6 +23,7 @@
 （下表 2026-09-04 的旧值已作废，保留仅为历史：infer-load `229c1328...`(B)/`09e8b60e...`(A)、infer-unload `dc948d63...`、infer-list `5b6d40fc...`。）
 （infer-load `e474b761` = 2026-09-17 遗留 1+2 修复版：头部注释改为实测口径 + **移除 `LLAMA_SERVER_PATH` 注入**；前一版 `d57a9021...` 已备份为 `/usr/local/bin/infer-load.bak-20260917-llamaserverpath`。详见 [TRACKER §2.6](../../spec/upstream-tracker/TRACKER.md)。）
 **2026-09-22 补登记 `load-gate`**（此前本表漏列 ⇒ 该件无部署记录、无 md5 基线）：当前值 **`07ad7e01...`**（**三站一致**，且 == 仓库副本 [load-gate](./load-gate)，0 个 CR）。本次改动 = 4 处 peer ssh 补 `-o BatchMode=yes`；改法是"先改仓库副本 → 三站 `cp -a` 备份（备份 md5 == 原 `6acec519...`，逐站核过）→ `install -m 755` → 逐站核新 md5 + `bash -n` + 跑 `load-gate 1` 回归"；回滚 = 三站 `sudo cp -a /usr/local/bin/load-gate.bak-20260922 /usr/local/bin/load-gate`。
+**2026-09-22 再补 `wait-gtt-release`，并把本表的"手工 md5 约定"升级为机器判据**：该件仓库副本 = `a60b1877...`（判据是 `TOTAL*0.82` 相对总内存的新版）；**A/B 当时仍是旧版 `40d6cfe4...`（`-ge 102400` 绝对 100G）且首行带 UTF-8 BOM** ⇒ 已按同一闭环推 A/B（备份 → `install -m 755` → 核新 md5 + **`FIRST3=23212f` 证明 BOM 已消除** → 回归 `timeout 20 wait-gtt-release` rc=0）。⇒ 门禁 `gates` 现按 [`rpc_check.py`](../rpc_check.py) 的 `STATION_BINS`（**8 件**）**逐站比对仓库副本 md5，不一致即 FAIL**（复用健康探针、零额外连接；期望值运行期取仓库副本 ⇒ 不立第二定义点）。**改这 8 个件时必须走「改仓库 → 核对 → 部署三站」**；只改仓库或只推一站都会被门禁当场点名。
 
 ## 空闲 TTL 自动卸载（2026-09-15, P2-5，**默认关**）
 
