@@ -1,7 +1,7 @@
 # 升级决策简报 —— unsloth studio 升级（网关 UI 控制帧致本地 provider 压缩失效）
 
 - **日期**: 2026-09-22
-- **状态**: **A 站已收口**（B 试点通过 → A 升级完成但**引擎面回归**、已复原 + `infer-load` 二修 + 门禁回绿 → C 暂缓）。详见 [§七](#七执行记录与范围外发现2026-09-22-当日)
+- **状态**: **三站收口完成**（A 已收口；B 试点通过 + 补齐 + `triton_kernels` 拷平；**C 已推**；`UNSLOTH_LLAMA_CPP_BACKEND=rocm` 落三站；性能测量完成）—— 详见 §七 / **§八**
 - **触发**: 用户问「opencode 遗留问题是否必须注册」⇒ 定位 compaction 失败根因 ⇒ 用户令「评估升级方案」「先取证 A 的未知项」⇒ 本简报
 - **关联**: [OPEN-ISSUES §O-23](../spec/d6-agent-standard/OPEN-ISSUES.md)（根因全文落档）· [DEVELOPMENT-LOG 2026-09-22 线二](../spec/d6-agent-standard/DEVELOPMENT-LOG.md)（第 ⑧ 条）
 
@@ -152,15 +152,12 @@
 
 - 公共 GitHub 代理（ghfast / ghproxy / gh-proxy）**实测均不可用**；**A 站本机 clash（`127.0.0.1:7890`）可用**（GitHub 握手 **0.46s**，对比直连 0 字节）；**C 站经 SSH 隧道复用 A 的代理**（实测有活跃连接）。
 
-### 7.5 三站当前状态（2026-09-23 00:10 收口后实测）
+### 7.5 三站当前状态
 
-| 站 | studio | `X-Unsloth-Events` | 引擎（`~/.unsloth/llama.cpp`） | 包数(freeze) | `unsloth_install_manifest` | 状态 |
-|---|---|---|---|---|---|---|
-| **A** | **2026.9.7** | **2** | `build 10715` / `ROCm0`（**已复原**；md5 与 B 逐字节同） | 261 | 有 | **已收口** |
-| **B** | **2026.9.7** | **2** | `build 10715` / `ROCm0`（**未动**） | 234 → **261** | **已写出（17 步）** | **试点通过 + 补齐完成** |
-| C | 2026.9.2 | 0 | `build 10715` / `ROCm0`（未动） | 261 | 有（15 步） | **暂缓**（用户裁定；A 已收口，可随时推） |
+> **本节原表（2026-09-22 晚状态）已由 [§8.6](#86-三站现状第二轮收口后实测) 取代** —— 为避免"同一事实两张表"的漂移（本仓纪律：同一事实出现在多张表 ⇒ 改一处必须核另一处），此处只留指针，不重复列数。
+> 口径统一说明：`X-Unsloth-Events` 现按 `…/site-packages/studio` 下**命中文件数**计，**三站均为 3**（此前 §7.2 记的"2"为早期不同扫描范围下的计数）。
 
-**门禁（补齐后全量复核）**：**15 绿 / 1 黄 / 0 红**（黄 = 既存 `claude-plugins-official` known_drift）；`backend` **PASS**、`gates` **站上件一致 24/24**、`engine` 三站可达且 **0 在服务**。
+**门禁（2026-09-22 晚复核）**：**15 绿 / 1 黄 / 0 红**；`backend` **PASS**、`gates` **站上件一致 24/24**、`engine` 三站可达且 **0 在服务**。
 
 ### 7.6 顺带纠正两处简报假设
 
@@ -258,3 +255,97 @@
 - `/opt/llama.cpp-9859`（三站均在位，门禁 `backend` 已核）+ `/opt/llama.cpp` → `llama.cpp-master-91f6a6cf`
 - `infer-load` 旧版：三站 `/usr/local/bin/infer-load.bak-20260922`（md5 `e474b761198dde596b86ab0edfad19be`）
 - **站间互备**：A 与 B 的 `llama.cpp` 引擎**逐字节同版**（md5 `31d8787b…`）⇒ 任一站可从另一站 tar 复原（实测 1.9 G / **18 s**）
+
+---
+
+## 八、第二轮收口与性能测量（2026-09-23）
+
+**用户五项指令**：① `UNSLOTH_LLAMA_CPP_BACKEND=rocm` 落到站；② C 站推升级；③ B 的 `triton_kernels` 从 A 拷平；④ 升级排查分析全过程 + 性能测量结果完整落档；⑤ 修平 OPEN-ISSUES 三个表块列数不一致。
+
+### 8.1 五项结果一览
+
+| # | 项 | 结果 | 关键证据 |
+|---|---|---|---|
+| ① | **pin 落站** | ✅ 三站已落（**`/etc/environment`**） | `printenv` 非交互 ssh 生效；`effective_backend_request() == ('rocm', True)`（**mandatory**）；备份 `/etc/environment.bak-20260923`（md5 `f3377ed5…`） |
+| ② | **C 站推升级** | ✅ studio 到位（**2026.9.7**）；**引擎未动** | 走"更新器 Python 阶段直调"（§8.3）；判据 ctl **0**、档位 `ctx 131072/:8080/ROCm0` 未变 |
+| ③ | **B 的 `triton_kernels` 拷平** | ✅ | A→B tar；聚合指纹 `03e308bf…` 一致；`pip list 1.0.0` + `import OK`；A/B 差异只剩版本级 |
+| ④ | **落档** | ✅ | 本 §八 + [OPEN-ISSUES §O-23](../spec/d6-agent-standard/OPEN-ISSUES.md) + [DEVELOPMENT-LOG 第 ⑪ 条](../spec/d6-agent-standard/DEVELOPMENT-LOG.md) |
+| ⑤ | **表块列数修平** | ✅ | 全文件 **10 表块 / 异常 0**；逐行"删插入后逐字还原原行"断言通过（§8.5） |
+
+### 8.2 pin 为什么落 `/etc/environment`（而不是 `.bashrc`/`.profile`）
+
+| 候选机制 | 对**非交互 ssh**（我们的 `update` 调用方式）是否生效 | 结论 |
+|---|---|---|
+| `~/.bashrc` | ❌ Ubuntu 默认有 `case $- in *i*) ;; *) return;; esac` 守卫，非交互直接返回 | 不用 |
+| `~/.profile` | ❌ 仅**登录** shell 读；`ssh host 'cmd'` 非登录 | 不用 |
+| **`/etc/environment`** | ✅ **经 `pam_env.so`**（`/etc/pam.d/sshd:44` `session required pam_env.so`）对**每个 ssh 会话**（含非交互命令）设置 | **采用** |
+
+**为什么这条重要**：`studio update` 走 ssh 非交互执行 ⇒ 若只写 `.bashrc`/`.profile`，**pin 等于没落地**。且 studio 进程（由 `infer-load` 经 ssh 拉起）继承该会话环境 ⇒ **UI 内的 "Update llama.cpp" 按钮同样受保护**。
+**单一真值点**：只写一处，避免 `.bashrc`/`.profile`/`/etc/environment` 三处漂移。
+**断言（作用点真的改了）**：三站 `llama_backend_from_env() = rocm`、`effective_backend_request() = ('rocm', True)`、`force_vulkan_requested() = False`。
+**影响面**：该变量只被安装器读（预编译包选型）；运行时不读 ⇒ 对推理无副作用。**回滚**：`/etc/environment.bak-20260923`。
+
+### 8.3 C 站推升级：被 **GitHub 出网**阻断 → 改用"更新器 Python 阶段直调"
+
+**原计划**：与 A 同流程 `unsloth studio update`（pin 已生效）。**实测阻断**：
+- C 站 `github.com` **完全不通**（`curl` 10 s 0 字节）；A 的 mihomo 在监听但**上游节点失效**（`api.github.com` 200 而 `github.com` 000）；**本仓 Windows 控制站到 GitHub 同样超时**；只有 **B 直连 ~33–35 KB/s** 可用。
+- 量化影响：`latest` = **`b11030-mix-5ff778e`**，其 **`…-linux-x64-rocm-gfx1151.tar.gz` = 337.4 MiB**（对照：**Vulkan bundle 仅 29.1 MiB**）。各可用下源实测吞吐：B 直连 ~35 KB/s、A 经代理 ~79 KB/s、镜像 `ghproxy.net` ~74 KB/s ⇒ **337 MiB 需 1.3–2.7 小时**。
+- ⇒ **不是"慢"，是"C 上没有任何可完成该 337 MiB 下载的通路"** ⇒ 引擎步不可完成。
+
+**转用路径（不使用 `studio update`，但仍是更新器自己的入口）**：
+- **关键源码事实**：`install_python_stack.py` **本身就负责安装 `unsloth` + `unsloth-zoo`** —— 源码逐字："`install.sh` sets `SKIP_STUDIO_BASE=1` to avoid reinstalling the core packages; **`studio update` does NOT set it, so unsloth + unsloth-zoo are reinstalled** to pick up new versions"（包名由 `STUDIO_PACKAGE_NAME` 指定，默认 `unsloth`）。且其安装走 `pip_install()` ⇒ **尊重 uv/constraints** ⇒ **不会换掉 ROCm torch**。
+- ⇒ `studio update` = **Python 阶段** + **Node 阶段** + **引擎阶段**；C 只需第一阶段 ⇒ **直调 `install_python_stack.py`**，其调用方式与 `studio update` 内部完全一致（同一函数、同一 env 约定）。
+- **两个 GitHub 依赖的处置**：`triton_kernels`（走脚本自带的 `_has_working_git()=False` 跳过分支；C 本就有该包 ⇒ 零损失）与**收尾阶段的 bitsandbytes 强制重装 GitHub wheel**（从 B **LAN 拷平同一 artifact** ⇒ 该步改为报 `bitsandbytes (AMD) is already this build -- keeping it`）。
+- **结果**：`deps installed`（17/17）、**`unsloth_install_manifest.json` 写出**（3222 B）、**引擎 md5 全程未变**（`31d8787b…`）⇒ **三站引擎仍逐字节同版**。
+- **版本压回**：镜像 latest 已是 **2026.9.8**（9.7 之后的 patch）⇒ 按裁定"目标版本 2026.9.7"压回 ⇒ **三站 studio 版本一致**。
+- **登记一处不一致（不修）**：C 的 `unsloth_install_manifest.json` 记 `package_version: 2026.9.8`（**它写出那一刻的实况**），而站上现为 `2026.9.7`（事后按裁定压回）⇒ **刻意不改 manifest** —— 改它等于伪造 pass 记录；下次 update 会自然对齐。
+
+**C 站判据（与 A 同口径）**：档位 `ctx 131072` / `:8080` / 设备 `ROCm0` **未变**；经 studio 流式 **控制帧 `ctl = 0`**（升级前 **2**）；帧数/字节 **127 / 24869–24882**，**与 B 站（2026.9.7）逐字节一致**。**全量门禁 15 绿 / 1 黄 / 0 红**。
+
+### 8.4 性能测量："升级后的 unsloth 有性能提升吗" → **无提升，亦无回退证据**
+
+**设计**：B（2026.9.7）vs **C（升级前 2026.9.2）**—— 同硬件、**同引擎 `build 10715`（md5 逐字节同）**、同 conf（`gpt-oss-120b`：同 `MODEL_PATH`/`CTX=131072`/`THREADS=16`/`N_CPU_MOE=0`/`RPC_TARGET` 空/`BACKEND=unsloth`）⇒ 唯一变量 = studio 版本。先测 C（未升级）后测 B，各 3 次。
+
+**⚠ 口径更正（本轮自查）**：`cluster.py flow bench` 的端口来自 `_flow_step_probe_engine`，是**引擎内层端口**（如 `:43149`）⇒ 它**直连 `llama-server`、不过 studio** ⇒ **那组 pp/tg 与 studio 版本无关**，只能当"引擎层对照"，不能当"升级效果"。
+
+| 层 | 指标 | B（2026.9.7） | C（2026.9.2） | 判读 |
+|---|---|---|---|---|
+| **引擎**（直连，flow bench） | tg ×3 | 47.3 / 36.0 / 45.8 t/s | 48.3 / 39.9 / 52.0 t/s | 站内极差 ~40% ⇒ **噪声内** |
+| **引擎启动参数** | 全部 | `-c 131072` · `--flash-attn on` · `--no-context-shift` · `--parallel 4` · `--kv-unified` · `--cache-type-k/v q8_0` · `--spec-default` · `--chat-template-kwargs {"reasoning_effort":"high"}` · `-ngl -1` · `--fit off` · `--load-mode none` | **逐项相同**（唯一差异：B 多 `--video-fps 1`，与文本解码无关） | **无提升机制** |
+| **网关/流式**（经 studio） | 控制帧 `ctl` | **0** | **2** | **确定性改进** |
+| | 帧数 / 字节 | **127** / 24869–24882 | **130** / 25431–25446 | 每响应 **−3 帧 / −~560 B（−2.2%）** |
+| | TTFT（中位） | 10.0 ms | 8.9 ms | 同量级 |
+| | **`usage.prompt_tokens`** | **1621** | **871** | ⚠ **studio 注入前缀 +750 token** |
+| **端到端稳态** | total（中位，缓存对齐后） | 1.66 s | 1.94 s | 站内极差 1.2–3.8 s ⇒ **噪声内** |
+
+**⚠ 本轮新发现 —— studio 注入前缀 +750 token（归因已完成）**：同一请求，**经 studio** 时 `prompt_tokens` = 871（C/9.2）vs 1621（B/9.7），差 **750**，稳定复现（×3、两种消息长度）。**归因取证**：**直连引擎**（绕过 studio）同 payload，两站 `prompt_tokens` **均为 68** ⇒ 差额**完全由 studio 产生**（非引擎、非模板、非 payload）。**影响**：该前缀**可被 KV 前缀缓存命中**（`cached_tokens` 同步 +750）⇒ 稳态下**不逐请求重付**；但 ① 每请求多吃 ~750 token 的**上下文窗口**；② 首次/缓存失效时多付 ~750 token 的 prefill。**未追**：为什么要加这 750 token（未比对两版前缀内容）。
+
+**⇒ 结论**：**升级不含吞吐提升**（引擎同二进制同参数，无机制），**也没有可归因的回退**（差异在跨机 + 单流噪声内）。**净收益 = 控制帧移除**（流更干净、每响应 −~560 B，且压缩路径恢复可用）；**净代价 = 注入前缀 +750 token 占 ctx**。
+
+**诚实边界**：① 是**跨机对照**（B vs C），非同机前后；② 单流、n=3、站内极差达 40% ⇒ 分辨力约 ±10%，**只能支持"无显著差异"，给不出系数**；③ 要精确系数应做**同机前后**或 `llama-bench`（多轮 + stddev）。
+
+### 8.5 OPEN-ISSUES 三个表块列数不一致：已修平（含度量口径教训）
+
+**三个块的性质不同**（这才是修法不同的原因）：
+- **块 1**（`§1 未决问题总览`，L24-52）：**真 8 列表**（`ID | 类别 | 严重度 | 简述 | 状态 | 归属批次 | <br /> | <br />`，尾部两列是空的 `<br />` 填充）。异常 2 行：**L48 少 1 格**（7 vs 8）、**L51 多 1 格**（9 vs 8）。
+- **块 2 / 块 3**（§D6 闭环审查 两节）：**3 列表**（`条目 | 说明 | 待办`）。异常 9 行，成因是 **prose 内未转义的 `|`**（HTML→MD 转换残留，含 `<label>`/`<sub>` 与正则里的 `|`）。
+
+**修法（零内容损失）**：
+- 块 1：L48 **追加一个纯填充格**；L51 **去掉一个纯填充格**。
+- 块 2/3：**只转义"多余"的内部管道** —— 保留 `首 |`、`条目后 |`、`尾 |`（有行尾 `|` 时再保留倒数第二个），其余转义为 `\|`。
+
+**护栏（断言）**：对 9 行转义行，"**删掉所插入的每一个反斜杠后必须逐字还原原行**" + "新列数 = 3"；对 L48 "= 原行 + ` <br /> |`"、L51 "= 原行去掉一个填充格"。**首轮两条被判据正确挡下**（我记录了插入位置，但后续插入使位置失效 ⇒ ≥2 次转义的 3 行不还原）⇒ 改为**升序插入并按 `esc[i]+i` 记最终位置**后全部通过。**复核：全文件 10 表块 / 异常 0**。
+
+**⚠ 度量口径教训（可推广）**：**"未转义管道数" ≠ "格数"** —— GFM 允许**省略行尾 `|`**，此时 `格数 = 管道数`（而非 `管道数 − 1`）。本轮两个自写探针正是因此给出**互相矛盾**的异常清单 ⇒ **判据必须固定用哪一个口径**（本仓取"**格数**"为准，并把它写进断言）。
+
+### 8.6 三站现状（第二轮收口后实测）
+
+| 站 | studio | 引擎（`~/.unsloth/llama.cpp`） | 包数 | pin 生效 | 状态 |
+|---|---|---|---|---|---|
+| **A** | **2026.9.7** | `build 10715` / `ROCm0`（md5 `31d8787b…`） | 264 | ✅ | 已收口 |
+| **B** | **2026.9.7** | 同上（逐字节同） | 265 | ✅ | 试点通过 + 补齐 + `triton_kernels` 拷平 |
+| **C** | **2026.9.7** | 同上（逐字节同） | 264 | ✅ | **已推**（Python 阶段）+ 判据通过 |
+
+**门禁**：**15 绿 / 1 黄 / 0 红**（黄 = 既存 `claude-plugins-official` known_drift）；`backend` PASS、`gates` 站上件一致 **24/24**、`engine` 三站可达且 **0 在服务**。
+
+**仍登记的两项差异**：① **引擎构建号**三站同为 `b10715`（**特此说明**：本轮**刻意没有**让 C 的引擎升到 `b11030` —— 既因 GitHub 阻断，也因"三站引擎同版"是本仓既定形态）；② `unsloth_zoo` B/C = `2026.9.7`、A = `2026.9.6`（版本级，非缺失）。
