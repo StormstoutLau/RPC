@@ -868,7 +868,7 @@ DeepSeek 官方开源 agent harness（MIT，TypeScript/pnpm/Cordis 框架，deve
 
 | # | 回归项 | 判据 | 复用资产 |
 |---|---|---|---|
-| ① | **4 CLI 调用形式** | `agent-cli-smoke.sh` 4/4 PASS（往期定版实测的同一脚本） | `agent-cli-smoke.sh`（站上件，已在 station_runtime） |
+| ① | **4 CLI 调用形式** | `agent-cli-smoke.sh` 4/4 PASS（往期定版实测的同一脚本） | `agent-cli-smoke.sh`（站上件，已在 station_runtime）（⚠ **2026-09-22 加注**：这两点**都不成立**，原文保留仅为历史记档 —— 该件**文件头第 3 行**写明"**主控站 Git Bash 发起**"（**不是**站上件），且 `inventory/ops.yaml` 里它登记在 **`frozen_ops_scripts`**（L223）而**不是** `station_runtime`；见 [OPEN-ISSUES](../spec/d6-agent-standard/OPEN-ISSUES.md)） |
 | ② | **G10（正向判据 + 位置参数观测）** | stdin 管道非空结果（**判据**）+ 位置参数耗时/结果（**观测**，不判 PASS/FAIL —— 理由见 §9.11.1） | 手测 2 条 |
 | ③ | **provider 直连 baseURL** | `cluster.py providers` 的 `ep:` 全部以 `:8080`/引擎端口结尾、**零 `:4000`**；claude `baseURL` 不变 | 统一入口 `providers`（本轮新增维度） |
 | ④ | **timeout 注入仍生效** | opencode.jsonc 显式 `timeout`/`chunkTimeout` 仍被尊重（≥本地慢模型需要），1.18.27 默认 5min 不反向覆盖 | `cluster.py providers` + 一次长生成冒烟 |
