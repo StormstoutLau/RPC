@@ -5530,6 +5530,36 @@ def cmd_ttl(argv) -> int:
     return 0
 
 
+def cmd_inbox(argv) -> int:
+    """cluster.py inbox  — 受理区 dashboard: 每笔目录 + 状态 + 更新时间, 一行一条。
+
+    纯本地无站上依赖 (ADR-0008); STATE.json 缺失/非法按行内提示, 不抛异常。
+    合法状态白名单与自洽判定在 rpc_check.py 的 inbox 断言 (quick)。
+    """
+    root = Path(__file__).resolve().parent.parent / "inbox"
+    if not root.is_dir():
+        print("inbox/ 不存在")
+        return 0
+    rows = []
+    for d in sorted(p for p in root.iterdir() if p.is_dir()):
+        if d.name.startswith("_"):
+            continue
+        st, ts = "no-state", ""
+        f = d / "40_state" / "STATE.json"
+        if f.is_file():
+            try:
+                j = json.loads(f.read_text(encoding="utf-8"))
+                st = j.get("state", "no-state")
+                ts = j.get("updated_at", "")
+            except Exception:
+                st = "BAD-JSON"
+        rows.append((d.name, st, ts))
+    print(f"  {'目录':<30} {'state':<26} {'updated_at'}")
+    for name, st, ts in rows:
+        print(f"  {name:<30} {st:<26} {ts}")
+    return 0
+
+
 # ── main ───────────────────────────────────────────────
 def main() -> int:
     args = sys.argv[1:]
@@ -5573,6 +5603,8 @@ def main() -> int:
         return cmd_ttl(args[1:])
     if sub == "agent":
         return cmd_agent(args[1:])
+    if sub == "inbox":
+        return cmd_inbox(args[1:])
     if sub == "e2e":
         return cmd_e2e()
     if sub == "secrets":

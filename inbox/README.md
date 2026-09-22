@@ -25,10 +25,10 @@ d:\RPC\inbox\
    README.md                     # 本文件（受理流程单一真值源）
    _template\                    # 标准模板（复制它到新项目）
       00_handoff\                # 需求方原始转运包（只读冻结，不覆写）
-      10_admin\                  # 管理员裁决 + 回复（新增）
-      20_plan\                   # 派发计划 / 任务卡模板
-      30_evidence\               # 执行台账 / 产物回收指针
-      40_state\                  # 生命周期标记
+      10_admin\                # 管理员裁决 + 复核意见（受理决定 / 裁决报告 / 复核意见-N）
+      20_plan\                 # 派发计划 / 任务卡模板（修订留版本 vN）
+      30_evidence\             # 执行台账 / 交付证据束（MANIFEST.sha256 钉死）
+      40_state\                # 生命周期标记（STATE.json + LOG.md）
    <project>-<yyyy-mm-dd>\       # 每笔受理（项目名-提交日期）
 ```
 
@@ -36,23 +36,37 @@ d:\RPC\inbox\
 
 ## 3. 生命周期状态机
 
-由 `40_state/STATE`（单行文本）标记。推荐顺序：
+由 `40_state/STATE.json`（`state`/`updated_at`/`by`）标记；每次变更在 `40_state/LOG.md` 追加一条。
 
 ```
-open → triage → accepted → running → done | rejected
+open → triage ⇄ waiting → accepted → plan-review ⇄ plan-revise → running → release → done
+   → accepted-by-requester | rejected-by-requester
+rejected（可从 triage / accepted / plan-review / plan-revise 任一进入）
 ```
+
+> `⇄` 表示可循环（协商回环 / 等回复）。直线为主路径；`rejected` 与 `rejected-by-requester` 为终止态
+> （后续新需求**开新 `open`**，不重写旧目录状态）。
 
 | 状态 | 含义 | 何时进入 |
 |---|---|---|
 | `open` | 已提交，等待管理员初筛 | 需求方提交转运包后 |
-| `triage` | 正在核对 DR/CR/接口，出裁决报告 | 管理员开始处理 |
+| `triage` | 正在核对 DR/CR/接口，出裁决报告（**主动处理中**） | 管理员开始处理 |
+| `waiting` | 卡在**等需求方补充 / 等外部条件**（区别于 triage 的主动处理） | 需需求方补料 / 依赖未就绪 |
 | `accepted` | 裁决通过，准备派发（入 `$PROJECTS`） | 裁决报告落 `10_admin/` |
-| `running` | 正在机群执行 | 开始派发 |
-| `done` | 已回收产物，结案 | 运维确认完成 |
-| `rejected` | 驳回 / 暂缓（`10_admin/受理决定.md` 写明理由） | 裁决否 |
+| `plan-review` | 派发计划已交需求方**复核**，等回复 | `20_plan/` 成型后交对方 |
+| `plan-revise` | 收到需求方意见，管理员**修订** `20_plan` | 复核退回，修订中 |
+| `running` | 正在机群执行 | 方案定稿开始派发 |
+| `release` | 执行完毕，交付证据束，**等需求方验收** | 产出回收入 `30_evidence/` 后 |
+| `done` | 运维确认完成（**结案**） | 证据束已回收、哈希钉住 |
+| `accepted-by-requester` | **验收签收**（需求方认账） | 需求方确认交付 |
+| `rejected-by-requester` | 验收不通过 / 终止 | 需求方拒收，终止 |
+| `rejected` | 裁决驳回 / 暂缓（`10_admin/受理决定.md` 写明理由） | 裁决否 |
 
-**变更纪律**：状态只由管理员改（`40_state/STATE` 覆盖写 + 时间戳），需求方不改。
-每笔目录的 `10_admin/受理决定.md` 是**状态变更的理由真值源**。
+**合法取值白名单**：`open` `triage` `waiting` `accepted` `plan-review` `plan-revise` `running` `release` `done` `accepted-by-requester` `rejected-by-requester` `rejected`
+
+**变更纪律**：状态只由管理员改 —— 覆盖写 `40_state/STATE.json`（`state`/`updated_at`/`by`），
+并在 `40_state/LOG.md` **追加**一条变更记录；需求方不改。
+每笔目录的 `10_admin/受理决定.md`（及其后的 `10_admin/复核意见-N.md`）是**状态变更的理由真值源**。
 
 ---
 
@@ -62,13 +76,41 @@ open → triage → accepted → running → done | rejected
    "受理前置均已就绪"清单，标 `triage`。
 2. **裁决**：`10_admin/裁决报告.md` 逐条回复 DR（确认/不成立/已修）+ CR（采纳/拒绝/替代）
    + 接口确认（A1-A13 语义核对）。`10_admin/受理决定.md` 写最终边界（合规轨 L/P、并发约束）。
-3. **入台**：通过 → `$PROJECTS` 注册（`agent-cli.ps1`）+ `20_plan/` 派发计划；驳回 → 写理由 + 标 `rejected`。
-4. **执行**：按 `20_plan/` 派发；观测记录落 `30_evidence/`（产物本身在项目根 `agent-out/`）。
-5. **关闭**：`done` / `rejected`，更新手册 §1.3 若框架完成度有变。
+3. **阻塞转 waiting**：若需需求方补料 / 等外部条件（如 CR-5 宿主、CR-7 引擎常驻裁定）→ 标 `waiting`，
+   LOG 记理由；补毕回 `triage`。
+4. **入台**：通过 → `$PROJECTS` 注册（`agent-cli.ps1`）+ `20_plan/` 派发计划（含**容量预估**：墙钟/
+   站占用窗口，见 `_template/20_plan/`）；驳回 → 写理由 + 标 `rejected`。
+5. **方案复核回环**：`20_plan/` 成型 → 标 `plan-review` 交需求方复核；收到意见 → 标 `plan-revise`，
+   意见落 `10_admin/复核意见-N.md`，修订 `20_plan/`（版本 vN）→ 再交 `plan-review`，循环至定稿。
+6. **执行**：按定稿 `20_plan/` 派发；观测记录落 `30_evidence/`（产物本身在项目根 `agent-out/`）。
+7. **交付 + 验收**：产出回收 → 30_evidence 证据束链死 → 标 `release` 交需求方验收；
+   需求方签收 → `accepted-by-requester`；拒收/终止 → `rejected-by-requester`（后续新需求开新 `open`）。
+8. **关闭**：`done`（运维结案）/ 各终止态；更新手册 §1.3 若框架完成度有变。
 
 ---
 
-## 5. 三条硬约束（向需求方传达）
+## 5. 交付证据束标准（结案必查）
+
+> 把框架已有的 run/卡级证据束（[ADR-0005](../adr/ADR-0005-任务卡证据回收闭环.md) /
+> [ADR-0007](../adr/ADR-0007-证据流阶段推进路线与改动验证闭环.md)）在结案点钉成**交付物标准**。
+> 模板见 `_template/30_evidence/README.md`。
+
+1. **链死**：结案时把项目根 `agent-out/<ts>/` 的 `run.json`（含 `evidence_manifest`）
+   + 单 run 证据束（`.meta`/`.prompt.txt`/`.progress`/`.accept-cmds.txt`/`.golden-cmd.txt`/
+   `.workspace-diff.txt`/`.attach-manifest.txt`/`.session-meta.txt`）哈希写入
+   `30_evidence/MANIFEST.sha256`（与 `00_handoff` 同格式）。**未附证据束 → 不 `done`**。
+2. **artifact freeze**：`done` 后 `30_evidence/` 与 `00_handoff/` 同样冻结，不再改动；
+   后续新需求开新 `open`。
+3. **重放语义**：验收判据 = **重放验证、非重放生成**（沿 ADR-0007）——可证伪的是哈希/diff/退出码/
+   输入快照，不承诺逐位一致再生成。
+4. **分级标注**：交付物标注 `Reproduced`（内部同基座复验，Phase 2）
+   或 `Replicated`（异基座独立审计/cold mirror，Phase 3）。
+5. **环境快照**：`cluster.py versions` 三站引擎/uv/模型哈希/`--kv-cache` 参数随证据束落档
+   （社区"机器可读环境描述"）。
+
+---
+
+## 6. 三条硬约束（向需求方传达）
 
 1. **零自加载**：引擎不自启，每次断掉须运维 `infer-load`。
 2. **跨站各 1 并发**（同站叠开被统一内存带宽顶起 ~2.8×）。
@@ -76,15 +118,18 @@ open → triage → accepted → running → done | rejected
 
 ---
 
-## 6. 门禁
+## 7. 门禁
 
 - 本目录**不参与** `scripts` 断言（是文档/交接物，非脚本）。
-- 可选：若加 `inbox` 断言，校验每个 `<proj>-<date>/` 有 `00_handoff/` 且状态目录合法，
-  **先在已知会红的样本上验红**。
+- **`inbox` 断言（`rpc_check.py`，quick 已启用）**：校验每个 `<proj>-<date>/`
+  ① 有 `00_handoff/` ② `40_state/STATE.json` 存在、可解析、state ∈ 白名单
+  ③ 状态内容自洽（`accepted+` 须有 `10_admin/受理决定.md`；`plan-review/plan-revise` 须有 `20_plan/`；
+  `release+` 须有 `30_evidence/` 记录）。
+- **dashboard**：`cluster.py inbox` 列出所有受理目录 + state + updated_at，一行一条。
 
 ---
 
-## 7. 第一笔实例
+## 8. 第一笔实例
 
 `paper-2026-08-23/` ← `D:\Paper\handoff_to_rpc_admin`（2468 篇论文蒸馏，已裁决推进中）。
 需求方原件已复制到 `00_handoff/`（复核用），项目侧原目录继续被 `.agentsync` 排除。
