@@ -150,7 +150,7 @@
 | `bitsandbytes` 从 **GitHub release 直链**（`--no-cache-dir`） | 稳定 **~30 KB/s**（asset **41.1 MiB** ⇒ ~25 分钟） | 先用 `gh api` 查 **asset 大小** ⇒ **量化 ETA** 后决定"等"；A/C 走代理则快 |
 | `triton_kernels @ git+https://github.com/triton-lang/triton.git` | `git fetch` **零字节卡死**（git 默认无低速超时 ⇒ 会挂数小时） | B 站**收口**（kill）；**脚本本身有 `triton kernels (skipped, no git)` 分支**；**A/C 已装 `triton_kernels 1.0.0` ⇒ 该步可跳过** |
 
-- 公共 GitHub 代理（ghfast / ghproxy / gh-proxy）**实测均不可用**；**A 站本机 clash（`127.0.0.1:7890`）可用**（GitHub 握手 **0.46s**，对比直连 0 字节）；**C 站经 SSH 隧道复用 A 的代理**（实测有活跃连接）。
+- 公共 GitHub 代理（ghfast / ghproxy / gh-proxy）**实测均不可用**；~~**A 站本机 clash（`127.0.0.1:7890`）可用**（GitHub 握手 **0.46s**，对比直连 0 字节）；**C 站经 SSH 隧道复用 A 的代理**（实测有活跃连接）~~ ⇒ **⚠ 这两条已于 2026-09-23 更正为误判，见 §10.2**（A 的 clash **没有任何节点**，当时那条"0.46s"是**直连成功被误归因**；"C 经隧道复用 A 的代理"在原理上不成立 —— 对端没有出口）。
 
 ### 7.5 三站当前状态
 
@@ -349,3 +349,56 @@
 **门禁**：**15 绿 / 1 黄 / 0 红**（黄 = 既存 `claude-plugins-official` known_drift）；`backend` PASS、`gates` 站上件一致 **24/24**、`engine` 三站可达且 **0 在服务**。
 
 **仍登记的两项差异**：① **引擎构建号**三站同为 `b10715`（**特此说明**：本轮**刻意没有**让 C 的引擎升到 `b11030` —— 既因 GitHub 阻断，也因"三站引擎同版"是本仓既定形态）；② `unsloth_zoo` B/C = `2026.9.7`、A = `2026.9.6`（版本级，非缺失）。
+
+---
+
+## 九、把 studio 生命周期纳入统一管理框架（2026-09-23）
+
+**用户裁定：完整三步**（断言 → 入口 → 登记）。**判定：可以纳入，且按 [ADR-0004](../adr/ADR-0004-统一管理入口为唯一管理面.md) 它本该已经在里面** —— 本轮 8 类动作里有 **6 类是"管理操作"**（改站上状态或读站上实况），而它们**全部在框架外**（内联 ssh + heredoc）。**三处已在框架内**（`infer-load` 三站部署走 `STATION_BINS`+`gates` 副本一致性；`flow bench` 自动落账；`rpc_check` 三站对账）说明"能纳的都纳得住"，**缺的是 studio 生命周期这一整块动作面**。
+
+### 9.1 已落地（本轮实改）
+
+| 件 | 落点 | 作用 |
+|---|---|---|
+| **① 断言扩展** | [rpc_check.py](../ops/rpc_check.py) `check_backend`（原"引擎后端与回滚基线"→ 现"引擎后端与 studio 防线"） | 新增四类判据：**(e) pin 在位且本会话可见**(FAIL) · **(f) `X-Unsloth-Events` 修复在位**(FAIL) · **(g) studio 版本三站一致**(WARN) · **(h) 引擎逐字节同版 ⇒ 站间 tar 可复原**(WARN) + 引擎备份目录清单(info) |
+| **② 入口** | [cluster.py](../ops/cluster.py) `studio status` + `FLOWS["studio-upgrade"]` | 只读矩阵（版本/zoo/修复/防线/引擎变体/marker/备份）；升级流程 预检→应用→验证→门禁→落账（`dry_default=True`，`--go` 才动手） |
+| **③ 期望值与复原路径** | `rpc_check.py` 常量 `_EXPECT_LLAMA_BACKEND = "rocm"` | 与既有 `_EXPECT_STUDIO_BACKEND` / `_EXPECT_DIST_BACKEND` **同族**；复原路径并入 (h) 判据 |
+
+**双向验证**（判据先在已知会红/会绿的对照上验红）：
+- **会红**：临时把 A 站 `/etc/environment` 的 pin 改成 `vulkan` ⇒ 门禁 **FAIL**、摘要 `pin ✗`、明细**点名 A 站**且给出「会话=vulkan / 文件=vulkan / 期望 rocm」、`exit=1` ✓
+- **会绿**：恢复后 ⇒ **PASS**、摘要 `pin ✓ · studio 2026.9.7 · 引擎 同版 · 修复 ✓`、`exit=0` ✓
+- **flow 端到端**：`flow studio-upgrade --station C --to 2026.9.7 --go` ⇒ **四步全绿 / PASS / 落账 / exit=0** ✓（`--stage engine --go` ⇒ **明确拒绝**并给出指引 ✓）
+
+### 9.2 设计取舍（含两处本轮实际踩到的坑）
+
+1. **期望值不进 `inventory/`，进 `rpc_check.py` 常量层** —— 因为 `inventory` 断言的语义是"**声明源**引用了未登记的端口/模型标识"（对账 `decl_*` vs 真值表），而 pin 没有"声明源"；同类期望值（`libggml-hip.so`、`/opt/llama.cpp-9859`）本就在常量层 ⇒ **放进 inventory 会制造第二处真值源**，与本仓"单一真值"纪律相悖。
+2. **判据取"会话里读得到"而不是"文件里有行"** —— 门禁自身的采集与 `studio update` 是**同一类会话**（非交互 ssh）⇒ `printenv` 读得到 = 安装器也读得到；只写文件 ≠ 生效（§8.2）。这正好在本轮的负向对照里被验红。
+3. **摘要行必须带"防线/修复/同版"** —— 实测发现渲染层**只在 FAIL/WARN 时打印 `detail`**（[main L2444](../ops/rpc_check.py)）⇒ `info` 在 PASS 时不可见；而这三件事恰是"没红也想知道"的 ⇒ 并入摘要 ✓。
+4. **取数只用免引号模式**（`grep -oE` 抓形状 / `ls`+`sed`），因为命令要穿 python→paramiko→bash→`$()` **四层**；且 **`\1` 在 Python 字符串里是八进制转义**（→ `\x01`）会把 sed 替换串毁掉 —— 本轮**实际踩到**（`devices` 取空），而 `\(` 只触发 SyntaxWarning（值仍对）⇒ **一律写 `\\`**。
+5. **flow 的台账"判据"列默认改取该 flow 末步的判据** —— 原实现把 bench 的文案写死在默认值里 ⇒ 新 flow 的行会**串台**（本轮实测 `studio-upgrade` 的行曾写"API timings @ 内层端口"）⇒ 改为自取，新增 flow 无需回改。
+6. **engine/node 阶段"明确拒绝"而非静默跳过** —— 静默跳过会让"没升引擎"看起来像"升完了"；现在 `--stage engine` 直接 FAIL 并给出简报 §8.3 的指引。
+7. **边界**：单次排障探针（"A 为何探成 `has_rocm=false`"那类）属 `tmp/`；文档与表块修平**不属管理面**。
+
+---
+
+## 十、A 站 mihomo 诊断：不是"节点失效"，而是**从来没有节点**（2026-09-23，用户要求调研）
+
+### 10.1 现象与诊断路径
+**现象**：C 推升级时全环境唯一能摸到 GitHub 的是 B（~35 KB/s）；A 的 `127.0.0.1:7890` 在听，但 `github.com` 经它时报 `SSL_ERROR_SYSCALL`。原记法（§7.4）是"**上游节点失效**"。
+
+**诊断（只读）**：`mihomo v1.19.17` 在跑（`-d /root/clashctl/resources -f …/runtime.yaml`）；API `:9090`（`secret` 已知）可用；`/configs` → `mode = rule`；`/proxies` → **总数 6，全是内置项**（`Compatible/Direct/Selector/Pass/Reject/RejectDrop`）；唯一组 `GLOBAL` 的 `now = DIRECT`；`runtime.yaml`（43 行）第 16/17 行即 **`proxies: []`** 与 **`proxy-groups: []`**；`profiles/` 只有 `.gitkeep`；`profiles.yaml` 的 `use:` 与 `profiles:` **均为空**；资源文件时间戳 **4月6日**。
+
+### 10.2 ⚠ 结论更正（推翻 §7.4 两条）
+- **不是"上游节点失效"，而是"没有任何节点"**：`proxies: []` ⇒ `mode=rule` 下未命中规则的流量**全部落到默认 DIRECT** ⇒ 所谓"经 A 的代理"**一直是直连**。
+- 实测对照（同一时刻，A 站）：`github.com` 直连 200(3.42s) / **经代理 200(1.07s)**；`api.github.com` 直连 200 / 经代理 200；`ghproxy.net` 直连 200 / 经代理 200 ⇒ **"经代理"与直连等价**，耗时差只是**网络波动**。
+- ⇒ 因此 §7.4 的「A 站本机 clash 可用（握手 0.46s）」是**直连成功被误归因**；**「C 站经 SSH 隧道复用 A 的代理」在原理上不成立**（隧道通 ≠ 对端有出口）。A 的 GitHub 时通时不通 = **纯 ISP 直连波动**；三站差异是**运营商路由差异**，不是代理差异。
+
+### 10.3 解决方案（分级；②已实测）
+1. **配订阅（唯一能真正提速，需你提供订阅 URL）** —— 填 `/root/clashctl/resources/profiles.yaml` 的 `profiles:` + `use:`，或经 zashboard 面板导入（`dist/` 与 `external-ui: dist` 已就位）。**我不猜订阅地址**。
+2. **零凭据可用：借 B 的直连（已实测）** —— 在 C（或 A）上 `ssh -f -N -D 11080 scott-lau@B`，再 `https_proxy=socks5h://127.0.0.1:11080`：
+   - `api.github.com` **200 / 0.82 s**；`github.com` 200（接近 15 s 超时边界）
+   - **ranged 4 MiB 实测 107 KB/s** ⇒ **337.4 MiB 的 rocm bundle ≈ 55 min**（优于 B 本机 35 KB/s，也优于镜像 `ghproxy.net` ~74 KB/s）
+   - **对照有效**：关掉隧道后 C 的 `github.com` 立刻回到 `000` ✓
+3. **镜像兜底**：`ghproxy.net` ~74 KB/s（约 78 min）；其余 5 个常用镜像实测 000。
+
+**⇒ 建议**：把"**借 B 的 SOCKS**"登记为**无代理条件下的标准取包路径**（C/A 的直连不可用、A 的 clash 是空壳）；并把"A 的 clash 无节点"作为**基础设施缺陷**记入待办（要么配订阅、要么明确不再依赖它）。
