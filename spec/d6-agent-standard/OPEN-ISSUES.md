@@ -271,6 +271,8 @@ limit: { context: J.context_length ?? Y?.limit.context ?? 0,
 
 **🐞 新登记（2026-09-22 顺带查出 → 当日已定位根因）**: **本地 provider 的 compaction 必然失败** —— 累积超阈后 opencode 进入 `agent=compaction`，紧接着抛 `level=ERROR … AI_TypeValidationError: Type validation failed: Value: {"type":"reasoning_summary","duration_ms":9472}`（它期望 `choices` 或 `error`）⇒ **压缩必然 rc=1、任务失败**（回测：`limit=20001` 臂 turn2/turn3 均复现，同一 session）。
 
+**⚠ 触发条件（2026-09-22 用户追问"方案 B 是否没有解决"后查明：该缺陷当前【潜伏】，我此前的记法把它当成了活跃故障源）**: 生产配置 `limit.context=131072` + `compaction.reserved=20000` ⇒ **压缩触发阈值 = 111072，远高于引擎 `n_ctx`=32768** ⇒ **压缩在"撞引擎上限"之前根本不可达**。**本仓自身记录早已给出佐证** —— 见上文实验 1 原文："`62079 < 131072-20000` ⇒ **不触发预压缩** ⇒ 直发 ⇒ 400" ⇒ **历史失败（52k / 62k 那两次）全是"客户端直发 → 服务端 400"，与压缩无关**。同理，本轮"压缩必崩"是**用 `limit.context=20001` 把阈值人为压到 1 token 才逼出的条件，生产上不存在** ⇒ **属实验设计瑕疵：把潜伏缺陷当成了活跃缺陷**。**⇒ 变为活跃的条件**：把 `limit.context` 下调到 ≤ 引擎 ctx + reserved（例如"**对齐引擎档位**"= 32768 ⇒ 阈值降到 **12768**）⇒ 该缺陷将**高频触发**。**⇒ 纪律（重要）：`limit.context` 对齐引擎档位这一改进，在 studio 升级完成前【不得实施】**；方案 B 的 `auto=false` 是该改进的**前置保险**，**不是本问题的解法**（它只移除路径、不改变任何上限；且在当前配置下净效果 ≈ 0）。
+
 **🔍 根因（2026-09-22 定位完成；根因不在 opencode，而在网关）**：
 1. **网关注注入非标准 SSE 帧** —— 三方 curl 对照（同一 prompt/model，B 站）：studio `:8080` **流式命中 1 次** `data: {"type": "reasoning_summary", "duration_ms": 179}`；studio **非流式 0 命中**；**直连底层 `llama-server :47059` 流式 0 命中** ⇒ **该帧由 studio 注入，引擎本身不发**（控制帧仅存在于流式路径）。
 2. **为何只有压缩路径炸**（`--log-level DEBUG` 对照）：**普通 turn** `reasoning_summary` 命中 **0**、`TypeValidation` **0**、rc=0；**压缩路径**命中 **3** / `TypeValidation` **2**、rc=1 ⇒ **普通对话路径对"无 `choices` 的帧"容错（丢弃）**，而压缩路径做**严格 union 校验**（`choices` 数组 **或** `error` 对象）⇒ 命中即 `invalid_union` ⇒ **必失败**。
