@@ -227,7 +227,18 @@ ContextOverflowError: request (62079 tokens) exceeds the available context size 
 - 再改 200000 / 全删 limit 块（`context:999999`）→ 视图**恒 131072**
 - 对照组：改 `name` → 视图**实时生效**（MARKER-XYZ 出现）
 
-**结论**: `opencode models` 对 name 实时读 jsonc，但 **limit.context 字段对 config 完全免疫** → 发送预算来自别处（非 jsonc）。
+**原结论**: `opencode models` 对 name 实时读 jsonc，但 **limit.context 字段对 config 完全免疫** → 发送预算来自别处（非 jsonc）。
+
+**⚠ 2026-09-22 复现结果：上句（视图层）【不成立】**。同版本（B 站 1.18.25）重做四组探针，**视图层 `limit.context` 完全跟随 config**：
+
+| 探针 | 写入 `limit.context` | `models --verbose` 观读 |
+|---|---|---|
+| 新增 id `probe-uniq-9f3`（不可能撞名） | 12345 | **12345** |
+| 新增 id `deepseek/deepseek-v4-flash`（**catalog 确证存在**） | 12345 | **12345** |
+| 新增 id `nemotron-3-ultra-free`（**catalog 确证存在**） | 12345 | **12345** |
+| 改**已存在**条目 `qwen` 131072→12345 / `m27-q4ks` 131072→23456 | — | **12345 / 23456**（改动**即时**生效） |
+
+⇒ ① **证伪"撞名 ⇒ catalog 覆盖"**：探针 id 是从 `opencode models` 全量列表里挑的**真实存在**的 catalog id（首轮先用 `qwen`，随即发现该裸 id 可能根本不在 catalog 里 ⇒ **方法论漏洞**，故补此轮）；② **证伪"改 config 后视图恒 131072"**——本次改动**即时**反映。**当时那次观测不可复现**（改的不是同一份配置 / 被后续覆盖 / 读到旧状态，**具体已不可考**，不再追）。三次实验的配置均**已还原**（md5 回到 `755975dba0ff28cf64dff0e106000cb6`）。
 
 **实验 3 — 排除 + 反编译定位**:
 - `~/.local/share/opencode/opencode.db`（161MB）：schema 仅会话/消息/事件，无 model 注册表 → 排除
@@ -242,9 +253,23 @@ limit: { context: J.context_length ?? Y?.limit.context ?? 0,
 ```
 `J.context_length`（catalog）**优先于** `Y.limit.context`（config）。但 catalog cache 无数 131072 → J 命中的是 **binary 内置 catalog**（发行版内嵌 models.dev 数据，`limit:{context:131072,output:8192}` 出现 75 处属 deepseek/gemma 等真实 entry）。`api.id="qwen"` 的 catalog 匹配落到 context_length=131072 的某内置 entry（具体 entry 未最终锁定，但值确凿）。
 
-**⛔ 架构结论（修正原 O-23 假设）**: 「通过改 opencode.jsonc 的 `limit.context` 让 opencode 对齐引擎 ctx」**此路不通**——opencode 1.18.25 对自定义 provider 模型的发送预算由**内置 catalog context_length** 决定，`limit.context` 字段不参与。防线只能建在**可控层**：agent-cli 档位=引擎档位（O-23 radical fix B 已覆盖 `ENGINE_CTX` 探测 + profile clamp），opencode 客户端预算不可信（bug 级行为）不作为依赖。
+**🔬 2026-09-22 行为层实测（把判据从"视图"升级到"实际请求"）**——同一 load 窗口，B 站引擎 = unsloth **gpt-oss-20b，`ctx=32768`**（`infer-load` 打印），`compaction.reserved=20000`：
 
-**💡 未尽确认（开放）**: binary 内置 catalog 中 `qwen` 命中的确切 entry 与值来源（131072）；若需根治 opencode 层，候选方向为改 `api.modelID` 为 catalog 不存在的 id 触发 `?? Y.limit.context` 回退路径（实验 2 中未测此项，因风险高未动 modelID）。
+- **短 prompt 两臂**（同一 prompt，唯一变量 = `limit.context`）：`20001`（有效预算 = 20001−20000 = **1 token**）与 `131072`（有效 111072）⇒ **两臂均 rc=0、输出 `OK`、引擎侧 `request_completed status_code=200`** ⇒ **`limit.context` 不构成发送前拦截**（1 token 预算也**没拦住任何请求**）。
+- **大 prompt（94.5k token）两臂**：**均 rc=1**，返回**同一条**错：`Message too long: 95037 tokens exceeds the **32768**-token context window. Try increasing the Context Length in Model settings…`（`code: context_length_exceeded`）—— **两臂报的都是 32768 = 引擎 ctx，与 config 的 20001 / 131072 均无关**。
+  ⚠ **诚实边界**：该错误**由谁生成本轮未定**（opencode 客户端预检 / studio-llama-server 透传，两者皆可）——**但两种解释都指向同一结论**：**硬闸数值来自服务端 ctx**。
+
+⇒ **硬结论**：1.18.25 上**真正拦住超长请求的是服务端 ctx**，不是 `limit.context`；`limit.context` 只作用于**视图与压缩预算**。
+
+**⛔ 架构结论（2026-09-22 修订）**: 「通过改 `opencode.jsonc` 的 `limit.context` 让 opencode 对齐引擎 ctx」**仍此路不通**（**操作性结论不变**），但**理由须改写**：
+- ❌ 原写法"发送预算由 **内置 catalog context_length** 决定、`limit.context` 字段**不参与**" ⇒ **不成立**（视图层跟随 config；硬闸是服务端 ctx，与 catalog 无关）。
+- ✅ 修正为：**`limit.context` 生效于视图 / 压缩阈值，但不构成"发送前硬闸"；实际硬闸 = 服务端（引擎 `n_ctx`）**，而客户端**无从提前得知**（除非引擎 ctx 本身够大）。
+
+⇒ **防线仍然只能建在可控层**：agent-cli 档位 = 引擎档位（`ENGINE_CTX` 探测 + profile clamp）**依然是唯一有效手段** —— **结论不变，仅原因从"catalog 覆盖"改为"客户端不作硬拦截、硬闸在服务端"**。
+
+**💡 未尽确认（2026-09-22 收窄）**: ① 1.18.25 的"发送前预算检查"在本轮**未观察到触发**（94k prompt + `limit=20001` 照发）⇒ 倾向"该版本对自定义 provider 无发送前硬闸"，但**未穷尽**（多轮累积 / compaction 路径未测）；② 原候选根治方向"改 `api.modelID` 触发 `?? Y.limit.context` 回退"——**作废**（其前提"catalog 优先"未被本轮支持）；③ 当时实验 2 的视图观测为何不可复现 ⇒ **已不可考，不再追**。
+
+**📌 上游注册：不必（2026-09-22 调查结论）** —— ① 本问题的**决定性因素在服务端**（引擎 `n_ctx`），不在 opencode；② 上游同族条目**已有 5+3 条**：`#29555` / `#37456`（closed-**completed**，多半只修显示）、`#37544`（`config: existing model limit override is ignored`，**closed-`not_planned`** ⇒ **再提同类会被关**）、`#35863`（context window 硬编码 200k，**open**）、`#40524`（catalog 与 `/models` 对账，**open**）、`#38835`（无 `limit.input` 时 `compaction.reserved` 被静默忽略，**open**）、`#40908`（要动态探测 ctx，**open**）；③ `#41104`（本地 ctx 发现 PR）**已提但未并入**（`merged=False`）；④ 我们落后 **7 个 patch**（1.18.25 → 1.18.32@09-21）而**近 8 个 release notes 无任何 limit/context/compaction 修复** ⇒ **升级不是解法、新开 issue 只会重复** ⇒ **不注册**（若将来要动上游，唯一有价值的形态是给 `#35863`/`#40908` 留一条限定角度的评论，非新 issue）。
 
 ### 附：agent-cli.ps1 PS5.1 编码隐患（2026-09-05 触发并修复）
 
