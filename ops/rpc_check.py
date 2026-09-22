@@ -516,10 +516,30 @@ OPS_INV = ROOT / "inventory" / "ops.yaml"
 SCRIPT_EXT = (".py", ".ps1", ".sh")
 
 
-def _iter_ops_scripts():
-    """ops/ 下 git 跟踪的**脚本** → [(rel, path)]。含无扩展名但带 shebang 的 (站上件常见)。"""
+def _in_script_scope(rel):
+    """脚本治理的**范围谓词** (两层): `ops/**` ∪ **仓库根顶层文件**。
+
+    为什么不写成"全仓递归 + 排除表" (2026-09-22 裁定, 决策简报《门禁口径…root 级脚本范围》):
+      · 全仓递归会把 `spec/**` (文档/卡片)、`tests/**` (夹具)、`archive/**` (已归档) 一并圈进来,
+        而这些目录**天然**不是管理面; 要正确排除就得维护一张不断变长的例外清单 ——
+        每加一个目录就多一个定义点, 漏一项就是假红/假绿 (本仓纪律: 判据只在一处定义)。
+      · 两层谓词**不需要任何例外清单**: 顶层文件 = 有人把一次性的东西直接丢在仓库根,
+        正是 2026-09-16 真正出事的形态 (根级 3 个零引用脚本); `ops/**` 是 ADR-0004 定义的管理面。
+        目录内的散件由目录自身归位 (archive/ 归档、tests/ 夹具)。
+      · 实测 (2026-09-22): 顶层被跟踪文件只有 `.gitignore` 与 `LICENSE`,
+        二者在 Python 里 `suffix=''` ⇒ 走 shebang 分支、首行非 `#!` ⇒ 不被当脚本
+        ⇒ 扩范围后**今日 0 项未登记**, 登记表零改动。
+    注意: PowerShell 的 `[IO.Path]::GetExtension('.gitignore')` 得 `.gitignore`,
+    与 Python 的 `os.path.splitext` 语义不同 —— 判据以 Python 侧为准。
+    """
+    return rel.startswith("ops/") or "/" not in rel
+
+
+def _iter_governed_scripts():
+    """受脚本治理约束的 git 跟踪**脚本** → [(rel, path)]。范围见 `_in_script_scope`。
+    含无扩展名但带 shebang 的 (站上件常见)。"""
     for rel, path in _iter_source_files():
-        if not rel.startswith("ops/") or not path.is_file():
+        if not _in_script_scope(rel) or not path.is_file():
             continue
         if path.suffix.lower() in SCRIPT_EXT:
             yield rel, path
@@ -530,7 +550,8 @@ def _iter_ops_scripts():
 
 
 def check_scripts(ctx):
-    """ops/ 脚本治理: 任何脚本必须在登记表里 (入口 / 站上运行时件 / 冻结存量)。"""
+    """脚本治理 (范围: `ops/**` ∪ 仓库根顶层, 见 `_in_script_scope`):
+    任何脚本必须在登记表里 (入口 / 站上运行时件 / 冻结存量)。"""
     try:
         import yaml
     except Exception:
@@ -547,7 +568,7 @@ def check_scripts(ctx):
     frozen = list(inv.get("frozen_ops_scripts") or [])
     known = set(entry) | set(runtime) | set(frozen)
 
-    scripts = dict(_iter_ops_scripts())
+    scripts = dict(_iter_governed_scripts())
     unknown = sorted(s for s in scripts if s not in known)
     missing_entry = [e for e in entry if not (ROOT / e).exists()]
     gone = sorted(f for f in frozen if f not in scripts)
