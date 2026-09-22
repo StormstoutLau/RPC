@@ -2381,6 +2381,77 @@ def check_models(ctx):
     return "PASS", note, info
 
 
+# ── 断言: inbox 受理区状态自洽 (P1, quick) ──────────────────────────
+# 目的: 阻止受理区目录与状态机漂移 —— 每个 <proj>-<yyyy-mm-dd>/ 必须满足
+#   ① 有 00_handoff/ (需求方原件冻结区)
+#   ② 40_state/STATE.json 存在、可解析、state ∈ 白名单
+#   ③ 状态内容自洽 (accepted+ 须有 受理决定.md; plan-review/plan-revise 须有 20_plan;
+#      release+ 须有 30_evidence 记录)
+# 依据: ADR-0008 + inbox/README §3 状态机 (2026-09-23 扩展: waiting/协商回环/验收签收)
+INBOX_DIR = ROOT / "inbox"
+INBOX_STATES = {"open", "triage", "waiting", "accepted", "plan-review", "plan-revise",
+                "running", "release", "done", "accepted-by-requester",
+                "rejected-by-requester", "rejected"}
+INBOX_PROJ_RE = re.compile(r"^[^_].+-\d{4}-\d{2}-\d{2}$")   # <proj>-<yyyy-mm-dd>, 排除 _template
+
+
+def check_inbox(ctx):
+    """受理区状态自洽: 目录结构 + STATE.json 合法 + 状态内容自洽。"""
+    n_dir = n_state = n_bad = 0
+    bad = []
+    if not INBOX_DIR.is_dir():
+        return "PASS", "inbox/ 不存在, 跳过", []
+    for d in sorted(p for p in INBOX_DIR.iterdir() if p.is_dir()):
+        name = d.name
+        if name.startswith("_") or not INBOX_PROJ_RE.match(name):
+            continue
+        n_dir += 1
+        # ① 必须有 00_handoff/ (需求方原件冻结区)
+        if not (d / "00_handoff").is_dir():
+            n_bad += 1
+            bad.append(f"{name}: 缺 00_handoff/ (需求方原件冻结区)")
+            continue
+        # ② STATE.json 存在且可解析, state ∈ 白名单
+        state_file = d / "40_state" / "STATE.json"
+        if not state_file.is_file():
+            n_bad += 1
+            bad.append(f"{name}: 缺 40_state/STATE.json (状态必须可机读)")
+            continue
+        try:
+            state = json.loads(state_file.read_text(encoding="utf-8")).get("state")
+        except Exception:
+            n_bad += 1
+            bad.append(f"{name}: STATE.json 不是合法 JSON")
+            continue
+        n_state += 1
+        if state not in INBOX_STATES:
+            n_bad += 1
+            bad.append(f"{name}: STATE={state!r} 不在白名单 ({', '.join(sorted(INBOX_STATES))})")
+            continue
+
+        def _nonempty(p):
+            """目录存在且至少有一个非 .gitkeep 文件。"""
+            return p.is_dir() and any(x.is_file() and x.name != ".gitkeep" for x in p.iterdir())
+
+        # ③ 状态内容自洽
+        if state in {"accepted", "plan-review", "plan-revise", "running", "release", "done",
+                     "accepted-by-requester", "rejected-by-requester"}:
+            if not (d / "10_admin" / "受理决定.md").is_file():
+                n_bad += 1
+                bad.append(f"{name}: STATE={state} 须有 10_admin/受理决定.md (受理通过依据)")
+        if state in {"plan-review", "plan-revise"}:
+            if not _nonempty(d / "20_plan"):
+                n_bad += 1
+                bad.append(f"{name}: STATE={state} 须有 20_plan/ 派发计划 (非空)")
+        if state in {"release", "done", "accepted-by-requester", "rejected-by-requester"}:
+            if not _nonempty(d / "30_evidence"):
+                n_bad += 1
+                bad.append(f"{name}: STATE={state} 须有 30_evidence/ 证据束记录 (非空)")
+
+    note = f"受理目录 {n_dir} · 状态可机读 {n_state} · 违规 {n_bad}"
+    return ("FAIL" if n_bad else "PASS"), note, bad
+
+
 # ── 断言清单 (加校验 = 在此加一条 + 写一个函数) ─────────────────────
 # fix 字段 = 该项失败/警告时的**处置建议** (健康引擎要求"红灯必须给出下一步", 而不是
 # 只报"哪里不对")。main() 在结论区按严重度打印。
@@ -2417,6 +2488,10 @@ CHECKS = [
             "「judge 校准已过期」= 判据(A/B)或稳定题集改过、校准报告没重跑 ⇒ 跑 "
             "`cluster.py agent audit-judge --save`(需站上在服务跨家族引擎)。这条把"
             "「改判据必须重跑校准」从**空头承诺**变成可判——报告自带 calib 指纹, 比对即可"},
+    {"id": "inbox", "title": "受理区状态自洽", "fn": check_inbox, "quick": True,
+     "fix": "按明细修: 缺 00_handoff/ = 转运包没冻结; STATE.json 缺失/非法/不在白名单 = 状态没走机读格式; "
+            "状态内容不自洽(如 accepted 无受理决定) = 先补 10_admin/受理决定.md 再改状态 "
+            "(依据 inbox/README §3 状态机, ADR-0008; 状态只由管理员改, 每次变更追加 40_state/LOG.md)"},
     {"id": "usb4", "title": "USB4 三角环链路", "fn": check_usb4, "quick": False,
      "fix": "地址/路由不符 => 对照 inventory/net.yaml 与归档 §6.3/§6.6; "
             "链路不通 => 先查 BIOS USB4 安全等级与是否冷启动(归档 §6.5)"},

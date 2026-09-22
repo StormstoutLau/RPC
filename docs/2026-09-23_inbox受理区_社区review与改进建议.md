@@ -93,12 +93,12 @@
 
 | # | 建议 | 优先 | 采纳? | 说明 |
 |---|---|---|---|---|
-| 1 | STATE 结构化 + LOG | P0 | — | |
-| 2 | 状态机加 `waiting` | P0 | — | |
-| 3 | inbox 门禁断言 | P1 | — | |
-| 4 | STATUS.md / cluster.py inbox | P1 | — | |
+| 1 | STATE 结构化 + LOG | P0 | ✅ 已实施 | `STATE.json` + `LOG.md`（批次 A，2026-09-23） |
+| 2 | 状态机加 `waiting` | P0 | ✅ 已实施 | 并入协商回环状态机（批次 B） |
+| 3 | inbox 门禁断言 | P1 | ✅ 已实施 | `rpc_check.py` quick 断言，先验红（批次 C） |
+| 4 | STATUS.md / cluster.py inbox | P1 | ✅ 已实施 | `cluster.py inbox` 子命令（批次 C） |
 | 5 | 00_handoff hash 钉住 | P1 | ✅ 已实施 | 方案 B：MANIFEST.sha256（见 §3 ⑤） |
-| 6 | 30_evidence 回收 hash | P2 | — | |
-| 7 | 20_plan 容量预估 | P2 | — | |
+| 6 | 30_evidence 回收 hash | P2 | ✅ 已实施 | 升 P1，交付证据束标准（批次 D，见标准调研 §2.5） |
+| 7 | 20_plan 容量预估 | P2 | ✅ 已实施 | `_template/20_plan/` 模板（批次 E） |
 
 > 本简报只记录；任何一项是否采纳、如何改，由 Scott 逐条裁决。
