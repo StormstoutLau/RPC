@@ -223,7 +223,27 @@ if [ "$BACKEND" = "unsloth" ]; then
   #    A/B(有 profile export)与 C(无)会**静默分叉**到不同引擎。故不再注入; 调用方仍可显式 export 覆盖。
   # O-25 在线实测顺带修复(2026-09-12): unsloth llama.cpp 已从 Vulkan 切 ROCm 后端,
   # 设备名 Vulkan0 -> ROCm0 (6 台 AMD 8060S 均实测 `--list-devices` = ROCm0)。硬编码 Vulkan0 会导致必然加载失败。
-  # 允许 env INFER_DEVICE 覆盖(如未来回退 vllm/其它设备名)。
+  # 2026-09-22 二修 (方案A 升级试点暴露): 该后端**不是恒定的** —— `unsloth studio update` 每次都按硬件
+  #   探测重选后端 bundle, 未显式 pin 时以探测结果为准 (作者级 help: "--llama-backend ... record the
+  #   choice, so later updates keep it instead of re-detecting"; 存储的选择是 advisory)。
+  #   A 站 2026-09-22 实测: 探测报 has_rocm=false => 自动装 linux-vulkan-x64 包 => 设备名翻回 Vulkan0,
+  #   于是"硬编码 ROCm0"**第二次**成为必然失败的原因(上一次是反向)。
+  #   => 不再硬编码设备名, 改为按引擎自身 `--list-devices` **实测选取** (ROCm 优先, 维持既定形态
+  #      "单站=HIP"; 无 ROCm 时退 Vulkan/CUDA/首个)。探测结果进日志, 使"翻转过"与"没翻转"可区分。
+  # env INFER_DEVICE 仍为最高优先(显式覆盖, 如临时 vllm/其它设备名)。
+  if [ -z "${INFER_DEVICE:-}" ]; then
+    _ENGINE="$HOME/.unsloth/llama.cpp/build/bin/llama-server"
+    _DEVS=$(timeout 20 "$_ENGINE" --list-devices 2>&1 \
+              | sed -n 's/^[[:space:]]*\([A-Za-z][A-Za-z0-9]*[0-9]\):[[:space:]].*/\1/p' \
+              | sort -u | tr '\n' ' ')
+    INFER_DEVICE=""
+    for _pref in ROCm Vulkan CUDA; do
+      _hit=$(printf '%s\n' $_DEVS | grep -m1 "^${_pref}[0-9]") || true
+      [ -n "$_hit" ] && { INFER_DEVICE="$_hit"; break; }
+    done
+    [ -n "$INFER_DEVICE" ] || INFER_DEVICE=$(printf '%s\n' $_DEVS | head -1)
+    log "引擎设备探测: 候选=[${_DEVS}] 选中=${INFER_DEVICE:-无}"
+  fi
   DEVICE="${INFER_DEVICE:-ROCm0}"
   cd /home/scott-lau
   UN_LOG="/home/scott-lau/.unsloth/run-${ALIAS}.log"
