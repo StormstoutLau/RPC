@@ -2007,11 +2007,27 @@
    },
    "recipe": "v2",
    "chained_at": "2026-09-22 13:43:52"
+  },
+  {
+   "proj": "paper",
+   "run_id": "202609221347542756",
+   "digest": "a2f5431fe16e3425b187ad57607ac72a4a0f8240503dcf8d61e73a8bd2fa911a",
+   "prev": "557d65c7bebead1d283af8a3fef355b5840cf65f0a2c1a9947af2d3806c6775a",
+   "files": {
+    ".agent-run.json": "888db5e8e2946ac8d46980683f648daf73c4078df4744645336ea1d52f43d7d6",
+    "agent-output": "bfc973b896cfa281c90b52d48460bf454cd12361c27b49695d0880d11f983fe1",
+    "prompt": "46feeb83a98030617d5b6f536112abbfe7d58cf5ec3e588c765e95c000972a33",
+    "stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "card": "62ccba45d8929c90d00824524b1dd61ac45940839679d95f3e5de50fb8e1d431",
+    "review": "-"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-22 13:50:08"
   }
  ],
  "head": {
   "proj": "paper",
-  "run_id": "202609221340319598",
-  "digest": "557d65c7bebead1d283af8a3fef355b5840cf65f0a2c1a9947af2d3806c6775a"
+  "run_id": "202609221347542756",
+  "digest": "a2f5431fe16e3425b187ad57607ac72a4a0f8240503dcf8d61e73a8bd2fa911a"
  }
 }
