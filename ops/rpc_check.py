@@ -2164,9 +2164,22 @@ _BACKEND_CMD = (
     "else printf 'opt_%s=missing\\n' \"$n\"; fi; "
     "done; "
     "echo '===ROLLBACK==='; "
-    "printf 'rollback=%s\\n' \"$(ls -d /opt/llama.cpp-9859 2>/dev/null || echo missing)\""
+    "printf 'rollback=%s\\n' \"$(ls -d /opt/llama.cpp-9859 2>/dev/null || echo missing)\"; "
+    # ── (e)-(h) 2026-09-23 增: studio 套件的"防线/修复/同版/复原路径" ──────────
+    # 为什么加: 2026-09-22 的 A 站翻转事故里, **引擎后端被 update 静默翻转**这件事
+    #   是靠人工发现的, 而门禁当时只判"后端类型"(即 (a)) —— 它连"我们事先下的
+    #   pin 是否真的生效"都不判。本轮把这四类事实变成取数, 判据见 check_backend。
+    "echo '===SUITE==='; "
+    "printf 'pin_file=%s\\n' \"$(grep -E '^UNSLOTH_LLAMA_CPP_BACKEND=' /etc/environment 2>/dev/null | tail -1 | cut -d= -f2-)\"; "
+    "printf 'pin_seen=%s\\n' \"$(printenv UNSLOTH_LLAMA_CPP_BACKEND 2>/dev/null)\"; "
+    "S=\"$HOME/.unsloth/studio/unsloth_studio/lib/python3.13/site-packages\"; "
+    "printf 'studio_ver=%s\\n' \"$(ls -d \"$S\"/unsloth-[0-9]*.dist-info 2>/dev/null | sed -E 's|.*/unsloth-(.+)[.]dist-info|\\1|' | sort -V | tail -1)\"; "
+    "printf 'events_files=%s\\n' \"$(grep -rl 'X-Unsloth-Events' \"$S/studio\" 2>/dev/null | wc -l)\"; "
+    "printf 'engine_md5=%s\\n' \"$(md5sum \"$HOME/.unsloth/llama.cpp/build/bin/llama-server\" 2>/dev/null | cut -d' ' -f1)\"; "
+    "printf 'engine_bak=%s\\n' \"$(ls -d \"$HOME/.unsloth/llama.cpp.\"* 2>/dev/null | xargs -r -n1 basename 2>/dev/null | tr '\\n' ',')\""
 )
 _EXPECT_STUDIO_BACKEND = "libggml-hip.so"      # 默认单站加载 = HIP/ROCm
+_EXPECT_LLAMA_BACKEND = "rocm"                 # /etc/environment 里 pin 的期望值 (2026-09-23 增)
 _EXPECT_DIST_BACKEND = "libggml-vulkan.so"     # 分布式 / RPC = Vulkan
 
 
@@ -2235,10 +2248,65 @@ def check_backend(ctx):
     else:
         warn.append("三站均未取到 studio 自带 ROCm 版本串 —— 不做一致性判定 (取不到 ≠ 不存在)")
 
+    # ── (e) pin 在位且**本会话可见** (2026-09-23 增) ────────────────────
+    # 判据取「printenv 读得到」而不是「文件里有行」：门禁自身的采集与 `studio update` 是
+    # **同一类会话**(非交互 ssh)，故读得到 = 安装器也能读到；只写文件 ≠ 生效
+    # (`~/.bashrc` 有 interactive 守卫、`~/.profile` 只被登录 shell 读 —— 见决策简报 §8.2)。
+    pins = {s: d.get("pin_seen", "") for s, d in per.items()}
+    pinf = {s: d.get("pin_file", "") for s, d in per.items()}
+    bad_pin = sorted(s for s, v in pins.items() if v != _EXPECT_LLAMA_BACKEND)
+    if bad_pin:
+        shown = " / ".join(s + "=会话「" + (pins.get(s) or "(空)") + "」文件「" + (pinf.get(s) or "(无)") + "」"
+                           for s in bad_pin)
+        detail.append("**" + " / ".join(bad_pin) + " 站 pin 未生效** (非交互 ssh 会话读不到 "
+                      "`UNSLOTH_LLAMA_CPP_BACKEND`)： " + shown
+                      + " —— 期望「" + _EXPECT_LLAMA_BACKEND + "」。这是「引擎后端被 update 静默翻转」的"
+                        "**唯一防线** (显式请求 = mandatory；marker 里的历史选择只是 advisory，探测不认即丢)；"
+                        "落点应为 /etc/environment (经 pam_env 对非交互命令亦生效)，见决策简报 §8.2")
+    else:
+        info.append("pin 在位且会话可见 ✓ (" + _EXPECT_LLAMA_BACKEND + ")")
+
+    # ── (f) X-Unsloth-Events 修复在位 (2026-09-23 增) ──────────────────
+    # 缺 = 网关注入无 `choices` 的控制帧 ⇒ 本地 provider 的 compaction 必然失败 (上游 #10362；本仓 O-23)
+    noev = sorted(s for s, d in per.items() if (d.get("events_files") or "0") == "0")
+    if noev:
+        detail.append("**" + " / ".join(noev) + " 站不含 `X-Unsloth-Events` 修复** —— 网关会注入无 `choices` "
+                      "的控制帧 ⇒ 本地 provider 的 compaction 必然失败 (上游 unsloth#10362；本仓 O-23)。"
+                      "修法 = 升级 studio，见决策简报 §三")
+    else:
+        info.append("`X-Unsloth-Events` 修复三站在位 ✓")
+
+    # ── (g) studio 版本三站一致性 (不一致 = WARN：滚动升级中间态可接受，但必须可见) ──
+    vers = sorted({d.get("studio_ver") for d in per.values() if d.get("studio_ver")})
+    if len(vers) > 1:
+        warn.append("三站 studio 版本**不一致**：" + " / ".join(
+            s + "=" + (per[s].get("studio_ver") or "?") for s in sorted(per))
+            + " —— 本仓既定形态是「三站同升」；滚动升级中间态可接受，但口径不一致必须可见")
+    elif len(vers) == 1:
+        info.append("三站 studio 版本一致 ✓ (" + vers[0] + ")")
+
+    # ── (h) 引擎逐字节同版 ⇒ 站间 tar 复原路径可用 (不同版 = WARN，非 FAIL：各站仍可各自下载) ──
+    md5s = sorted({d.get("engine_md5") for d in per.values() if d.get("engine_md5")})
+    if len(md5s) > 1:
+        warn.append("三站引擎**构建不同版** (md5 不一致)：" + " / ".join(
+            s + "=" + (per[s].get("engine_md5") or "?")[:12] for s in sorted(per))
+            + " —— 「从同版站 tar 复原」这条分钟级回滚路径不可用 (实测 1.9 G / 18 s)，预案须按逐站写")
+    elif len(md5s) == 1:
+        info.append("三站引擎逐字节同版 ✓ ⇒ 站间 tar 可复原 (md5 " + md5s[0][:12] + "…)")
+    baks = {s: (d.get("engine_bak") or "").strip(",") for s, d in per.items()}
+    info.append("引擎面备份目录 (" + "~/.unsloth/llama.cpp.*" + ")： " + " / ".join(
+        s + "=" + (baks.get(s) or "(无 — 引擎若被替换，只能靠站间 tar 或重下)") for s in sorted(baks)))
+
     if not per:
         return "FAIL", "后端: 三站均采集失败", detail
     tip = vals[0] if len(vals) == 1 else " / ".join(f"{s}:{rocm.get(s) or '?'}" for s in sorted(rocm))
     note = f"后端: 可达 {len(per)}/3 站 · 单站=HIP / 分布式=Vulkan · ROCm {tip}"
+    # 摘要行必须带上「防线 / 修复 / 同版」三件事 —— info 明细只在 FAIL/WARN 时渲染 (见 main),
+    # PASS 时不可见；而这三件事恰是"没红也想知道"的 (如"pin 还在不在位")。
+    note += (" · pin " + ("✓" if not bad_pin else "✗")
+             + " · studio " + (vers[0] if len(vers) == 1 else ("/".join(vers) or "?"))
+             + " · 引擎 " + ("同版" if len(md5s) == 1 else (str(len(md5s)) + " 版不同"))
+             + " · 修复 " + ("✗" if noev else "✓"))
     if detail:
         return "FAIL", note, info + detail + [f"(WARN) {w}" for w in warn]
     if warn:
@@ -2327,11 +2395,16 @@ CHECKS = [
             "或回滚站上版并改仓库侧; 清单见 rpc_check.py 的 STATION_BINS"},
     {"id": "engine", "title": "引擎态与残留", "fn": check_engine, "quick": False,
      "fix": "残留用 infer-unload 或清 llama/rpc 进程; 端口在听但 RSS 异常需查进程归属"},
-    {"id": "backend", "title": "引擎后端与回滚基线", "fn": check_backend, "quick": False,
+    {"id": "backend", "title": "引擎后端与 studio 防线", "fn": check_backend, "quick": False,
      "fix": "默认单站引擎=HIP、分布式(/opt)=Vulkan 是本集群的**既定形态**; 后端变了先查是谁改的 "
             "(studio 自更新 / UPGRADE_SOP 升级 / 有人换构建) 再决定是否改期望值, 并把台账 §2.6 "
             "的后端矩阵同步; 回滚基线缺失 => 从同版本站 tar 分发补回 "
-            "(UPGRADE_SOP §6: 保留 `<现役>` + `9859` 两个版本目录以支持分钟级回滚)"},
+            "(UPGRADE_SOP §6: 保留 `<现役>` + `9859` 两个版本目录以支持分钟级回滚); "
+            "**pin 未生效** => 落 `/etc/environment` 的 `UNSLOTH_LLAMA_CPP_BACKEND=rocm`"
+            "(`.bashrc`/`.profile` 对非交互 ssh 无效, 见决策简报 §8.2); "
+            "**缺 `X-Unsloth-Events`** => 升级 studio(简报 §三); "
+            "**studio 版本或引擎构建不同版** => `cluster.py studio status` 看矩阵再决定是否同升; "
+            "**引擎备份目录为空** => 引擎若被替换只能靠站间 tar(要求三站逐字节同版)或重下"},
     {"id": "models", "title": "模型库完整性", "fn": check_models, "quick": False,
      "fix": "孤儿 `cluster.py models link --go`; 断链 `cluster.py models prune --go`"},
     {"id": "stations", "title": "三站实况对账", "fn": check_stations, "quick": False,
