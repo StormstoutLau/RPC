@@ -12,6 +12,7 @@
 | infer-list           | /usr/local/bin/infer-list           | 模型清单（建议后端=unsloth，embedding/AWQ 特殊）          |
 | llama-serve-instance | /usr/local/bin/llama-serve-instance | systemd 实例包装器（回退路径用）                        |
 | cluster-ttl          | /usr/local/bin/cluster-ttl          | 空闲 TTL 自动卸载检查器（60s oneshot，**默认关**；见下 P2-5）  |
+| load-gate            | /usr/local/bin/load-gate            | **加载前内存门禁**（4 条硬规则：used+need+12G≤total / avail≥need+12G / 已有 llama RSS+need+12G≤total / loadavg1>8 WARN）；默认查本机，可传 peer 站 |
 | load-mem-gate        | /usr/local/bin/load-mem-gate        | 内存门（12G 垫）                                 |
 | wait-gtt-release     | /usr/local/bin/wait-gtt-release     | GTT 回收等待                                   |
 
@@ -21,6 +22,7 @@
 当前（2026-09-17，**三站一致**）：infer-load `e474b761...`、infer-unload `6ff2a3b3...`、llama-serve-instance `0cf134f6...`。
 （下表 2026-09-04 的旧值已作废，保留仅为历史：infer-load `229c1328...`(B)/`09e8b60e...`(A)、infer-unload `dc948d63...`、infer-list `5b6d40fc...`。）
 （infer-load `e474b761` = 2026-09-17 遗留 1+2 修复版：头部注释改为实测口径 + **移除 `LLAMA_SERVER_PATH` 注入**；前一版 `d57a9021...` 已备份为 `/usr/local/bin/infer-load.bak-20260917-llamaserverpath`。详见 [TRACKER §2.6](../../spec/upstream-tracker/TRACKER.md)。）
+**2026-09-22 补登记 `load-gate`**（此前本表漏列 ⇒ 该件无部署记录、无 md5 基线）：当前值 **`07ad7e01...`**（**三站一致**，且 == 仓库副本 [load-gate](./load-gate)，0 个 CR）。本次改动 = 4 处 peer ssh 补 `-o BatchMode=yes`；改法是"先改仓库副本 → 三站 `cp -a` 备份（备份 md5 == 原 `6acec519...`，逐站核过）→ `install -m 755` → 逐站核新 md5 + `bash -n` + 跑 `load-gate 1` 回归"；回滚 = 三站 `sudo cp -a /usr/local/bin/load-gate.bak-20260922 /usr/local/bin/load-gate`。
 
 ## 空闲 TTL 自动卸载（2026-09-15, P2-5，**默认关**）
 
