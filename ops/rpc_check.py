@@ -18,6 +18,7 @@
   python ops/rpc_check.py --list           # 只列断言清单
 """
 import argparse
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -249,6 +250,33 @@ def _bash_lint(files, bash: str) -> tuple:
     return bad, details, seen
 
 
+# ── shell 语法检查并行化 (2026-09-23, 第③项) ────────────────────────
+# 为什么是**并行分块**而不是"合并外层循环"(第一条捷径):
+#   `bash -n <file>` 只把第一个入口当脚本解析(source 进来的不算), 所以每个文件**必须**独立
+#   fork 一次 `bash -n` —— 那把多个文件拼进同一次 bash 调用的"合并"做法, 只会检查第一个文件,
+#   是静默降为 0 覆盖(本仓最忌讳)。cProfile 实测 syntax 19.6s 里 ~17s 卡在逐文件 fork 的
+#   `_stdin_write`, 语法解析本身仅 ~0.3s ⇒ 并行分块是不**删除**任何判据、也不改 seen 口径的提速。
+def _bash_lint_parallel(files, bash: str, workers: int = 8) -> tuple:
+    """并行分块跑 `_bash_lint`。返回 (bad, details, seen_sum)。
+
+    seen 口径保持"远端循环实际处理的文件总数" ⇒ 覆盖校验仍看它 == len(files)，
+    不会因为并行而丢掉"读到数 != 喂入数 ⇒ 结果不可信"这条。
+    """
+    if not files:
+        return 0, [], 0
+    n = min(workers, len(files))
+    chunks = [files[i::n] for i in range(n)]
+    bad_total, seen_total, all_det = 0, 0, []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=n) as ex:
+        futs = [ex.submit(_bash_lint, chunk, bash) for chunk in chunks]
+        for f in futs:
+            b, d, seen = f.result()
+            bad_total += b
+            all_det += d
+            seen_total += (seen if seen is not None else 0)
+    return bad_total, all_det, seen_total
+
+
 def _iter_shebang_scripts():
     """git 跟踪文件里**无扩展名但带 shebang** 的脚本 → (rel, path, kind)。
 
@@ -460,15 +488,19 @@ def check_syntax(ctx):
                 f" (good={n_good}/{seen_good} bad={n_broke}/{seen_broke}"
                 f" detail={' | '.join(det_broke)[:80]}) → 本栏不可信, 拒绝给 PASS")
         else:
+            # ③(2026-09-23): 业务 `.sh` 与无扩展名脚本**并行**检查。
+            #   cProfile 实测: `bash -n` 必须逐文件 fork(见 _bash_lint_parallel 注释), syntax 的
+            #   ~17s 全卡在 fork, 解析本身仅 0.3s ⇒ 并行分块(默认 8 worker)让 19.6s → ~3s 量级。
+            #   自证(good/broke)保持串行独立 —— 那是"好样本必 0 错/坏样本必 1 错"的单文件判定。
             if sh_files:
-                bad_sh, det, seen = _bash_lint([p for _, p in sh_files], bash)
+                bad_sh, det, seen = _bash_lint_parallel([p for _, p in sh_files], bash)
                 detail += det
                 if seen != len(sh_files):
                     bad_sh = len(sh_files)
                     detail.append(f".sh 覆盖不全: 实际检查 {seen} / 应有 {len(sh_files)} 个"
                                   f" (读到数 != 喂入数 ⇒ 结果不可信)")
             if sb_sh:
-                bad_sb_sh, det, seen = _bash_lint([p for _, p in sb_sh], bash)
+                bad_sb_sh, det, seen = _bash_lint_parallel([p for _, p in sb_sh], bash)
                 detail += det
                 if seen != len(sb_sh):
                     bad_sb_sh = len(sb_sh)
