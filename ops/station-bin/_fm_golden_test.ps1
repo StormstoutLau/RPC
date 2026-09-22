@@ -728,6 +728,20 @@ Assert-True "ssh: 全部 ssh/scp 调用点带 `-o BatchMode=yes`（实测 $(@($s
 if (@($sshNoBatch).Count -gt 0) {
     Write-Host ('        缺 BatchMode 的行: ' + ((@($sshNoBatch) | ForEach-Object { $_.Extent.StartLineNumber }) -join ', '))
 }
+# 同一条不变量**也套到另一个入口** `_switch_qwen_flavor.ps1`（2026-09-22）：该件原为**半修** ——
+#   3 处 ssh 带了 BatchMode、2 处 scp 没带（"只修一半的修复看起来是完整的"，本仓已记过同族）。
+#   ⚠ 要求 ≥5 是**防恒真**的下界：若哪天解析失败/文件改名导致 0 处命中，必须红，不能静默通过
+#   （"0 覆盖与 100% 通过不可区分"是本仓的既有教训）。
+$switchPs1 = Join-Path (Split-Path $cli -Parent) '_switch_qwen_flavor.ps1'
+$swT = $null; $swErr = $null
+$swAst = [System.Management.Automation.Language.Parser]::ParseInput(
+    [System.IO.File]::ReadAllText($switchPs1, [System.Text.UTF8Encoding]::new($false)), [ref]$swT, [ref]$swErr)
+$swCalls = @($swAst.FindAll({ param($n)
+            $n -is [System.Management.Automation.Language.CommandAst] -and
+            @('ssh', 'scp') -contains $n.GetCommandName() }, $true))
+$swBad = @($swCalls | Where-Object {
+            -not (@($_.CommandElements | ForEach-Object { $_.Extent.Text }) -match 'BatchMode=yes') })
+Assert-True "ssh: _switch_qwen_flavor.ps1 的全部 ssh/scp 也带 BatchMode（实测 $(@($swCalls).Count) 处，缺 $(@($swBad).Count) 处；解析错 $(@($swErr).Count)）" (@($swCalls).Count -ge 5 -and @($swBad).Count -eq 0 -and @($swErr).Count -eq 0)
 # `Test-StationEngineReady` 的 scp 走 `Start-Process -FilePath 'scp' -ArgumentList $scpArgs`
 # ⇒ 没有 scp 的 CommandAst 节点，**真实选项在 `$scpArgs` 那个赋值里**。
 # ⚠ 第一版我把断言打在 Start-Process 的 `Extent.Text` 上 ⇒ 那串文本里只有 `$scpArgs`（变量名），

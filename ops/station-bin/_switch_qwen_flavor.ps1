@@ -10,6 +10,10 @@
 #   think   -> reason/short,     thinking ON,  ctx 32768
 #   long    -> big docs,         thinking ON,  ctx 262144
 # source kept ASCII-only for PS5.1 BOM safety.
+# ssh/scp rule: **every** call carries `-o BatchMode=yes` (+ explicit -o ConnectTimeout) so an
+# auth anomaly fails fast instead of hanging on a password prompt. Guarded by the AST assertion
+# in _fm_golden_test.ps1 (2026-09-22: this file was previously a HALF-FIX - ssh calls had it,
+# scp calls did not).
 # ============================================================================
 [CmdletBinding()]
 param(
@@ -38,12 +42,12 @@ foreach ($g in $guards) {
     $chk = ssh -o ConnectTimeout=10 -o BatchMode=yes $hostName "[ -x /home/scott-lau/$g ] && echo present || echo missing" 2>$null
     if ($LASTEXITCODE -eq 0 -and "$chk" -match 'present') { continue }
     Write-Host "GUARD deploy: $g -> /home/scott-lau/"
-    scp -q -o ConnectTimeout=10 $localGuard "${hostName}:/home/scott-lau/$g" 2>$null
+    scp -q -o BatchMode=yes -o ConnectTimeout=10 $localGuard "${hostName}:/home/scott-lau/$g" 2>$null
     if ($LASTEXITCODE -ne 0) { Write-Host "WARN: scp guard $g failed"; continue }
     ssh -o ConnectTimeout=10 -o BatchMode=yes $hostName "chmod +x /home/scott-lau/$g" 2>$null
 }
 
-scp -q -o ConnectTimeout=10 $sh "${hostName}:/tmp/_switch_qwen_flavor.sh"
+scp -q -o BatchMode=yes -o ConnectTimeout=10 $sh "${hostName}:/tmp/_switch_qwen_flavor.sh"
 if ($LASTEXITCODE -ne 0) { Write-Host "ERR: scp _switch_qwen_flavor.sh failed"; exit 5 }
 
 $sshCmd = "bash /tmp/_switch_qwen_flavor.sh $Flavor $b64"
