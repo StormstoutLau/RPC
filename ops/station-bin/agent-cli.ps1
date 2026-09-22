@@ -1814,8 +1814,13 @@ exit `$RC
     # it is a previous run leftover -> annotate (queue/run numbers untrusted), never claimed as live.
     # O-12 P2-1: stale ALSO nulls accept/golden verdicts (fail-safe: stale meta = verdict unknown =
     #            treated as fail, never trusts previous round's old values)
+    # O-22 族延伸 (2026-09-23): meta TASK_ID != 本次 ts 时, 同批**固定名媒体**(.progress/
+    #   .attach-manifest/.workspace-diff)同样无法自证属于本次 —— 尤其孤儿采样器若仍在写固定名
+    #   .progress, 主控拉到的节拍是旧 run 的。据此置空节拍并 WARN(不改 rc; 属覆盖缺口非篡改)。
+    $evStale = $false
     if ($metaTaskId -and $metaTaskId -ne "$ts") {
         Write-Host "META_STALE: meta TASK_ID=$metaTaskId != this run ts=$ts (previous-run residual; queue/run omitted)"
+        $evStale = $true
         $queue_s = 0; $run_s = 0
         $accept_ok = $null; $accept_golden_ok = $null
     }
@@ -1842,7 +1847,11 @@ exit `$RC
     }
     # O-25 P0-②: parse .progress tail ("t=end bytes=.. bytes_s=..") into per-run throughput baseline.
     $outputBytes = 0; $outputBps = 0
-    if (Test-Path $progressTxt) {
+    if ($evStale) {
+        # O-22 族延伸 (2026-09-23): 主控侧一致性判据 —— 孤儿采样器若可持续写固定名 .progress,
+        #   拉到的节拍是旧 run 的, 无法自证本次。置空并 WARN(不改 rc; 覆盖缺口非篡改)。
+        Write-Host "EVIDENCE_STALE: .meta TASK_ID != 本次 ts ⇒ .progress 节拍不可信, 置空"
+    } elseif (Test-Path $progressTxt) {
         $lastLine = (Get-Content $progressTxt | Where-Object { $_ -match '^t=' } | Select-Object -Last 1)
         if ($lastLine -and $lastLine -match 'bytes=(\d+).*bytes_s=(\d+)') {
             $outputBytes = [int]$matches[1]; $outputBps = [int]$matches[2]
