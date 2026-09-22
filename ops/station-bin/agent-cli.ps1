@@ -2594,8 +2594,18 @@ mkdir -p "$stWorkDir/.attach/$nm2"
     # P3: **只换 runner**, 上层编排(归档/accept/golden/usage/证据面/resume)零改动 —— 两者同契约。
     #   站上分支的型号用引擎接受的别名 `main`(站上既有 settings 也是这么做的:
     #   `modelOverrides: claude-opus-4-6 -> main`) ⇒ 与云端分支的 `$id` 语义不同, 故分开传。
+    # ── 台账 / run.json 的 `model` 列: **必须写"实际执行身份"**, 不能写路由 id ────────────────
+    # 原先两处都写 `$id`(= 路由/别名指向的型号)。站上分支实际跑的是**站上本地引擎**(别名 main)
+    #   ⇒ 对一个 `local-only`("物理不出网")的 run, 台账与 .agent-run.json 会**报一个云端型号**
+    #   (实测 run `202609221331304084` 写成 `thinkingmachines/inkling:free`)。
+    #   ⚠ 为何要紧: 这两件都是**真值源**, 而"按 model 列判该 run 是否出网"是个**看起来能用**的判据
+    #   ⇒ 会把不出网的 run 读成出网（方向: 假警报; **同族的反向错误会掩盖真出网**）。
+    #   ⇒ 站上分支写 `station:<站>/<别名>`(= 位置 + 实际模型); 非站上分支**保持 `$id`**(那时它就是真值)。
+    #   ⚠ 信息不丢: 请求的路由 id 仍可从**归档的卡**(`card.md`, run 的证据件之一)+ `ROUTE_TABLE` 复原。
+    $stModelAlias = 'main'   # 单一真值: 既用于 `--model` 实参, 也用于上面这个执行身份串(免得两处漂移)
+    $execModel = if ($useStation) { "station:$st/$stModelAlias" } else { $id }
     if ($useStation) {
-        $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('-p "" --model "main"') -stdin $promptIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $timeout -WorkDir $stWorkDir
+        $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('-p "" --model "' + $stModelAlias + '"') -stdin $promptIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $timeout -WorkDir $stWorkDir
     } else {
         $rcov = Invoke-ClaudeFly -argStr ('-p "" --model "' + $id + '"') -stdin $promptIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $timeout -cwd $projRoot
     }
@@ -2610,7 +2620,7 @@ mkdir -p "$stWorkDir/.attach/$nm2"
         Add-Content $outTxt "`n=== RESUME[$contAttempt] prev_rc=$rc ==="
         [IO.File]::WriteAllText($contIn, ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($contB64))), $utf8NoBom)
         if ($useStation) {
-            $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('--continue -p "" --model "main"') -stdin $contIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $continueTimeout -WorkDir $stWorkDir
+            $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('--continue -p "" --model "' + $stModelAlias + '"') -stdin $contIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $continueTimeout -WorkDir $stWorkDir
         } else {
             $rcov = Invoke-ClaudeFly -argStr ('--continue -p "" --model "' + $id + '"') -stdin $contIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $continueTimeout -cwd $projRoot
         }
@@ -2670,7 +2680,7 @@ mkdir -p "$stWorkDir/.attach/$nm2"
     if ($code -eq 9) { $code = 1 }   # 兼容: 9 仅本地语义保留, 原生 rc 走下面映射
     $finalCode = if ($rc -eq 0 -and $acceptOk -eq 1 -and $acceptGoldenOk -eq 1) { 0 } elseif ($rc -eq 6) { 6 } else { 1 }
     $ledger = 'd:\RPC\ops\station-bin\agent-runs.log'
-    $line = "$ts,$proj,$id,$sens,$finalCode,0,$runS"
+    $line = "$ts,$proj,$execModel,$sens,$finalCode,0,$runS"
     try { Add-Content -Path $ledger -Value $line -Encoding utf8 | Out-Null } catch { Write-Host "LEDGER_WARN: $($_.Exception.Message)" }
 
     $collectOk = $true; $runDir = ''
@@ -2687,7 +2697,7 @@ mkdir -p "$stWorkDir/.attach/$nm2"
 
     $contentSha = if (Test-Path $outTxt) { Get-Sha256Text ([IO.File]::ReadAllText($outTxt)) } else { '' }
     $run = [ordered]@{
-        proj = $proj; task_id = "task-$ts"; cli = 'claude'; model = $id; sensitivity = $sens
+        proj = $proj; task_id = "task-$ts"; cli = 'claude'; model = $execModel; sensitivity = $sens
         readonly = $readonly; session_id = ''; exit_code = $finalCode
         status = if ($finalCode -eq 0) { 'completed' } elseif ($finalCode -eq 6) { 'timeout' } else { 'failed' }
         # 缺口 8 **刻意不做 claude 备路**(与缺口 5/6 同例): 该路的会话不落在 opencode 会话库 ⇒

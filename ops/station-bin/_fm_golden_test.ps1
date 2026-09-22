@@ -637,6 +637,23 @@ Assert-True "w3b: 不存在'第二套工作区概念'(实测 $w3Scratch 处自�
 $w3WsCmd = @($ccCmds | Where-Object { $_.GetCommandName() -eq 'Invoke-Workspace' }) | Select-Object -First 1
 $iW3Ws = if ($w3WsCmd) { $w3WsCmd.Extent.StartOffset - $ccFn.Extent.StartOffset } else { -1 }
 Assert-True "w3b: 位置断言(AST) —— 工作区同步($iW3Ws) 早于 站上 spawn($iW3Spawn)" ($iW3Ws -gt 0 -and $iW3Spawn -gt 0 -and $iW3Ws -lt $iW3Spawn)
+# --- 台账/run.json 的 model 列 = **实际执行身份**（2026-09-22 续）---
+# 病: 两处都写 `$id`（路由 id）。站上分支实际跑**站上本地引擎**（别名 main）⇒ 对一个 `local-only`
+#   （"物理不出网"）的 run, **台账与 .agent-run.json 会报一个云端型号**（实测 run `202609221331304084`
+#   写成 `thinkingmachines/inkling:free`）。而"按 model 列判该 run 是否出网"是个**看起来能用**的判据
+#   ⇒ 会读出假警报（同族的反向错误会**掩盖真出网**）。
+# 判据四条: ① 两件都写 `$execModel` ② 站上分支才有 `station:` 前缀 ③ `--model` 实参与执行身份串
+#   用**同一个** `$stModelAlias`（防两处漂移）④ **反向**: 本地支仍写 `$id`（别把非站上分支也改坏）。
+Assert-True "ledger: 台账行写 execModel(不是路由 id)" ($cliText -match '\$line = "\$ts,\$proj,\$execModel,')
+Assert-True "run.json: model = execModel(不是路由 id)" ($cliText -match 'cli = ''claude''; model = \$execModel')
+Assert-True "execModel: 站上分支带 station:<站>/<别名> 前缀" ($cliText -match '\$execModel = if \(\$useStation\) \{ "station:\$st/\$stModelAlias"')
+# ⚠ 拼 needle 时用 `[char]39` 表示单引号 —— 少写一层 `\"`/`''` 转义（本行第一版就是被转义写坏的）。
+$needleStAlias = '--model "' + [char]39 + ' + $stModelAlias'
+$w3AliasCalls = ([regex]::Matches($cliText, [regex]::Escape($needleStAlias))).Count
+Assert-True "execModel: `--model` 实参与执行身份串**同源**(`$stModelAlias`, 实测 $w3AliasCalls 处=站上首跑+resume)" ($w3AliasCalls -eq 2)
+$needleLocalId = '--model "' + [char]39 + ' + $id'
+$w3LocalModel = ([regex]::Matches($cliText, [regex]::Escape($needleLocalId))).Count
+Assert-True "反向: 本地支仍用 \$id(实测 $w3LocalModel 处=本地首跑+resume) —— 别把非站上分支改坏" ($w3LocalModel -eq 2)
 
 # --- W2（2026-09-22）: 进程退出码可信性 —— `exit $数组` 会把 rc 抹成 0 ---
 # 实测（临时脚本直测进程 rc）: exit 4 ⇒ 4 / exit @($null,4) ⇒ **0** / exit @(0,4) ⇒ **0**

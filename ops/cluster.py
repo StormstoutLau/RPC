@@ -3317,6 +3317,13 @@ def cmd_flow(argv) -> int:
 # ── P0: agent 任务进度/吞吐只读视图 (2026-09-15, 调研 spec/agent-observability/) ──
 # **一个采集器都不新增**: 三个数据源全是 O-25 已建的 ——
 #   ① 主控派发台账 ops/station-bin/agent-runs.log (ts,proj,model,sens,code,queue_s,run_s)
+#      ⚠ **model 列的语义 = "实际执行身份"**(2026-09-22 订正, 只改语义不改 schema):
+#          · 站上 claude 分支 ⇒ `station:<站>/<别名>`(如 `station:B/main` —— 实际跑的是**站上本地引擎**)
+#          · 其余 ⇒ 路由/别名指向的型号 id(那时它**就是**真值)
+#        为什么钉一句: 原先站上分支写的是路由 id ⇒ 对一个 `local-only`("物理不出网")的 run
+#        会**报一个云端型号**(实测 `thinkingmachines/inkling:free`) ⇒ 而"按 model 列判该 run 是否
+#        出网"是个**看起来能用**的判据 ⇒ 会读出假警报(同族的反向错误会**掩盖真出网**)。
+#        ⇒ **判"是否出网"请看 `local-only` + `station:` 前缀, 别把 model 当云端型号去匹配。**
 #   ② 主控 run 详情 <projRoot>/agent-out/<ts>/.agent-run.json (status/run_s/output_bps/slot/profile/accept)
 #   ③ 站上运行中节拍 $HOME/agent-workspaces/<proj>/out/.progress (5s 一行 t=.. bytes=.. bytes_s=.., 终值 t=end)
 #
