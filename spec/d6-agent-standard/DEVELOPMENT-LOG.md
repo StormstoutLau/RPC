@@ -106,6 +106,23 @@ upstream: \[d6-agent-standard-.* 全量文档]
 
 - **验收（本日终态）**: 夹具 `_fm_golden_test` **164/164**、`_scrubber_coverage_test` **43/43**、`_probe_fallback` **pass**（含 `-SmokeOnly`）；门禁 **15 绿 / 1 黄 / 0 红**（黄灯 = 已登记的 `stations` 插件漂移）；证据链 **117 条、未入链 0**；三站引擎已 unload。
 
+### 2026-09-22（线二）— opencode 发送预算口径修正：09-07 的旧架构结论被实测推翻
+
+> **与上节的关系**: 上节记 **D6 派发面安全加固**；本节记 **opencode 客户端预算 / 引擎 ctx 解耦线（O-23）**，属**不同工作流**，仅同日。**触发**: 用户问「opencode 遗留问题是否必须注册」⇒ 先查上游、再复现 09-07 的三组实验 ⇒ **旧结论不成立**。**结论全文落档**: OPEN-ISSUES §O-23。
+
+- **① 旧结论（09-07 实验 2/3）**: "1.18.25 对自定义 provider 的发送预算由**内置 catalog `context_length`** 决定，`limit.context` 对 config **完全免疫**"（依据：改 `limit.context` 后 `opencode models --verbose` 视图**仍 131072**；binary 反编译出 `J.context_length ?? Y?.limit.context`）。
+- **② 复现失败（配置层四组探针）**: 同版本（B 站 1.18.25）重做 ⇒ **视图层完全跟随 config**：① 新增条目；② 改**已存在**条目（`qwen` 131072→12345、`m27-q4ks`→23456，**即时生效**）；③ **三个从 `opencode models` 全量列表里确证存在于 catalog 的 id**（`deepseek/deepseek-v4-flash`／`nemotron-3-ultra-free`／`gpt-oss-120b`）**全部读到写入值 12345** ⇒ **"撞名 ⇒ catalog 覆盖"不成立**。
+  - **方法论教训（本轮最关键）**: 首轮拿 `qwen` 当"撞名臂"是**无效设计** —— 裸 id `qwen` 可能**根本不在 catalog 里**（catalog id 形如 `deepseek/deepseek-v4-flash`）⇒ "两臂都对"**什么也证明不了**。⇒ **撞名/冲突类实验必须先用枚举命令确认对照组真在名单里**。
+- **③ 行为层实弹（判据从"视图"升级到"实际请求"）** —— B 站引擎 gpt-oss-20b **`ctx=32768`**、`compaction.reserved=20000`：
+  - **短 prompt 两臂**（`limit=20001` 可用 **1** tok / `131072`）⇒ 均 **rc=0 + 引擎 200** ⇒ **`limit.context` 不是"发送前硬闸"**；
+  - **94.5k 单次请求两臂** ⇒ **同一条错** `Message too long: 95037 tokens exceeds the **32768**-token context window`（`code: context_length_exceeded`）⇒ **硬闸数值 = 服务端 ctx**，与 config 的 20001／131072 **均无关**（该错由客户端预检还是服务端透传**未定**，两种解释都指向"硬闸来自服务端"）；
+  - **多轮累积（3 轮 × ~8k tok，同一 session）** ⇒ `limit=20001` 臂**第 2 轮即出现 `agent=compaction`**、`limit=131072` 臂**三轮零压缩** ⇒ **`limit.context` 确实驱动 compaction 阈值**（两臂唯一变量）。
+- **④ 修订后的机制**: `limit.context` **生效于"视图 + 压缩阈值"**，但**不构成"发送前硬闸"**；**实际硬闸 = 服务端（引擎 `n_ctx`）**。⇒ O-23 的修复（**agent-cli 档位=引擎档位**、`ENGINE_CTX` 探测 + profile clamp）**结论不变，仅理由改写**（"catalog 覆盖" → "客户端不作硬拦截"）；原候选根治方向（改 `api.modelID` 触发回退）**作废**。
+- **⑤ 上游注册：不必**（对用户原问题的答案）: 决定性因素在**服务端**；上游同族已有 **5+3 条**（`#29555`/`#37456` closed-completed、**`#37544` 被 `not_planned`**、`#35863`/`#40524`/`#38835`/`#40908` open）；`#41104`（本地 ctx 发现 PR）**已提未并入**；我们落后 **7 个 patch**（1.18.25→1.18.32@09-21）而**近 8 个 release notes 无相关修复** ⇒ **升级不是解法、新开 issue 只会重复**。
+- **⑥ 顺带查出（新登记）**: **压缩路径在本地 provider 上必然失败** —— `agent=compaction` 后紧跟 `level=ERROR … AI_TypeValidationError: Value: {"type":"reasoning_summary","duration_ms":9472}`（opencode 期望 `choices`/`error`）⇒ 累积超阈时任务**不是被压缩救回、而是直接 rc=1** ⇒ **"把 `limit.context` 对齐引擎档位"这一改进的收益，取决于先修此条**（实测该臂 turn2/turn3 均复现）。
+- **⑦ 现场纪律**: 四次配置实验**全部先备份 → 后还原 → 核 md5 回到原值**（`755975dba0ff28cf64dff0e106000cb6`）；探针临时文件已删；跑完 `cluster.py unload`（**三站 OK**）。
+- **关联**: [OPEN-ISSUES §O-23](OPEN-ISSUES.md)（结论已改写 + 新增"压缩必然失败"登记）。
+
 ### 2026-09-16 — provider 命名漂移修复 / 新模型入网 / C2 引擎面统一日
 
 > 本章为补记（当日未即时落档，2026-09-16 晚由用户指示「修复记录 / 排查过程 / 决策依据完整落档」一次性回填）。

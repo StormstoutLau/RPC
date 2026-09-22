@@ -267,7 +267,9 @@ limit: { context: J.context_length ?? Y?.limit.context ?? 0,
 
 ⇒ **防线仍然只能建在可控层**：agent-cli 档位 = 引擎档位（`ENGINE_CTX` 探测 + profile clamp）**依然是唯一有效手段** —— **结论不变，仅原因从"catalog 覆盖"改为"客户端不作硬拦截、硬闸在服务端"**。
 
-**💡 未尽确认（2026-09-22 收窄）**: ① 1.18.25 的"发送前预算检查"在本轮**未观察到触发**（94k prompt + `limit=20001` 照发）⇒ 倾向"该版本对自定义 provider 无发送前硬闸"，但**未穷尽**（多轮累积 / compaction 路径未测）；② 原候选根治方向"改 `api.modelID` 触发 `?? Y.limit.context` 回退"——**作废**（其前提"catalog 优先"未被本轮支持）；③ 当时实验 2 的视图观测为何不可复现 ⇒ **已不可考，不再追**。
+**💡 未尽确认（2026-09-22；① 当日已补齐）**: ① **"发送前硬闸"的判定已补齐**：**多轮累积实测**（3 轮 × ~8k tok、同一 session）显示 `limit=20001`（可用 1 tok）**第 2 轮即触发 `agent=compaction`**，而 `limit=131072` **三轮零压缩** ⇒ **`limit.context` 确实驱动 compaction 阈值** —— 但它是"**事后**压缩"，**不是事前拦截**（第一轮的 8k 请求已发出去）；"单次 94k + `limit=20001` 照发"这一条**保留**（该单次路径无拦截）；② 原候选根治方向"改 `api.modelID` 触发 `?? Y.limit.context` 回退"——**作废**（其前提"catalog 优先"未被本轮支持）；③ 当时实验 2 的视图观测为何不可复现 ⇒ **已不可考，不再追**。
+
+**🐞 新登记（2026-09-22 顺带查出，独立于本旨）**: **本地 provider 的 compaction 必然失败** —— 一旦累积超阈、opencode 进入 `agent=compaction`，紧接着抛 `level=ERROR … AI_TypeValidationError: Type validation failed: Value: {"type":"reasoning_summary","duration_ms":9472}`（它期望 `choices` 或 `error`）⇒ **压缩必然 rc=1、任务失败**（本轮回测：`limit=20001` 臂 turn2/turn3 **均复现**，同一 session）。**含义**：① 累积型长任务在本地引擎上**无法靠 compaction 自救** ⇒ 现有"agent-cli 档位 = 引擎档位"的 clamp 仍是**唯一防线**；② **"把 `limit.context` 对齐引擎档位"这一改进的收益，取决于先修此条**；③ 疑似与 gpt-oss 的 reasoning 流事件（`reasoning_summary`）相关 ⇒ **未查上游、未定位根因**。
 
 **📌 上游注册：不必（2026-09-22 调查结论）** —— ① 本问题的**决定性因素在服务端**（引擎 `n_ctx`），不在 opencode；② 上游同族条目**已有 5+3 条**：`#29555` / `#37456`（closed-**completed**，多半只修显示）、`#37544`（`config: existing model limit override is ignored`，**closed-`not_planned`** ⇒ **再提同类会被关**）、`#35863`（context window 硬编码 200k，**open**）、`#40524`（catalog 与 `/models` 对账，**open**）、`#38835`（无 `limit.input` 时 `compaction.reserved` 被静默忽略，**open**）、`#40908`（要动态探测 ctx，**open**）；③ `#41104`（本地 ctx 发现 PR）**已提但未并入**（`merged=False`）；④ 我们落后 **7 个 patch**（1.18.25 → 1.18.32@09-21）而**近 8 个 release notes 无任何 limit/context/compaction 修复** ⇒ **升级不是解法、新开 issue 只会重复** ⇒ **不注册**（若将来要动上游，唯一有价值的形态是给 `#35863`/`#40908` 留一条限定角度的评论，非新 issue）。
 
