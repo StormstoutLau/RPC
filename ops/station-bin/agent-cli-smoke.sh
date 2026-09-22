@@ -14,6 +14,10 @@
 #       bash agent-cli-smoke.sh A        # 仅 A 站
 #       bash agent-cli-smoke.sh C        # 仅 C 站
 # 退出码: 0 = 全 PASS/SKIP; 1 = 有 FAIL
+# ssh/scp 纪律 (2026-09-22 统一): 每个 ssh/scp 调用点都必须带 `-o BatchMode=yes`（并显式给
+#   `-o ConnectTimeout=`）。理由: 认证异常时 OpenSSH 会**弹口令阻塞等 stdin** ⇒ 表现为"卡住"而非
+#   "失败"（实测挂起 >90s）。本脚本的 heredoc 形态尤其要紧 —— 它的 stdin **正被 heredoc 占用**，
+#   无 tty 时 OpenSSH 会从 stdin 取口令 ⇒ 比"挂住"更隐蔽。守卫见 _fm_golden_test.ps1 的文本扫描断言。
 # ============================================================================
 set -u
 SCOPE="${1:-ALL}"
@@ -28,12 +32,12 @@ report() { # name status detail
 # ---------------------------------------------------------------- B 站
 if [ "$SCOPE" = "ALL" ] || [ "$SCOPE" = "B" ]; then
   HOST_B=scott-lau@scott-lau-GTR-Pro.local
-  LOADED=$(ssh -o ConnectTimeout=10 "$HOST_B" "pgrep -c -f llama-server" 2>/dev/null || echo 0)
+  LOADED=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST_B" "pgrep -c -f llama-server" 2>/dev/null || echo 0)
   if [ "${LOADED:-0}" -lt 1 ]; then
     report B-backend SKIP "llama-server 未运行, 先 infer-load nvidia-nemotron-3-super"
   else
     # B-claude: LiteLLM(4000)→nemotron; 冷缓存 33k 预填可能 ~20min, 热缓存 30-120s
-    OUT=$(ssh "$HOST_B" 'bash -s' <<'REMOTE' 2>/dev/null
+    OUT=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST_B" 'bash -s' <<'REMOTE' 2>/dev/null
 cd /tmp
 out=/tmp/smoke-claude-$$.out
 s=$(date +%s)
@@ -50,7 +54,7 @@ REMOTE
       report B-claude FAIL "$OUT"
     fi
     # B-opencode: local/nemotron (直连本机引擎), stdin 管道形式
-    OUT=$(ssh "$HOST_B" 'bash -s' <<'REMOTE' 2>/dev/null
+    OUT=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST_B" 'bash -s' <<'REMOTE' 2>/dev/null
 cd /tmp
 out=$(echo 'reply with exactly: OK' | timeout 180 opencode run -m local/nemotron 2>/dev/null | tail -1)
 echo "OUT=$out"
@@ -67,12 +71,12 @@ fi
 # ---------------------------------------------------------------- A 站
 if [ "$SCOPE" = "ALL" ] || [ "$SCOPE" = "A" ]; then
   HOST_A=scott-lau@scott-lau-NEX.local
-  LOADED=$(ssh -o ConnectTimeout=10 "$HOST_A" "pgrep -c -f llama-server" 2>/dev/null || echo 0)
+  LOADED=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST_A" "pgrep -c -f llama-server" 2>/dev/null || echo 0)
   if [ "${LOADED:-0}" -lt 1 ]; then
     report A-backend SKIP "llama-server 未运行, 先 infer-load gpt-oss-120b"
   else
     # A-claude: 直连 A 本机 llama-server(8080) gpt-oss, 快
-    OUT=$(ssh "$HOST_A" 'bash -s' <<'REMOTE' 2>/dev/null
+    OUT=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST_A" 'bash -s' <<'REMOTE' 2>/dev/null
 cd /tmp
 out=/tmp/smoke-claude-$$.out
 s=$(date +%s)
@@ -89,7 +93,7 @@ REMOTE
       report A-claude FAIL "$OUT"
     fi
     # A-opencode: local/gpt-oss (直连 A 本机引擎)
-    OUT=$(ssh "$HOST_A" 'bash -s' <<'REMOTE' 2>/dev/null
+    OUT=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST_A" 'bash -s' <<'REMOTE' 2>/dev/null
 cd /tmp
 out=$(echo 'reply with exactly: OK' | timeout 180 opencode run -m local/gpt-oss 2>/dev/null | tail -1)
 echo "OUT=$out"
@@ -106,12 +110,12 @@ fi
 # ---------------------------------------------------------------- C 站
 if [ "$SCOPE" = "ALL" ] || [ "$SCOPE" = "C" ]; then
   HOST_C=scott-lau@192.168.1.37
-  LOADED=$(ssh -o ConnectTimeout=10 "$HOST_C" "pgrep -c -f llama-server" 2>/dev/null || echo 0)
+  LOADED=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST_C" "pgrep -c -f llama-server" 2>/dev/null || echo 0)
   if [ "${LOADED:-0}" -lt 1 ]; then
     report C-backend SKIP "llama-server 未运行, 先 cluster.py load gpt-oss-c"
   else
     # C-claude: 直连 C 本机 llama-server(8080), 同 A 形态
-    OUT=$(ssh "$HOST_C" 'bash -s' <<'REMOTE' 2>/dev/null
+    OUT=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST_C" 'bash -s' <<'REMOTE' 2>/dev/null
 cd /tmp
 out=/tmp/smoke-claude-$$.out
 s=$(date +%s)
@@ -128,7 +132,7 @@ REMOTE
       report C-claude FAIL "$OUT"
     fi
     # C-opencode: local/gpt-oss (直连本机引擎), stdin 管道形式
-    OUT=$(ssh "$HOST_C" 'bash -s' <<'REMOTE' 2>/dev/null
+    OUT=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST_C" 'bash -s' <<'REMOTE' 2>/dev/null
 cd /tmp
 out=$(echo 'reply with exactly: OK' | timeout 180 opencode run -m local/gpt-oss 2>/dev/null | tail -1)
 echo "OUT=$out"
@@ -155,12 +159,12 @@ fi
 # CHECKLIST BP-3 静态断言 `opencode run -m ... < .prompt.txt`），与位置参数是否可用无关。
 # 保留观测的价值：升级窗口人工比对"耗时/结果"与历史记录，作为行为变更的线索。
 if [ "$SCOPE" = "ALL" ] || [ "$SCOPE" = "B" ]; then
-  G10B=$(ssh -o ConnectTimeout=10 scott-lau@scott-lau-GTR-Pro.local "pgrep -c -f llama-server" 2>/dev/null || echo 0)
+  G10B=$(ssh -o BatchMode=yes -o ConnectTimeout=10 scott-lau@scott-lau-GTR-Pro.local "pgrep -c -f llama-server" 2>/dev/null || echo 0)
   if [ "${G10B:-0}" -lt 1 ]; then
     report g10-positional SKIP "B backend 未加载 (未加载时位置参数必然失败, 测不出真假)"
   else
     T0=$(date +%s)
-    OUT=$(ssh scott-lau@scott-lau-GTR-Pro.local 'bash -s' <<'REMOTE' 2>/dev/null
+    OUT=$(ssh -o BatchMode=yes -o ConnectTimeout=10 scott-lau@scott-lau-GTR-Pro.local 'bash -s' <<'REMOTE' 2>/dev/null
 cd /tmp
 out=$(timeout 25 opencode run -m local/nemotron 'reply with exactly: OK' 2>/dev/null | tail -1)
 echo "OUT=$out"
@@ -181,7 +185,7 @@ ACF=d:/RPC/ops/station-bin/agent-cli.ps1
 CARD=d:/RPC/spec/d6-agent-standard/test-cards/echo.md
 PS=powershell.exe
 if [ "$SCOPE" = "ALL" ]; then
-  B_BACKEND=$(ssh -o ConnectTimeout=10 scott-lau@scott-lau-GTR-Pro.local "pgrep -c -f llama-server" 2>/dev/null || echo 0)
+  B_BACKEND=$(ssh -o BatchMode=yes -o ConnectTimeout=10 scott-lau@scott-lau-GTR-Pro.local "pgrep -c -f llama-server" 2>/dev/null || echo 0)
   if [ "${B_BACKEND:-0}" -lt 1 ]; then
     report d6-task SKIP "B backend 未加载, 先 infer-load (agent-cli 端到端依赖模型)"
     report d6-timeout SKIP "B backend 未加载, 跳过超时注入"

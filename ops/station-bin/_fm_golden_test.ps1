@@ -742,6 +742,40 @@ $swCalls = @($swAst.FindAll({ param($n)
 $swBad = @($swCalls | Where-Object {
             -not (@($_.CommandElements | ForEach-Object { $_.Extent.Text }) -match 'BatchMode=yes') })
 Assert-True "ssh: _switch_qwen_flavor.ps1 的全部 ssh/scp 也带 BatchMode（实测 $(@($swCalls).Count) 处，缺 $(@($swBad).Count) 处；解析错 $(@($swErr).Count)）" (@($swCalls).Count -ge 5 -and @($swBad).Count -eq 0 -and @($swErr).Count -eq 0)
+
+# --- .sh 侧（2026-09-22）：**没有可用 AST** ⇒ 只能文本扫描兜底（边界显式声明）---
+# 为什么还是要做: `agent-cli-smoke.sh` 有 **12 处**裸调用（其中 7 处 heredoc 形态**连 `-o` 都没有**），
+#   而该文件是**升级窗口回归三件套**之一 ⇒ 不能只修不加守卫（"修完就漂"是本仓的常态）。
+# ⚠ 边界（诚实声明）: 文本判据会被注释/字符串骗（本项目已踩 5 次）。本扫描靠三条压假阳：
+#   ① 只取 `#` 之前的代码段；② 命中点**引号奇偶**判是否在串内；③ 逐文件要求**命中数恰为登记值**。
+#   已知残留边界: **跨行字符串**（如 docstring）判不出；`.sh` 里没有 Python AST 可用。
+$shScan = @'
+import re, sys
+CALL = re.compile(r"(?<![\w.\-])(?:&\s*)?(ssh|scp)\s")
+
+def in_quote(s, pos):
+    return s[:pos].count('"') % 2 == 1 or s[:pos].count("'") % 2 == 1
+
+for f in sys.argv[1:]:
+    bare, total = [], 0
+    for i, ln in enumerate(open(f, encoding="utf-8", errors="replace").read().splitlines(), 1):
+        code = ln.split("#", 1)[0]
+        if not code.strip():
+            continue
+        for m in CALL.finditer(code):
+            if in_quote(code, m.start()):
+                continue
+            total += 1
+            if "BatchMode" not in code:
+                bare.append(i)
+            break
+    print("{} bare={} total={}".format(f.replace("\\", "/").rsplit("/", 1)[-1], len(bare), total))
+'@
+$shScanFiles = @((Join-Path (Split-Path $cli -Parent) 'agent-cli-smoke.sh'))
+$shRes = 'PYERR: not run'
+try { $shRes = (@($shScan | python - @shScanFiles 2>&1) | Select-Object -Last 1) } catch { $shRes = "PYERR: $($_.Exception.Message)" }
+# ⚠ `total=12` 是**防恒真**的下界（0 命中必须红）：⚠ 增删调用须同步改本数（故意的摩擦）
+Assert-True "ssh: .sh 侧无裸调用（文本扫描兜底，实测 $shRes）" ($shRes -match '^agent-cli-smoke\.sh bare=0 total=12$')
 # `Test-StationEngineReady` 的 scp 走 `Start-Process -FilePath 'scp' -ArgumentList $scpArgs`
 # ⇒ 没有 scp 的 CommandAst 节点，**真实选项在 `$scpArgs` 那个赋值里**。
 # ⚠ 第一版我把断言打在 Start-Process 的 `Extent.Text` 上 ⇒ 那串文本里只有 `$scpArgs`（变量名），
