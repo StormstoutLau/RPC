@@ -585,3 +585,5 @@
 | 2026-09-23 00:19 | bench | gpt-oss-120b-c@C | API timings 口径 · max_tokens=128 · prompt 实测 468 tok | PASS | pp 468 tok 435.2 t/s · tg 128 tok 48.3 t/s |
 | 2026-09-23 00:19 | bench | gpt-oss-120b-c@C | API timings 口径 · max_tokens=128 · prompt 实测 1 tok | PASS | pp 1 tok 40.7 t/s · tg 128 tok 39.9 t/s |
 | 2026-09-23 00:19 | bench | gpt-oss-120b-c@C | API timings 口径 · max_tokens=128 · prompt 实测 1 tok | PASS | pp 1 tok 41.1 t/s · tg 128 tok 52.0 t/s |
+| 2026-09-23 01:01 | studio-upgrade | - | API timings @ 内层端口 (pp/tg 由响应 timings 实测) | FAIL | - |
+| 2026-09-23 01:04 | studio-upgrade | C | rpc_check --only backend,engine 无 FAIL | PASS | - |

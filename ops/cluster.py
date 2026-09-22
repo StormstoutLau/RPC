@@ -9,6 +9,7 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
     python ops/cluster.py frames
     python ops/cluster.py unload
     python ops/cluster.py e2e
+    python ops/cluster.py studio status                                     # studio 套件矩阵 (版本/修复/防线 pin/引擎同版/复原路径; 只读)
     python ops/cluster.py secrets {status|scan|push|pull}
     python ops/cluster.py providers
     python ops/cluster.py egress [borrow [--to A|B|C --from A|B|C|--restore A|B|C] [--go]]
@@ -2397,6 +2398,105 @@ def cmd_versions(argv) -> int:
     return 0
 
 
+# ── studio 套件矩阵 (2026-09-23 增) ─────────────────────────────────────
+# 为什么需要: 2026-09-22 的 A 站翻转事故里,「防线还在不在 / 修复在不在 / 三站是否同版」这三件
+#   事全靠人工 ssh 拼证据。门禁 `backend` 现已判它们(红会拦), 但**没红时也要能看矩阵** ——
+#   尤其回滚预案(引擎备份目录 + 站间 tar 可行性)与 marker 里**记录**的变体。
+# 与 `versions` 的分工: `versions` 是**引擎**矩阵(RPC/单机/LM Studio/内核/commit);
+#   本条是**studio 套件**(版本/修复/防线/引擎变体/复原路径)。
+# 取数刻意**只用免引号模式**(`grep -oE` 抓形状 / `ls`+`sed`), 因为这条命令要经
+#   python→paramiko→bash→`$()` 四层, 引号嵌套是本仓历史事故高发区。
+_STUDIO_SCAN = (
+    "echo '===SUITE==='; "
+    "S=\"$HOME/.unsloth/studio/unsloth_studio/lib/python3.13/site-packages\"; "
+    "M=\"$HOME/.unsloth/llama.cpp/UNSLOTH_PREBUILT_INFO.json\"; "
+    "E=\"$HOME/.unsloth/llama.cpp/build/bin/llama-server\"; "
+    "printf 'studio_ver=%s\\n' \"$(ls -d \"$S\"/unsloth-[0-9]*.dist-info 2>/dev/null | sed -E 's|.*/unsloth-(.+)[.]dist-info|\\1|' | sort -V | tail -1)\"; "
+    "printf 'zoo_ver=%s\\n' \"$(ls -d \"$S\"/unsloth_zoo-*.dist-info \"$S\"/unsloth-zoo-*.dist-info 2>/dev/null | sed -E 's|.*/unsloth[-_]zoo-(.+)[.]dist-info|\\1|' | sort -V | tail -1)\"; "
+    "printf 'pin=%s\\n' \"$(printenv UNSLOTH_LLAMA_CPP_BACKEND 2>/dev/null)\"; "
+    "printf 'events=%s\\n' \"$(grep -rl X-Unsloth-Events \"$S/studio\" 2>/dev/null | wc -l)\"; "
+    "printf 'engine_md5=%s\\n' \"$(md5sum \"$E\" 2>/dev/null | cut -d' ' -f1)\"; "
+    "printf 'engine_bak=%s\\n' \"$(ls -d \"$HOME/.unsloth/llama.cpp.\"* 2>/dev/null | xargs -r -n1 basename 2>/dev/null | tr '\\n' ',')\"; "
+    "printf 'marker_tag=%s\\n' \"$(grep -oE 'b[0-9]{5}' \"$M\" 2>/dev/null | head -1)\"; "
+    "printf 'marker_asset=%s\\n' \"$(grep -oE 'app-b[0-9]+-[a-z0-9-]+-linux-x64-[a-z0-9-]+[.]tar[.]gz' \"$M\" 2>/dev/null | head -1)\"; "
+    "printf 'marker_compiled=%s\\n' \"$(timeout 20 \"$E\" --version 2>&1 | grep -oE 'Clang [0-9.]+|GNU [0-9.]+' | head -1)\"; "
+    # ⚠ 反斜杠一律写 `\\`：`\1` 在 Python 里是**八进制转义**(→ \x01)会把 sed 替换串毁掉,
+    #   而 `\(` 只触发 SyntaxWarning(值仍对) —— 两者表现不同, 但都别写单个反斜杠。
+    "printf 'devices=%s\\n' \"$(timeout 20 \"$E\" --list-devices 2>&1 | sed -n 's/^[[:space:]]*\\([A-Za-z][A-Za-z0-9]*[0-9]\\):.*/\\1/p' | tr '\\n' ',')\""
+)
+
+
+def probe_studio(st: str) -> dict:
+    """单站 studio 套件矩阵 (只读)。不可达时只带 reachable=False。"""
+    d = {"station": st, "reachable": False}
+    ok, out = ssh_run(st, _STUDIO_SCAN, timeout=90)
+    if not ok:
+        return d
+    d["reachable"] = True
+    for line in (out or "").splitlines():
+        if "=" in line and not line.startswith("==="):
+            k, _, v = line.partition("=")
+            d[k.strip()] = v.strip()
+    return d
+
+
+def cmd_studio(argv) -> int:
+    """cluster.py studio status —— studio 套件三站矩阵 (只读)。
+
+    看什么: 版本 / 修复在不在 / **防线(pin)在不在位** / 引擎同不同版 / 复原与备份路径。
+    """
+    what = (argv[0] if argv else "status")
+    if what not in ("status", "-h", "--help"):
+        print("用法: cluster.py studio status")
+        return 2
+    rows = {}
+    threads = [threading.Thread(target=lambda s=st: rows.__setitem__(s, probe_studio(s)))
+               for st in ("A", "B", "C")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    for st in ("A", "B", "C"):
+        d = rows.get(st) or {}
+        if not d.get("reachable"):
+            print(f"\n=== {st} 站 ===\n  不可达")
+            continue
+        comp = (" · " + d["marker_compiled"]) if d.get("marker_compiled") else ""
+        print(f"\n=== {st} 站 ===")
+        print(f"  studio        {d.get('studio_ver') or '?'}  · unsloth_zoo {d.get('zoo_ver') or '?'}")
+        print(f"  修复          X-Unsloth-Events 命中 {d.get('events') or '0'} 个文件")
+        print(f"  防线 pin      {d.get('pin') or '(未生效)'}   (期望 rocm; 见决策简报 §8.2)")
+        print(f"  引擎          marker tag {d.get('marker_tag') or '?'} · 设备 {(d.get('devices') or '?').strip(',')}{comp}")
+        print(f"  引擎 md5      {(d.get('engine_md5') or '?')[:16]}")
+        print(f"  marker asset  {d.get('marker_asset') or '?'}")
+        print(f"  备份目录      {(d.get('engine_bak') or '').strip(',') or '(无 — 引擎若被替换只能靠站间 tar 或重下)'}")
+
+    print("\n=== 一致性 / 防线检查 ===")
+    for label, key in (("studio 版本", "studio_ver"), ("unsloth_zoo", "zoo_ver"), ("引擎 md5", "engine_md5")):
+        vals = {st: (rows.get(st) or {}).get(key) for st in ("A", "B", "C")}
+        uniq = {v for v in vals.values() if v}
+        if len(uniq) == 1:
+            print(f"  ✓ {label:<12}三站一致 ({str(next(iter(uniq)))[:16]})")
+        else:
+            print(f"  ⚠ {label:<12}**不一致** "
+                  + " / ".join(f"{s}={str(vals[s] or '?')[:16]}" for s in ("A", "B", "C")))
+    pins = {st: (rows.get(st) or {}).get("pin") for st in ("A", "B", "C")}
+    bad_pin = [s for s, v in pins.items() if v != "rocm"]
+    print(("  ✓ " if not bad_pin else "  ⚠ ") + "防线 pin    "
+          + ("三站均生效 (rocm)" if not bad_pin else "**未生效**: "
+             + " / ".join(f"{s}={pins[s] or '(空)'}" for s in bad_pin)))
+    evs = {st: (rows.get(st) or {}).get("events") for st in ("A", "B", "C")}
+    noev = [s for s, v in evs.items() if not v or v == "0"]
+    print(("  ✓ " if not noev else "  ⚠ ") + "修复在位    "
+          + ("三站均有 X-Unsloth-Events" if not noev else "**缺失**: " + " / ".join(noev)))
+    md5s = {st: (rows.get(st) or {}).get("engine_md5") for st in ("A", "B", "C")}
+    if len({v for v in md5s.values() if v}) == 1:
+        print("  ✓ 复原路径   三站引擎逐字节同版 ⇒ 可站间 tar (实测 1.9 G / 18 s)")
+    else:
+        print("  ⚠ 复原路径   三站引擎**不同版** ⇒ 站间 tar 不可用, 只能各自下载或依赖各自备份目录")
+    return 0
+
+
 def _cmd_models_meta(stations) -> int:
     """打印每站模型元数据表 (P1-6): 原生 ctx / 量化(含来源) / conf 加载参数。"""
     for st in stations:
@@ -3114,6 +3214,115 @@ def _flow_paths_report(ctx) -> tuple:
     return bool(rows), f"{len(rows)} 条路径有结论, 其中 {len(good)} 条可用", detail
 
 
+# ── flow: studio-upgrade 的步骤实现 (2026-09-23 增) ─────────────────────
+# 为什么有这个 flow: 2026-09-22/23 的整轮升级是**内联 ssh + heredoc** 做的 —— 顺序与判据
+#   只活在那一轮对话里，与 ADR-0004 D3① (管理操作应走统一入口) 相悖。本 flow 把当天**实测
+#   通过**的顺序固定下来：预检(防线/下源) → 阶段应用 → 验证(版本/修复/引擎未动/防线) → 门禁 → 落账。
+# 边界(刻意，不是"待补"): 只纳入 **python 阶段**。`--stage engine|node` **明确不支持并给出指引**，
+#   而不是静默跳过 —— 因为引擎阶段需从 github.com 取 337.4 MiB 的 rocm bundle，node 阶段需
+#   nodejs.org 取 ~200 MiB (api-only 形态用不到)；预检会把下源可达性打出来供你判断。
+_SU_HOME = "$HOME/.unsloth/studio/unsloth_studio"
+_SU_PY = _SU_HOME + "/bin/python"
+_SU_SP = _SU_HOME + "/lib/python3.13/site-packages"
+_SU_SHIM = "/tmp/.rpc-su-nogit"        # 前置 PATH 的假 git (exit 127) ⇒ 走脚本自带的 no-git 跳过分支
+_SU_INDEX = "https://pypi.tuna.tsinghua.edu.cn/simple"
+
+
+def _flow_step_su_precheck(ctx) -> tuple:
+    """防线(pin) + 三站套件现状 + 下源可达性。判据 = 每站 pin 生效且可达。"""
+    sts = ([s for s in (ctx.get("station") or "").upper().replace(" ", "").split(",") if s]
+           or ["A", "B", "C"])
+    ctx["stations"] = sts
+    rows, detail = {}, []
+    for st in sts:
+        d = probe_studio(st)
+        rows[st] = d
+        if not d.get("reachable"):
+            return False, f"{st} 站不可达", detail
+        detail.append(f"{st}: studio {d.get('studio_ver') or '?'} · pin {d.get('pin') or '(空)'} "
+                      f"· 修复 {d.get('events') or '0'} · 引擎 {(d.get('engine_md5') or '?')[:12]}")
+    ctx["pre"] = rows
+    bad = [s for s in sts if rows[s].get("pin") != "rocm"]
+    if bad:
+        return False, ("pin 未生效: " + " / ".join(bad) + " —— 先落 /etc/environment 的 "
+                       "UNSLOTH_LLAMA_CPP_BACKEND=rocm (见决策简报 §8.2)"), detail
+    ok, out = ssh_run(sts[0],
+                      "for u in " + _SU_INDEX + "/ https://github.com; do printf '%s ' \"$u\"; "
+                      "curl -sS -o /dev/null -w '%{http_code}\\n' --max-time 6 \"$u\" 2>/dev/null || echo FAIL; done",
+                      timeout=40)
+    ctx["net"] = (out or "").strip()
+    detail.append("下源可达性(" + sts[0] + " 站): " + " | ".join((out or "").split()))
+    return True, f"防线在位 · {len(sts)} 站预检通过", detail
+
+
+def _flow_step_su_apply(ctx) -> tuple:
+    """按阶段应用。本 flow 只实现 python 阶段 (engine/node 明确不支持并给指引)。"""
+    stage = (ctx.get("stage") or "python").lower()
+    sts = ctx["stations"]
+    if stage in ("engine", "node"):
+        why = ("引擎阶段需从 github.com 取 **337.4 MiB** 的 rocm bundle (实测 A/C 直连不通、"
+               "B 仅 ~35 KB/s ⇒ 1.3–2.7 h)，见决策简报 §8.3" if stage == "engine"
+               else "node 阶段需从 nodejs.org 取 ~200 MiB (站上 Node 只有前端需要，api-only 用不到)")
+        return False, f"--stage {stage} **本 flow 明确不纳入** —— {why}；请按简报 §8.3 的预置/中转手法做", []
+    to = (ctx.get("to") or "").strip()
+    detail, failed = [], None
+    for st in sts:
+        cmd = ("set -u; mkdir -p " + _SU_SHIM
+               + "; printf '#!/bin/sh\\nexit 127\\n' > " + _SU_SHIM + "/git; chmod 755 " + _SU_SHIM + "/git; "
+               + "PATH=\"" + _SU_SHIM + ":$PATH\" "
+               + "UV_INDEX_URL=" + _SU_INDEX + " UV_DEFAULT_INDEX=" + _SU_INDEX
+               + " PIP_INDEX_URL=" + _SU_INDEX + " STUDIO_PACKAGE_NAME=unsloth "
+               + _SU_PY + " " + _SU_SP + "/studio/install_python_stack.py > /tmp/rpc-su.log 2>&1; rc=$?; "
+               + ("PIP_INDEX_URL=" + _SU_INDEX + " " + _SU_PY + " -m pip install -q \"unsloth==" + to
+                  + "\" >> /tmp/rpc-su.log 2>&1; rc=$?; " if to else "")
+               + "rm -rf " + _SU_SHIM + "; tail -4 /tmp/rpc-su.log; exit $rc")
+        ok, out = ssh_run(st, cmd, timeout=1800)
+        tail = " / ".join((out or "").strip().splitlines()[-2:])[:180]
+        detail.append(f"{st}: rc={'0' if ok else '非 0'} · {tail}")
+        if not ok:
+            failed = st
+            break
+    if failed:
+        return False, f"{failed} 站 {stage} 阶段失败 (命令 rc 非 0；站上日志 /tmp/rpc-su.log)", detail
+    return True, f"{len(sts)} 站 {stage} 阶段完成" + (f" · 目标版本 {to}" if to else ""), detail
+
+
+def _flow_step_su_verify(ctx) -> tuple:
+    """升级后验证: 版本==目标 · 修复在位 · pin 仍在 · (只跑 python 阶段时) 引擎 md5 未变。"""
+    stage = (ctx.get("stage") or "python").lower()
+    to = (ctx.get("to") or "").strip()
+    sts, pre = ctx["stations"], (ctx.get("pre") or {})
+    detail, bad = [], []
+    for st in sts:
+        d = probe_studio(st)
+        v = d.get("studio_ver")
+        if to and v != to:
+            bad.append(f"{st} 版本 {v or '?'} ≠ 目标 {to}")
+        if not d.get("events") or d["events"] == "0":
+            bad.append(f"{st} 缺 `X-Unsloth-Events` 修复")
+        if d.get("pin") != "rocm":
+            bad.append(f"{st} pin 丢失 ({d.get('pin') or '(空)'})")
+        was = (pre.get(st) or {}).get("engine_md5")
+        if stage == "python" and was and d.get("engine_md5") != was:
+            bad.append(f"{st} 引擎 md5 **变了** ({(was or '?')[:12]} → {(d.get('engine_md5') or '?')[:12]})"
+                       f" —— 只跑 python 阶段不该动引擎")
+        detail.append(f"{st}: studio {v or '?'} · 修复 {d.get('events') or '0'} · pin {d.get('pin') or '(空)'} "
+                      f"· 引擎 {(d.get('engine_md5') or '?')[:12]}")
+    if bad:
+        return False, "验证不通过", bad + detail
+    return True, "版本/修复/防线 通过" + (" · 引擎未被动" if stage == "python" else ""), detail
+
+
+def _flow_step_su_gate(ctx) -> tuple:
+    """门禁复核: 复用 rpc_check 的 backend + engine 两项断言 (子进程, 同一个解释器)。"""
+    r = subprocess.run([sys.executable, str(REPO_ROOT / "ops" / "rpc_check.py"), "--only", "backend,engine"],
+                       capture_output=True, text=True, timeout=300)
+    lines = [ln.strip() for ln in (r.stdout or "").splitlines()
+             if "结论:" in ln or "[FAIL]" in ln or "[WARN]" in ln]
+    ok = (r.returncode == 0)
+    return ok, ("门禁通过" if ok else f"门禁未通过 (rc={r.returncode})"), lines[:6]
+
+
 # 每个 flow: 步骤 → 判据 → 台账落点。dry_default=True 者默认只出计划。
 FLOWS = {
     "verify": {
@@ -3136,6 +3345,20 @@ FLOWS = {
             ("bench", "标准请求取 timings", "HTTP 200 且响应含 timings", _flow_step_bench),
         ],
         "teardown": _flow_teardown_bench,
+    },
+    "studio-upgrade": {
+        "title": "studio 套件升级 (Python 阶段；默认三站同升)",
+        "desc": "预检(防线 pin / 下源可达) → 阶段应用 → 验证(版本·修复·引擎未动·防线) → 门禁 → 落账。"
+                "只纳入 python 阶段；`--stage engine|node` 明确不支持(见决策简报 §8.3)。"
+                "用法: flow studio-upgrade [--to 2026.9.7] [--stage python] [--station C] --go",
+        "dry_default": True,       # 改站上状态 → 默认只出计划
+        "ledger": "metrics-log",
+        "steps": [
+            ("precheck", "防线与下源预检", "三站可达 且 pin=rocm", _flow_step_su_precheck),
+            ("apply", "按阶段应用", "命令 rc=0 (python 阶段: install_python_stack; --to 则压回版本)", _flow_step_su_apply),
+            ("verify", "升级后验证", "版本==目标 且 修复在位 且 pin 仍在 且 引擎未被动", _flow_step_su_verify),
+            ("gate", "门禁复核", "rpc_check --only backend,engine 无 FAIL", _flow_step_su_gate),
+        ],
     },
     "swap": {
         "title": "换模型/后端 (按站)",
@@ -3212,8 +3435,11 @@ def cmd_flow(argv) -> int:
     i = 0
     while i < len(rest):
         a = rest[i]
-        if a == "--backend" and i + 1 < len(rest):
-            ctx["backend"] = rest[i + 1]
+        # 带值开关统一表: 形态 `--x <v>` ⇒ ctx["x"]。加新开关只改这张表, 不再加分支。
+        key = {"--backend": "backend", "--station": "station",
+               "--to": "to", "--stage": "stage"}.get(a)
+        if key and i + 1 < len(rest):
+            ctx[key] = rest[i + 1]
             i += 2
             continue
         if not a.startswith("--"):
@@ -3273,7 +3499,9 @@ def cmd_flow(argv) -> int:
 
     # 落账行 (日期 / flow / 目标 / 判据(口径) / 结果 / 证据 三要素齐)
     t = ctx.get("timings") or {}
-    crit = "API timings @ 内层端口 (pp/tg 由响应 timings 实测)"
+    # 默认取**该 flow 末步的判据**(= 验收判据)：这样新增 flow 不用再回来改这条链,
+    # 也不会串台 (2026-09-23 实测: studio-upgrade 的行曾误用 bench 的"API timings"文案)。
+    crit = f["steps"][-1][2] if f.get("steps") else "—"
     if name == "bench":
         crit = (f"API timings 口径 · max_tokens=128 · prompt 实测 {t.get('prompt_n', '?')} tok")
     elif name == "verify":
@@ -5335,6 +5563,8 @@ def main() -> int:
         return cmd_models(args[1:])
     if sub == "versions":
         return cmd_versions(args[1:])
+    if sub == "studio":
+        return cmd_studio(args[1:])
     if sub == "flow":
         return cmd_flow(args[1:])
     if sub == "reqlog":
