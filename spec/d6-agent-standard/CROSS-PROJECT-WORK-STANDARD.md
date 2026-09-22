@@ -46,6 +46,7 @@ D6 `DESIGN.md` 顶层目标已声明：为 RPC / Paper / Auto_Prover / Cpp_Hub �
 - `readonly`、`timeout_s`、`continue-timeout-s`（续跑独立预算）
 - `accept-golden`（主控独立断言，`source`+`cmd`；实现/测试分离）
 - 可选：`isolate-xdg`（同站并行兜底）、`decompose`（拆片 A/B 并行）
+- 可选（**"显式接受出网"家族**）：`review-model`（把该卡的 review 钉到指定 judge）、**`attach-egress: ok`**（**附件默认不出网** —— 有附件且后端会出网时，必须写它才放行；判据 = **可判性**，见 [REMEDIATION-PLAN §5.5.2](REMEDIATION-PLAN.md)）
 
 **验收铁律**: 模型不自我盖章——`accept` / `accept-golden` 由主控独立断言；得分/核对由主控侧做，不采信站自报。
 
