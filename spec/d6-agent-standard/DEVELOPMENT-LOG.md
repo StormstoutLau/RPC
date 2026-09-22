@@ -76,6 +76,16 @@ upstream: \[d6-agent-standard-.* 全量文档]
   **教训（同族第 5 次）**：**"范围谓词"和"判据"一样，必须双向验** —— 只验"该红的红了"（根级 FAIL）会漏掉"不该红的红了"（把 `tests/**` 也扫进去），两个方向缺一不可。
   关联: [决策简报 §③](../../docs/2026-09-22_门禁口径决策简报_doclinks越界链与root级脚本范围.md)、OPEN-ISSUES「root 级脚本不受 `scripts` 门禁治理」、ADR-0004 D3。
 
+- **⑯ ssh/scp 统一 `BatchMode`（09-16 登记的健壮性项闭环）—— "把卡住变成快速失败"**:
+  **病**：认证异常时（典型 = `~/.ssh/config` 缺身份块 ⇒ 用户名退化为本机用户）OpenSSH 会**弹口令提示并阻塞等 stdin** ⇒ 自动化里表现为"卡住"（**实测挂起 >90s**）而不是"失败"。
+  **范围**：严格按登记点名的两处（`agent-cli.ps1` 的 ssh/scp、`cluster.py` 的 paramiko 路径）—— 未擅自扩面（扩面属 ADR-0004 D3 新能力）。
+  **改了什么**：① `agent-cli.ps1` **20 处**裸调用补 `-o BatchMode=yes`（另 9 处本就有）⇒ 全文件 **29 个 ssh/scp 调用点全部带 BatchMode**；首个调用点旁落**纪律注释**（为什么 + 守卫在哪）。② `cluster.py`：**paramiko 根本没有 BatchMode**（它不弹口令、认证失败即抛异常，"挂死"形态不存在）⇒ 这一侧真正的对应物是**超时上界** —— **实测上游源码**（paramiko 5.0.0）`banner_timeout` 默认 **15s**、`auth_timeout` 默认 **30s**（**两者不同源**），而原代码只给了 `banner_timeout` ⇒ "认证阶段卡住"要等 **30s** 而非 `SSH_TIMEOUT=8` ⇒ 补 `auth_timeout=timeout`；并**把另外 2 处重复的 `paramiko.SSHClient()` 收敛到唯一入口 `_connect`**（那正是漂移的滋生点）。
+  **守卫（4 条，带自动调用点）**：`_fm_golden_test.ps1` **164 → 168** —— ① AST 数全文件 ssh/scp `CommandAst` 必须含 BatchMode；② `Start-Process -FilePath 'scp'` 形式的 scp 判其**参数数组赋值**；③ 用 **Python `ast`** 判 `cluster.py` 里 `SSHClient()` 调用恰 1 处、`connect` 恰 1 处；④ 其 `connect` 关键字必须含 `auth_timeout`。
+  **验收（变异自证 4/4 全红 → 还原 168/168）**：摘一处 BatchMode ⇒ **缺 1 处并点名第 275 行**；摘 `$scpArgs` 里的 ⇒ 红；摘 `auth_timeout` ⇒ 红；多一个 `SSHClient()` 调用 ⇒ 红。
+  **⚠⚠ 本轮最值钱的是"判据自身"的两个坑（我又犯了一遍）**：**(a) 文本判据第 5 次被注释骗** —— ③ 第一版用 `[regex]::Matches($text, 'paramiko\.SSHClient\(\)')` 数出 **2 处**，其中一处是 `_connect` 的 **docstring 里提到这个名字** ⇒ 改 Python `ast` 数真实调用节点。**(b) 断言打在了错的对象上** —— `Start-Process` 那处我把断言打在它自己的 `Extent.Text` 上，而该串里只有**变量名** `$scpArgs`（真值在**上一行赋值**里）⇒ 必红；修法是判"**真值所在的那一行**"。⇒ 两条都可推广：*断言要打真值载体，不是打引用它的那一行*；*"数某个名字出现几次"这类判据天然会被注释骗，有 AST 就必须用 AST*。
+  **⚠ 新登记（不在本项点名范围内，待裁）**：扫描发现仓库还有 **3 个站上/一次性工具的 12 处**裸调用 —— `agent-cli-smoke.sh` **6 处**（其中 1 处连 `-o` 都没有）、`load-gate` **4 处**（`ConnectTimeout=5`）、`_switch_qwen_flavor.ps1` **2 处**；**当前无守卫**（`.sh` 无可靠 AST 面）。**⚠ 盘点过程诚实记录**：第一版文本扫描把**注释与消息串**一起算了（`throw "NETFAIL: scp failed…"`、docstring 里的 `ssh 失败`、`echo "== A -> B ssh 连通 =="`、夹具样串全被误算 ⇒ **虚报 33 处**）⇒ 收紧为"只看 `#` 之前的代码段"并**逐行核对**才得 **12 处**真值。**同一坑当日第二次**：连"盘点脚本"本身都会被注释骗。
+  关联: OPEN-ISSUES「ssh/scp 未统一 BatchMode」、ADR-0006（该缺陷是它的调查副产物）。
+
 - **纪律沉淀（本日产出，均可推广）**:
   1. **判据必须先在"已知会红/已知会绿"的对照上验，否则它只是"在跑"不是在判** —— 本日**三次**同族翻车：位置断言被**注释里的函数名**骗（改 AST 找实际命令调用）；AST 判据只判 `StatementBlockAst` 而**函数体是 `NamedBlockAst`（兄弟类不是子类）** ⇒ 顶层语句全被漏掉（删回 bug 也 PASS）；"探查 0 次"**可能是恒真的**（补正对照证明 0 有意义）。
   2. **定级必须查"流量"，不能只看"有没有源"** —— "有源"≠"有流"（review 出网一度被我报成 P0"活跃"，按存量卡与调用面修正为「结构性 P0 / 暴露面 P1」）。

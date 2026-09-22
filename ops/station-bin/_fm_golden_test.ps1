@@ -714,6 +714,54 @@ Assert-True "probe: `-SmokeOnly` 通过(rc=0) —— 探针可驱动那条链、
 if ($probeSmokeRc -ne 0) { Write-Host ('        smoke: ' + ((@($probeSmoke) | Select-Object -Last 3) -join ' / ')) }
 else { Write-Host ('        smoke: ' + ((@($probeSmoke) | Where-Object { "$_" -match 'PROBE_SMOKE_OK' }) -join '')) }
 
+# --- ssh/scp 调用纪律（2026-09-22 统一）: 每个调用点必须带 `-o BatchMode=yes` ---
+# 为什么: 认证异常时（典型 = `~/.ssh/config` 缺身份块 ⇒ 用户名退化）OpenSSH 会**弹口令并阻塞等
+#   stdin** ⇒ 自动化里表现为"卡住"（实测挂起 >90s）而不是"失败"。BatchMode 让它立刻失败。
+# ⚠ 用 **AST** 取真实命令节点 —— 文本匹配会被注释骗（本文件顶部刚加的纪律注释里**就写着**
+#   `ssh -o ConnectTimeout=10` 这个形状，用文本判必假红/假绿；同族教训本项目已踩 4 次）。
+$sshCalls = @($ast.FindAll({ param($n)
+            $n -is [System.Management.Automation.Language.CommandAst] -and
+            @('ssh', 'scp') -contains $n.GetCommandName() }, $true))
+$sshNoBatch = @($sshCalls | Where-Object {
+            -not (@($_.CommandElements | ForEach-Object { $_.Extent.Text }) -match 'BatchMode=yes') })
+Assert-True "ssh: 全部 ssh/scp 调用点带 `-o BatchMode=yes`（实测 $(@($sshCalls).Count) 处，缺 $(@($sshNoBatch).Count) 处）" (@($sshCalls).Count -gt 0 -and @($sshNoBatch).Count -eq 0)
+if (@($sshNoBatch).Count -gt 0) {
+    Write-Host ('        缺 BatchMode 的行: ' + ((@($sshNoBatch) | ForEach-Object { $_.Extent.StartLineNumber }) -join ', '))
+}
+# `Test-StationEngineReady` 的 scp 走 `Start-Process -FilePath 'scp' -ArgumentList $scpArgs`
+# ⇒ 没有 scp 的 CommandAst 节点，**真实选项在 `$scpArgs` 那个赋值里**。
+# ⚠ 第一版我把断言打在 Start-Process 的 `Extent.Text` 上 ⇒ 那串文本里只有 `$scpArgs`（变量名），
+#   必红。判据要打**真值所在的那一行**（赋值语句），否则"判了但不是你以为的东西"。
+$spScp = @($ast.FindAll({ param($n)
+            $n -is [System.Management.Automation.Language.CommandAst] -and
+            $n.GetCommandName() -eq 'Start-Process' -and $n.Extent.Text -match "FilePath 'scp'" }, $true))
+$spArgs = @($ast.FindAll({ param($n)
+            $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+            $n.Left.Extent.Text -eq '$scpArgs' }, $true))
+Assert-True "ssh: Start-Process 形式的 scp 也带 BatchMode（调用 $(@($spScp).Count) 处 / `$scpArgs 赋值 $(@($spArgs).Count) 处）" (@($spScp).Count -gt 0 -and @($spArgs).Count -eq 1 -and $spArgs[0].Extent.Text -match 'BatchMode=yes')
+
+# --- cluster.py（paramiko 侧）: 建连走**唯一入口** `_connect` 且三个超时全显式 ---
+# paramiko 无 BatchMode（它不弹口令、认证失败是抛异常）⇒ 这一侧的对应物是"把卡住的上界压到 SSH_TIMEOUT"。
+# ⚠ 上游事实（paramiko 5.0.0 **实测源码**，非推测）: `self.banner_timeout = 15` / `self.auth_timeout = 30`
+#   ⇒ 两者**不同源**，只给 banner_timeout 的话认证阶段仍会等 30s。
+# ⚠⚠ 这里**必须用 Python 的 AST**，不能用文本判：第一版我用
+#   `[regex]::Matches($text, 'paramiko\.SSHClient\(\)')` 数出 **2 处**，其中一处是 `_connect` 的
+#   **docstring 里提到这个名字** —— 正是"文本判据被注释骗"（本项目第 5 次）。改用 `ast` 数**真实调用节点**。
+$clusterPy = Join-Path (Split-Path (Split-Path $cli -Parent) -Parent) 'cluster.py'
+$pyProbe = @'
+import ast, sys
+tree = ast.parse(open(sys.argv[1], encoding="utf-8").read())
+calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)]
+newc = [c for c in calls if isinstance(c.func, ast.Attribute) and c.func.attr == "SSHClient"]
+conn = [c for c in calls if isinstance(c.func, ast.Attribute) and c.func.attr == "connect"]
+kw = sorted({k.arg for c in conn for k in c.keywords})
+print("SSHClient={} connect={} kwargs={}".format(len(newc), len(conn), ",".join(kw)))
+'@
+$pyRes = 'PYERR: not run'
+try { $pyRes = (@($pyProbe | python - $clusterPy 2>&1) | Select-Object -Last 1) } catch { $pyRes = "PYERR: $($_.Exception.Message)" }
+Assert-True "ssh: cluster.py 建连只有唯一入口（AST: SSHClient 调用=1, connect 调用=1）—— 实测 $pyRes" ($pyRes -match '^SSHClient=1 connect=1 ')
+Assert-True "ssh: cluster.py 的 connect 三超时全显式（否则 auth 默认 30s）—— 实测 $pyRes" ($pyRes -match 'kwargs=auth_timeout,banner_timeout,timeout')
+
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
 exit $(if ($fail -eq 0) { 0 } else { 1 })
