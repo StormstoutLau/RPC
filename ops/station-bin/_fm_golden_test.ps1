@@ -27,7 +27,7 @@ Invoke-Expression $fn.Extent.Text   # 定义函数到当前会话
 # 它们是**纯函数**(只吃 $accept/$goldenActive/卡 subjects, 不碰站、不碰文件系统)
 # ⇒ 可离线单测; 这正是"派发路径改动"能被验证而不用每次都真派发的关键。
 # O-15/AUDIT (2026-09-21): 追加提取 claude 按路基线(Get-ClaudeFrameworkSubjects) 与 fallback 判定 (Test-FallbackEligible)。
-foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-FallbackEligible', 'Test-CtxOverflowError', 'Resolve-CtxOverflowCode', 'Resolve-ClaudeStationCandidates', 'Get-SensitivityBackendReject', 'Get-BackendEgress', 'Get-JudgeEgress', 'Get-JudgeComplianceReject', 'Resolve-ClaudeBudget', 'Resolve-LocalBash', 'Invoke-LocalBashCmd')) {
+foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-FallbackEligible', 'Test-CtxOverflowError', 'Resolve-CtxOverflowCode', 'Resolve-ClaudeStationCandidates', 'Get-SensitivityBackendReject', 'Get-BackendEgress', 'Get-JudgeEgress', 'Get-JudgeComplianceReject', 'Get-AttachEgressReject', 'Get-ScrubRules', 'Invoke-Scrubber', 'Get-ScrubBlockReason', 'Resolve-ReviewPrompt', 'Resolve-ClaudeBudget', 'Resolve-LocalBash', 'Invoke-LocalBashCmd')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -526,6 +526,56 @@ $gateCalls = ([regex]::Matches($cliText, 'Get-SensitivityBackendReject -sensitiv
 Assert-True "gate: Get-SensitivityBackendReject 调用点 = 6(实测 $gateCalls) ⚠ 增删闸须同步改本数" ($gateCalls -eq 6)
 Assert-True "gate: review 闸已接线 compliance(调用 Get-JudgeComplianceReject)" ($cliText -match 'Get-JudgeComplianceReject -judge')
 Assert-True "gate: review 闸已接线 judge 属性(调用 Get-JudgeEgress)" ($cliText -match 'Get-JudgeEgress \$judge')
+
+# --- W1b 裁定 A（2026-09-22）: review 出网前过同一套 scrub + block ---
+# 决策被提成**纯函数** `Resolve-ReviewPrompt` ⇒ 这里给的是**行为证据**（不是"接线在不"），
+#   因为返回值里带**真正要送出去的文本** —— 正是"行为证据不必依赖实弹"的那条路。
+# ⚠ 样串一律**按段拼接**（不写字面量）: ① 本地 `secrets` 门禁会拦未掩码的 `sk-` 样串（它要求掩码或白名单）；
+#   ② 远端 GitHub push-protection 另外会拦 `PRIVATE KEY` 字面量。两处都不是"能糊过去的东西"，故与
+#   `_scrubber_coverage_test.ps1` 同法处理。
+$SAMPLE_LEAKY = 'api key: ' + 'sk-' + 'a8bprobe1234567890abcdef' + ' and path D:\Paper\agent-out\secret.xlsx'
+$revSend = Resolve-ReviewPrompt -prompt $SAMPLE_LEAKY -sensitivity 'public'
+Assert-True "review: public => 原样发出(不抹, 保住评审保真度)" (
+    $revSend['action'] -eq 'send' -and $revSend['reason'] -eq 'as-is' -and $revSend['prompt'] -eq $SAMPLE_LEAKY)
+$revScrub = Resolve-ReviewPrompt -prompt $SAMPLE_LEAKY -sensitivity 'sanitized'
+Assert-True "review: sanitized => 发出的是**被抹后**的文本(原文消失 + 出现占位符)" (
+    $revScrub['action'] -eq 'send' -and $revScrub['reason'] -eq 'scrubbed' -and
+    -not ($revScrub['prompt'] -like '*sk-a8bprobe*') -and $revScrub['prompt'] -like '*[[]REDACTED-KEY[]]*')
+Assert-True "review: 抹是幂等的(对已抹文本再抹不二次破坏)" (
+    (Resolve-ReviewPrompt -prompt $revScrub['prompt'] -sensitivity 'sanitized')['prompt'] -eq $revScrub['prompt'])
+# ⚠ 私钥样串**按段拼接**（不写字面量）—— 远端 GitHub push-protection 会拦 PRIVATE KEY 字面量
+#   （本地 `secrets` 门禁只认 `sk-`，拦不住它 ⇒ 这一条是**远端**约束）。见 _scrubber_coverage_test.ps1 同族注释。
+$PEM = '-----BEGIN ' + 'OPENSSH PRIVATE KEY-----'
+Assert-True "review: 私钥块 => 拒发(不是抹) —— 任何 sensitivity 都拒" (
+    (Resolve-ReviewPrompt -prompt ("x`n$PEM`nAAA`n" + '-----END ' + 'OPENSSH PRIVATE KEY-----') -sensitivity 'sanitized')['action'] -eq 'reject' -and
+    (Resolve-ReviewPrompt -prompt $PEM -sensitivity 'public')['action'] -eq 'reject')
+# 位置断言: 消毒/拒必须在**发请求之前**（"算了不用"或"先发后抹"都会静默失效 —— 这类错很隐蔽）
+# ⚠ 用 **AST 找实际的命令调用**，不用文本 IndexOf —— 前者免疫注释。
+#   （实测教训: 第一版用文本搜 `Resolve-ReviewPrompt` 时命中的是**上方注释里的函数名**，
+#     于是"调用被搬走/删掉"它照样 PASS ⇒ 判据在跑但没在判。这类错只在变异测试里才现形。）
+$rvFn = @($fns) | Where-Object { $_.Name -eq 'Invoke-Review' } | Select-Object -First 1
+Assert-True "review: Invoke-Review 函数体可被 AST 定位" ([bool]$rvFn)
+$rvCmds = @($rvFn.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true))
+$guardCmd = @($rvCmds | Where-Object { $_.GetCommandName() -eq 'Resolve-ReviewPrompt' }) | Select-Object -First 1
+$sendCmd = @($rvCmds | Where-Object { $_.GetCommandName() -eq 'Invoke-Judge' }) | Select-Object -First 1
+$iGuard = if ($guardCmd) { $guardCmd.Extent.StartOffset - $rvFn.Extent.StartOffset } else { -1 }
+$iSend = if ($sendCmd) { $sendCmd.Extent.StartOffset - $rvFn.Extent.StartOffset } else { -1 }
+Assert-True "review: 位置断言(AST) —— 消毒判定($iGuard) 早于 发请求($iSend)" ($iGuard -gt 0 -and $iSend -gt 0 -and $iGuard -lt $iSend)
+$rvBody = $rvFn.Extent.Text
+Assert-True "review: 抹后的文本**真的被用于发送**(`$prompt = `$rp['prompt'] 存在)" ($rvBody -match "\`$prompt = \`$rp\['prompt'\]")
+
+# --- W4 裁定 B（2026-09-22）: 附件默认不出网 + 显式放行 ---
+Assert-True "attach: 有附件 + 出网后端 + 未声明 => 拒" ((Get-AttachEgressReject -attachCount 1 -backendEgress $true -declared '') -eq 'attach-egress-unconfirmed')
+Assert-True "attach: 有附件 + 出网后端 + 声明 ok => 放行" ((Get-AttachEgressReject -attachCount 1 -backendEgress $true -declared 'ok') -eq '')
+Assert-True "attach: 声明的容忍(大小写/空白): 'YES'/' true ' 都放行, 'no' 仍拒" (
+    (Get-AttachEgressReject -attachCount 1 -backendEgress $true -declared 'YES') -eq '' -and
+    (Get-AttachEgressReject -attachCount 1 -backendEgress $true -declared ' true ') -eq '' -and
+    (Get-AttachEgressReject -attachCount 1 -backendEgress $true -declared 'no') -ne '')
+Assert-True "attach: 后端**不出网** => 放行(无需声明 —— 本条保证不误伤现存本地附件卡)" ((Get-AttachEgressReject -attachCount 1 -backendEgress $false -declared '') -eq '')
+Assert-True "attach: **无附件** => 放行(与附件无关的卡不受影响)" ((Get-AttachEgressReject -attachCount 0 -backendEgress $true -declared '') -eq '')
+$attCalls = ([regex]::Matches($cliText, 'Get-AttachEgressReject -attachCount')).Count
+Assert-True "attach: 两个通道各判一次 = 2(实测 $attCalls)(opencode 通道 + claude 运行时通道)" ($attCalls -eq 2)
+Assert-True "attach: 前端 schema 已加预置键 attach-egress" ($cliText -match "\`$h\['attach-egress'\] = ''")
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"

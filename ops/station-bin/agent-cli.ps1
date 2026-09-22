@@ -645,6 +645,9 @@ function Get-FrontMatter {
     #   timeout_s, 就等于"主路烧剩多少它用多少"(而主路往往是**耗尽**预算才 rc=6 的) ⇒ 备路几乎
     #   必然立刻超时 —— 备路等于白切。故 claude 通道要有**自己的**首跑预算。
     $h['fallback-timeout-s'] = 0
+    # W4 裁定 B（2026-09-22）: attach-egress - **附件出网的显式放行**。默认空 = 不放行
+    #   ⇒ 有附件 + 后端会出网 ⇒ 拒绝（fail-closed）。判据与理由见 `Get-AttachEgressReject` 注释。
+    $h['attach-egress'] = ''
     # O-12: accept-golden single-object {source, cmd} (IMPLEMENTATION §3.1 M1)
     $h['accept-golden'] = @{ source=''; cmd='' }
     # O-16 review ring: advisory judge routing + reserved gate toggle + judge timeout budget
@@ -969,6 +972,28 @@ function Get-ScrubBlockReason {
     return ''
 }
 
+function Resolve-ReviewPrompt {
+    # W1b 裁定 A（2026-09-22）: **review 出网也要过同一套 scrub + block**。
+    # 为什么（决定性判据 = **档位语义一致性**）: `sanitized` 这一档的**定义**就是"含可机判敏感项 ⇒
+    #   机械 scrub 后进远端"（DESIGN §2.1）⇒ 若对**同一张卡**"派发可出网、review 不可"，档位的含义会
+    #   **取决于跑哪个子命令** —— 正是本项目一直在消灭的"同一概念两个定义点"。
+    #   （另: 原被考虑的"review 强制本地 judge"方案会让 `sanitized` 在 review 上降级成 `local-only` 语义，
+    #     且引入"本地 judge 需引擎在位"的新可用性依赖 ⇒ 已由 §5.5.1 否决，仅保留为卡的显式选项。）
+    # 三条规则（与派发路径**完全同规矩**；模式来源 = `Get-ScrubRules`，绝不另写第二套）:
+    #   ① **block 判据对任何 sensitivity 都跑** —— 私钥块这类"卡本身就不该出网"的**直接拒发**；
+    #      否则"抹完"会把本该被拒的卡**伪装成正常**（沿用 DESIGN §193 的二分依据: 能不能安全抹除）。
+    #   ② **只对 `sanitized` 抹** —— `public` 无承诺（原样发出，保住评审保真度）；`local-only` 已被
+    #      `compliance`/`egress` 闸限制为只能走本地 judge（不出网 ⇒ 无需抹）。
+    #   ③ 抹/拒都发生在**提示词组装之后、发请求之前**（位置由调用方保证 ⇒ 夹具里有位置断言）。
+    # 纯函数 ⇒ 夹具可按名提取离线单测 —— **这就是"行为证据不必依赖实弹"的那条路**（与 Get-ScrubBlockReason 同族）。
+    # 返回 @{ action='send'|'reject'; reason=''; prompt=<真正要送出去的文本> }
+    param([string]$prompt, [string]$sensitivity)
+    $blk = Get-ScrubBlockReason $prompt
+    if ($blk) { return @{ action = 'reject'; reason = $blk; prompt = $prompt } }
+    if ($sensitivity -eq 'sanitized') { return @{ action = 'send'; reason = 'scrubbed'; prompt = (Invoke-Scrubber $prompt) } }
+    return @{ action = 'send'; reason = 'as-is'; prompt = $prompt }
+}
+
 function Test-FallbackEligible([int]$code) {
     # O-15/AUDIT (2026-09-21): 主路(opencode)失败中**哪一类才值得自动切 claude 备路**。
     # 只认 rc=6(= 远程 `timeout` sentinel→124→6, 及本地 resume 耗尽后的超时) —— 这正是 claude
@@ -1106,6 +1131,24 @@ function Get-JudgeComplianceReject {
     return 'judge-compliance'
 }
 
+function Get-AttachEgressReject {
+    # W4 裁定 B（2026-09-22）: **附件默认不出网 + 显式放行**。返回 '' = 放行 / 否则原因 token。
+    # 为什么附件与卡正文**不同规矩**（§5.5.2 的决定性判据 = **可判性**）:
+    #   · 卡正文是文本 ⇒ 能建**可测的覆盖率**（14 项探测形态 + 9 条规则）⇒ **抹后可出网**（= `sanitized` 档定义）；
+    #   · **附件形态不可判**（二进制/压缩/base64/UTF-16/未知编码）⇒ **抹不出可测覆盖率** ⇒ 「抹」只产出
+    #     **假防线**（"抹了一半"比"明确不抹"**更难发现**）⇒ 只能靠**不出网**兜底。
+    # 三条全中才拒: ① 有附件 ② 目标后端**会出网** ③ 卡**未**显式声明放行。
+    # 放行通道 = 卡写 `attach-egress: ok|yes|true`（与 `review-model` 同属"**显式接受出网**"家族）。
+    # ⚠ 后端是否出网由调用方按通道给（opencode 通道 = Get-BackendEgress $id；claude 通道 = -not $useStation）。
+    # 纯函数 ⇒ 夹具可按名提取离线单测（与 Get-SensitivityBackendReject / Resolve-ReviewPrompt 同族）。
+    param([int]$attachCount, [bool]$backendEgress, [string]$declared)
+    if ($attachCount -le 0) { return '' }
+    if (-not $backendEgress) { return '' }
+    $d = ([string]$declared).Trim().ToLower()
+    if ($d -eq 'ok' -or $d -eq 'yes' -or $d -eq 'true') { return '' }
+    return 'attach-egress-unconfirmed'
+}
+
 function Resolve-ClaudeBudget {
     # P4 (2026-09-21): claude 通道(直接入口 + AUTO_FALLBACK 备路)**自己的**预算选择。纯函数 ⇒ 夹具可离线单测。
     # 为什么必须独立(而不复用主路那张卡的 timeout_s): 备路是被主路失败**触发**的, 而主路往往正是
@@ -1199,6 +1242,10 @@ function Invoke-Task {
     if ($effectiveCli -ne 'claude') {
         $rejB = Get-SensitivityBackendReject -sensitivity $sens -backendEgress (Get-BackendEgress $id)
         if ($rejB) { Write-Host "REJECT $rejB (task, $id) exit 4 - no override channel"; return 4 }
+        # W4 裁定 B（2026-09-22）: **附件默认不出网**（后端属性判据；claude 通道那条由
+        #   `Invoke-Task-Claude` 按运行时 `$useStation` 判 —— 它的后端属性只有那里才知道）。
+        $rejAtt = Get-AttachEgressReject -attachCount @($attach).Count -backendEgress (Get-BackendEgress $id) -declared $fm['attach-egress']
+        if ($rejAtt) { Write-Host "REJECT $rejAtt (task, $id) exit 4 - 附件默认不出网; 卡里加 ``attach-egress: ok`` 才放行"; return 4 }
     }
     Write-Host "CLI=$effectiveCli route_station=$station"
     if ($effectiveCli -eq 'claude') {
@@ -2333,6 +2380,13 @@ function Invoke-Task-Claude {
         Write-Host "REJECT $rej (claude-direct, $id) exit 4 - no override channel (owner-policy)"
         return 4
     }
+    # W4 裁定 B（2026-09-22）: **附件默认不出网**。claude 通道的后端属性同样按**运行时**判
+    #   （站上本地 claude ⇒ 不出网 ⇒ 放行; 主控本地 ⇒ OpenRouter 云端 ⇒ 需显式放行）。
+    $rejAtt = Get-AttachEgressReject -attachCount @($attach).Count -backendEgress (-not $useStation) -declared $fm['attach-egress']
+    if ($rejAtt) {
+        Write-Host "REJECT $rejAtt (claude-direct, $id) exit 4 - 附件默认不出网; 卡里加 ``attach-egress: ok`` 才放行"
+        return 4
+    }
 
     $prof = Resolve-Profile -model $m -complexity $complexity -taskType $taskType
     Write-Host "PROFILE: profile=$($prof.profile) ctx=$($prof.context) max_out=$($prof.max_output) flavor=$($prof.flavor) (claude local)"
@@ -3113,6 +3167,19 @@ function Invoke-Review {
         $productText = $head + '...[TRUNCATED mid (head+tail 40K total)]...' + $tail
     }
     $prompt = Build-JudgePrompt -fm $fm -product $productText -runId $runName -cardPath $card
+    # W1b 裁定 A（2026-09-22）: **判据提示词出网前也要过 scrub + block**，且位置必须在**发请求之前**。
+    #   与派发路径同规矩（同一套 `Get-ScrubRules`）；决策本身是纯函数 `Resolve-ReviewPrompt` ⇒ 可离线单测。
+    # ⚠ 打印顺序刻意如此: `SANITIZED gate:` 行**只在真抹了时**才打 —— 实测第一版把它放在判定之前，
+    #   于是"拒发"的场合也会先打出"正在抹…"（**误导**：什么都没抹）。SCRUB 明细行由 `Invoke-Scrubber` 内部打印。
+    $rp = Resolve-ReviewPrompt -prompt $prompt -sensitivity $sens
+    if ($rp['action'] -eq 'reject') {
+        Write-Host "REJECT $($rp['reason']) (review, $($judge['id'])) exit 4 - 该卡不该出网(命中即拦截, 不做抹除)"
+        return 4
+    }
+    if ($rp['reason'] -eq 'scrubbed') {
+        Write-Host "SANITIZED gate: judge prompt scrubbed before it leaves console (review, $($judge['id']))"
+    }
+    $prompt = $rp['prompt']
     $rt = 600
     $rtFm = 0
     if ([int]::TryParse([string]$fm['review-timeout-s'], [ref]$rtFm) -and $rtFm -gt 0) { $rt = $rtFm }
