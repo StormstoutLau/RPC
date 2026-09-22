@@ -27,7 +27,7 @@ Invoke-Expression $fn.Extent.Text   # 定义函数到当前会话
 # 它们是**纯函数**(只吃 $accept/$goldenActive/卡 subjects, 不碰站、不碰文件系统)
 # ⇒ 可离线单测; 这正是"派发路径改动"能被验证而不用每次都真派发的关键。
 # O-15/AUDIT (2026-09-21): 追加提取 claude 按路基线(Get-ClaudeFrameworkSubjects) 与 fallback 判定 (Test-FallbackEligible)。
-foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-FallbackEligible', 'Test-CtxOverflowError', 'Resolve-CtxOverflowCode', 'Resolve-ClaudeStationCandidates', 'Get-SensitivityBackendReject', 'Get-BackendEgress', 'Get-JudgeEgress', 'Get-JudgeComplianceReject', 'Get-AttachEgressReject', 'Get-ScrubRules', 'Invoke-Scrubber', 'Get-ScrubBlockReason', 'Resolve-ReviewPrompt', 'Resolve-ClaudeBudget', 'Resolve-LocalBash', 'Invoke-LocalBashCmd')) {
+foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-FallbackEligible', 'Test-CtxOverflowError', 'Resolve-CtxOverflowCode', 'Resolve-ClaudeStationCandidates', 'Get-SensitivityBackendReject', 'Get-BackendEgress', 'Get-JudgeEgress', 'Get-JudgeComplianceReject', 'Get-AttachEgressReject', 'Get-ScrubRules', 'Invoke-Scrubber', 'Get-ScrubBlockReason', 'Resolve-ReviewPrompt', 'Resolve-ClaudeBudget', 'Resolve-LocalBash', 'Invoke-LocalBashCmd', 'Resolve-ExitCode')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -595,6 +595,45 @@ Assert-True "attach: **无附件** => 放行(与附件无关的卡不受影响)"
 $attCalls = ([regex]::Matches($cliText, 'Get-AttachEgressReject -attachCount')).Count
 Assert-True "attach: 两个通道各判一次 = 2(实测 $attCalls)(opencode 通道 + claude 运行时通道)" ($attCalls -eq 2)
 Assert-True "attach: 前端 schema 已加预置键 attach-egress" ($cliText -match "\`$h\['attach-egress'\] = ''")
+
+# --- W2（2026-09-22）: 进程退出码可信性 —— `exit $数组` 会把 rc 抹成 0 ---
+# 实测（临时脚本直测进程 rc）: exit 4 ⇒ 4 / exit @($null,4) ⇒ **0** / exit @(0,4) ⇒ **0**
+#   ⇒ 数组一律取不到真值。真例: `Invoke-Task` 内一处**裸调用** `Invoke-RemoteScript`
+#   （返回 int rc、成功后=0，且**每次派发都跑**）⇒ `$code = @(0, <真 rc>)` ⇒
+#   修前实测: 日志/台账写 `exit=6` 而**进程 rc=0**（**不带** AUTO_FALLBACK 的普通超时 run 同样如此，
+#   即"失败被静默读成成功"）。探针 `_probe_fallback.ps1` 里有同名规则的 `Scalar`（取末元素），
+#   所以探针一直没被骗到 —— 只有 CLI 的调用方被骗。
+Assert-True "rc: 标量化 —— 单值原样透传 (4 => 4)" ((Resolve-ExitCode 4) -eq 4)
+Assert-True "rc: 标量化 —— **本 bug 的确切形状** @(0,4) => 4(修前 exit @(0,4) 得 0)" ((Resolve-ExitCode @(0, 4)) -eq 4)
+Assert-True "rc: 标量化 —— @(`$null,4) => 4(exit @(`$null,4) 实测得 0)" ((Resolve-ExitCode @($null, 4)) -eq 4)
+Assert-True "rc: 标量化 —— 文本杂音 @('stray',4) => 4(exit 同样得 0)" ((Resolve-ExitCode @('stray', 4)) -eq 4)
+Assert-True "rc: 标量化 —— 单元素数组 @(6) => 6(不退化为数组)" ((Resolve-ExitCode @(6)) -eq 6)
+Assert-True "rc: 标量化 —— 返回类型是 Int32(不是数组/字符串)" ((Resolve-ExitCode @(0, 6)).GetType().Name -eq 'Int32')
+# 末元素不可转 int ⇒ **抛错**(故意): 契约是"这些函数返回 int rc", 违契约要响, 不静默给 0
+$rcThrew = $false
+try { [void](Resolve-ExitCode @(0, 'not-a-code')) } catch { $rcThrew = $true }
+Assert-True "rc: 末元素非数字 => 抛错(响, 而非静默 0)" $rcThrew
+# 结构性: 出口**全部**走守卫(否则新增子命令又漏) ⇒ 计数断言(故意的摩擦)
+$exitRaw = ([regex]::Matches($cliText, 'exit \$code')).Count
+Assert-True "rc: 全仓不再有裸 exit `$code 写法(实测 $exitRaw 处 ⇒ 必须过标量化守卫)" ($exitRaw -eq 0)
+$exitGuard = ([regex]::Matches($cliText, 'exit \(Resolve-ExitCode \$code\)')).Count
+Assert-True "rc: exit (Resolve-ExitCode `$code) = 5(实测 $exitGuard) ⚠ 增删子命令须同步改本数" ($exitGuard -eq 5)
+# ⚠ 用 **AST** 判"裸调用"(不是文本 —— 文本会被注释里的函数名骗, 本项目踩过):
+#   裸调用 = 该命令是**单元素管道**且父节点是语句容器(既没被赋值、也没 `| Out-Null`)。
+# ⚠⚠ **本判据第一版是假判(变异自证当场抓到, 2026-09-22)**: 只判了 `StatementBlockAst`,
+#   而**函数体是 `NamedBlockAst`, 与 `StatementBlockAst` 是兄弟类(不是子类)**
+#   ⇒ "直接写在函数体顶层的语句"**全被漏掉**。而本 bug 的那处裸调用(attach-reset)恰在
+#   `Invoke-Task` 体**顶层** ⇒ 把 `| Out-Null` 删回去,**第一版判据照样 PASS**(假安全)。
+#   ⇒ 两个容器类型都要收。**教训(与"位置断言被注释骗"同族): 结构判据必须先在"已知该红"的
+#   变异上验红, 否则它只是"在跑", 不是在判。**
+$bareRemote = @($ast.FindAll({ param($n)
+            $n -is [System.Management.Automation.Language.PipelineAst] -and
+            $n.PipelineElements.Count -eq 1 -and
+            ($n.Parent -is [System.Management.Automation.Language.StatementBlockAst] -or
+             $n.Parent -is [System.Management.Automation.Language.NamedBlockAst]) -and
+            $n.PipelineElements[0] -is [System.Management.Automation.Language.CommandAst] -and
+            $n.PipelineElements[0].GetCommandName() -eq 'Invoke-RemoteScript' }, $true))
+Assert-True "rc: 全仓无**裸调用** Invoke-RemoteScript(返回 int rc ⇒ 裸调用必污染调用方 `$code)(实测 $($bareRemote.Count) 处)" ($bareRemote.Count -eq 0)
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"

@@ -360,7 +360,9 @@ find "`$W" -maxdepth 2 -type f | sort
 echo '--- md5 (AGENTS.md/CLAUDE.md/.agentsync):'
 md5sum AGENTS.md CLAUDE.md .agentsync
 "@
-        Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-ws-create.sh"
+        # ⚠ W2/归零纪律 (2026-09-22): 本函数返回 int rc ⇒ **裸调用会污染调用方 `$code`**
+        #   (见 `Resolve-ExitCode` 注)。全仓凡 `Invoke-RemoteScript` 一律赋值或 `| Out-Null`。
+        Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-ws-create.sh" | Out-Null
         # 5. local md5 for comparison
         $mdLocal = (Get-FileHash (Join-Path $stag 'AGENTS.md') -Algorithm MD5).Hash.ToLower()
         Write-Host "Local AGENTS.md md5: $mdLocal"
@@ -389,7 +391,7 @@ cd "`$W"
 tar -xf /tmp/agent-cli-sync-$proj.tar -C "`$W"
 echo "sync OK: `$(du -sh "`$W" | cut -f1)"
 "@
-        Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-ws-sync.sh"
+        Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-ws-sync.sh" | Out-Null
     }
     elseif ($act -eq 'archive') {
         # O-02 (2026-09-14): formal archive - timestamp snapshot tar of remote workdir,
@@ -408,7 +410,7 @@ echo "ARCHIVED $AR/__PLACEHOLDER_P__-$STAMP.tar ($SIZE) live workdir preserved (
 ls -1 "$AR" | sort
 '@
         $body = $body.Replace('__PLACEHOLDER_W__', "$Script:WORKSPACE_ROOT/$proj").Replace('__PLACEHOLDER_AR__', "$Script:WORKSPACE_ARCHIVE_ROOT/$proj").Replace('__PLACEHOLDER_P__', $proj)
-        Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-ws-archive.sh"
+        Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-ws-archive.sh" | Out-Null
     }
     else { throw "unknown workspace action: $act (create|sync|archive)" }
 }
@@ -912,6 +914,31 @@ function Get-NumOr([string]$s, [double]$def) {
     return $def
 }
 
+function Resolve-ExitCode {
+    # W2 (2026-09-22): **进程退出码的标量化守卫**。返回 int。
+    # 为什么必需(实测, 不是推测): PS 函数 = 管道上**全部**输出 ⇒ 函数体内只要有**残留管道输出**
+    #   (裸语句: 既没被赋值、也没 `| Out-Null` 吸收、也没被 return), 调用方 `$code = Invoke-Task …`
+    #   拿到的就是**数组**; 而 `exit $数组` 会让**进程退出码变 0** —— 实测三例(临时脚本, 直接测进程 rc):
+    #     `exit 4`              ⇒ 4
+    #     `exit @($null, 4)`    ⇒ **0**
+    #     `exit @(0, 4)`        ⇒ **0**
+    #   ⇒ "策略拒绝 rc=4 / 引擎超时 rc=6" 在**自动化**眼里变成"一切正常" —— 而 rc 是自动化**唯一**判读面。
+    # 本次实例(实测): `Invoke-Task` 内一处**裸调用** `Invoke-RemoteScript`(派发前 reset `.attach/`,
+    #   **每次派发都跑**, 其返回值是 int 成功=0) ⇒ `$code = @(0, 6)` ⇒ 进程 rc=0, 而日志与台账里写的是 6。
+    #   ⚠ 这不是"只在 fallback 路径" —— 实测**不带 AUTO_FALLBACK** 的普通超时 run 同样是 `exit=6` / `rc=0`
+    #   (凡走到 attach-reset 之后的派发都受影响; 成功时看不出来, 失败时被静默掩盖)。
+    # 为什么**同时**要这个出口守卫(而不是只修那处残留): 这类残留**已复发两次**(09-18 归零纪律 / 本次 W2),
+    #   而出口只有几处 ⇒ 出口守卫是**结构性**的(以后新增裸语句不会再静默改 rc)。两者都要:
+    #   残留点也须按归零纪律修掉, 否则多出来的管道元素会被本守卫**静默吞掉**(把本可看见的信号丢掉)。
+    # 取**最后一个**元素 = 该函数的语义("返回值在管道末"; `return` 之后不可能再有输出)
+    #   —— 与 `_probe_fallback.ps1` 的 `Scalar` **同规则**(该探针早已知道这个形状, 所以它一直没被本 bug 骗到,
+    #   而 CLI 入口没有 ⇒ 只有 CLI 的调用方被骗)。
+    # 非数字末元素 ⇒ `[int]` 抛错(**故意**): 契约是"这些函数返回 int rc", 违契约要响, 不要静默给 0。
+    param($v)
+    if ($v -is [array]) { return [int]@($v)[@($v).Count - 1] }
+    return [int]$v
+}
+
 function Get-ScrubRules {
     # 2026-09-21 · scrubber 规则扩充裁定（docs/security/2026-09-21_scrubber规则扩充裁定与影响面.md）：
     # ★ **规则的单一真值源** —— `Invoke-Scrubber`(抹) 与 `Get-ScrubBlockReason`(拒) 都从这里取，
@@ -1390,7 +1417,14 @@ W="$Script:WORKSPACE_ROOT/$proj"
 #   ⇒ 改为**派发前清空**(等价于所声明的语义, 且不必依赖"collect 回收"那一步)。
 rm -rf "`$W/.attach" && mkdir -p "`$W/.attach"
 "@
-    Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-attach-reset.sh"
+    # ⚠⚠ **W2 实测根因 (2026-09-22): 这一行曾漏 `| Out-Null`, 是"进程 rc 恒为 0"的来源** ——
+    #   `Invoke-RemoteScript` 返回 int rc(成功=0), 而本行是**裸调用** ⇒ 该 0 落进 `Invoke-Task` 的
+    #   **管道**(= 函数返回值集合), 于是调用方拿到 `$code = @(0, <真 rc>)`, 而 `exit $数组` ⇒ **进程 rc=0**。
+    #   为什么它比别的裸调用更要命: **每次派发都跑这一行**(09-18 缺口 5 把 `.attach/` 清理改成**无条件** reset),
+    #   所以**任何走过此处之后的失败**都被抹成 0(实测: 不带 AUTO_FALLBACK 的普通超时 run 也是 `exit=6` / `rc=0`)。
+    #   归零纪律 09-18 清点时只覆盖了 cmdlet(`Copy-Item`/`Move-Item`/`Remove-Item`/`Add-Content`),
+    #   **漏了自定义函数的返回值** ⇒ 这次补上; 并加出口守卫 `Resolve-ExitCode`(结构性, 见其注)。
+    Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-attach-reset.sh" | Out-Null
     if ($attach.Count -gt 0) {
         foreach ($a in $attach) {
             if (-not (Test-Path $a)) { Write-Host "attach missing (skip): $a"; continue }
@@ -1403,7 +1437,7 @@ set -eu
 W="$Script:WORKSPACE_ROOT/$proj"
 mkdir -p "`$W/.attach/$name"
 "@
-                Invoke-RemoteScript -HostName $hostName -ScriptBody $bodyDir -LocalName "agent-cli-attach-mkdir-dir.sh"
+                Invoke-RemoteScript -HostName $hostName -ScriptBody $bodyDir -LocalName "agent-cli-attach-mkdir-dir.sh" | Out-Null
                 scp -q -r -o ConnectTimeout=10 $a "${hostName}:$Script:WORKSPACE_ROOT/$proj/.attach/" 2>$null
             }
             else {
@@ -1488,7 +1522,7 @@ W="$Script:WORKSPACE_ROOT/$proj"
 rm -rf "`$W/.golden" && mkdir -p "`$W/.golden" \
   && tar -xf "`$W/.golden.tgz" -C "`$W/.golden" && rm -f "`$W/.golden.tgz"
 "@
-        Invoke-RemoteScript -HostName $hostName -ScriptBody $goldenInject -LocalName "agent-cli-golden-$ts.sh"
+        Invoke-RemoteScript -HostName $hostName -ScriptBody $goldenInject -LocalName "agent-cli-golden-$ts.sh" | Out-Null
         # M3 golden block (fused into $body below; literal interpolation ONLY for the three
         # console-side values goldenSha/goldenBase/goldenCmdB64 - all remote vars backtick-escaped)
         $goldenBlock = @"
@@ -3285,6 +3319,9 @@ function Invoke-Review {
 }
 
 # ---------------- entry ----------------
+# ⚠ W2 (2026-09-22): 下面**每一处** `exit` 都必须过 `Resolve-ExitCode` —— 被调函数(Invoke-Task/Review/…)
+#   的返回值可能是**数组**(体内残留管道输出, 实测过一次), 而 `exit $数组` 会让**进程 rc 恒为 0**
+#   ⇒ 自动化会把"策略拒绝/超时"读成"成功"。新增子命令时**照此写**; 夹具对它设了计数断言(防漏)。
 try {
     if ($Command -eq 'workspace') {
         $act = if ($Create) { 'create' } elseif ($Sync) { 'sync' } elseif ($Archive) { 'archive' } else { 'create' }
@@ -3302,14 +3339,14 @@ try {
         if ($EngineCtxHint -gt 0) { Write-Host "ENGINE_CTX_HINT=$EngineCtxHint (test clamp)" }
             Write-Host "PROFILE: profile=$($prof.profile) ctx=$($prof.context) max_out=$($prof.max_output) thinking=$($prof.thinking) template=$($prof.template) reasoning=$($prof.reasoning_format) flavor=$($prof.flavor) ($($prof.source))"
         }
-        exit $code
+        exit (Resolve-ExitCode $code)
     }
     elseif ($Command -eq 'lock') {
         # M4 lock/state diagnostic (A9/A10). usage: agent-cli lock <proj> --acquire|--release|--status [--hold <s>]
         if (-not $Act) { Write-Host 'usage: agent-cli lock <proj> --acquire [--hold <s>] | --release | --status'; exit 2 }
         if (-not $Proj) { $Proj = $env:AGENT_CLI_PROJ }
         $code = Invoke-LockState -act $Act -proj $Proj -hold $Hold -hostName $RemoteHost
-        exit $code
+        exit (Resolve-ExitCode $code)
     }
     elseif ($Command -eq 'task') {
         # M2 full chain. usage: agent-cli task <proj> --card <task.md> [--model <m>] [--sensitivity <x>] [--complexity <auto|short|standard|long>] [--task-type <code|reason|concept|numeric|doc>]
@@ -3318,17 +3355,17 @@ try {
         #   param**(pristine HEAD 单加一行也报 Missing-')') ⇒ 走 Invoke-Task 的**函数级** switch, 由 env 桥接。
         $autoFb = ($env:AGENT_AUTO_FALLBACK -eq '1')
         $code = Invoke-Task -proj $Proj -card $Card -model $Model -sensitive $Sensitivity -type $Type -hostName $RemoteHost -attach $Attach -complexity $Complexity -taskType $TaskType -SlotAllowBusy:$SlotAllowBusy -cli $Cli -AutoFallback:$autoFb
-        exit $code
+        exit (Resolve-ExitCode $code)
     }
     elseif ($Command -eq 'split') {
         # O-26 Split-Dispatcher. usage: agent-cli split <proj> --card <master.md> [--model <m>] (master card must declare decompose: ordered list)
         $code = Invoke-SplitTask -proj $Proj -card $Card -model $Model -sensitive $Sensitivity -type $Type -complexity $Complexity -taskType $TaskType -SlotAllowBusy:$SlotAllowBusy -cli $Cli -attach $Attach
-        exit $code
+        exit (Resolve-ExitCode $code)
     }
     elseif ($Command -eq 'review') {
         # O-16 review ring (advisory). usage: agent-cli review <proj> --card <task.md> [--run-id <ts>] [--model <judge-alias>] [--overwrite]
         $code = Invoke-Review -proj $Proj -card $Card -runId $RunId -model $Model -overwrite:$Overwrite -sensitive $Sensitivity
-        exit $code
+        exit (Resolve-ExitCode $code)
     }
     else {
         Write-Host "usage:"; Write-Host "  agent-cli workspace <proj> [--create|--sync|--archive] [--type python|cpp|doc|lean4]"

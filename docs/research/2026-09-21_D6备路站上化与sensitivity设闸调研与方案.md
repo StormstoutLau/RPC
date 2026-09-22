@@ -176,6 +176,7 @@
 **顺带暴露两个缺陷（已登记 OPEN-ISSUES）**
 - **"备路总墙钟预算"缺失**：`T_load` 与主控侧 sync/collect **都不在** `timeout_s` 内（实测 `dispatch_wall=33.4s` vs 卡预算 **10s**）⇒ 任何"换站 / 加载"方案都需要**另立总预算**；P4 的 `fallback-timeout-s` **不覆盖**它。
 - **`agent-cli.ps1 task` 在 fallback-reject 路径上进程退出码 = 0**（日志却写 `REJECT … exit 4`）。而同文件的 `route`（exit 2）与 claude-station-reject（exit 4）**都正确传播** ⇒ **非普遍问题**，疑为已知的"函数返回值被管道污染"类（09-18 闭环过一次同类）。**未复现确认**。
+  - ⚠ **本节结论已被 2026-09-22 的实测推翻两处，以 [OPEN-ISSUES](../../spec/d6-agent-standard/OPEN-ISSUES.md) 与 [REMEDIATION-PLAN §W2](../../spec/d6-agent-standard/REMEDIATION-PLAN.md) 的完成记录为准**：① **"非普遍问题"是错的** —— 那两条反例（`route` / claude-station-reject）都恰好在污染点**之前** early-return；实测**不带** `AUTO_FALLBACK` 的普通超时 run 同样 `exit=6` / **进程 rc=0** ⇒ 影响**每一次真派发**（成功时看不出、失败时被静默读成成功）。② **根因不是 `ssh`/`scp` 残留文本，而是 `Invoke-RemoteScript` 的 int 返回值 0**（attach-reset 处**裸调用**；该行**每次派发都跑**）⇒ `$code = @(0, <真 rc>)`，而 `exit @(0,4)` 实测得 **0**。已修（归零纪律补全 6 处 + 出口守卫 `Resolve-ExitCode`）。
 
 ### 3.6 第二轮实测：O-23 类问题重新定性 + 「引擎忙」实测（2026-09-21 已执行）
 
