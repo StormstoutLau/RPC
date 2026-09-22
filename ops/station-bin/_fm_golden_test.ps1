@@ -624,6 +624,19 @@ $w3Spawn = @($ccCmds | Where-Object { $_.GetCommandName() -eq 'Invoke-ClaudeFly-
 $iW3Sync = if ($w3Sync) { $w3Sync.Extent.StartOffset - $ccFn.Extent.StartOffset } else { -1 }
 $iW3Spawn = if ($w3Spawn) { $w3Spawn.Extent.StartOffset - $ccFn.Extent.StartOffset } else { -1 }
 Assert-True "w3: 位置断言(AST) —— 附件上站($iW3Sync) 早于 站上 spawn($iW3Spawn)" ($iW3Sync -gt 0 -and $iW3Spawn -gt 0 -and $iW3Sync -lt $iW3Spawn)
+# 步 2b（2026-09-22）: **站上 claude 的项目工作区** —— 光有附件不够: 卡里"读 `src/x.py`"这类
+#   **项目相对路径**若解析不到, **没有任何判据会因此报错** ⇒ 与"缺件却跑完"是同一族(假绿灯)。
+#   做法 = **复用主路同一套** `Invoke-Workspace -act sync`，cwd 指向**项目工作区**。
+#   ⚠ 刻意**不**自建 scratch: 两套工作区概念会让"附件/项目文件在哪儿"随路径而异 —— 而"同一件事
+#   有两个定义点"正是本仓反复踩的坑。
+$w3WsSync = ([regex]::Matches($cliText, "-act 'sync'")).Count
+Assert-True "w3b: 两条路各同步一次项目工作区 = 2(实测 $w3WsSync) —— 站上支复用主路同一套" ($w3WsSync -eq 2)
+Assert-True "w3b: 站上 cwd = **项目工作区**(不是自建 scratch)" ($cliText -match '\$stWorkDir = "\$Script:WORKSPACE_ROOT/\$proj"')
+$w3Scratch = ([regex]::Matches($cliText, '_p3_claude_ws')).Count
+Assert-True "w3b: 不存在'第二套工作区概念'(实测 $w3Scratch 处自建 scratch)" ($w3Scratch -eq 0)
+$w3WsCmd = @($ccCmds | Where-Object { $_.GetCommandName() -eq 'Invoke-Workspace' }) | Select-Object -First 1
+$iW3Ws = if ($w3WsCmd) { $w3WsCmd.Extent.StartOffset - $ccFn.Extent.StartOffset } else { -1 }
+Assert-True "w3b: 位置断言(AST) —— 工作区同步($iW3Ws) 早于 站上 spawn($iW3Spawn)" ($iW3Ws -gt 0 -and $iW3Spawn -gt 0 -and $iW3Ws -lt $iW3Spawn)
 
 # --- W2（2026-09-22）: 进程退出码可信性 —— `exit $数组` 会把 rc 抹成 0 ---
 # 实测（临时脚本直测进程 rc）: exit 4 ⇒ 4 / exit @($null,4) ⇒ **0** / exit @(0,4) ⇒ **0**

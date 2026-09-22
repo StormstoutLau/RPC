@@ -2499,22 +2499,33 @@ function Invoke-Task-Claude {
             $promptFull += "`n(attachments staged under .attach/ - read as needed)"
         }
     }
-    # ── W3 步 2 (2026-09-22): **站上变体的附件同步** —— 把附件真的送到**执行点**, 取代原先"一律拒绝" ──
-    # 为什么必须送: 站上变体在**站上**跑 claude, 而上面那段附件复制**只落主控本地** `<projRoot>\.attach`
-    #   ⇒ 站上读不到 ⇒ agent 在**缺件**下跑完 = **假绿灯**（比明确拒绝危险：假绿灯会被当成证据）。
-    # 处置（不是"删闸就完"）：① 为**该项目**在站上建工作区 `<WSROOT>/_p3_claude_ws/<proj>`;
-    #   ② 对它**只 reset `.attach/`**（09-18 教训: 残留件会污染本次）；③ 逐件 scp 上去(目录先 mkdir 兜空目录);
-    #   ④ **任一步失败 ⇒ `return 5`**（fail-closed: 宁可不跑, 也不在缺件下跑完 —— 安全性质与旧闸等价）。
-    # ⚠ **工作区名必须"每项目稳定", 不能"每次唯一"** —— `claude --continue` 是**按目录**恢复会话的:
-    #   若每次换一个新目录, 续接路径**永远找不到上一次会话** ⇒ 长卡续接静默失效(本轮自查发现并避免)。
-    #   故只 reset `.attach/`(清残留), **不删整个工作区**(目录本身要活到下一次 resume)。
-    # ⚠ 与本地支的分工: 本地支 cwd=`$projRoot`(附件已落在 `<projRoot>\.attach`), 站上支 cwd=上面那个工作区
-    #   ⇒ **两边 prompt 里的相对引用 `.attach/<name>` 都解析得到**（`Invoke-ClaudeFly-Station -WorkDir`）。
-    # ⚠ 已知边界（已登记，非本次引入）: 该工作区**只含附件**，**不含项目文件** —— 站上 claude 迄今也没有
-    #   项目工作区（原先 cwd 是 `$HOME`）⇒ 这是**未被消费**的能力缺口, 与本步正交，另登记。
+    # ── W3 步 2 (2026-09-22): **站上变体 = 主路同一套工作区**（附件 + 项目文件都在执行点）──────────
+    # 两件事:
+    #   ① **同步项目工作区** —— 与主路**同函数、同语义**（`Invoke-Workspace -act sync`）: 站上 claude
+    #      若没有项目工作区, 卡里"读 `src/x.py`"这类**项目相对路径一律解析不到**, 而**没有任何判据
+    #      会因此报错** ⇒ 属"缺件却跑完"的同一族(假绿灯)。rc 语义也照抄主路(NETFAIL⇒5 / 其它⇒6)
+    #      ⇒ **失败即不跑**(fail-closed)。⚠ **刻意不另造"第二套工作区概念"**(如自建 scratch 目录):
+    #      两套工作区会让"附件在哪儿/项目文件在哪儿"随路径而异, 而这类分叉正是本仓反复踩的坑。
+    #   ② **附件落到同一个工作区的 `.attach/`** —— 与主路**完全同址** ⇒ 两边 prompt 里的相对引用
+    #      `.attach/<name>` 语义一致。步骤: 建工作区(若缺) → **只 reset `.attach/`** → 逐件 scp;
+    #      **任一步失败 ⇒ `return 5`**(fail-closed: 宁可不跑, 也不在缺件下跑完)。
+    # ⚠ **工作区必须"每项目稳定"**(`<WSROOT>/<proj>`), 不能"每次唯一": `claude --continue` 是**按目录**
+    #   恢复会话的 ⇒ 每次换新目录会让**续接路径永远找不到上一次会话**(长卡续接静默失效)。同理**不删**
+    #   工作区本身, 只清 `.attach/`。
+    # ⚠ 撤掉旧闸的依据是**实弹**(见 REMEDIATION-PLAN §W3 步 2): 站上 cwd = 该项目工作区 + 附件唯一
+    #   marker 出现在 agent 输出里 ⇒ 附件在站上确实可读; 项目文件面由"该工作区确有项目文件"佐证。
     $stWorkDir = ''
     if ($useStation) {
-        $stWorkDir = "$Script:WORKSPACE_ROOT/_p3_claude_ws/$proj"
+        Write-Host "CLAUDE-STATION: sync 项目工作区 -> $proj (station=$st)"
+        try { Invoke-Workspace -proj $proj -act 'sync' -Station $st | Out-Null }
+        catch {
+            $smsg = $_.Exception.Message
+            if ($smsg -like 'NETFAIL*') { Write-Host "CLAUDE-STATION sync network failure: $smsg"; return 5 }
+            Write-Host "CLAUDE-STATION sync failed: $smsg"
+            Write-Host "  ⇒ 站上工作区可能尚未建立; 先跑: agent workspace $proj --create --station $st"
+            return 6
+        }
+        $stWorkDir = "$Script:WORKSPACE_ROOT/$proj"
         $bodyReset = @"
 set -eu
 W="$stWorkDir"
