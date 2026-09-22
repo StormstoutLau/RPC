@@ -1,5 +1,8 @@
 # 开放日志：D6 agent-cli wrapper MVP（Open Issues 台账）
 
+> **本表是"登记"（每条的证据、结论、待办）；开放项的定级与执行顺序见 [REMEDIATION-PLAN.md](REMEDIATION-PLAN.md)（2026-09-21）** ——
+> 那份文档只做跨条目的优先级分析与工作项合并，不重复本表的证据。**本表新增/关闭一条时应回头改那份的定级。**
+
 ***
 
 id: d6-agent-standard-OPEN-ISSUES
