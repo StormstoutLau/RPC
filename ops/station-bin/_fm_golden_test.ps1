@@ -27,7 +27,7 @@ Invoke-Expression $fn.Extent.Text   # 定义函数到当前会话
 # 它们是**纯函数**(只吃 $accept/$goldenActive/卡 subjects, 不碰站、不碰文件系统)
 # ⇒ 可离线单测; 这正是"派发路径改动"能被验证而不用每次都真派发的关键。
 # O-15/AUDIT (2026-09-21): 追加提取 claude 按路基线(Get-ClaudeFrameworkSubjects) 与 fallback 判定 (Test-FallbackEligible)。
-foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-FallbackEligible', 'Test-CtxOverflowError', 'Resolve-CtxOverflowCode', 'Resolve-ClaudeStationCandidates', 'Get-SensitivityBackendReject', 'Resolve-ClaudeBudget', 'Resolve-LocalBash', 'Invoke-LocalBashCmd')) {
+foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-FallbackEligible', 'Test-CtxOverflowError', 'Resolve-CtxOverflowCode', 'Resolve-ClaudeStationCandidates', 'Get-SensitivityBackendReject', 'Get-BackendEgress', 'Get-JudgeEgress', 'Get-JudgeComplianceReject', 'Resolve-ClaudeBudget', 'Resolve-LocalBash', 'Invoke-LocalBashCmd')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -43,6 +43,16 @@ $rtAst = @($ast.FindAll({ param($n)
 if (-not $rtAst) { throw '$Script:ROUTE_TABLE assignment not found in agent-cli.ps1' }
 Invoke-Expression $rtAst.Extent.Text
 Write-Host "DEBUG ROUTE_TABLE keys=$(@($Script:ROUTE_TABLE.Keys).Count)"
+
+# --- W1a (2026-09-21): 一并提取**真实 JUDGE_TABLE**（同为赋值语句） ---
+# 为什么必须测真表: W1a 把 `egress` / `compliance` 从"声明了但没人读"变成真判据 ⇒ 表里的数据
+#   本身就是判据的真值源 ⇒ 必须断言"**每个 judge 都分类了**"（否则新增 judge 会静默走 fail-closed 或漏判）。
+$jtAst = @($ast.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+    $n.Left.Extent.Text -eq '$Script:JUDGE_TABLE' }, $true)) | Select-Object -First 1
+if (-not $jtAst) { throw '$Script:JUDGE_TABLE assignment not found in agent-cli.ps1' }
+Invoke-Expression $jtAst.Extent.Text
+Write-Host "DEBUG JUDGE_TABLE keys=$(@($Script:JUDGE_TABLE.Keys).Count)"
 
 $pass = 0; $fail = 0
 function Assert-True($name, $cond) {
@@ -470,6 +480,52 @@ Assert-True "cwd: Invoke-ClaudeFly 体内**显式**设 WorkingDirectory(不设�
 $cliText = [IO.File]::ReadAllText($cli)
 $cwdCallSites = ([regex]::Matches($cliText, 'Invoke-ClaudeFly -argStr [^\r\n]*-budgetS \$\w+(?:Timeout)? -cwd \$projRoot')).Count
 Assert-True "cwd: 两个本地调用点(首跑 + resume)都传 -cwd `$projRoot(实测 $cwdCallSites 处)" ($cwdCallSites -eq 2)
+
+# --- W1a (2026-09-21): 后端属性判据 —— 把"型号前缀"换成"后端属性"的结构根因验证 ---
+# 背景: 旧判据是白名单式 `-match '^opencode/'`, 每加一个云后端就漏一次(已漏两次: claude 备路 / review judge)。
+# 三层断言: ① 函数行为(含**假想云端后端**) ② **真表覆盖率**(每个 id / 每个 judge 都被分类)
+#           ③ **结构断言**(AST, 免疫注释): 全仓不再有"按型号前缀判敏感度"的残留。
+# ⚠ 这些是**结构/单元**断言 —— 它们证明"接线正确"; **行为证据仍只有实弹能给**(见 REMEDIATION-PLAN §2)。
+Assert-True "egress: 站内本地引擎(local/*) => 不出网" ((Get-BackendEgress 'local/gpt-oss-20b') -eq $false)
+Assert-True "egress: 站上 openrouter(openrouter/*) => 出网" ((Get-BackendEgress 'openrouter/thinkingmachines/inkling:free') -eq $true)
+Assert-True "egress: zen(opencode/*) => 出网" ((Get-BackendEgress 'opencode/nemotron-3-ultra-free') -eq $true)
+# ★ 这条是**结构根因**的证明: 一个本仓**不存在**的云后端, 无需改判据即被纳管
+Assert-True "egress: ★假想云端后端(brand-new-vendor/*) => 出网(新后端无需改判据)" ((Get-BackendEgress 'brand-new-vendor/some-model:free') -eq $true)
+Assert-True "egress: 未知/空 id => 出网(fail-closed, 不默认放行)" ((Get-BackendEgress '') -eq $true -and (Get-BackendEgress 'noslash') -eq $true)
+
+$rtIds = @($Script:ROUTE_TABLE.Values | ForEach-Object { [string]$_['id'] } | Sort-Object -Unique)
+$rtEgress = @($rtIds | Where-Object { Get-BackendEgress $_ })
+$rtLocal = @($rtIds | Where-Object { -not (Get-BackendEgress $_) })
+Assert-True "egress: ROUTE_TABLE 扫 $($rtIds.Count) 个 id => 出网 $($rtEgress.Count) / 站内 $($rtLocal.Count)(两类都必须非空, 防判据恒真恒假)" ($rtIds.Count -gt 0 -and $rtEgress.Count -gt 0 -and $rtLocal.Count -gt 0)
+
+$jtMissing = @($Script:JUDGE_TABLE.Keys | Where-Object {
+        -not $Script:JUDGE_TABLE[$_].ContainsKey('egress') -or -not $Script:JUDGE_TABLE[$_].ContainsKey('compliance') })
+Assert-True "egress: JUDGE_TABLE 全部 $($Script:JUDGE_TABLE.Keys.Count) 个 judge 都声明 egress+compliance(缺: $($jtMissing -join ','))" ($jtMissing.Count -eq 0)
+
+# judge 三态 —— 与 review 闸**同构**（硬不变式 + 表驱动），故这里等于把闸的行为离线复现
+function JudgeReject($alias, $sens) {
+    $j = $Script:JUDGE_TABLE[$alias]
+    $r = Get-SensitivityBackendReject -sensitivity $sens -backendEgress (Get-JudgeEgress $j)
+    if (-not $r) { $r = Get-JudgeComplianceReject -judge $j -sensitivity $sens }
+    return $r
+}
+Assert-True "judge: local-only × egress judge(ultra) => 拒" ((JudgeReject 'ultra' 'local-only') -ne '')
+Assert-True "judge: sanitized × egress judge(ultra) => 放行(compliance 声明 public,sanitized)" ((JudgeReject 'ultra' 'sanitized') -eq '')
+Assert-True "judge: public × egress judge(ultra) => 放行" ((JudgeReject 'ultra' 'public') -eq '')
+Assert-True "judge: sanitized × 本地 judge(main) => 放行" ((JudgeReject 'main' 'sanitized') -eq '')
+Assert-True "judge: local-only × 本地 judge(main) => 放行(本地不出网 —— 正是敏感卡该走的路)" ((JudgeReject 'main' 'local-only') -eq '')
+Assert-True "judge: local-only × commercial(ENV 注入, 按出网) => 拒" ((JudgeReject 'commercial' 'local-only') -ne '')
+Assert-True "judge: 未声明 compliance => 拒(fail-closed, 手工构造)" ((Get-JudgeComplianceReject -judge @{ type = 'local' } -sensitivity 'public') -eq 'judge-compliance-undeclared')
+
+$ocMatch = @($ast.FindAll({ param($n)
+            $n -is [System.Management.Automation.Language.BinaryExpressionAst] -and
+            $n.Operator -eq 'Match' -and
+            $n.Right.Extent.Text -match 'opencode/' }, $true))
+Assert-True "gate: AST 中不再存在 `-match '<...>opencode/' 形式的判据(注释不算) —— 实测 $($ocMatch.Count) 处" ($ocMatch.Count -eq 0)
+$gateCalls = ([regex]::Matches($cliText, 'Get-SensitivityBackendReject -sensitivity')).Count
+Assert-True "gate: Get-SensitivityBackendReject 调用点 = 6(实测 $gateCalls) ⚠ 增删闸须同步改本数" ($gateCalls -eq 6)
+Assert-True "gate: review 闸已接线 compliance(调用 Get-JudgeComplianceReject)" ($cliText -match 'Get-JudgeComplianceReject -judge')
+Assert-True "gate: review 闸已接线 judge 属性(调用 Get-JudgeEgress)" ($cliText -match 'Get-JudgeEgress \$judge')
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"

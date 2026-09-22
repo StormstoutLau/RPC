@@ -40,17 +40,22 @@
 
 ## 2. 四个工作项（**按共享改动面合并** —— 这是计划骨架）
 
-> 原则：**同一处代码 + 同一次验证，能付清多项时就合并**。四项都动 `agent-cli.ps1` ⇒ **串行做**，每步过全套夹具（`_fm_golden_test` 101/101 + `_scrubber_coverage_test` 43/43 + `rpc check`）。
+> 原则：**同一处代码 + 同一次验证，能付清多项时就合并**。四项都动 `agent-cli.ps1` ⇒ **串行做**，每步过全套夹具（`_fm_golden_test` **119/119** + `_scrubber_coverage_test` 43/43 + `rpc check`）。
 
-### W1｜judge 面收口（**W1a = 3 项纯执行；步 4 已拆成 W1b 单列裁决**，详见 §5.1）
+### W1｜judge 面收口（**W1a 步 1–3 ✅ 已完成（2026-09-21）；步 4 已拆成 W1b 单列裁决**，详见 §5.1）
+
+> **W1a 完成记录（2026-09-21）**：① **默认 judge 与三个档位路由已重指到"站上 `openrouter`"**（id 取 `secrets/openrouter.conf` 的 `harness_priority` 前两档 = 权威真值；`ctx` 经厂商 API 核实）；**`test-cards/sanitized.md` 实测跑通**（run `202609221131192690`：`TASK_RC=0` + 3 处 `SCRUB` 命中 + agent 回 `A8B-PROBE-OK`）⇒ **验收路径恢复**。
+> ② **`compliance` + 新增 `egress` 字段接线**（`Get-JudgeComplianceReject` / `Get-JudgeEgress`，缺字段走 fail-closed）
+> ③ **三处"按型号前缀判"换成后端属性判据** `Get-BackendEgress`（fail-closed 默认；**claude 通道豁免**以免误杀 P3）⇒ 结构根因消除。
+> **自证**：夹具 **119/119**（+18 条，含 ★"假想云端后端"负例 / `ROUTE_TABLE` 覆盖率 / `JUDGE_TABLE` 覆盖率 / AST"全仓无前缀判据"）+ **两次变异自证**（恒 false ⇒ 5 条红；删字段 ⇒ 覆盖率红并点名）+ **实弹四连**（`route` 三态含 P3 不误杀 / `task` 层 rc=4 且**零触站** / `local-only` 正例不误杀 / `sanitized` 验收卡跑通）。
 
 **为什么合并**：这几项全在**同一段代码**（judge 选型 + 敏感度闸 + 判据提示词组装）。
 
 | 步 | 内容 | 完成判据 |
 |---|---|---|
-| 1 | **换掉不可用的默认 judge**：`ultra`（zen）→ 可用的 egress 或本地 judge；或在 `ROUTE_TABLE`/`JUDGE_TABLE` 加站上 `openrouter/<id>` 条目（已实测 16s 可用、凭据在位、四开关已核） | `test-cards/sanitized.md` **能跑通**（久违的验收路径恢复） |
-| 2 | **`compliance` 接线**：把 `Invoke-Review` 里只挡 `local-only` 的窄判据换成**表驱动**（按 `$sens` 卡 judge 选型） | 夹具：`local-only × egress ⇒ 拒`、`sanitized × egress ⇒ 放行`、`sanitized × 本地 ⇒ 放行` 三态 |
-| 3 | **同源结构根因**：把 `Resolve-Model` / `Invoke-Task` / `Invoke-Task-Claude` 三处"按型号前缀 `^opencode/` 判"也改为**表驱动的后端属性**（`$backendEgress` 不再硬编码） | 夹具：新增"假想云端后端"负例 —— 加一个带 `egress=$true` 的表项 ⇒ 三处闸**都**能拦住（证明"再加一个后端不漏"） |
+| 1 ✅ | **换掉不可用的默认 judge**：`ultra`（zen）→ 可用的 egress 或本地 judge；或在 `ROUTE_TABLE`/`JUDGE_TABLE` 加站上 `openrouter/<id>` 条目（已实测 16s 可用、凭据在位、四开关已核） | ✅ `test-cards/sanitized.md` **已跑通**（run `202609221131192690`，回 `A8B-PROBE-OK`） |
+| 2 ✅ | **`compliance` 接线**：把 `Invoke-Review` 里只挡 `local-only` 的窄判据换成**表驱动**（按 `$sens` 卡 judge 选型） | ✅ 夹具三态齐（`local-only × egress ⇒ 拒`、`sanitized × egress ⇒ 放行`、`sanitized × 本地 ⇒ 放行`），另加"未声明 compliance ⇒ 拒" |
+| 3 ✅ | **同源结构根因**：把 `Resolve-Model` / `Invoke-Task` / route cmd 三处"按型号前缀 `^opencode/` 判"改为**后端属性**（`$backendEgress` 不再硬编码） | ✅ 夹具：★"假想云端后端 `brand-new-vendor/*` ⇒ 出网"负例 + **AST 断言**"全仓不再存在按前缀判敏感度" + 调用点计数断言（=6） |
 | 4 | **【W1b｜待裁】** `review` 出网加同一套 scrub + `Get-ScrubBlockReason`（位置：`Build-JudgePrompt` 之后 / `Invoke-Judge` 之前）**或**改为"`sanitized` 卡的 review 强制本地 judge"（**§5.1 推荐后者**） | 实弹：`sanitized` 卡的 review ⇒ 出网被消除（本地 judge）或控制台出现 `SCRUB[…] hit`（抹法）；夹具：私钥块卡 ⇒ review **拒发** |
 
 ⚠ **步 4 与 W4 的①共享同一决策**（"消毒面收到哪为止"）⇒ 若你选"附件不纳入"，步 4 只覆盖提示词（卡正文 + 产出）；若选"全部纳入"，步 4 顺带覆盖附件清单。
@@ -180,9 +185,12 @@ C 与 W1a 是纯执行项 —— 你同意取向，我按上面顺序做；你�
 ## 6. 执行顺序（含为什么是这个顺序）
 
 ```
-W2 (rc 可信性)  →  W1 (judge 面)  →  W3 (claude 路静默失败)  →  W4 (消毒面收口)
-   ↑ 先修"读数"        ↑ 再修"承诺"        ↑ 再修"静默"              ↑ 最后"待裁"
+W2 (rc 可信性)  →  W1a ✅(已完成)  →  W3 (claude 路静默失败)  →  W1b + W4 (两项待裁)
+   ↑ 先修"读数"        ↑ 再修"承诺"        ↑ 再修"静默"                  ↑ 最后"待裁"
 ```
+
+- **W1a ✅ 已完成（2026-09-21）**：判据已接到真值源、验收路径已恢复 ⇒ 后续 W3/W4 **有了验证手段**。
+- **W1b 与 W4 现在可以一起裁**（两者都在回答"消毒面收到哪为止"，见 §5.4）—— 裁完再做，顺序不变。
 
 - **W2 第一**：它修的是**读数本身**。在读数是坏的时候去做别的验证，验证结论都不可信。
 - **W1 第二**：它恢复**验收路径**（sanitized 卡能跑）+ 消灭"每加一个后端漏一次"的结构根因 ⇒ 后面 W3/W4 才**有验证手段**。
