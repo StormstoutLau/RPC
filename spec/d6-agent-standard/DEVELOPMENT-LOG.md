@@ -143,6 +143,14 @@ upstream: \[d6-agent-standard-.* 全量文档]
   - **解决方案（②已实测）**：① 配订阅（需用户提供 URL，唯一能真正提速）；② **零凭据：借 B 的直连** —— C 上 `ssh -f -N -D 11080 scott-lau@B` + `https_proxy=socks5h://127.0.0.1:11080` ⇒ `api.github.com` 200/0.82s、**ranged 4 MiB 实测 107 KB/s ⇒ 337.4 MiB ≈ 55 min**（优于 B 本机 35 KB/s 与 `ghproxy.net` 74 KB/s）；关隧道后 C 直连立刻回 `000`（对照有效）；③ 镜像兜底 `ghproxy.net`。
   - **三处踩坑（可推广）**：① **`\1` 在 Python 字符串里是八进制转义**（→ `\x01`）会把 sed 替换串毁掉 ⇒ 取数穿 Python 层时**反斜杠一律写 `\\`**（`\(` 只 warning、值仍对，两者表现不同）；② **`pkill -f "<模式>"` 会自匹配承载脚本自身**（脚本文本含该串）⇒ 本次把承载会话自己杀了、隧道未建（改到另一会话里清）；③ **台账"判据"列默认值写死成 bench 文案** ⇒ 新 flow 的行串台（改为自取该 flow 末步判据）。
 - **关联**: [OPEN-ISSUES §O-23](OPEN-ISSUES.md)、[决策简报 §九/§十](../../docs/2026-09-22_决策简报_unsloth-studio升级方案.md)（纳入框架 + mihomo 诊断）。
+- **⑬ 四项 D6 健壮性判据收口（2026-09-23；用户令"先解决这4个问题 按 todolist"）**:
+  - **② `syntax` 缺 `ps1-bom` 子判据 —— 已实现在位，未新增**：D6 表 L720 ③ 滞后于实现 —— `rpc_check.py` **L430-454** 的 `(ps1-bom)` 判据（含非 ASCII 却无 BOM ⇒ FAIL）早在 **2026-09-21** 就已落地且计入 `counts`→`total_bad`→门禁 FAIL；`--only syntax` 实测输出含 `.ps1-bom:14文件/0失败`。**结论：该项无需做，只更新认知**。
+  - **④a `doclinks` 未跟踪文件盲窗 —— 不存在**：doclinks 用 **`ROOT.rglob("*.md")` 扫磁盘**（非 syntax 的 `git ls-files`），D6 表把它与 syntax 的"未跟踪盲窗"误并。**实测**：会话新建未 git add 的 `ops_DOCLINK_PROBE.md`（tmp 外）仍被抓到 2 条失效 ⇒ 盲窗不存在，**该项无需做**。
+  - **③ `syntax` 占 quick ~96% —— 优化完成 19.6s→6.7s**：先 cProfile 定位：**瓶颈是 412 次 `bash -n` 逐文件 fork（~17s），语法解析本身仅 ~0.3s**。中途排掉一个"合并外循环"的错误捷径（`bash -n` 只作用首个入口脚本，合并=静默降 0 覆盖，正好验证"判据须先在已知会红样本验红"）。**正解 = 并行分块**：新增 `_bash_lint_parallel`（`ThreadPoolExecutor`，默认 8 worker，`chunks=files[i::n]`，`seen` 口径保持"远端实处理文件总数"以保住"读到数!=喂入数⇒不可信"那条）。**双向自证**：注入坏 `.sh` 并 git add 后 ⇒ `.sh:413文件/1失败` 仍精确点名坏文件（并行不漏错）；删除后回绿；覆盖数 412/413、构建号、`0失败` 均不变。
+  - **① 站上 `out/` per-run 陈旧守卫 —— 加主控侧一致性判据（用户裁定）**：取证确认站上侧已兜底大部分（`acquire` 把上一轮 `out/` 归档进 `orphaned/`、采样器 run 结束 `kill $SPID`+`wait`、`.agent-lock` flock）；**真正未覆盖** = "主控中止（kill ssh）但远端 body 仍跑"的孤儿采样器持续写**固定名** `.progress`，主控拉到的节拍无法自证属本次。**修**（不改站上件，agent-cli.ps1 是主控侧脚本）：证据回收段若 `.meta` 的 TASK_ID != 本次 ts（`$evStale`），则将 `.progress` 节拍置空并打 `EVIDENCE_STALE` **WARN（不改 rc，属覆盖缺口非篡改）** —— 复用既有 META_STALE 锚点，零新增连接。夹具 **170/170** 通过，四项门禁（syntax/scripts/doclinks/evidence）全 PASS。
+  - **④b 锚年龄告警 / ④c 证据面留存目标 —— 仅记账（用户裁定）**：D6 表 L720 ④ 本就标注"社区调研待做判据（调研 §14.6，仅记账）"，本轮**不编码**，维持原定位仅记账。
+> **本项的总教训**：D6 审查表（L720）的"待办"是 **2026-09-21 时的快照**，其中 ②③④a 的描述与当前实现**已有漂移**（②已实现、④a 不存在）——**动手前先取证（`--only` 实测 + 读代码），别照着滞后清单造无用功**；而 ③ 的真瓶颈要靠 **profile 而非猜**（两次直觉捷径都被实测推翻）。
+- **关联**: [OPEN-ISSUES D6 闭环审查 L720](OPEN-ISSUES.md)（②③④a 已收口，④b/c 仍仅记账）。
 
 ### 2026-09-16 — provider 命名漂移修复 / 新模型入网 / C2 引擎面统一日
 
