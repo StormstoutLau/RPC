@@ -1,0 +1,13 @@
+# MANIFEST.sha256 — 00_handoff 双副本漂移检测基线 (ADR-0008 劝⑤ 方案 B)
+# 作用：钉住需求方原始目录 D:\Paper\handoff_to_rpc_admin 的当前字节态；供与 D:\Paper\handoff_to_rpc_admin 复核，
+#   若源更新则本清单不再匹配 => 漂移可检。再生成：python - <<EOF（或重新跑生成脚本）
+# 生成时间: 2026-09-23T02:31:19.353758+08:00
+# 校验: cd 到 D:\Paper\handoff_to_rpc_admin 后 `sha256sum -c <本清单绝对路径>` 应全 OK（忽略开头 # 行）
+f146cf3bca6ee34b31dbb62686d3a4f65a39ec8f06a4c46025f208ccc25145a2  01_DR-缺陷报告.md
+356b46a8253e548d86d2ee67deba488f82a01b95c62e2777ac3836b80e8e28e0  02_CR-变更需求.md
+e1e8908477a18111a9f053040571856aaa408f74e4e8ecf08822d0d25ccbb57d  03_编排与接口约定.md
+66cc9b58f0920aeb342de9c4c7574a35a030db53e7d5cf4a5f13762f8ae410d7  04_证据附录.md
+e474245b81f496ed9e6f610d95fe3c12a7a899229728edbb91b878ea0442c31a  05_项目级配置/AGENTS.md
+d2da74816e22689d0bc1bb41c2765aae24e079a36452d97a9b67aa29e2294f4a  05_项目级配置/CLAUDE.md
+e7fd15e21faa75d68f57953adda9c7d443f781109241fd8774c778ce32638dc1  05_项目级配置/SKILL.md
+2311434c5da212f4e4c2bec77a4433613d3b367d46d6922ffab968462fb2ac7d  README.md
