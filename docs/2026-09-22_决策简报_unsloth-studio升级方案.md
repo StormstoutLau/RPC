@@ -69,6 +69,8 @@
 
 **⚠ 收益边界（三方案共用）**: 升级**只买到"累积型长任务能被压缩救回"**；**单次请求超引擎 `n_ctx` 仍被服务端拒** ⇒ **agent-cli clamp 无论如何都要保留**（O-23 架构结论不变）。
 
+**⚠⚠ 范围外发现（2026-09-22 执行中暴露，本简报原评估遗漏）**: `studio update` **不只升 Python 包 —— 它会把 `~/llama.cpp`（引擎）替换为 `unslothai/llama.cpp` 的 latest**，且 `--help` **无跳过开关** ⇒ 三站引擎一致性、`/opt` 治理面与回滚点均受影响。详见 [§七](#七执行记录与范围外发现2026-09-22-当日)。
+
 ---
 
 ## 四、试点步骤与判据（若选 A）
@@ -110,3 +112,50 @@
 | 5 | **回滚机制**是否先确认（`update` 版本可指定性） | 先确认 / 试点中一并确认 |
 | 6 | 试点通过后**是否立即推 A、C** | 立即 / 另约窗口 |
 | **7** | **A 完成前，任何"下调 `limit.context`（含对齐引擎档位）"的动作** | **一律禁止**（会激活潜伏缺陷；若确需动，**必须先落 B**） |
+
+---
+
+## 七、执行记录与范围外发现（2026-09-22 当日）
+
+### 7.1 用户裁定
+**B 站试点 → 通过后立即推 A、C**；**A 完成前禁止下调 `limit.context`**（待裁 7）。遇新变量时用户裁定：**让 A 跑完 + 暂停 C + 立即落档**。
+
+### 7.2 B 站试点结果：**通过**
+
+| 判据 | 升级前 | **升级后** |
+|---|---|---|
+| ① 流内控制帧 `reasoning_summary` | studio 流式 **1** | **0**（非流式标准、直连引擎 0） |
+| ② 压缩两轮（probe `limit=20001`、`auto=true`） | turn2 **rc=1** / compact=2 / **TypeValidation=2** | **turn1 rc=0；turn2 rc=0 / compact=1 / TypeValidation=0** ⇒ **压缩恢复可用** |
+| ③ 引擎档位 | `ctx 32768` / `:8080` | **未变** |
+
+版本面：`unsloth 2026.9.2 → 2026.9.7`、`unsloth_zoo 2026.9.1 → 2026.9.6`、`bitsandbytes 0.50.2 → 0.50.3.dev0`、**`pyarrow 25.0.1 → 23.0.1`（意外降级，待解释）**；包总数 **235 不变**；`X-Unsloth-Events` 命中 **0 → 2**。
+
+### 7.3 ⚠ 范围外发现：`studio update` **会替换引擎**
+
+- 日志：`requested llama.cpp tag: latest (repo: unslothai/llama.cpp)` → `installing prebuilt llama.cpp...` → `Downloading llama.cpp-source-<sha>.tar.gz（36.1 MiB）` → **随后本地编译**（A 站实测 **169** 个 cmake/g++ 进程）。
+- **`--help` 无任何跳过引擎的开关**（仅 `--local` / `--package` / `--verbose` / `--verify`）。
+- ⇒ **影响**：① **三站引擎版本将不一致**（B 引擎未动、A 被替换）；② 偏离引擎治理面 `/opt/llama.cpp-9859`（**注：update 目标是 `~/llama.cpp`；本次实测 `/opt/llama.cpp*` 三个入口未被触及**）；③ 需为 `~/llama.cpp` 面**另立回滚点**。
+- **简报原评估遗漏此条**（仅提示"可能牵连引擎启动参数"，未料到**直接换二进制**）。
+
+### 7.4 执行中遇到的三个网络瓶颈与处置（可复用）
+
+| 瓶颈 | 现象 | 处置 |
+|---|---|---|
+| `uv` → PyPI 走 **IPv6**（Fastly `2a04:…`） | **8 分钟 CPU 仅 1s、零进展** | **清华镜像 env**（`UV_INDEX_URL`/`UV_DEFAULT_INDEX`/`PIP_INDEX_URL`）⇒ 解卡 |
+| `bitsandbytes` 从 **GitHub release 直链**（`--no-cache-dir`） | 稳定 **~30 KB/s**（asset **41.1 MiB** ⇒ ~25 分钟） | 先用 `gh api` 查 **asset 大小** ⇒ **量化 ETA** 后决定"等"；A/C 走代理则快 |
+| `triton_kernels @ git+https://github.com/triton-lang/triton.git` | `git fetch` **零字节卡死**（git 默认无低速超时 ⇒ 会挂数小时） | B 站**收口**（kill）；**脚本本身有 `triton kernels (skipped, no git)` 分支**；**A/C 已装 `triton_kernels 1.0.0` ⇒ 该步可跳过** |
+
+- 公共 GitHub 代理（ghfast / ghproxy / gh-proxy）**实测均不可用**；**A 站本机 clash（`127.0.0.1:7890`）可用**（GitHub 握手 **0.46s**，对比直连 0 字节）；**C 站经 SSH 隧道复用 A 的代理**（实测有活跃连接）。
+
+### 7.5 三站当前状态
+
+| 站 | studio | `X-Unsloth-Events` | 引擎面 | 状态 |
+|---|---|---|---|---|
+| **B** | **2026.9.7** | **2** | 未动 | **试点通过**；但 update **未跑完**（卡 `triton_kernels` 后收口）⇒ **`triton_kernels` 缺失**（A/C 有 1.0.0） |
+| A | **2026.9.7** | **2** | **替换中**（下载完、编译中） | 执行中 |
+| C | 2026.9.2 | 0 | 未动 | **已暂停**（freeze 与基线**零差异**、Node 未装完、无锁残留） |
+
+### 7.6 顺带纠正两处简报假设
+
+1. **"三站 studio 版本不一致会致门禁 `backend` FAIL" —— 不成立**：B 升级后门禁仍 **15 绿 / 1 黄 / 0 红**、`backend` PASS（该断言查**引擎后端与 ROCm 串**，**不查 studio 包版本**）。
+2. **`verify-install` 基线即 `rc=1`**（官方语义"安装未完成"）⇒ B 升级后仍 `rc=1`，**非本次造成** ⇒ 该判据**在本环境不可用作"完整性"判据**。
