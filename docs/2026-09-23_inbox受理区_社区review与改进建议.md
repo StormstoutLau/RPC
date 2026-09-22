@@ -63,6 +63,11 @@
 - 建议二选一：
   - **A（推荐）**：项目侧原目录标记"权威见 inbox"，收拢为唯一副本；或
   - **B**：`00_handoff/` 存原目录 `MANIFEST.sha256` 清单，漂移可检（复用既有校验思想）。
+- ✅ **已实施（2026-09-23，方案 B）**：`paper-2026-08-23/00_handoff/MANIFEST.sha256` 已生成
+  （标准 `sha256sum` 格式：`<hex>  <relpath>`，顶部注释头含生成时间 + 校验方法）。
+  **双向自证通过**：基线源 vs 清单 8/8 一致 → 临时改源 README 引入漂移 ⇒ 校验报 **False**（可检）→
+  还原 ⇒ **True**。漂移检测**可检出、可还原、非恒真**。校验命令：cd 到源目录后
+  `sha256sum -c <MANIFEST绝对路径>`（Windows 侧等价用 Python 递归比对）。
 
 ### ⑥ [P2] `30_evidence` 证据 hash 链接
 - 现状：`30_evidence` 设计为"指针"，产物在项目根 `agent-out/`，未链死。
@@ -92,7 +97,7 @@
 | 2 | 状态机加 `waiting` | P0 | — | |
 | 3 | inbox 门禁断言 | P1 | — | |
 | 4 | STATUS.md / cluster.py inbox | P1 | — | |
-| 5 | 00_handoff hash 钉住 | P1 | — | |
+| 5 | 00_handoff hash 钉住 | P1 | ✅ 已实施 | 方案 B：MANIFEST.sha256（见 §3 ⑤） |
 | 6 | 30_evidence 回收 hash | P2 | — | |
 | 7 | 20_plan 容量预估 | P2 | — | |
 
