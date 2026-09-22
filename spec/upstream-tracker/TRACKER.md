@@ -82,7 +82,7 @@ depends: [vulkan-version-control-UPGRADE_SOP v1.0, operator-optimization-DESIGN 
 | [#29191](https://github.com/ggml-org/llama.cpp/pull/29191) ⭐新 | **streams experts from qwen 3.8 moe with gpu prefill on vulkan and hip**，1 commit / 3 评论 | 🔴 Open（创建 9/20、更新 9/21、`ms=blocked`、非 draft） | **直接命中现役模型（qwen3.8）+ 我们的两条后端（Vulkan / HIP）**：MoE **expert 流式**（不把全部 expert 常驻显存）⇒ 与"单站内存受限 + 分层/分片"同向。触发：评估（先读设计再判是否可借） |
 | [#27554](https://github.com/ggml-org/llama.cpp/pull/27554) | mmq 大 tile（dense prefill 1.76×） | ❌ Closed；方向由 [#27553](https://github.com/ggml-org/llama.cpp/issues/27553) 承接 |
 
-### 1.4 分布式推理相关 PR（集中索引，2026-09-16 新增）
+### 1.4 分布式推理相关 PR（集中索引，2026-09-16 新增；**状态复核 2026-09-22**）
 
 > **为什么单列**: 用户 2026-09-16 指出「V4-Flash 与 GLM-5.3-Flash 需要关注**分布式推理相关 PR**」。核查结论：**V4 侧此前已有标注**（§1.2b 的「层级」列 + §1.2 的 v0.3.0 / #28047 行），**GLM 侧则散落在 §1.2 的 #28047 与 §1.1 结论文字里、表格内无标注**；且两模型**均缺 4 条关键条目**（本次补录，行首标 ⭐）。本节作为**跨模型的单一入口**：既收模型专属项，也收**两模型共用的分布式基建**。
 
