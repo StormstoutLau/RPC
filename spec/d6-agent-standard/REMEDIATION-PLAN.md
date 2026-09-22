@@ -316,7 +316,7 @@ W1a ✅  →  W1b + W4 ✅  →  W2 ✅  →  W3 ✅
 ```
 
 - **已完成（2026-09-22）**：**W1a**（判据接真值源 + 恢复验收路径）、**W1b + W4**（消毒面收口：review 同规矩 + 附件默认不出网）、**§5.5.4 追补**（`review.json` 进产出方基线 —— 修 W1b/W4 自身带出的覆盖缺口）、**W2**（rc 可信性：复现成立 + 根因 `Invoke-RemoteScript` 裸调用 + 出口守卫 `Resolve-ExitCode`；**定级被修正为"影响每一次真派发"**）、**W3**（claude 路：站上变体 + 附件 ⇒ fail-closed 拒；headless 工具可用性由既有实弹关闭）。
-- **⇒ 计划内工作项全部完成**。遗留（**已登记，非本计划范围**）：① `_probe_fallback.ps1` **无自动调用点**（它已静默烂过一次；建议加冒烟判据或改"提取全部函数再覆盖 stub"）；② `W3 步 2`（站上变体附件同步）为**能力边界**，撤闸前须先有实弹证据；③ 存量 `review.json` WARN 已由用户裁定接受（水印 16 条，**水印 gitignored ⇒ 换机会重报**）。
-- ⚠ **夹具基线 `_fm_golden_test` 153/153** + `_scrubber_coverage_test` 43/43 + `_probe_fallback` **pass** + `rpc check`。
-- ⚠ **要真派发 ⇒ 站上须先在服务一个引擎**（否则一律 `STATION_NOT_READY`，exit 10）。本机当前：B 站 `:8080` 已载 `gpt-oss-20b`（ctx 32768）。
+- **⇒ 计划内工作项全部完成**。遗留（**已登记，非本计划范围**）：① ✅ ~~`_probe_fallback.ps1` **无自动调用点**~~ —— **2026-09-22 已闭环**：探针加 `-SmokeOnly` 静态自检（判"`Invoke-Task`/`-Claude` 体内调用到的、`agent-cli.ps1` 有定义的函数是否都已提取或 stub"）+ **由夹具调用它**（153→**154**）；**首跑即命中一个潜伏漂移**（`Invoke-ClaudeFly-Station` 未提取，只因探针里站上探查必然失败才没爆）⇒ 已修；变异自证（拿掉 `Get-BackendEgress` ⇒ smoke rc=1 且夹具红）；② `W3 步 2`（站上变体附件同步）为**能力边界**，撤闸前须先有实弹证据；③ 存量 `review.json` WARN 已由用户裁定接受（水印 16 条，**水印 gitignored ⇒ 换机会重报**）。
+- ⚠ **夹具基线 `_fm_golden_test` 154/154** + `_scrubber_coverage_test` 43/43 + `_probe_fallback` **pass**（含 `-SmokeOnly` 自检）+ `rpc check`。
+- ⚠ **要真派发 ⇒ 站上须先在服务一个引擎**（否则一律 `STATION_NOT_READY`，exit 10）。**当前：三站均已 unload（在服务 0 站）** —— 下次要派发先 `cluster.py load <alias>`。
 - 💡 **可复用的一条工具**：注入式探针 `ops/station-bin/_probe_fallback.ps1` **离线**驱动真实 `Invoke-Task`（stub 站点依赖）⇒ **不触站也能拿到行为证据**；但它有**硬编码提取清单**，`agent-cli.ps1` 新增纯函数时要同步（否则它会**静默失效**，见 OPEN-ISSUES 同名行）。
