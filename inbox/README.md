@@ -133,3 +133,7 @@ rejected（可从 triage / accepted / plan-review / plan-revise 任一进入）
 
 `paper-2026-08-23/` ← `D:\Paper\handoff_to_rpc_admin`（2468 篇论文蒸馏，已裁决推进中）。
 需求方原件已复制到 `00_handoff/`（复核用），项目侧原目录继续被 `.agentsync` 排除。
+
+**当前待办**（解除 `waiting` 的前置）：产出正式 `10_admin/裁决报告.md`
+（逐条 DR/CR/接口确认；CR-1/CR-5/CR-7 需需求方裁定）→ `10_admin/受理决定.md` → `20_plan/`（含容量预估）
+→ 交需求方复核。待办明细见 `paper-2026-08-23/40_state/评估摘要.md`。
