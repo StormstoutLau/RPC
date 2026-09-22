@@ -1,6 +1,10 @@
 #!/bin/bash
 # load-gate 最终版 (部署用) — B/C 站也是同构脚本
 # 用法: load-gate <需要GB> [host...] ; 默认本机
+# ssh 纪律 (2026-09-22 统一): 对 peer 的每个 ssh 都必须带 `-o BatchMode=yes`（并显式
+#   `-o ConnectTimeout=`）。理由: 认证异常时 OpenSSH 会**弹口令阻塞等 stdin** ⇒ 在本脚本里表现
+#   为"卡住"而非"失败"（实测挂起 >90s）。加了之后，认证/网络异常会**快速返回空值** ⇒ 直接落到下面
+#   既有的 `[ABORT] host $h 不可达` 分支（fail-closed 语义本就存在，此处只是把"卡住"去掉）。
 set +e
 NEED="${1:?用法: load-gate <需要GB> [host ...]}"
 HOSTS=("${@:2}")
@@ -15,10 +19,10 @@ gethost_facts() {
     rssm=$(ps -eo rss,comm | grep -E 'llama-server|ggml-rpc-server|llama-cli' | awk '{s+=$1} END{printf "%d", s/1024}')
     load1=$(cut -d' ' -f1 /proc/loadavg)
   else
-    total=$(ssh -o ConnectTimeout=5 "$h" "awk '/MemTotal/{printf \"%d\", \$2/1024}' /proc/meminfo" 2>/dev/null)
-    avail=$(ssh -o ConnectTimeout=5 "$h" "awk '/MemAvailable/{printf \"%d\", \$2/1024}' /proc/meminfo" 2>/dev/null)
-    rssm=$(ssh -o ConnectTimeout=5 "$h" "ps -eo rss,comm | grep -E 'llama-server|ggml-rpc-server|llama-cli' | awk '{s+=\$1} END{printf \"%d\", s/1024}'" 2>/dev/null)
-    load1=$(ssh -o ConnectTimeout=5 "$h" "cut -d' ' -f1 /proc/loadavg" 2>/dev/null)
+    total=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$h" "awk '/MemTotal/{printf \"%d\", \$2/1024}' /proc/meminfo" 2>/dev/null)
+    avail=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$h" "awk '/MemAvailable/{printf \"%d\", \$2/1024}' /proc/meminfo" 2>/dev/null)
+    rssm=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$h" "ps -eo rss,comm | grep -E 'llama-server|ggml-rpc-server|llama-cli' | awk '{s+=\$1} END{printf \"%d\", s/1024}'" 2>/dev/null)
+    load1=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$h" "cut -d' ' -f1 /proc/loadavg" 2>/dev/null)
     used=$(( total - avail ))
   fi
   [ -z "$rssm" ] && rssm=0
