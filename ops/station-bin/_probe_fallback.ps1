@@ -313,19 +313,19 @@ function Count-ClaudeRuns {
 
 # 直接入口用 claude 型号; 兜底入口的主路用**站上本地引擎**型号(gpt-oss) —— 那正是本洞的真实场景
 #   (非 `opencode/*` ⇒ 旧三处闸不拦)。
-# W3 用例 E 需要一个**真实存在**的附件文件(附件闸/能力闸都先看 `Test-Path`)。
-$attFile = Join-Path $env:TEMP 'probe-attach.txt'
-[IO.File]::WriteAllText($attFile, "probe-attach-payload`n", (New-Object System.Text.UTF8Encoding($false)))
 # ⚠ 每个用例都**显式**给 `attach`: 因为 `@($null).Count` 在 PS 里是 **1**(不是 0) —— 若让缺省值漏进来,
-#   A–D 会被误判成"有附件"而撞上 W3 的新闸(这正是"缺省值形状"类陷阱)。
+#   `local-only` 的用例会被误判成"有附件"(进而走进站上附件同步分支, 在探针里必然失败)。
 $cases = @(
     @{ tag = 'A local-only + -cli claude (直接入口) '; card = $cardLocal; sens = 'local-only'; cli = 'claude';   model = 'claude';  fb = $false; expect = 'reject'; attach = @(); probes = 'gt0' },
     @{ tag = 'B local-only + AUTO_FALLBACK (兜底入口)'; card = $cardLocal; sens = 'local-only'; cli = 'opencode'; model = 'gpt-oss'; fb = $true;  expect = 'reject'; attach = @() },
     @{ tag = 'C sanitized  + -cli claude (直接入口) '; card = $cardSanit; sens = 'sanitized'; cli = 'claude';   model = 'claude';  fb = $false; expect = 'allow';  attach = @() },
-    @{ tag = 'D sanitized  + AUTO_FALLBACK (兜底入口)'; card = $cardSanit; sens = 'sanitized'; cli = 'opencode'; model = 'gpt-oss'; fb = $true;  expect = 'allow';  attach = @() },
-    # E: W3 步 1 的新闸 —— 站上变体 + 有附件 ⇒ fail-closed 拒, 且**零触站**(`noProbe`)。
-    #    ⚠ `noProbe` 是本用例的**判别性**所在: 没有它, "闸不存在"也会因探查循环 rc=4 而 PASS。
-    @{ tag = 'E local-only + -cli claude + 附件';      card = $cardLocal; sens = 'local-only'; cli = 'claude';   model = 'claude';  fb = $false; expect = 'reject'; attach = @($attFile); noProbe = $true }
+    @{ tag = 'D sanitized  + AUTO_FALLBACK (兜底入口)'; card = $cardSanit; sens = 'sanitized'; cli = 'opencode'; model = 'gpt-oss'; fb = $true;  expect = 'allow';  attach = @() }
+    # ⚠ 原用例 E（`local-only` + claude + 附件）已**删除**：它当时验的是 W3 步 1 那道"一律拒绝"闸的
+    #   **零触站**性质。步 2 把能力做了出来（站上建工作区 + 附件真的 scp 上去 + cwd 指过去）⇒ 该闸已撤,
+    #   而**站上同步这条路径在探针环境里根本无法验**（没有真实站; scp 必然失败 ⇒ 会走 fail-closed 的
+    #   rc=5 分支, 那验的是"网络失败"而不是"附件到位"）。⇒ 它的**行为证据由真实站实弹提供**
+    #   （`local-only` + `-Cli claude` + `-Attach` ⇒ agent 真读到附件; 见 REMEDIATION-PLAN §W3 步 2）。
+    #   ⚠ 这里刻意**不**留一个"看着像在验"的替身：那正是本项目反复吃过的"判据在跑, 判的不是你以为的"。
 )
 foreach ($c in $cases) {
     $before = Count-ClaudeRuns
@@ -347,18 +347,9 @@ foreach ($c in $cases) {
             $ok = $false
         }
     }
-    # W3 步 1: 判别性判据 —— 该用例被拒时**不得触碰任何站**(闸在候选探查之前)。
-    if ($c.noProbe) {
-        if ($script:probeStationProbes -eq 0) {
-            Write-Host ('     PASS  ' + $c.tag + ' [零触站]: 站上候选探查 0 次(闸在探查之前生效)')
-        } else {
-            Write-Host ('     FAIL  ' + $c.tag + ' [零触站]: 探查了 ' + $script:probeStationProbes + ' 次 ⇒ 闸没拦住, 或在探查之后(该卡会被实际派到站上)')
-            $ok = $false
-        }
-    }
-    # ⚠⚠ **正对照(没有它,"0 次"可能是恒真的)**: 若计数器/探查循环根本没在跑, 上面那条 `= 0` 会**永远 PASS**
+    # ⚠⚠ **正对照(没有它,"0 次"可能是恒真的)**: 若计数器/探查循环根本没在跑, 这类 `= 0` 会**永远 PASS**
     #   ⇒ 那是"判据在跑, 但判的不是你以为的东西"(本项目已踩三次)。⇒ 必须有**一个已知会触碰站**的用例
-    #   (A: local-only + claude, 无附件 ⇒ 不过新闸 ⇒ 走到候选探查)把计数证明成 **> 0**。
+    #   (A: local-only + claude, 无附件 ⇒ 走到候选探查)把计数证明成 **> 0**。
     if ($c.probes -eq 'gt0') {
         if ($script:probeStationProbes -gt 0) {
             Write-Host ('     PASS  ' + $c.tag + ' [正对照]: 站上候选探查 ' + $script:probeStationProbes + ' 次(>0) ⇒ 计数器是活的, 故 E 的"0 次"有意义')

@@ -596,37 +596,34 @@ $attCalls = ([regex]::Matches($cliText, 'Get-AttachEgressReject -attachCount')).
 Assert-True "attach: 两个通道各判一次 = 2(实测 $attCalls)(opencode 通道 + claude 运行时通道)" ($attCalls -eq 2)
 Assert-True "attach: 前端 schema 已加预置键 attach-egress" ($cliText -match "\`$h\['attach-egress'\] = ''")
 
-# --- W3 步 1（2026-09-22）: 站上变体 + 有附件 ⇒ fail-closed 拒（**能力缺口，不是策略选择**）---
-# 为什么必须拒: 站上变体在**站上**跑 claude 且站上脚本 `cd "$HOME"`，而附件只复制到**主控本地**
-#   `<projRoot>\.attach` ⇒ 站上读不到 ⇒ agent 在**缺件**下跑完 = **假绿灯**。代价不对称：
-#   **假绿灯会被当成证据**，而"明确拒绝"是可修的错误。
-# 与 W4 的 `Get-AttachEgressReject` **不同维度**（那道管"附件会不会出网"，站上本地 ⇒ 放行；
-#   本闸管"附件到不到得了执行点"）⇒ **两个都要有**，不能互相替代。
+# --- W3（2026-09-22）: claude 路站上变体 —— 步 1 的"一律拒绝"已由步 2"真的同步"取代 ---
+# 背景: 站上变体在**站上**跑 claude（原先 `cd` 到 HOME），而附件只落主控本地 ⇒ 读不到 ⇒ "缺件跑完"= 假绿灯。
+#   步 1 用 fail-closed 闸挡住；步 2 **把能力做出来**（站上建专用工作区 + 附件 scp 上去 + cwd 指过去），
+#   并把"同步失败"做成 fail-closed ⇒ **安全性质不变**（绝不在缺件下跑完），但危险形态变成可用的能力。
+# ⚠ 本块守住四条不变量（缺任一条，能力就会静默退化成"假绿灯"）:
+#   ① 旧的"一律拒绝"闸**已撤**（不是被悄悄加回来，那会把能力重新关掉）
+#   ② 站上 spawn **两处**都传 `-WorkDir`（少传一处 ⇒ 那条路径的 cwd 退回旧语义）
+#   ③ 站上脚本**不再** cd 到 HOME，且工作区不可用时**退 8**（fail-closed）
+#   ④ 附件上站任何一步失败 ⇒ **非零退出**（绝不静默继续）
 $ccFn = @($fns) | Where-Object { $_.Name -eq 'Invoke-Task-Claude' } | Select-Object -First 1
 Assert-True "w3: Invoke-Task-Claude 函数体可被 AST 定位" ([bool]$ccFn)
+$w3OldGate = ([regex]::Matches($cliText, 'claude-station-attach-unsupported')).Count
+Assert-True "w3: 旧的'站上+附件一律拒绝'闸**已撤**(实测 $w3OldGate 处)" ($w3OldGate -eq 0)
+$w3WorkDirCalls = ([regex]::Matches($cliText, 'Invoke-ClaudeFly-Station -hostName .*-WorkDir \$stWorkDir')).Count
+Assert-True "w3: 站上 spawn 两处都传 -WorkDir = 2(实测 $w3WorkDirCalls)" ($w3WorkDirCalls -eq 2)
+# ⚠ **行首锚定**(`(?m)^cd ...`)，不是全文 `-match` —— 因为站上脚本是**here-string**(AST 看不进去),
+#   只能文本判; 而全文匹配会被**注释**骗(本仓已踩过 4 次)。锚行首 = "这是一条真命令", 注释行以 `#` 开头。
+Assert-True "w3: 站上脚本不再 cd 到 HOME(附件/项目相对路径就地可解析)" (-not ($cliText -match '(?m)^cd "\$HOME"'))
+Assert-True "w3: 站上脚本对工作区不可用 **fail-closed**(退 8, 不在错的 cwd 下跑完)" ($cliText -match 'workdir 不可用')
+$w3SyncFail = ([regex]::Matches($cliText, 'claude-station-attach-sync-failed')).Count
+Assert-True "w3: 附件上站失败 => fail-closed(实测 $w3SyncFail 处; 非零退出, 绝不静默继续)" ($w3SyncFail -eq 1)
+# 位置断言（**AST**，不是文本）: 附件上站必须**早于站上 spawn** —— 否则 agent 先跑、附件后到 = 缺件跑完
 $ccCmds = @($ccFn.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true))
-$w3Gate = @($ccCmds | Where-Object { $_.Extent.Text -match 'claude-station-attach-unsupported' }) | Select-Object -First 1
-Assert-True "w3: 存在 fail-closed 闸(REJECT claude-station-attach-unsupported)" ([bool]$w3Gate)
-# 判据形状: 必须键在 `$useStation` **且** 有附件上 —— 防它被改成恒真/恒假而断言照样绿
-$w3If = @($ccFn.FindAll({ param($n)
-            $n -is [System.Management.Automation.Language.IfStatementAst] -and
-            $n.Extent.Text -match 'claude-station-attach-unsupported' }, $true)) | Select-Object -First 1
-Assert-True "w3: 闸的判据 = useStation + 有附件(不是恒真/恒假)" (
-    [bool]$w3If -and $w3If.Clauses.Count -gt 0 -and
-    ($w3If.Clauses[0].Item1.Extent.Text -match '\$useStation') -and
-    ($w3If.Clauses[0].Item1.Extent.Text -match 'attach'))
-# 位置断言（**AST**，不是文本 —— 文本会被注释骗，本项目已踩两次）: 闸必须**早于站上候选探查**
-#   与**早于站上 spawn** ⇒ 被拒的卡**零触站**（探针另有一条行为性的零触站断言）。
-$w3Probe = @($ccCmds | Where-Object { $_.GetCommandName() -eq 'Test-StationEngineReady' }) | Select-Object -First 1
+$w3Sync = @($ccCmds | Where-Object { $_.Extent.Text -match 'claude-ws-reset\.sh' }) | Select-Object -First 1
 $w3Spawn = @($ccCmds | Where-Object { $_.GetCommandName() -eq 'Invoke-ClaudeFly-Station' }) | Select-Object -First 1
-$iW3Gate  = if ($w3Gate)  { $w3Gate.Extent.StartOffset  - $ccFn.Extent.StartOffset } else { -1 }
-$iW3Probe = if ($w3Probe) { $w3Probe.Extent.StartOffset - $ccFn.Extent.StartOffset } else { -1 }
+$iW3Sync = if ($w3Sync) { $w3Sync.Extent.StartOffset - $ccFn.Extent.StartOffset } else { -1 }
 $iW3Spawn = if ($w3Spawn) { $w3Spawn.Extent.StartOffset - $ccFn.Extent.StartOffset } else { -1 }
-Assert-True "w3: 位置断言(AST) —— 闸($iW3Gate) 早于 站上候选探查($iW3Probe)（⇒ 零触站）" ($iW3Gate -gt 0 -and $iW3Probe -gt 0 -and $iW3Gate -lt $iW3Probe)
-Assert-True "w3: 位置断言(AST) —— 闸($iW3Gate) 早于 站上 spawn($iW3Spawn)" ($iW3Gate -gt 0 -and $iW3Spawn -gt 0 -and $iW3Gate -lt $iW3Spawn)
-# 计数断言: 该闸只应有一处（防"加了个新入口又漏"；与 attach 双通道那种"必须两处"的情形要分清）
-$w3Cnt = ([regex]::Matches($cliText, 'claude-station-attach-unsupported')).Count
-Assert-True "w3: 闸的判据串只出现 1 次(实测 $w3Cnt)" ($w3Cnt -eq 1)
+Assert-True "w3: 位置断言(AST) —— 附件上站($iW3Sync) 早于 站上 spawn($iW3Spawn)" ($iW3Sync -gt 0 -and $iW3Spawn -gt 0 -and $iW3Sync -lt $iW3Spawn)
 
 # --- W2（2026-09-22）: 进程退出码可信性 —— `exit $数组` 会把 rc 抹成 0 ---
 # 实测（临时脚本直测进程 rc）: exit 4 ⇒ 4 / exit @($null,4) ⇒ **0** / exit @(0,4) ⇒ **0**

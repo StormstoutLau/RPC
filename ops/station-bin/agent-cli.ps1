@@ -2389,23 +2389,13 @@ function Invoke-Task-Claude {
         Write-Host "REJECT claude-station=$($r['station']) (exit 4) - claude channel must run local (station='')"
         return 4
     }
-    # W3 步 1 (2026-09-22): **站上变体 + 有附件 ⇒ fail-closed 拒** —— 这是**能力缺口**, 不是策略选择。
-    # 为什么**必须拒**而不是"让它跑": 站上变体在**站上**执行 claude, 且站上脚本 `cd "$HOME"`
-    #   (见 `Invoke-ClaudeFly-Station` 生成的 `_p3_claude_run.sh`) —— 而附件只被复制到**主控本地**
-    #   `<projRoot>\.attach`(见下方 attach 块) ⇒ **站上根本读不到**。此时 agent 会在**缺件**的情况下
-    #   跑完并给出结论 = **假绿灯**。而"明确拒绝"是**可修的错误**(卡作者改走主控本地 / 等步 2 实现同步)
-    #   ⇒ 两者代价不对称: **假绿灯会被当成证据**。故优先拒, 不优先实现同步。
-    # ⚠ 与 W4 附件闸的分工(两个判据不同维度, 都要有): `Get-AttachEgressReject` 管的是
-    #   "附件**会不会出网**"(按后端出网属性判; 站上本地 ⇒ 不出网 ⇒ **放行**); 本闸管的是
-    #   "附件**到不到得了执行点**"。⇒ **W4 的放行不能被读成"站上+附件可用"**。
-    # ⚠ 位置刻意在此(**早于站上候选探查**): 该卡必被拒 ⇒ **不该为它触碰任何站**(判据里那条
-    #   "零触站"由此保证); 夹具对此设**位置断言**(AST, 见 _fm_golden_test.ps1)。
-    # **后置(步 2, 可选)**: 真正实现"附件同步到站上 + `cd` 到站上工作区"后可撤本闸 —— 撤之前
-    #   **必须**先有"附件在站上可读"的实弹证据(方法与 P3 探针卡相同), 别只凭代码看着对。
-    if ($useStation -and @($attach).Count -gt 0) {
-        Write-Host "REJECT claude-station-attach-unsupported (exit 4) - 站上变体不支持附件(附件只到主控本地, 站上 cwd=`$HOME 读不到) ⇒ fail-closed; 改走主控本地(需 public/sanitized)或等 W3 步 2 实现同步"
-        return 4
-    }
+    # W3 步 2 (2026-09-22): 原先这里是一道**"站上变体 + 有附件 ⇒ 一律拒绝"**的 fail-closed 闸
+    #   （因为附件只到主控本地、站上读不到 ⇒ 会"缺件跑完"= 假绿灯）。**现已被"把能力做出来"取代**：
+    #   下面会为本次 run 在站上建专用工作区并**把附件真的 scp 上去**，任一步失败即 `return 5`
+    #   ⇒ **安全性质不变**（绝不在缺件下跑完），但**危险形态从"可见拒绝"变成"可用的能力"**。
+    #   ⚠ 撤闸的**依据**不是"代码看着对"，而是**实弹**：`local-only` + `-Cli claude` + `-Attach` 在
+    #     真实站上跑通、且 agent **读到了附件**（见 REMEDIATION-PLAN §W3 步 2 的完成记录）。
+    #   ⚠ 别再"顺手加回"这道闸：它会把已实现的能力重新关掉；要退回到拒绝，请先说明为什么同步不可靠。
     # ⚠ P0 止血 (2026-09-21, 安全策略洞 · 出网路径①) —— **P3 已把它从"一律拒绝"升级为"分流"**：
     #   原语义: `local-only` 一律不进本通道(本函数是**主控本地** spawn claude, 其
     #   ANTHROPIC_BASE_URL = 云端 OpenRouter ⇒ 出网)。该洞此前**惰性**(备路不可用
@@ -2509,6 +2499,52 @@ function Invoke-Task-Claude {
             $promptFull += "`n(attachments staged under .attach/ - read as needed)"
         }
     }
+    # ── W3 步 2 (2026-09-22): **站上变体的附件同步** —— 把附件真的送到**执行点**, 取代原先"一律拒绝" ──
+    # 为什么必须送: 站上变体在**站上**跑 claude, 而上面那段附件复制**只落主控本地** `<projRoot>\.attach`
+    #   ⇒ 站上读不到 ⇒ agent 在**缺件**下跑完 = **假绿灯**（比明确拒绝危险：假绿灯会被当成证据）。
+    # 处置（不是"删闸就完"）：① 为**该项目**在站上建工作区 `<WSROOT>/_p3_claude_ws/<proj>`;
+    #   ② 对它**只 reset `.attach/`**（09-18 教训: 残留件会污染本次）；③ 逐件 scp 上去(目录先 mkdir 兜空目录);
+    #   ④ **任一步失败 ⇒ `return 5`**（fail-closed: 宁可不跑, 也不在缺件下跑完 —— 安全性质与旧闸等价）。
+    # ⚠ **工作区名必须"每项目稳定", 不能"每次唯一"** —— `claude --continue` 是**按目录**恢复会话的:
+    #   若每次换一个新目录, 续接路径**永远找不到上一次会话** ⇒ 长卡续接静默失效(本轮自查发现并避免)。
+    #   故只 reset `.attach/`(清残留), **不删整个工作区**(目录本身要活到下一次 resume)。
+    # ⚠ 与本地支的分工: 本地支 cwd=`$projRoot`(附件已落在 `<projRoot>\.attach`), 站上支 cwd=上面那个工作区
+    #   ⇒ **两边 prompt 里的相对引用 `.attach/<name>` 都解析得到**（`Invoke-ClaudeFly-Station -WorkDir`）。
+    # ⚠ 已知边界（已登记，非本次引入）: 该工作区**只含附件**，**不含项目文件** —— 站上 claude 迄今也没有
+    #   项目工作区（原先 cwd 是 `$HOME`）⇒ 这是**未被消费**的能力缺口, 与本步正交，另登记。
+    $stWorkDir = ''
+    if ($useStation) {
+        $stWorkDir = "$Script:WORKSPACE_ROOT/_p3_claude_ws/$proj"
+        $bodyReset = @"
+set -eu
+W="$stWorkDir"
+mkdir -p "`$W"
+# 只清 `.attach/`(残留件会污染本次); **不删** `W` 本身 —— 见上"每项目稳定"那条(`claude --continue`)
+rm -rf "`$W/.attach" && mkdir -p "`$W/.attach"
+"@
+        Invoke-RemoteScript -HostName $stHost -ScriptBody $bodyReset -LocalName "agent-cli-claude-ws-reset.sh" | Out-Null
+        foreach ($a in @($attach)) {
+            # 与本地支同语义: 源不存在 ⇒ 跳过(上面循环已 `attach missing (skip)` 告警, 且 prompt 未引用它)
+            if (-not (Test-Path $a)) { continue }
+            $nm2 = Split-Path $a -Leaf
+            if (Test-Path $a -PathType Container) {
+                $bodyMk = @"
+set -eu
+mkdir -p "$stWorkDir/.attach/$nm2"
+"@
+                Invoke-RemoteScript -HostName $stHost -ScriptBody $bodyMk -LocalName "agent-cli-claude-attach-mkdir.sh" | Out-Null
+                & scp -q -r -o BatchMode=yes -o ConnectTimeout=8 $a "${stUser}@${stHost}:$stWorkDir/.attach/" 2>&1 | Out-Null
+            } else {
+                & scp -q -o BatchMode=yes -o ConnectTimeout=8 $a "${stUser}@${stHost}:$stWorkDir/.attach/" 2>&1 | Out-Null
+            }
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "REJECT claude-station-attach-sync-failed (exit 5) - 附件上站失败: $a ⇒ fail-closed(宁可不跑, 也不在缺件下跑完)"
+                return 5
+            }
+            Write-Host "ATTACH_OK(station): $a -> $stWorkDir/.attach/$nm2"
+        }
+        Write-Host "P3_CLAUDE_WORKDIR: $stWorkDir (站上 claude 的 cwd; 附件 $(@($attach).Count) 件)"
+    }
     if ($prof.thinking -eq 'ON' -and $prof.profile -in @('short','reason')) {
         $promptFull += "`n`n(concise reply expected: minimize thinking, give key steps + final result)"
     }
@@ -2548,7 +2584,7 @@ function Invoke-Task-Claude {
     #   站上分支的型号用引擎接受的别名 `main`(站上既有 settings 也是这么做的:
     #   `modelOverrides: claude-opus-4-6 -> main`) ⇒ 与云端分支的 `$id` 语义不同, 故分开传。
     if ($useStation) {
-        $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('-p "" --model "main"') -stdin $promptIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $timeout
+        $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('-p "" --model "main"') -stdin $promptIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $timeout -WorkDir $stWorkDir
     } else {
         $rcov = Invoke-ClaudeFly -argStr ('-p "" --model "' + $id + '"') -stdin $promptIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $timeout -cwd $projRoot
     }
@@ -2563,7 +2599,7 @@ function Invoke-Task-Claude {
         Add-Content $outTxt "`n=== RESUME[$contAttempt] prev_rc=$rc ==="
         [IO.File]::WriteAllText($contIn, ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($contB64))), $utf8NoBom)
         if ($useStation) {
-            $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('--continue -p "" --model "main"') -stdin $contIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $continueTimeout
+            $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('--continue -p "" --model "main"') -stdin $contIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $continueTimeout -WorkDir $stWorkDir
         } else {
             $rcov = Invoke-ClaudeFly -argStr ('--continue -p "" --model "' + $id + '"') -stdin $contIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $continueTimeout -cwd $projRoot
         }
@@ -2788,8 +2824,10 @@ function Invoke-ClaudeFly {
         #   ⚠ 同函数里 accept 早已**显式** `-cwd $projRoot`（L2392/2408）⇒ 本改动同时消除
         #   「**agent 的 cwd ≠ accept 的 cwd**」这个此前未被核过的**已存在不一致**。
         #   也顺带让代码注释「claude cwd=projRoot」（L2280）从**假设**变成**事实**。
-        #   ⚠ 站上变体（`Invoke-ClaudeFly-Station`）是另一套机制（站上脚本 `cd "$HOME"`）且
-        #   **附件根本没同步到站上** ⇒ 同类但更重，**本轮不动**，已登记待办。
+        #   ⚠ 站上变体（`Invoke-ClaudeFly-Station`）是另一套机制（站上脚本 cd 到**执行点工作区**,
+        #      见其 `-WorkDir`）。2026-09-22 W3 步 2 之前它是 `cd "$HOME"` **且附件根本没同步到站上**
+        #      ⇒ 二者已一并闭环（`Invoke-Task-Claude` 现为站上建工作区 + scp 附件上去 + fail-closed）。
+        #      仍留的**项目文件**层面差异（站上工作区只含附件、不含项目文件）见 §W3 步 2 的"已知边界"。
         if ($cwd) { $psi.WorkingDirectory = $cwd }
         $proc = [System.Diagnostics.Process]::Start($psi)
         # 三路**并发**搬运, 防任一管道写满互锁: stdin 从文件灌入, stdout/stderr 落文件。
@@ -2874,7 +2912,10 @@ function Invoke-ClaudeFly-Station {
     #      ⇒ claude 会**以为有 120k** 并把超限请求发出去 ⇒ 引擎 400(自造"预算不可信", O-23 同构)。
     #      故本函数**从引擎 /props 现读 n_ctx** 并对齐(留输出余量) ⇒ 自对齐, 不靠外部传参。
     param([string]$hostName, [string]$remoteUser, [string]$argStr, [string]$stdin,
-          [string]$stdout, [string]$stderr, [string]$scratch, [int]$budgetS)
+          [string]$stdout, [string]$stderr, [string]$scratch, [int]$budgetS,
+          # W3 步 2 (2026-09-22): **站上 claude 的 cwd**（执行点目录）。空/不存在 ⇒ 站上脚本 fail-closed
+          #   退 8 —— 绝不退回 `$HOME`（那正是"卡里相对路径全解析不到却照样跑完"的假绿灯形状）。
+          [string]$WorkDir)
     if (-not (Test-Path $stdin)) { [IO.File]::WriteAllText($stdin, '', (New-Object System.Text.UTF8Encoding $false)) }
     $ru = "$remoteUser@$hostName"
     $rIn = '/tmp/_p3_claude_in.txt'; $rOut = '/tmp/_p3_claude_out.txt'; $rErr = '/tmp/_p3_claude_err.txt'
@@ -2883,9 +2924,9 @@ function Invoke-ClaudeFly-Station {
         $runSh = @'
 #!/bin/bash
 # _p3_claude_run.sh — 站上跑 claude headless 并指向**站上本地引擎**(物理不出网)
-# 由 agent-cli.ps1 的 Invoke-ClaudeFly-Station 生成; 参数: $1=argStr  $2=budgetS
+# 由 agent-cli.ps1 的 Invoke-ClaudeFly-Station 生成; 参数: $1=argStr  $2=budgetS  $3=workdir
 set -uo pipefail
-ARGSTR="$1"; BUDGET="$2"
+ARGSTR="$1"; BUDGET="$2"; WORK="$3"
 KEYF="$HOME/.config/rpc/unsloth.key"
 K=""; [ -f "$KEYF" ] && K=$(tr -d '[:space:]' < "$KEYF")
 # 引擎真实 ctx(自对齐; 取不到则退回保守值)
@@ -2899,8 +2940,12 @@ cat > "$SET" <<JSON
 {"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8080","CLAUDE_CODE_MAX_CONTEXT_TOKENS":"$MAXC","DISABLE_AUTOUPDATER":"1"},
  "apiKeyHelper":"/bin/cat $KEYF","model":"main","modelOverrides":{"main":"main"}}
 JSON
-echo "P3_STATION: engine_ctx=$CTX max_context_tokens=$MAXC base_url=http://127.0.0.1:8080"
-cd "$HOME" || exit 8
+echo "P3_STATION: engine_ctx=$CTX max_context_tokens=$MAXC base_url=http://127.0.0.1:8080 cwd=$WORK"
+# W3 步 2 (2026-09-22): **不再 `cd "$HOME"`** —— 改到**执行点目录**(站上为该次 run 建的工作区)，
+#   否则卡里以相对路径引用的附件(`.attach/<name>`)与项目文件**都解析不到**。
+#   **fail-closed**: 目录不可用就当场退 8 —— 绝不在错的 cwd 下跑完(那正是"假绿灯"的形状)。
+[ -n "$WORK" ] && [ -d "$WORK" ] || { echo "P3_STATION_ERR: workdir 不可用: '$WORK'"; exit 8; }
+cd "$WORK" || exit 8
 timeout "$BUDGET" claude --settings "$SET" $ARGSTR < /tmp/_p3_claude_in.txt \
   > /tmp/_p3_claude_out.txt 2> /tmp/_p3_claude_err.txt
 RC=$?
@@ -2914,7 +2959,7 @@ exit $RC
         & scp -q -o BatchMode=yes -o ConnectTimeout=8 $localSh "${ru}:/tmp/_p3_run.sh" 2>&1 | Out-Null
         & scp -q -o BatchMode=yes -o ConnectTimeout=8 $stdin "${ru}:${rIn}" 2>&1 | Out-Null
         # [3] 执行(预算在**站上** timeout 里; ssh 自身不设超时以免掩盖真实 rc)
-        $out = & ssh -o BatchMode=yes -o ConnectTimeout=8 $ru "bash /tmp/_p3_run.sh '$argStr' $budgetS" 2>&1
+        $out = & ssh -o BatchMode=yes -o ConnectTimeout=8 $ru "bash /tmp/_p3_run.sh '$argStr' $budgetS '$WorkDir'" 2>&1
         $rc = $LASTEXITCODE
         foreach ($l in @($out)) { Write-Host "  [station-claude $hostName] $l" }
         # [4] 收 stdout/stderr(上层编排只看这两个文件)
