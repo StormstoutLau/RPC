@@ -60,19 +60,19 @@ $Script:ROUTE_TABLE = @{
     'qwen'       = @{ id = 'local/qwen';                              station = 'B' }
     'gpt-oss'    = @{ id = 'local/gpt-oss';                           station = 'A' }
     'gpt-oss-20b'= @{ id = 'local/gpt-oss-20b';                       station = 'B' }   # O-13 sympy 收口卡 (B 站 20b, 2026-09-14)
-    # ⚠ **2026-09-21 实测：以下三个 zen 路由当前不可用，别用** —— 三站 `opencode auth list` 均为
-    #   **0 credentials**；而 `opencode/*` 是 opencode 自带网关(zen)，**无凭据时不报错、只静默挂死**
-    #   （实测 `timeout 120` 被掐 3 次 = **360s**，输出只有 `> build · <model>` banner；**同一模型**
-    #   走站上**有凭据**的 `openrouter/*` 则 **16s** 出结果 ⇒ 差异只在凭据）。
-    #   ⇒ 要恢复须先 `opencode auth login --provider opencode`（要 https://opencode.ai/auth 的 API key，
-    #   且 clack TUI **需 tty** ⇒ 管道喂 stdin 无效、无设备码流程）。
-    #   复验（30s 以内，判据写在脚本头）：站上 `bash _probe_opencode_provider.sh <model> 25`
-    #   ⇒ `RC=124` + 只有 banner = 静默挂死；`RC=0` + `ZEN-OK` = 可用。
-    #   ⚠ 连带：`test-cards/sanitized.md`（**唯一那张 `sanitized` 验收卡**）用的就是下面的 `lightning`
-    #   ⇒ **该卡当前跑不通**（sanitized 闸的验收路径实际是断的），见 OPEN-ISSUES。
-    'lightning'  = @{ id = 'opencode/nemotron-3.5-lightning-free';              station = 'B' }
-    'ultra'      = @{ id = 'opencode/nemotron-3-ultra-free';                    station = 'B' }
-    'free-1m'    = @{ id = 'opencode/nemotron-3-ultra-free';                    station = 'B' }  # alias of ultra
+    # ⚠ **2026-09-21 实测：zen（`opencode/*`）当前不可用 ⇒ 这三个档位已重指到"站上 openrouter"**。
+    #   事实：三站 `opencode auth list` 均为 **0 credentials**；`opencode/*` 是 opencode 自带网关(zen)，
+    #   **无凭据时不报错、只静默挂死**（实测 `timeout 120` 被掐 3 次 = **360s**，输出只有 `> build · <model>`
+    #   banner；**同一模型**走站上 `openrouter/*` 则 **16s** 出结果 ⇒ 差异只在凭据）。复验工具：
+    #   `_probe_opencode_provider.sh <model> 25`（`RC=124`=静默挂死 / `RC=0`=可用）。若要恢复 zen：
+    #   `opencode auth login --provider opencode`（要 https://opencode.ai/auth 的 API key，且 clack TUI 需 tty）。
+    #   新 id 取 `secrets/openrouter.conf` 的 **`harness_priority` 前两档**（该键是**权威真值**，本表只镜像，
+    #   **不新立模型清单**）—— 与 `claude`/`claude-opus` 同源；站上 `openrouter` provider 已有 key 且实测可用。
+    #   ⚠ **别名命名的是"档位"（快 / 高保真 / 1M），不是厂商** —— 故重指不改名、调用方零改动。
+    #   ⚠ `free-1m` 的"1M"是**原 zen 型号的属性**，新 id 的 ctx **未核**（JUDGE_TABLE 里那个 ctx 字段同此）。
+    'lightning'  = @{ id = 'openrouter/thinkingmachines/inkling:free';            station = 'B' }   # 快档 (原 zen: opencode/nemotron-3.5-lightning-free)
+    'ultra'      = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';   station = 'B' }   # 高保真档 (原 zen: opencode/nemotron-3-ultra-free)
+    'free-1m'    = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';   station = 'B' }  # alias of ultra
     # C 站 (seaviv) 2026-09-09: gpt-oss 本地引擎已注入 8080; nemotron 模型已传待启
     'gpt-oss-c'  = @{ id = 'local/gpt-oss';                           station = 'C' }
     'nemotron-c' = @{ id = 'local/nemotron';                          station = 'C' }
@@ -92,6 +92,10 @@ $Script:ROUTE_TABLE = @{
     'local/qwen3.8-flash-next'    = @{ id = 'local/qwen3.8-flash-next';    station = 'C' }
     'opencode/nemotron-3.5-lightning-free'  = @{ id = 'opencode/nemotron-3.5-lightning-free';  station = 'B' }
     'opencode/nemotron-3-ultra-free'        = @{ id = 'opencode/nemotron-3-ultra-free';        station = 'B' }
+    # (上面两条 zen full-id 保留: 若将来 `opencode auth login` 恢复凭据, 它们即可用; 当前会静默挂死)
+    # 站上 openrouter 的两个档位 full-id (与上面 local/* 同例: 使 `--model <id>` 与 env AGENT_FALLBACK_MODEL 可解析)
+    'openrouter/thinkingmachines/inkling:free'          = @{ id = 'openrouter/thinkingmachines/inkling:free';          station = 'B' }
+    'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free' = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free'; station = 'B' }
     # O-15 claude 备通道 (2026-09-12): 控制台本地执行, station 空 = 不走 ssh. cli=claude 选中本地执行器.
     #   id = 传给 `claude -p --model` 的型号。
     #   ⚠ **2026-09-21 修正（实测，阻断级）**: 原为 **Claude 原生 id**(claude-sonnet-4-5 / claude-opus-4-1) ——
@@ -441,9 +445,14 @@ function Invoke-Router {
     $id = $r['id']
     $station = $r['station']
 
-    # rule B: local-only never goes to Zen egress (opencode/* => outbound)
-    if ($sensitivity -eq 'local-only' -and $id -match '^opencode/') {
-        Write-Host "REJECT local-only+remote ($id) exit 4 - no override channel (owner-policy)"; return 4
+    # rule B: local-only never leaves the console。**判据 = 后端属性**（W1a 2026-09-21：不再看型号前缀
+    #   `^opencode/` —— 白名单式判据每加一个云后端就漏一次，已漏两次）。
+    #   ⚠ **claude 通道豁免**：该通道的实际后端由 P3 决定（站上有本地引擎 ⇒ 站上本地引擎 = 不出网），
+    #     故交由 `Invoke-Task-Claude` 以 `-backendEgress (-not $useStation)` 按运行时判；
+    #     此处若按 route id 判会**误杀 P3**。
+    if ([string]$r['cli'] -ne 'claude') {
+        $rejB = Get-SensitivityBackendReject -sensitivity $sensitivity -backendEgress (Get-BackendEgress $id)
+        if ($rejB) { Write-Host "REJECT $rejB (route, $id) exit 4 - no override channel (owner-policy)"; return 4 }
     }
 
     Write-Host "ROUTE ok: $model -> $id (station $station, sensitivity=$sensitivity)"
@@ -1049,6 +1058,54 @@ function Get-SensitivityBackendReject {
     return ''
 }
 
+# ---------------- W1a (2026-09-21): 后端属性判据（把敏感度闸从"型号前缀"接到"后端属性"上） ----------------
+# 为什么要有这三个纯函数（结构根因）:
+#   此前判"这个后端会不会出网"用的是**白名单式型号前缀** `-match '^opencode/'`，代价已付过两次 ——
+#   ① claude 备路（route id 是 OpenRouter 型号 `thinkingmachines/inkling:free`，前缀不是 opencode/）
+#   ② review 的 egress judge（另一套完全独立的窄判据）。
+#   ⇒ 白名单式判据**每加一个云后端就漏一次**。本组函数把它换成"后端属性"：**判据只在一处定义**，
+#     新增后端**自动纳管**（夹具 `_fm_golden_test.ps1` 有"假想云端后端"负例钉住这一点）。
+# ⚠ 调用方注意（一条容易搞错的边界）: **claude 通道不要用 `Get-BackendEgress` 判** —— 那条路的
+#   实际后端由 P3 决定（站上有本地引擎 ⇒ 站上本地引擎 = 不出网），由 `Invoke-Task-Claude`
+#   以 `-backendEgress (-not $useStation)` 按**运行时**判。此处若按 route id 判会**误杀 P3**。
+
+function Get-BackendEgress {
+    # route id 用它自己跑时会不会出网。规则刻意**反转为 fail-closed 默认**：
+    #   **只有站内本地引擎（`local/<flavor>`）不出网，其余一律视为出网**（含未知/空 id）。
+    param([string]$id)
+    if ([string]::IsNullOrWhiteSpace($id)) { return $true }
+    return -not ($id -match '^local/')
+}
+
+function Get-JudgeEgress {
+    # judge 会不会出网 —— **优先读 `JUDGE_TABLE` 声明的 `egress` 字段**（真值源就在表里）；
+    #   未声明时**回退按 `type` 推**，仍无法判定 ⇒ **视为出网**（fail-closed）。
+    #   为什么以声明字段为主: `type='http'` 是 **ENV 注入**的外部 /v1 —— 若调用方把它指向**本地**端点,
+    #   那它就不出网, 而 type 推不出来（故 `commercial` 那一行注释要求"改一处就同时改另一处"）。
+    #   type 语义: 'local'(控制台 CLI) / 'http-local'(站上引擎) ⇒ 不出网; 'egress'(云) / 'http'(外部) ⇒ 出网。
+    param($judge)
+    if (-not $judge) { return $true }
+    if ($judge.ContainsKey('egress')) { return [bool]$judge['egress'] }
+    $t = [string]$judge['type']
+    if ($t -eq 'local' -or $t -eq 'http-local') { return $false }
+    return $true
+}
+
+function Get-JudgeComplianceReject {
+    # **接线 `JUDGE_TABLE.compliance`** —— 该字段此前全仓只有声明、**无任何读取点**（= 假防线，
+    #   见 OPEN-ISSUES「消毒面 ≠ 出网面」缺口③）。语义：该 judge **允许承载的 sensitivity 列表**；
+    #   `all` = 全部允许；**未声明 ⇒ 拒**（fail-closed，别让"忘写字段"变成"默认放行"）。
+    # 返回 '' = 放行 / 否则 = 拒绝原因 token（纯函数，与 Get-SensitivityBackendReject 同族）。
+    param($judge, [string]$sensitivity)
+    if (-not $judge) { return 'judge-unknown' }
+    $c = [string]$judge['compliance']
+    if ([string]::IsNullOrWhiteSpace($c)) { return 'judge-compliance-undeclared' }
+    if ($c.Trim().ToLower() -eq 'all') { return '' }
+    $allow = @($c.Split(',') | ForEach-Object { $_.Trim().ToLower() })
+    if ($allow -contains ([string]$sensitivity).ToLower()) { return '' }
+    return 'judge-compliance'
+}
+
 function Resolve-ClaudeBudget {
     # P4 (2026-09-21): claude 通道(直接入口 + AUTO_FALLBACK 备路)**自己的**预算选择。纯函数 ⇒ 夹具可离线单测。
     # 为什么必须独立(而不复用主路那张卡的 timeout_s): 备路是被主路失败**触发**的, 而主路往往正是
@@ -1133,9 +1190,16 @@ function Invoke-Task {
     $r = Resolve-Model $m
     if (-not $r) { Write-Host "REJECT unknown-model ($m) exit 2 - not in route table"; return 2 }
     $id = $r['id']; $station = $r['station']
-    if ($sens -eq 'local-only' -and $id -match '^opencode/') { Write-Host "REJECT local-only+remote ($id) exit 4 - no override channel"; return 4 }
     # O-15 claude 备通道: 有效执行器 = --cli > route.cli > card.cli > opencode. claude => 控制台本地执行分支.
     $effectiveCli = if ($cli) { $cli.ToLower() } elseif ($r['cli']) { [string]$r['cli'] } elseif ($fm['cli']) { [string]$fm['cli'].ToLower() } else { 'opencode' }
+    # W1a (2026-09-21): local-only 出网闸。**判据 = 后端属性**（不再看型号前缀 `^opencode/`）。
+    #   ⚠ 先算 `$effectiveCli`（故上面那行提前到闸之前）：**claude 通道豁免本闸** —— 其实施后端由 P3
+    #     决定（站上有本地引擎 ⇒ 站上本地引擎 = 不出网），交由 `Invoke-Task-Claude` 按运行时判；
+    #     此处按 route id 判会**误杀 P3**。
+    if ($effectiveCli -ne 'claude') {
+        $rejB = Get-SensitivityBackendReject -sensitivity $sens -backendEgress (Get-BackendEgress $id)
+        if ($rejB) { Write-Host "REJECT $rejB (task, $id) exit 4 - no override channel"; return 4 }
+    }
     Write-Host "CLI=$effectiveCli route_station=$station"
     if ($effectiveCli -eq 'claude') {
         return Invoke-Task-Claude -proj $proj -card $card -model $m -sensitive $sens -attach $attach -complexity $complexity -taskType $taskType
@@ -1933,11 +1997,10 @@ exit `$RC
     #   `return (…)` 只会吐其 int 返回值, 不会污染调用方 `$code = Invoke-Task …`。
     #   ⚠ 刻意只对 `effectiveCli -eq 'opencode'`: 若卡/路由本就选 claude(或其自身超时)则**不二次转发**。
     if ($AutoFallback -and $effectiveCli -eq 'opencode' -and (Test-FallbackEligible $code)) {
-        # ⚠ P0 止血 (2026-09-21, 安全策略洞 · 出网路径②): 主路 model 是**站上本地引擎**时
-        #   (如 gpt-oss-20b 走 B 站), 上方的闸**不会**拦(它只拦 local-only + `^opencode/`)
-        #   ⇒ 死锁 rc=6 一路走到这里 ⇒ `Invoke-Task-Claude` ⇒ **云端 OpenRouter**
-        #   ⇒ `local-only` 的 prompt **实际出网**。必须**在调用点也判**(Invoke-Task-Claude 内那道
-        #   守"直接入口", 这道守"自动兜底入口" —— 只判一处会漏)。语义: **拒绝兜底**(fail-closed,
+        # ⚠ P0 止血 (2026-09-21, 安全策略洞 · 出网路径②): 上游闸判的是**主路 route 那个后端**
+        #   (站上本地引擎 ⇒ 不出网 ⇒ 放行), 而**兜底的目标后端不是它** —— 是控制台本地 claude
+        #   ⇒ OpenRouter **云端** ⇒ `local-only` 的 prompt 会**实际出网**。故**必须在调用点也判**
+        #   (Invoke-Task-Claude 内那道守"直接入口", 这道守"自动兜底入口" —— 只判一处会漏)。语义: **拒绝兜底**(fail-closed,
         #   不是"兜底到别处")。返回 4 而**不是**原 rc —— 刻意让"策略拒绝"盖过"超时": 否则调用方
         #   只看到 timeout 会**换站重试**(每次重试都要再跑一遍本地引擎), 策略事件被埋掉。
         #   原 rc 已在上一行 `TASK_DONE … exit=$code` 打印, 未丢失。
@@ -2007,9 +2070,13 @@ function Invoke-SplitTask {
     $r = Resolve-Model $m
     if (-not $r) { Write-Host "REJECT unknown-model ($m) exit 2 - not in route table"; return 2 }
     $id = $r['id']
-    if ($sens -eq 'local-only' -and $id -match '^opencode/') { Write-Host "REJECT local-only+remote ($id) exit 4 - no override channel"; return 4 }
-    if ($id -notlike 'local/*') {
-        Write-Host "SPLIT_WARN: model=$id is egress (opencode/*) - cross-station each-1 assumes per-station engines; egress has single route, fanout may not parallelize"
+    # W1a (2026-09-21): 与 Resolve-Router / Invoke-Task 同一个判据（后端属性），claude 通道豁免（同上游注释）。
+    if ([string]$r['cli'] -ne 'claude') {
+        $rejB = Get-SensitivityBackendReject -sensitivity $sens -backendEgress (Get-BackendEgress $id)
+        if ($rejB) { Write-Host "REJECT $rejB (split, $id) exit 4 - no override channel"; return 4 }
+    }
+    if (Get-BackendEgress $id) {
+        Write-Host "SPLIT_WARN: model=$id is egress - cross-station each-1 assumes per-station engines; egress has single route, fanout may not parallelize"
     }
 
     # round-robin target stations A/B/C (cross-station each 1, O-18 physical upper bound 3)
@@ -2751,18 +2818,28 @@ exit $RC
 
 $Script:REVIEW_DIR = Join-Path $PSScriptRoot 'review'
 
-# JUDGE_TABLE: review-model alias -> @{type; id; station; ctx; compliance}
+# JUDGE_TABLE: review-model alias -> @{type; id; station; ctx; egress; compliance}
 #   type 'egress'      = opencode gateway on B (outbound, NOT for local-only)      [src ② ultra]
 #   type 'local'       = console opencode CLI (npm i -g opencode-ai)               [src ⑤ main]
 #   type 'http'        = OpenAI-compatible /v1 (commercial hook, ENV-injected)     [src ① commercial]
 #   type 'http-local'  = OpenAI-compatible /v1 to station engine (load-gate)       [src ③ rpc / ④ m27]
+# ⚠ **W1a (2026-09-21): `egress` 与 `compliance` 从"声明了但没人读"变成真判据** ——
+#   此前 `compliance` **全仓只有声明、无任何读取点**（假防线，见 OPEN-ISSUES「消毒面 ≠ 出网面」缺口③），
+#   实际生效的是"只挡 local-only"的窄判据。现在两个字段都由真值函数读取：
+#     `Get-JudgeEgress`（读 `egress`；**缺字段 ⇒ 回退按 type 推、仍未知 ⇒ 视为出网**，fail-closed）
+#     `Get-JudgeComplianceReject`（读 `compliance`；`all` = 全放行；**缺字段 ⇒ 拒**，fail-closed）
+#   ⇒ **新增一个 judge 必须同时声明这两个字段**（夹具 `_fm_golden_test.ps1` 有覆盖率断言钉住）。
 $Script:JUDGE_TABLE = @{
-    'ultra'       = @{ type='egress';      id='opencode/nemotron-3-ultra-free'; station='B'; ctx=1000000; compliance='public,sanitized'; maxtokens=2500 }
-    'free-1m'     = @{ type='egress';      id='opencode/nemotron-3-ultra-free'; station='B'; ctx=1000000; compliance='public,sanitized'; maxtokens=2500 }
-    'main'        = @{ type='local';       id='main-opencode-cli';               station='';  ctx=1000000; compliance='all'; maxtokens=4000 }
-    'commercial'  = @{ type='http';        id='commercial';                      station='';  ctx=131072;  compliance='all'; maxtokens=2500 }
-    'm27'         = @{ type='http-local';  id='local/m27-q4ks';                  station='C'; ctx=131072;  compliance='all'; maxtokens=8000 }
-    'rpc-v4flash' = @{ type='http-local';  id='cluster-v4flash';                 station='C'; ctx=1000000; compliance='all'; maxtokens=8000 }
+    # 2026-09-21: id 从 zen(`opencode/nemotron-3-ultra-free`, **当前不可用**) 重指到**站上 openrouter**;
+    #   ctx 值经厂商 API 核实 (`/api/v1/models` ⇒ 1000000), 非沿用旧值。见 ROUTE_TABLE 处同一段说明。
+    'ultra'       = @{ type='egress';      id='openrouter/nvidia/nemotron-3-ultra-550b-a55b:free'; station='B'; ctx=1000000; egress=$true;  compliance='public,sanitized'; maxtokens=2500 }
+    'free-1m'     = @{ type='egress';      id='openrouter/nvidia/nemotron-3-ultra-550b-a55b:free'; station='B'; ctx=1000000; egress=$true;  compliance='public,sanitized'; maxtokens=2500 }
+    'main'        = @{ type='local';       id='main-opencode-cli';               station='';  ctx=1000000; egress=$false; compliance='all'; maxtokens=4000 }
+    # `commercial` 是 **ENV 注入**的外部 /v1(K 与 base 都由调用方给) ⇒ 默认按**出网**处理。
+    #   若把它指向**本地**端点: 必须**同时**改 `egress=$false` 与 `compliance='all'`（两处一起改，别只改一处）。
+    'commercial'  = @{ type='http';        id='commercial';                      station='';  ctx=131072;  egress=$true;  compliance='public,sanitized'; maxtokens=2500 }
+    'm27'         = @{ type='http-local';  id='local/m27-q4ks';                  station='C'; ctx=131072;  egress=$false; compliance='all'; maxtokens=8000 }
+    'rpc-v4flash' = @{ type='http-local';  id='cluster-v4flash';                 station='C'; ctx=1000000; egress=$false; compliance='all'; maxtokens=8000 }
 }
 
 $Script:REVIEW_PARTIAL_OUT = ''   # (internal) carries error/marker across helpers on failure path
@@ -2999,9 +3076,16 @@ function Invoke-Review {
     $judge = Resolve-Judge $judgeAlias
     if (-not $judge) { Write-Host "REJECT unknown-judge ($judgeAlias) exit 2 - judge aliases: ultra|free-1m|main|commercial|m27|rpc-v4flash"; return 2 }
 
-    # sensitivity gate: local-only never to egress (opencode/* outbound)
-    if ($sens -eq 'local-only' -and $judge['type'] -eq 'egress') {
-        Write-Host "REJECT local-only+egress-judge ($($judge['id'])) exit 4 - no override channel"; return 4
+    # sensitivity gate (W1a 2026-09-21): **两个真值源，两个都要过**
+    #   ① 硬不变式: `local-only × 会出网 ⇒ 拒`（判据 = 表里声明的后端属性 `egress`，不再看 `type` 字符串）
+    #   ② 表驱动: `JUDGE_TABLE.compliance`（该 judge 允许承载的 sensitivity 列表）—— 此字段此前
+    #      **"声明了但没人读"（假防线）**；`all` = 全放行；**未声明 ⇒ 拒**（fail-closed）。
+    #   ⇒ 新增一个 judge 必须**同时**声明 `egress` 与 `compliance`：漏 `egress` 会被 ① 挡，
+    #     漏 `compliance` 会被 ② 挡 ⇒ **"再加一个 judge 又漏一次"的结构根因消除**。
+    $rejJ = Get-SensitivityBackendReject -sensitivity $sens -backendEgress (Get-JudgeEgress $judge)
+    if (-not $rejJ) { $rejJ = Get-JudgeComplianceReject -judge $judge -sensitivity $sens }
+    if ($rejJ) {
+        Write-Host "REJECT $rejJ (review, $($judge['id'])) exit 4 - no override channel"; return 4
     }
 
     $runDir = Get-ReviewRunDir -projRoot $projRoot -runId $runId
