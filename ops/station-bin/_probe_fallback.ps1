@@ -26,10 +26,17 @@ if ($errs -and $errs.Count -gt 0) { throw "agent-cli.ps1 parse errors: $($errs |
 $fns = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))
 
 # extract REAL pure functions we need (no site/file deps)
+# ⚠ (2026-09-22) 本清单**必须随 agent-cli.ps1 新增的"被 Invoke-Task 调用到的纯函数"同步** ——
+#   实测踩到: P5 规则扩充新增 `Get-ScrubRules`、W1a 新增 `Get-BackendEgress`、W4 新增 `Get-AttachEgressReject`
+#   之后本探针**静默失效**（`Get-BackendEgress is not recognized` 直接抛），而它**无自动调用点** ⇒ 无人察觉。
+#   ⇒ 新增纯函数时同步此处；判据是"Invoke-Task / Invoke-Task-Claude 体内是否直接调用它"。
 foreach ($nm in @('Get-FrontMatter','Get-CardIdentity','Test-CardSafetyDeclared','Get-Sha256Text',
                   'Get-Sha256Lines','Get-NumOr','Invoke-Scrubber','Merge-EvidenceSubjects',
                   'Get-FrameworkSubjects','Get-ClaudeFrameworkSubjects','Test-FallbackEligible',
                   'Get-SensitivityBackendReject',
+                  'Get-ScrubRules','Get-ScrubBlockReason','Get-BackendEgress','Get-AttachEgressReject',
+                  'Test-CtxOverflowError','Resolve-CtxOverflowCode',
+                  'Resolve-ClaudeStationCandidates','Resolve-ClaudeBudget',
                   'Resolve-ClaudeSpawn','Invoke-ClaudeFly','Resolve-LocalBash','Invoke-LocalBashCmd','Invoke-Task-Claude')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found" }
@@ -170,6 +177,16 @@ else {
         if ($names -contains 'judgment-record' -or $names -contains 'attach-manifest') {
             Write-Host 'FAIL claude baseline leaked opencode-only items'; $ok = $false
         } else { Write-Host 'PASS  claude baseline: no opencode-only leak (stderr present, judgment-record/attach-manifest absent)' }
+        # (§5.5.4 2026-09-22) review 件必须**在基线里且带 ephemeral** —— 这是本仓唯一能**离线**跑真实
+        #   归档路径并读到 .agent-run.json 的地方 ⇒ 它给的是**行为证据**(夹具只证明纯函数返回值)。
+        #   两个条件缺一不可: 不在 ⇒ `review` 写过 review.json 后变成 undeclared 缺口; 不带 ephemeral
+        #   ⇒ 每个没 review 过的 claude run 都假报 missing-artifact(与本探针上面那条"泄漏"断言同为噪声判据)。
+        $rv = @($evm.subjects | Where-Object { $_.name -eq 'review' })
+        if ($rv.Count -eq 1 -and $rv[0].path -eq 'review.json' -and $rv[0].ephemeral -eq $true) {
+            Write-Host 'PASS  claude baseline: review(review.json) present + ephemeral=true'
+        } else {
+            Write-Host ('FAIL  claude baseline: review 件缺或 ephemeral 非 true (count=' + $rv.Count + ')'); $ok = $false
+        }
     }
     # (4) archived artifacts exist (stderr.txt, card.md, prompt.txt)
     $rd = Join-Path $outRoot $claudeTs
@@ -282,12 +299,20 @@ foreach ($c in $cases) {
 
 # (7e) 覆盖: 4 例对"是否出网"这一结果在**同一类**内是同构的(任一处闸生效都成立) ⇒ 只有覆盖断言能把
 #      "哪一处闸在守"分辨开(与夹具的结构断言互补: 判据必须报覆盖率, 而不是"有个闸在跑")。
-$callSig = 'Get-SensitivityBackendReject -sensitivity $sens -backendEgress $true'
-$nCalls = ([regex]::Matches($src, [regex]::Escape($callSig))).Count
+# ⚠ (2026-09-22) **本判据第一版已过时，且过时方向很危险** —— 它数的是**字面量**
+#    `Get-SensitivityBackendReject -sensitivity $sens -backendEgress $true` 出现 >=2 次。
+#    而 W1a 的**全部用意**就是把硬编码 `$true` 换成**后端属性判据** `(Get-BackendEgress $id)`
+#    （故意只留兜底入口那 1 处 `$true`，因它在主控本地=云端=出网）⇒ 实测该字面量只剩 **1** 处。
+#    ⇒ 继续用它，等于要求"把属性判据改回硬编码"（**判据与设计反向**）。这与夹具那条"位置断言被注释骗"
+#    同族：**文本判据会随实现改进而静默变成错误的要求**。改为按**当前设计**判：判据在 `Invoke-Task`
+#    体内被调用 **>=2 次**（直接入口 + 兜底入口），且两处拒绝串可分辨是哪条路径。
+$nCalls = @($it.FindAll({ param($n)
+        $n -is [System.Management.Automation.Language.CommandAst] -and
+        $n.GetCommandName() -eq 'Get-SensitivityBackendReject' }, $true)).Count
 if ($nCalls -ge 2 -and $src.Contains('(claude-direct, $id)') -and $src.Contains('(fallback, $fbModel)')) {
-    Write-Host ('     PASS  coverage: 判据在两条路径均被调用(实测调用点 ' + $nCalls + ' 处) + 拒绝串可分辨路径')
+    Write-Host ('     PASS  coverage: 判据在 Invoke-Task 体内调用 ' + $nCalls + ' 处(直接入口+兜底入口) + 拒绝串可分辨路径')
 } else {
-    Write-Host ('     FAIL  coverage: 调用点 ' + $nCalls + ' 处(期望 >=2) 或拒绝串缺失'); $ok = $false
+    Write-Host ('     FAIL  coverage: Invoke-Task 体内调用点 ' + $nCalls + ' 处(期望 >=2) 或拒绝串缺失'); $ok = $false
 }
 
 Write-Host '--------------------------------'

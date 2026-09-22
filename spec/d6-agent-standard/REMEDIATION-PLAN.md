@@ -244,6 +244,33 @@ C 与 W1a 是纯执行项（W1a 已完成）；**A/B 的实施项见 §5.5.3，�
 > - **自证**：夹具 **133/133**（+14；含 review 三态**行为证据**、**位置断言**、attach 五态）；**变异自证 3 次** —— 两个函数各自失效 ⇒ 4 条同时红 + 退出 1；**顺序变异**（在闸前插一个诱饵发送点）⇒ 位置断言当场红。**实弹 3 条**：`sanitized` 卡 review ⇒ 3 处 `SCRUB` + `score=优秀` rc=0（真发出）；私钥块卡 review ⇒ `REJECT scrub-unsafe:private-key` rc=4、**零触站**、`review.json` 未创建；附件卡 + 出网型号 ⇒ `REJECT attach-egress-unconfirmed` rc=4、**零触站**。
 > - ⚠ **实施中抓到的两条自身问题（已修，值得记）**：① **位置断言是假的** —— 第一版用文本 `IndexOf` 搜 `Resolve-ReviewPrompt`，**命中的是我写的注释里的函数名** ⇒ "调用被搬走/删掉"它照样 PASS；改为 **AST 找实际命令调用**后，诱饵变异立刻红。**教训：文本断言会被注释骗，位置断言要用 AST。** ② **日志误导** —— `SANITIZED gate:` 行原先打在判定**之前**，于是"拒发"的场合也会先打"正在抹…"（其实什么都没抹）⇒ 改为**只在真抹时**打。
 
+#### 5.5.4 收尾（追补，2026-09-22）：`review.json` 进产出方基线
+
+**由来**：§5.5.3 实施并提交后跑门禁，报出 **WARN「可重放性审计：新增 1 条」**，明细逐字为
+`paper/202609221131192690: 已归档但未被任何 subject 覆盖: review.json`。门禁的处置建议**逐字**给出了修法：
+> 若明细里是「已归档但未被任何 subject 覆盖」= 新证据件没进产出方基线 ⇒ **应改 `ops/station-bin/agent-cli.ps1` 的 `Get-FrameworkSubjects`（清单唯一真值在那里），而不是接受它**
+
+**根因**：`review` 子命令**事后**往 runDir 写 `review.json`（O-16 的"并行键"，`NEVER alters run.json/task accept semantics`），
+而 `agent_audit` 的 undeclared 判据**动态枚举 runDir** ⇒ 只要某个 run 被 review 过一次，该件就成了"已归档但未被任何 subject 覆盖"。
+
+**修法**：把 `review` 作为基线件加进 **两个**按路基线（`Get-FrameworkSubjects` / `Get-ClaudeFrameworkSubjects`），并**必须带 `ephemeral = $true`**。
+- **为什么两个都要**：`Get-ReviewRunDir` 按 `.agent-run.json` **动态选目录、不分路** ⇒ claude 路的 run 一样能被 review、一样会落 `review.json`，不补则必然重演同一条缺口。
+- **为什么必须带 `ephemeral`**：`review.json` 是**事后写入、非派发必有** ⇒ 裸列会让**每个没 review 过的 run** 都假报 `missing-artifact`（与既有那条"`accept-output` 不能无条件列入"是同族错误）。`ephemeral` 在此承担**第三态**的语义：不是"必有"，而是"**可合法缺席**" —— 缺席 ⇒ `artifact-ephemeral-by-design`（**不是缺口**），存在 ⇒ `offline-ok`（branch 3 已穷尽，两支都非缺口）。
+
+**⚠ 关键发现（差点误判为"改完门禁就变绿"）**：**manifest 是派发时快照 ⇒ 改基线不回溯**（ADR-0007 已记过同一条"改卡不回溯"）。
+⇒ 本条 WARN **不会被本次修复消掉** —— 存量那条 run 的 manifest 是**修复前**写的。本次修法只保证**将来**的 run 不再产生该缺口；
+存量那条属**历史欠账**（同 v1 run 的先例），要消掉只能推进水印（`agent audit --accept`），而**推进水印按设计是人的显式动作**
+（门禁全程只读、水印 `ops/.audit-baseline.json` 被 gitignore）—— 故本项**停在"修根因 + 报"**，不代跑 `--accept`。
+
+**为什么不追加 e2e 派发**：本仓对"**派发路径改动**"的**指定验证手段就是阶段 0.5 夹具**（夹具头注释原文：
+"它们是**纯函数**…这正是『**派发路径改动**』能被验证而不用每次都真派发的关键"），且 run `202609221131192690` 的 `evidence_manifest`
+（= 该路径当时的基线输出，10 项）**本身就是这条代码路径的行为证据** ⇒ 本次增量只是**同一个列表多一项**（已由夹具覆盖内容与透传）。
+（实测旁证：当前站上**无引擎在服务**，任何派发都先撞 `STATION_NOT_READY` ⇒ 追加 e2e 的成本是"先 `infer-load` 再派发"，收益仅为复验一条已被既存 run 证明的链路。）
+
+**自证**：夹具 **133/133 → 137/137**（+4：主路基线含 `review` 且 `ephemeral=true` / claude 基线同 / **Merge 透传 ephemeral**）；
+**变异自证 3 次** —— ① 去掉 `ephemeral` ⇒ **2 条红**（含专为"基线好看但发射形状仍是 `false`"这一假修法而设的**透传断言**）；
+② 基线里整条删掉 ⇒ **8 条红**；③ 破坏 `Merge-EvidenceSubjects` 的 ephemeral 透传（基线正确、合并层吃掉）⇒ **2 条红**。
+
 ## 6. 执行顺序（含为什么是这个顺序）
 
 ```
@@ -251,6 +278,7 @@ W1a ✅  →  W1b + W4 ✅  →  W2 (rc 可信性)  →  W3 (claude 路静默失
  判据接真值源   收消毒面        ↑ 先复现再定级        ↑ 剩下的静默失败
 ```
 
-- **已完成（2026-09-22）**：**W1a**（判据接真值源 + 恢复验收路径）、**W1b + W4**（消毒面收口：review 同规矩 + 附件默认不出网）。
+- **已完成（2026-09-22）**：**W1a**（判据接真值源 + 恢复验收路径）、**W1b + W4**（消毒面收口：review 同规矩 + 附件默认不出网）、**§5.5.4 追补**（`review.json` 进产出方基线 —— 修 W1b/W4 自身带出的覆盖缺口）。
 - **下一步（顺序可调）**：**W2**（`task` 在 fallback-reject 路径 rc=0 —— **第一步是复现，1 次派发；复现不出就当场降级并改登记**，别为看不见的缺陷动关键路径）；**W3**（claude 路站上变体的附件静默缺失 ⇒ fail-closed；+ headless 工具单测 1 次）。
-- ⚠ 两者都要动 `agent-cli.ps1` ⇒ **串行做**，每步过全套夹具（`_fm_golden_test` **133/133** + `_scrubber_coverage_test` 43/43 + `rpc check`）。
+- ⚠ 两者都要动 `agent-cli.ps1` ⇒ **串行做**，每步过全套夹具（`_fm_golden_test` **137/137** + `_scrubber_coverage_test` 43/43 + `rpc check`）。
+- ⚠ **W2/W3 都要真派发 ⇒ 站上须先在服务一个引擎**（否则一律 `STATION_NOT_READY`，exit 10）。

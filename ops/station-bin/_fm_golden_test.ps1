@@ -197,7 +197,7 @@ Assert-True "evm: subject after in-block comment parsed" ($ev['subjects'][3]['na
 # --- ADR-0007 路B: 框架固定件基线 + 合并 (纯函数, 无需真派发即可验证) ---
 $b0 = @(Get-FrameworkSubjects @() $false)
 $n0 = @($b0 | ForEach-Object { $_.name })
-Assert-True "baseline: 无 accept 无 golden => 10 件" ($b0.Count -eq 10)
+Assert-True "baseline: 无 accept 无 golden => 11 件" ($b0.Count -eq 11)
 Assert-True "baseline: 含 judgment-record/prompt/workspace-diff/card" (
     ($n0 -contains 'judgment-record') -and ($n0 -contains 'prompt') -and
     ($n0 -contains 'workspace-diff') -and ($n0 -contains 'card'))
@@ -205,9 +205,20 @@ Assert-True "baseline: 含 judgment-record/prompt/workspace-diff/card" (
 #   都会假报 missing-artifact(把缺口判据变成噪声) ⇒ 必须**不**列入。
 Assert-True "baseline: 无 accept => 不含 accept-output(否则每 run 假报缺件)" (-not ($n0 -contains 'accept-output'))
 
+# W1b/W4 收口 (2026-09-22): `review` 件 —— 为什么既要**在**基线里、又要**带 ephemeral**:
+#   ① 不在基线里 ⇒ `review` 一旦写过 `review.json`, 门禁的 undeclared 判据(**动态枚举 runDir**)
+#      就把该件报成"已归档但未被任何 subject 覆盖"的可重放缺口(实测 run `202609221131192690`)。
+#   ② 在基线里但**不带** ephemeral ⇒ 每个没 review 过的 run 都假报 `missing-artifact`(噪声判据)。
+#   ⇒ 两条必须**同时**成立, 故本块的两个断言缺一不可(只断言"存在"会放过 ②, 只断言 ephemeral 会放过 ①)。
+$rb = @($b0 | Where-Object { $_.name -eq 'review' })
+Assert-True "baseline: 含 review 件(path=review.json)" (
+    $rb.Count -eq 1 -and $rb[0].path -eq 'review.json')
+Assert-True "baseline: review 件带 ephemeral=true(否则未 review 的 run 假报 missing-artifact)" (
+    $rb.Count -eq 1 -and $rb[0]['ephemeral'] -eq $true)
+
 $b1 = @(Get-FrameworkSubjects @('echo ok') $true)
 $n1 = @($b1 | ForEach-Object { $_.name })
-Assert-True "baseline: 有 accept+golden => 12 件" ($b1.Count -eq 12)
+Assert-True "baseline: 有 accept+golden => 13 件" ($b1.Count -eq 13)
 Assert-True "baseline: 有 accept+golden => 含 accept-output/accept-golden-output" (
     ($n1 -contains 'accept-output') -and ($n1 -contains 'accept-golden-output'))
 
@@ -217,8 +228,8 @@ $cardSubs = @(
     @{ name = 'station-tmp-log'; path = ''; collect = 'tail -5 /tmp/x.log'; digest = 'sha256'; ephemeral = $true }
 )
 $mg = @(Merge-EvidenceSubjects $cardSubs @() $false)
-# 10(基线) + 2(卡声明) - 1(其中 prompt 与基线同 path, 去重) = 11
-Assert-True "merge: 基线10 + 卡声明2 - 重复1 = 11" ($mg.Count -eq 11)
+# 11(基线) + 2(卡声明) - 1(其中 prompt 与基线同 path, 去重) = 12
+Assert-True "merge: 基线11 + 卡声明2 - 重复1 = 12" ($mg.Count -eq 12)
 Assert-True "merge: 卡声明与基线同 path 只出现一次" ((@($mg | Where-Object { $_.path -eq 'prompt.txt' })).Count -eq 1)
 $tmp = @($mg | Where-Object { $_.name -eq 'station-tmp-log' })
 Assert-True "merge: 卡特有 subject 保留(collect/ephemeral 未丢)" (
@@ -227,19 +238,27 @@ Assert-True "merge: 五键齐备(免得下游取键得 null 静默传播)" (
     (@($mg | Where-Object { -not ($_.Contains('name') -and $_.Contains('path') -and
                                 $_.Contains('collect') -and $_.Contains('digest') -and
                                 $_.Contains('ephemeral')) })).Count -eq 0)
+# 合并必须**透传** ephemeral: 若 Merge 这一环把 ephemeral 吃成缺省 false, 基线里那两条 review 断言
+#   就只是"函数返回值好看", 发射到 run.json 的形状仍是 false ⇒ 缺口照旧。断言合并**结果**而非仅基线。
+Assert-True "merge: review 件经合并后仍 ephemeral=true(透传, 非仅基线好看)" (
+    (@($mg | Where-Object { $_.name -eq 'review' -and $_.ephemeral -eq $true })).Count -eq 1)
 
 # 路B 的核心目的: **无 manifest 的卡**(= 71 个真实 run 的来源)也能拿到非空声明 ⇒ 不再是 recipe v1
 $m0 = @(Merge-EvidenceSubjects @() @() $false)
-Assert-True "merge: 空卡仍得 10 件(=> 不再退化为 recipe v1)" ($m0.Count -eq 10)
+Assert-True "merge: 空卡仍得 11 件(=> 不再退化为 recipe v1)" ($m0.Count -eq 11)
 
 # --- O-15/AUDIT (2026-09-21): claude 备路按路基线(证据面到齐 => recipe v2) ---
 # 该路归档件集 = opencode 子集 + stderr, 无 judgment-record 等远端合成批件
 $cb = @(Get-ClaudeFrameworkSubjects @() $false)
 $cbn = @($cb | ForEach-Object { $_.name })
-Assert-True "claude: 无 accept/golden => 4 件" ($cb.Count -eq 4)
+Assert-True "claude: 无 accept/golden => 5 件" ($cb.Count -eq 5)
 Assert-True "claude: 含 agent-output/prompt/stderr/card" (
     ($cbn -contains 'agent-output') -and ($cbn -contains 'prompt') -and
     ($cbn -contains 'stderr') -and ($cbn -contains 'card'))
+# W1b/W4 收口: 与主路同理(该路 run 一样可被 review ⇒ 一样落 review.json) ⇒ 两条件同时断言
+$crb = @($cb | Where-Object { $_.name -eq 'review' })
+Assert-True "claude baseline: 含 review 件且 ephemeral=true(否则重演同一条 undeclared 缺口)" (
+    $crb.Count -eq 1 -and $crb[0].path -eq 'review.json' -and $crb[0]['ephemeral'] -eq $true)
 # 负向自证: claude 基线**不得**混入 opencode 专用件, 否则每 run 假报缺件(噪声判据)
 Assert-True "claude: 无 judgment-record/workdiff/sessmeta/attach/mishap" (-not (
     ($cbn -contains 'judgment-record') -or ($cbn -contains 'workspace-diff') -or
@@ -248,25 +267,25 @@ Assert-True "claude: 无 judgment-record/workdiff/sessmeta/attach/mishap" (-not 
 
 $cb1 = @(Get-ClaudeFrameworkSubjects @('echo ok') $true)
 $cbn1 = @($cb1 | ForEach-Object { $_.name })
-Assert-True "claude: 有 accept+golden => 6 件" ($cb1.Count -eq 6)
+Assert-True "claude: 有 accept+golden => 7 件" ($cb1.Count -eq 7)
 Assert-True "claude: 含 accept-output/accept-golden-output" (
     ($cbn1 -contains 'accept-output') -and ($cbn1 -contains 'accept-golden-output'))
 
-# 合并: claude 走 baselineFn 分支 —— 空卡 => 得 claude 基线(4), 不掺主路 10 件
+# 合并: claude 走 baselineFn 分支 —— 空卡 => 得 claude 基线(5), 不掺主路 11 件
 $cmg = @(Merge-EvidenceSubjects @() @() $false { param($ac,$ga) Get-ClaudeFrameworkSubjects $ac $ga })
-Assert-True "claude merge: 空卡 => 4 件(claude 基线, 而非主路 10)" ($cmg.Count -eq 4)
+Assert-True "claude merge: 空卡 => 5 件(claude 基线, 而非主路 11)" ($cmg.Count -eq 5)
 # 去重: 卡声明与 claude 基线同 path(prompt.txt)只出现一次
 $csubs = @(
     @{ name = 'prompt'; path = 'prompt.txt'; digest = 'sha256'; collect = ''; ephemeral = $false }
     @{ name = 'station-tmp-log'; path = ''; collect = 'tail -5 /tmp/x.log'; digest = 'sha256'; ephemeral = $true }
 )
 $cmg2 = @(Merge-EvidenceSubjects $csubs @() $false { param($ac,$ga) Get-ClaudeFrameworkSubjects $ac $ga })
-Assert-True "claude merge: 基线4 + 卡声明2 - 重复1 = 5" ($cmg2.Count -eq 5)
+Assert-True "claude merge: 基线5 + 卡声明2 - 重复1 = 6" ($cmg2.Count -eq 6)
 Assert-True "claude merge: prompt.txt 只出现一次" ((@($cmg2 | Where-Object { $_.path -eq 'prompt.txt' })).Count -eq 1)
 Assert-True "claude merge: 卡特有件保留" ((@($cmg2 | Where-Object { $_.name -eq 'station-tmp-log' })).Count -eq 1)
-# baselineFn 缺省(主路调用点)不传时行为不变 => 既有的 10 件合并仍成立(防退化)
+# baselineFn 缺省(主路调用点)不传时行为不变 => 既有的 11 件合并仍成立(防退化)
 $defmg = @(Merge-EvidenceSubjects @() @() $false)
-Assert-True "claude merge: 缺省 baselineFn 仍得主路 10 件(未破坏主路调用)" ($defmg.Count -eq 10)
+Assert-True "claude merge: 缺省 baselineFn 仍得主路 11 件(未破坏主路调用)" ($defmg.Count -eq 11)
 
 # --- O-15/AUDIT (2026-09-21): auto-fallback 触发判定(纯函数, rc 表) ---
 # 正向: 只认 rc=6(引擎死锁/超时)才切 claude 备路
