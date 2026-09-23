@@ -125,7 +125,12 @@ rejected（可从 triage / accepted / plan-review / plan-revise 任一进入）
   ① 有 `00_handoff/` ② `40_state/STATE.json` 存在、可解析、state ∈ 白名单
   ③ 状态内容自洽（`accepted+` 须有 `10_admin/受理决定.md`；`plan-review/plan-revise` 须有 `20_plan/`；
   `release+` 须有 `30_evidence/` 记录）。
-- **dashboard**：`cluster.py inbox` 列出所有受理目录 + state + updated_at，一行一条。
+- **dashboard**：
+  - `cluster.py inbox` —— 列出所有受理目录 + state + updated_at，一行一条（CLI）。
+  - **web 看板**（推荐，零手动）—— `cluster.py web` 管理页的**「受理区 · 跨项目进度 + 待办聚合」卡片**：
+    15s 自动刷新，按"需要动作"分组（`waiting`/`plan-review`/`release` 黄底高亮 · 进行中 · 已关闭折叠），
+    顶部健康快照（共 N 笔 · 需动作 M · 进行中 K），并**从状态机派生每笔的"下一动作"**（待办聚合，
+    无需人工维护）。数据源 = 各笔 `40_state/STATE.json`（派生视图，与门禁同一套状态语义）。
 
 ---
 

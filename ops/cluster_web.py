@@ -282,10 +282,64 @@ def _collect_agent(limit: int = 20):
                         "stale": len([b for b in beats if b.get("stale") and b.get("running")])}}
 
 
+# ── 受理区跨项目进度 + 待办聚合 (ADR-0008) ─────────────────────────
+# 读 inbox/<proj>-<date>/40_state/STATE.json → 派生下一动作 (待办聚合, 无需用户手动给提示词)。
+# 分组: action(需动作,高亮: waiting/plan-review/release) · active(进行中) · closed(已关闭,折叠)。
+INBOX_ROOT = cluster.REPO_ROOT / "inbox"
+INBOX_STATES = {"open", "triage", "waiting", "accepted", "plan-review", "plan-revise",
+                "running", "release", "done", "accepted-by-requester",
+                "rejected-by-requester", "rejected"}
+# 状态 → 下一动作 (待办聚合的单一真值; 与 inbox/README §3 状态机对齐)
+_INBOX_NEXT = {
+    "open": "待管理员初筛 → 产出 10_admin/裁决报告.md",
+    "triage": "核对 DR/CR/接口 → 产出 10_admin/裁决报告.md + 受理决定.md",
+    "waiting": "等需求方补充 / 外部条件；解除后 → 产出 10_admin/裁决报告.md",
+    "accepted": "产出 20_plan/ 派发计划(含容量预估) → 交需求方复核",
+    "plan-review": "等需求方复核意见(10_admin/复核意见-N.md)",
+    "plan-revise": "按复核意见修订 20_plan(版本 vN) → 再交复核",
+    "running": "机群执行中(观测见「Agent 任务」卡片)",
+    "release": "已交付证据束，等需求方验收签收",
+    "done": "运维已结案(artifact 冻结)",
+    "accepted-by-requester": "需求方已验收签收",
+    "rejected-by-requester": "需求方拒收 / 终止",
+    "rejected": "已驳回 / 暂缓",
+}
+_ACTION_STATES = {"waiting", "plan-review", "release"}
+_ACTIVE_STATES = {"open", "triage", "accepted", "plan-revise", "running"}
+
+
+def _collect_inbox():
+    """受理区跨项目进度 + 待办聚合。纯本地, 无站上依赖。"""
+    rows = []
+    if INBOX_ROOT.is_dir():
+        for d in sorted(p for p in INBOX_ROOT.iterdir() if p.is_dir()):
+            if d.name.startswith("_"):
+                continue
+            st, ts, broken, note = "no-state", "", "", ""
+            f = d / "40_state" / "STATE.json"
+            if f.is_file():
+                try:
+                    j = json.loads(f.read_text(encoding="utf-8"))
+                    st = j.get("state", "no-state")
+                    ts = j.get("updated_at", "")
+                except Exception:
+                    st, broken = "BAD-JSON", "STATE.json 非法"
+            group = ("action" if st in _ACTION_STATES
+                     else "active" if st in _ACTIVE_STATES
+                     else "closed")
+            next_action = note or _INBOX_NEXT.get(st, "未知状态")
+            rows.append({"dir": d.name, "state": st, "updated_at": ts,
+                         "next": next_action, "group": group, "broken": broken})
+    action_n = sum(1 for r in rows if r["group"] == "action")
+    active_n = sum(1 for r in rows if r["group"] == "active")
+    return {"time": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "rows": rows,
+            "summary": {"total": len(rows), "action": action_n, "active": active_n}}
+
+
 def _collect_planes():
     """凭据 / Provider / 出站 三平面聚合 (统一入口的 ②③ 平面)。"""
     sec, pv, eg = {}, {}, {}
-    threads = []
     for st in ("A", "B", "C"):
         threads.append(threading.Thread(target=lambda s=st: sec.__setitem__(s, cluster.probe_secrets(s))))
         threads.append(threading.Thread(target=lambda s=st: pv.__setitem__(s, cluster.probe_providers(s))))
@@ -403,6 +457,10 @@ class Handler(BaseHTTPRequestHandler):
             if not self._auth_ok():
                 return self._json(401, {"error": "unauthorized"})
             return self._json(200, _collect_agent())
+        if path == "/api/inbox":
+            if not self._auth_ok():
+                return self._json(401, {"error": "unauthorized"})
+            return self._json(200, _collect_inbox())
         return self._json(404, {"error": "not found"})
 
     def do_POST(self):
@@ -624,6 +682,10 @@ details>div{padding:0 16px 16px}
   <details>
     <summary>空闲 TTL 自动卸载 (P2-5 · 默认关)</summary>
     <div id="ttl"></div>
+  </details>
+  <details>
+    <summary>受理区 · 跨项目进度 + 待办聚合 (只读, 15s 自动刷新)</summary>
+    <div id="inbox"></div>
   </details>
   <details>
     <summary>Agent 任务 (进行中 / 已完成) · 只读</summary>
@@ -1220,7 +1282,64 @@ async function loadAgent(){
   }finally{ agentBusy=false; setTimeout(loadAgent, 15000); }
 }
 
-function refreshAll(){ loadModels(); loadStatus(); loadPlanes(); loadVersions(); loadReqlog(); loadTtl(); loadAgent(); }
+// ── 受理区跨项目进度 + 待办聚合 (ADR-0008) ─────────────────────────
+// 派生视图: 从 STATE.json 读状态 / 下一动作, 无人手维护。分组:
+//   action(需动作, 黄底) = waiting/plan-review/release · active(进行中) · closed(关闭,折叠)。
+let inboxBusy=false;
+function inboxBadge(st){
+  if(st==='waiting') return '<span class="badge warn">waiting</span>';
+  if(st==='plan-review'||st==='release') return '<span class="badge warn">'+esc(st)+'</span>';
+  if(st==='running'||st==='triage'||st==='accepted'||st==='plan-revise'||st==='open')
+    return '<span class="badge">'+esc(st)+'</span>';
+  if(st==='done'||st==='accepted-by-requester') return '<span class="badge ok">'+esc(st)+'</span>';
+  if(st==='rejected-by-requester'||st==='rejected') return '<span class="badge err">'+esc(st)+'</span>';
+  return '<span class="badge err">'+esc(st)+'</span>';
+}
+async function loadInbox(){
+  if(inboxBusy) return; inboxBusy=true;
+  try{
+    const d = await api('GET','/api/inbox');
+    const sm = d.summary||{}, rows = d.rows||[];
+    const activeRows = rows.filter(r=>r.group!=='closed');
+    const closedRows = rows.filter(r=>r.group==='closed');
+    let h = '<div style="padding:8px 12px">'
+      + '<b>受理区健康快照</b>: 共 '+sm.total+' 笔 · '
+      + (sm.action?('<b style="color:#b45309">需动作 '+sm.action+'</b> · '):('需动作 0 · '))
+      + '进行中 '+sm.active
+      + '<span class="mut">(需动作 = 等需求方/等外部条件/等验收, 聚合于下方)</span></div>';
+    if(!rows.length){
+      h += '<table style="margin:8px 12px"><tr><td class="empty">受理区为空 (无跨项目请求)</td></tr></table>';
+    }
+    else{
+      h += '<table style="margin:8px 12px"><tr><th>受理项目</th><th>状态</th>'
+         + '<th>下一动作 (待办聚合)</th><th>最近变更</th></tr>';
+      for(const r of activeRows){
+        const rowCss = r.group==='action' ? ' style="background:#fdf6ec"' : '';
+        h += '<tr'+rowCss+'><td><b>'+esc(r.dir)+'</b></td><td>'+inboxBadge(r.state)+'</td>'
+           + '<td>'+esc(r.next)+'</td><td class="mut">'+esc(r.updated_at)+'</td></tr>';
+      }
+      if(closedRows.length){
+        h += '<tr><td colspan="4" class="mut" style="padding:8px 12px">'
+           + '— 已关闭 ('+closedRows.length+') · 点击展开 —</td></tr>';
+        for(const r of closedRows){
+          h += '<tr class="muted-row"><td><b>'+esc(r.dir)+'</b></td><td>'+inboxBadge(r.state)+'</td>'
+             + '<td>'+esc(r.next)+'</td><td class="mut">'+esc(r.updated_at)+'</td></tr>';
+        }
+      }
+      h += '</table>';
+    }
+    h += '<div class="mut" style="padding:0 12px 8px">'
+       + '下一动作由状态机派生(见 <code>inbox/README</code> §3), 无需手动维护。'
+       + '聚合时间 '+esc(d.time||'')+'</div>';
+    document.getElementById('inbox').innerHTML = h;
+  }catch(e){
+    if(e.message!=='unauthorized')
+      document.getElementById('inbox').innerHTML =
+        '<div class="mut" style="padding:12px">加载失败: '+esc(e.message)+'</div>';
+  }finally{ inboxBusy=false; setTimeout(loadInbox, 15000); }
+}
+
+function refreshAll(){ loadModels(); loadStatus(); loadPlanes(); loadVersions(); loadReqlog(); loadTtl(); loadAgent(); loadInbox(); }
 refreshAll();
 </script></body></html>"""
 
