@@ -214,7 +214,17 @@ def main() -> int:
          path_moved and per_host and gi_removed,
          f"路径已改={path_moved} 按机分片={per_host} gitignore 已移除={gi_removed}（只判非注释行）")
 
-    print(f"\n静态护栏 {12} 条")
+    # O-31：claude 备路的**站上临时名**必须带"本次唯一 id"（固定名 ⇒ 同站并发互相覆盖/混写）。
+    #   依据 BLINDSCAN-v3 §3 的跨条目纪律：**共享路径要么带 per-invocation 身份、要么走真锁**。
+    o31_old = "_p3_claude_in.txt" not in src
+    o31_id = "$p3id" in src
+    o31_pfx = "${PFX}_in.txt" in src and 'PFX="$4"' in src
+    need("O-31 claude 备路站上临时名带唯一 id（且前缀经 $4 传入站上脚本）",
+         o31_old and o31_id and o31_pfx,
+         f"旧固定名已清除={o31_old} p3id={o31_id} PFX 传递={o31_pfx} ⇒ "
+         "固定名会让同站两个备路 run 互踩（O-31）")
+
+    print(f"\n静态护栏 {13} 条")
     if fails:
         print("FAIL:")
         for x in fails:
