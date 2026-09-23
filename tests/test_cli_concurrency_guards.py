@@ -78,7 +78,13 @@ def main() -> int:
          "RC_DOMAIN=v2" in src,
          "去掉域标记 ⇒ cluster.py 会按 v1 解释 ⇒ 验收失败的 run 又被误判 FAIL")
 
-    print(f"\n静态护栏 {5} 条")
+    # F-1 / O-28 RC③：探针名必须带 per-invocation 身份
+    need("F-1 探针名带 RUN_TOKEN（不得退回秒级精度）",
+         bool(re.search(r"_preflight_\$\(\$Script:RUN_TOKEN\)\.probe", src)),
+         "退回 _preflight_HHmmss.probe ⇒ 同一秒启动的两进程撞同一探针 ⇒ Stream was not readable，"
+         "且会把『并发』伪装成『环境不可写』（错误归因）")
+
+    print(f"\n静态护栏 {6} 条")
     if fails:
         print("FAIL:")
         for x in fails:
