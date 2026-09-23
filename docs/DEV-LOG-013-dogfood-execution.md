@@ -21,6 +21,8 @@
 | **B2 门禁假绿审计** | ✅ `ACCEPT_OK=1` · `TASK_RC=0` · `RUN_S=789` · `OUT_BYTES=5352`（`ATTACH_MANIFEST_LINES=1`） | run `202609240059503785` |
 | **`attach-egress` 反例注入** | ✅ 带附件 + 未声明 ⇒ `REJECT attach-egress-unconfirmed (task, …) exit 4` | 夹具 `tmp/neg-attach-no-declare.md` |
 | 门禁 / 测试 | ✅ `rpc_check --quick` **10 绿 / 1 黄 / 0 红** · `tests` **6/6** | 每轮提交前跑 |
+| **执行环境（本轮实测）** | ✅ **执行者 = 站 B 的 `opencode` `1.18.25`**（`/usr/local/bin/opencode`）· 模型 `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free` · **`claude` 备路本轮零覆盖** | 三次 run 的 `.agent-run.json` 均 `cli=opencode`；站上 `command -v`：`opencode` ✓ · `claude` ✓（**装了但未用**）· **`hermes` ✗（站上没有）**。三份产物的 `agent-output` 里 `fallback\|claude` **零命中**（主路 rc = 0/0/9，**9 ≠ 6** 且 `AGENT_AUTO_FALLBACK` 默认关 ⇒ 备路不触发） |
+| **成本口径（本轮）** | 三次 run **全部走 `:free` 档** ⇒ **未消耗付费额度**；耗的是 **openrouter 免费请求配额**（1000/天/账户；实测 3 个账户：主控+A 合并 / B / C） | `py ops/cluster.py egress` 实测（四路 http=200 + free 配额余量） |
 
 ---
 
@@ -163,4 +165,28 @@ B2（门禁假绿审计）**17 项断言全覆盖**，每项给出 `可能假绿
   ③ **A2 状态标 ❌ 设计错误待改**（候选：改为只取证工作区根内 / 或该取证改由主控 ssh 执行、只把结果当输入）。
 - **元意义**：**验证跑与业务跑合一** —— P0-3 为验一个一行修复而跑的卡，**同时**暴露了一张卡的设计缺陷。
   ⇒ 支持"**小步实跑**"优于"批量派发后统一收"。
+
+### 8.2 `claude` 通道首测（`-Cli claude`）：**链路通、但产物型任务当前不可用**（2026-09-24）
+
+- **动机**：Scott 指出"**claude code 搭配 openrouter api 应该进行测试**"；而本轮 opencode 路径此前**零覆盖** claude 备路。
+- **烟测卡**：[dogfood-cards/smoke-claude-channel.md](../spec/d6-agent-standard/dogfood-cards/smoke-claude-channel.md)（最小：只写一行 `out/smoke.txt`）。
+- **派发**：`task dogfood -Card … -Model claude -Cli claude`（run `202609240130344985`）
+
+| 观察 | 值 | 含义 |
+|---|---|---|
+| `CLI=claude route_station=`（**空**） | ✅ | **主控本地**执行（P3 分流：`public` ⇒ 主控 + 云端 OpenRouter） |
+| `CLAUDE_SPAWN=…@anthropic-ai\claude-code\bin\claude.exe` · **`claude first rc=0`** · 42s | ✅ | **claude code `2.1.207` 真的跑起来了** |
+| 认证 | 走 `~/.claude/settings.json` 的 `apiKeyHelper`（`or-key.cmd`）+ `ANTHROPIC_BASE_URL=https://openrouter.ai/api` | ✅ **无需额外注入 env** |
+| 模型 | `thinkingmachines/inkling:free` | ✅ **免费档**（与 `model: claude` 路由一致） |
+| `ACCEPT_MODE=bash-local`（Git Bash，`cwd=d:\RPC\tmp\dogfood-ws`） | ✅ | 验收在**主控本地**执行，cwd = 载体根 |
+| **`ACCEPT_OK=0`** · 模型自报 **"文件写入被拒 → `SMOKE_BLOCKED`"** · 载体 `out/` 只有 `.keep` · `stderr.txt` 空 | ❌ | ★ **claude code 的 `-p`（无头）模式默认不授予写权限** ⇒ **产物没落** |
+
+- **根因（一手读码）**：[agent-cli.ps1:2729](../ops/station-bin/agent-cli.ps1#L2729) 的调用形式 = `'-p "" --model "<id>"'`
+  —— **不带任何权限开关**（无 `--permission-mode` / `--allowedTools`）。`settings.json` 里虽有 `"defaultMode": "acceptEdits"`，
+  但在 `-p` 下**未生效**（实测）。
+- **⇒ 两条结论**：① **"claude code + openrouter api" 链路可用**，且**就是免费档**；
+  ② 但它**当前只能做"纯输出型"任务**；**产物型任务需加权限开关**（候选 `--permission-mode acceptEdits` / `--allowedTools`）
+  —— 属**改运行时 + 能力放宽**，须 Scott 裁定并配**正反注入**；
+  ⚠ 且必须**显式处理与卡面 `readonly: true` 的关系**（否则 claude 通道会把"只读卡"也变成可写 ⇒ 破卡面契约）。
+- **登记**：台账 **O-42**。
 
