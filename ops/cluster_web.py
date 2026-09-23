@@ -340,6 +340,7 @@ def _collect_inbox():
 def _collect_planes():
     """凭据 / Provider / 出站 三平面聚合 (统一入口的 ②③ 平面)。"""
     sec, pv, eg = {}, {}, {}
+    threads = []
     for st in ("A", "B", "C"):
         threads.append(threading.Thread(target=lambda s=st: sec.__setitem__(s, cluster.probe_secrets(s))))
         threads.append(threading.Thread(target=lambda s=st: pv.__setitem__(s, cluster.probe_providers(s))))

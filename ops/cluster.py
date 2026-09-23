@@ -18,6 +18,7 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
     python ops/cluster.py reqlog {sample|summary|tail|path} [--minutes N]   # 引擎请求/token 统计 (站上采样)
     python ops/cluster.py ttl {status|check|enable|disable} [--ttl N] [--dry-run] [--go]  # 空闲 TTL 自动卸载 (默认关)
     python ops/cluster.py agent {runs|live|tail|chain|verify|audit|audit-judge} [--limit N] [--station X] [--json]  # 进度/吞吐 + 证据链 + 可复现性审计 + judge 校准
+    python ops/cluster.py inbox                                             # 受理区跨项目进度 (每笔 <proj>-<date> 的 state/时间, 一行一条)
 
 子命令:
     status   三站 llama /health + 当前加载实例 + 引擎清单一屏聚合
@@ -62,7 +63,10 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
              ⚠ 口径: 产出列是 **agent 产出字节口径** (output_bytes / B/s), **不是 token** ——
              与 reqlog 的引擎耗时口径 t/s、API timings 互不可比; 无头 run 不吐 usage ⇒ 不做换算;
              ETA 需目标量而运行中不可得 ⇒ 一律 `NA` (不打荒数字)。
-    web      傻瓜式推理框架管理 Web UI (按需服务, 见 ops/cluster_web.py; 浏览器点按钮加载/切后端/卸载)
+    web      傻瓜式推理框架管理 Web UI (按需服务, 见 ops/cluster_web.py; 浏览器点按钮加载/切后端/卸载;
+             管理页含「受理区」卡片: 跨项目进度 + 待办聚合, 15s 自动刷新)
+    inbox    受理区跨项目进度 (只读, ADR-0008): 读 inbox/<proj>-<date>/40_state/STATE.json,
+             列出每笔的 state + updated_at。合法状态白名单/自洽性由门禁 `rpc_check.py --only inbox` 判定。
 
 退出码:
     0 成功 / 1 失败 / 2 RPC 类需手动
