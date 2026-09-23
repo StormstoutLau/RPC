@@ -621,6 +621,30 @@ esac
 
 # ---------------- M2 task full-chain ----------------
 
+function Add-LedgerLine {
+    # 2026-09-23 (F-4): **并发追加安全** —— 用"打开-写入-关闭 + 冲突重试"代替裸 `Add-Content`。
+    #   为什么: 裸 `Add-Content` **无显式互斥**(依赖"单行短于缓冲"的偶然性 —— 实测两进程各写一行
+    #   未损坏, 但**无保证**); 而 ledger 是**每次 run 都要追加的共享单文件** ⇒ 一旦交错,
+    #   证据链里的 run 记录就被损坏(**比"漏一行"更难查**)。
+    #   判据同 BLINDSCAN-v3 §3 的跨条目纪律: 共享路径**要么带 per-invocation 身份、要么走真锁**;
+    #   ledger **必须共享**(它是全局台账), 故只能走锁 —— 这里用 `FileShare.Read` 隐式互斥 + 退避重试。
+    param([string]$Path, [string]$Line)
+    for ($i = 0; $i -lt 10; $i++) {
+        try {
+            $fs = [IO.File]::Open($Path, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+            $sw = New-Object IO.StreamWriter($fs, (New-Object Text.UTF8Encoding $false))
+            $sw.WriteLine($Line)
+            $sw.Flush(); $sw.Dispose(); $fs.Dispose()
+            return $true
+        }
+        catch {
+            if ($i -ge 9) { return $false }
+            Start-Sleep -Milliseconds (20 * ($i + 1))
+        }
+    }
+    return $false
+}
+
 function Assert-AgentOutWritable {
     # TODO-2 pre-flight (2026-09-07): BEFORE any remote sync/run, verify the console agent-out
     # root is writable from the injected sandbox whitelist. A fresh host session may NOT include
@@ -2020,8 +2044,8 @@ exit `$FINAL_RC
     #   故与 run.json 的取值保持一致。**注**: claude 本地备路**不在本修范围** —— 其 .meta 本就写
     #   QUEUE_S=0(本地执行无远端队列), 台账/run.json 同为 0, 自洽。
     $line = "$ts,$proj,$id,$sens,$code,$queue_s,$run_s"
-    try { Add-Content -Path $ledger -Value $line -Encoding utf8 | Out-Null; $ledgerOk = $true }
-    catch { $ledgerOk = $false; Write-Host "LEDGER_WARN: $($_.Exception.Message)" }
+    $ledgerOk = Add-LedgerLine -Path $ledger -Line $line
+    if (-not $ledgerOk) { Write-Host "LEDGER_WARN: append failed after 10 retries (F-4: 并发追加有互斥+退避)" }
 
     # 7) .agent-run.json under <proj>/agent-out/<ts>/ (DESIGN §6.2)
     #    Hardened in try/catch: if agent-out is not sandbox-writable (new host session), we
@@ -2759,7 +2783,7 @@ mkdir -p "$stWorkDir/.attach/$nm2"
     $finalCode = if ($rc -eq 0 -and $acceptOk -eq 1 -and $acceptGoldenOk -eq 1) { 0 } elseif ($rc -eq 6) { 6 } else { 1 }
     $ledger = 'd:\RPC\ops\station-bin\agent-runs.log'
     $line = "$ts,$proj,$execModel,$sens,$finalCode,0,$runS"
-    try { Add-Content -Path $ledger -Value $line -Encoding utf8 | Out-Null } catch { Write-Host "LEDGER_WARN: $($_.Exception.Message)" }
+    if (-not (Add-LedgerLine -Path $ledger -Line $line)) { Write-Host "LEDGER_WARN: append failed after 10 retries (F-4)" }
 
     $collectOk = $true; $runDir = ''
     try {

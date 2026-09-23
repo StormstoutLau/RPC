@@ -51,6 +51,13 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | O-25 | 演进/可观测 | P2   | **agent 任务执行进度可观测性（派发前预估 + 派发中节拍）**：派发后黑盒——ledger/.meta/.agent-run 均为 run-end 快照，无运行中采样 → 长卡状态不可观测、无吞吐、无 ETA；预算估算用单一 wall-clock 而非分相 | 🔵 P0 完成 + 判据③已落地：①吞吐基准表✓（THROUGHPUT-BASELINE.md+metrics-log Phase 6.2）；②`.progress` 打点✓（远端5s采样+teardown终值+collect拉取+parse回填）；③派发前预估✓（Get-ThroughputEstimate 分相估算，HIT才给/MISS不打荒，TIMEOUT-WARN预警；实证 gpt-oss 682s、回归9/9）；**P1槽位门✓（并入O-08/F1：`_slot_gate.sh`+`Invoke-SlotGate`+task接入，busy默认reject exit 24，`--slot-allow-busy`放行，slot记入run.json）**；**P2看板✓（2026-09-12 落地，L3 单文件 HTML：`make-dashboard.ps1` 生成器→内联 ledger+run.json→self-contained `dashboard.html`，file:// 直开零网络请求；已完成总览 22 行+run 详情展开；正在跑/Live tab 由 `-Live` 拉远端 .progress，无则 no-live-data；见 O-25 详情节）** | 🔵 **O-25 已全收口（①-④+P1/P2 全落地 + 2026-09-12 实机在线实测全通，见详情节）** | 一期 | <br /> |
 | O-26 | 演进/编排 | P2   | **单任务分解派发并行（Split-Dispatcher）**：现派发=单卡→单站；一张可切分 readonly 大任务卡在单节点（物理上界 3：A/B/C 各1 并发，O-18）无法利用多站。缺口=任务卡无 `decompose` 声明、编排层无拆/并、无 Merge | ✅ **已闭环（2026-09-12）**：decompose 拆 2 分片 A/B 双站并行，全子卡 accept，Merge 正确，并行 465.1s ≪ 串行 720.8s（ratio 0.645）；落地修复 2 bug | V2 fan-out L2.5（schema 冻结前加 decompose 键） | <br /> | <br /> |
 
+| O-27 | 验证/判据 | P1 | 证据链 `_VERDICT_RC_MAP` 未覆盖"远端 0 ⇄ 整体 1"（验收失败路径）⇒ **任何 accept 失败的 run 都阻断提交** | ✅ 已闭环（裁定 b **治同源** + 12 条正反注入） | ✅ 已修 |
+| O-28 | 并发/编排 | P1 | **并发脆弱面**（一处列全）：站覆盖**半覆盖** · `$ts` 撞车 · 探针固定名 · sync tar 固定名 · create tar + staging 固定名 | ◐ 已修 5 处（RC①② + F-1/F-14/create）；**O-31 待修** | D6-P2 |
+| O-29 | 框架/卡面 | P2 | **无 `accept-golden` 的卡**每次 run 产生 1 条可重放性 gap | ⏳ 待办 | D6-P1 |
+| O-30 | 环境/卡面 | P2 | 站上 **`/proc/*` 不可读** · **B 站无 `nvidia-smi`** · **`readonly:true` 与"必须落文件"互斥** | ⏳ 待办（卡已修，**纪律未入册**） | D6-P1 / D7-P1 |
+| O-31 | 并发/防污染 | P1 | **claude 备路**站上固定名 `_p3_claude_*` + 备路**无 flock** ⇒ 同站并发互踩（**第四例同类**） | ⏳ 已核实为缺陷，**待修** | D6-P2 |
+| O-32 | 工具/噪音 | P2 | **进度采样器读尚未创建的输出文件** ⇒ 每 5s 噪音 + run 中断（**连续误判三次**的坑） | ✅ 已定性 + 已修（待站上复跑验证） | ✅ |
+
 ## 2. 各未决项详情
 
 ### 2.0 2026-09-23 新增（吃狗粮暴露；**登记在此而非另建文档** —— 本表是未决问题单一真值）

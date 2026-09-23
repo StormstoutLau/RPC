@@ -165,7 +165,16 @@ def main() -> int:
     if pend:
         print(f"  · 已登记(豁免/待核实, 见 O-31): {pend}")
 
-    print(f"\n静态护栏 {8} 条")
+    # F-4：ledger 追加必须走 Add-LedgerLine（互斥 + 退避），不得退回裸 Add-Content
+    #   （ledger 是**必须共享**的全局台账 ⇒ 按 BLINDSCAN-v3 §3 纪律只能"走真锁"）
+    naked = [(i, ln.strip()[:70]) for i, ln in enumerate(src.splitlines(), 1)
+             if "Add-Content" in ln.split('#', 1)[0] and "$ledger" in ln.split('#', 1)[0]]
+    ledger_calls = [ln for ln in src.splitlines() if "Add-LedgerLine" in ln.split('#', 1)[0]]
+    need("F-4 ledger 走 Add-LedgerLine（ledger 上无裸 Add-Content）",
+         (not naked) and len(ledger_calls) >= 3,
+         f"ledger 上的裸 Add-Content 命中={naked}；Add-LedgerLine 出现数={len(ledger_calls)}（应为 定义1 + 两路各1 = 3）")
+
+    print(f"\n静态护栏 {9} 条")
     if fails:
         print("FAIL:")
         for x in fails:
