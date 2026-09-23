@@ -597,13 +597,15 @@ def check_scripts(ctx):
         return "FAIL", f"inventory/ops.yaml 解析失败: {type(e).__name__}: {e}", []
 
     entry = list(inv.get("entry") or [])
+    modules = list(inv.get("entry_modules") or [])      # 2026-09-23: 入口的拆分模块 (见 ops.yaml 注释)
     runtime = list(inv.get("station_runtime") or [])
     frozen = list(inv.get("frozen_ops_scripts") or [])
-    known = set(entry) | set(runtime) | set(frozen)
+    known = set(entry) | set(modules) | set(runtime) | set(frozen)
 
     scripts = dict(_iter_governed_scripts())
     unknown = sorted(s for s in scripts if s not in known)
     missing_entry = [e for e in entry if not (ROOT / e).exists()]
+    missing_module = [m for m in modules if not (ROOT / m).exists()]
     gone = sorted(f for f in frozen if f not in scripts)
 
     detail = []
@@ -615,13 +617,15 @@ def check_scripts(ctx):
             detail.append(f"  …另 {len(unknown) - 20} 个")
     if missing_entry:
         detail.append("统一入口件缺失: " + ", ".join(missing_entry))
+    if missing_module:
+        detail.append("入口拆分模块缺失 (登记了但文件不在): " + ", ".join(missing_module))
     if gone:
         detail.append(f"冻结清单里已不存在的 {len(gone)} 项可从 inventory/ops.yaml 删掉 "
                       f"(只减不增, 删减是欢迎的方向): " + ", ".join(gone[:8])
                       + (" …" if len(gone) > 8 else ""))
-    bad = bool(unknown) or bool(missing_entry)
-    note = (f"扫描 {len(scripts)} 个脚本 · 入口 {len(entry)} · 站上运行时 {len(runtime)} "
-            f"· 冻结存量 {len(frozen)} · 未登记 {len(unknown)}")
+    bad = bool(unknown) or bool(missing_entry) or bool(missing_module)
+    note = (f"扫描 {len(scripts)} 个脚本 · 入口 {len(entry)} · 拆分模块 {len(modules)} "
+            f"· 站上运行时 {len(runtime)} · 冻结存量 {len(frozen)} · 未登记 {len(unknown)}")
     # 提示必须进 note: PASS 时明细块不打印, 只放 detail 等于没人看得到 (实测踩到)
     if gone:
         note += f" · 清单含 {len(gone)} 项已不存在(应移除)"
