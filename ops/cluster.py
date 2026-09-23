@@ -3245,10 +3245,17 @@ def _gap_key(kind: str, label: str, sub: str) -> str:
 #   会把工作区弄脏。⇒ 水印只能由**显式命令** `cluster.py agent audit --accept` 推进。
 #   副作用（刻意接受，与"不静默降级"同向）: **"接受这批新 gap"成为人类的显式动作**，
 #   而不是被自动抹平。门禁的 fix 字段会直接给出该命令。
-# 存储位置与 `ops/.egress_daily.json` 同族（主控本地状态、已在 .gitignore）——
-#   本仓是单机单贡献者，入仓换来的"跨机一致"当前无收益；若将来多人/多机，再升级为入仓
-#   （那时 `git log` 就是"谁在何时接受了什么"的留痕）。
-AGENT_AUDIT_BASELINE = Path(__file__).resolve().parent / ".audit-baseline.json"
+# 存储位置（**2026-09-23 变更：已入仓**）——
+#   原为 `ops/.audit-baseline.json`（本地、已 gitignore）。该选择的**两处代价**在
+#   `docs/research/2026-09-18_证据流审计常跑_触发点与成本严重度调研.md` §D-b 已登记：
+#     ① 换机器/新克隆首跑会把存量当"新增"报一次（**自愈**）；
+#     ② **"基线何时建立"不可审计**。
+#   同处写明的**升级条件**是"**若将来多人/多机，再升级为入仓**"（那时 `git log` 就是
+#   "谁在何时接受了什么"的留痕）。⇒ **D7（三站 + 跨项目）正是该条件所指的"多机"**
+#   ⇒ 本轮执行入仓化（**执行已登记的决策，不是新决策**）。
+#   代价（刻意接受）：每次 `--accept` 会改动仓内文件 ⇒ **提交摩擦** —— 而**这正是留痕的来源**。
+#   已知未决：多机并发 `--accept` 会产生合并冲突（后续可改"按机分文件"，见 D7-P1-1 待办）。
+AGENT_AUDIT_BASELINE = Path(__file__).resolve().parent.parent / "inventory" / "audit-baseline.json"
 
 
 def agent_audit_baseline_load() -> dict:

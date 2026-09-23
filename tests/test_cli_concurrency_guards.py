@@ -198,7 +198,20 @@ def main() -> int:
          f"写入侧={w_side} 常量={c_const} 消费={c_use} 默认空={c_safe} 分桶显示={c_disp} ⇒ "
          "缺消费者 = 违反 P1-1 检查项；默认非空 = 存量 key 全变 ⇒ 一次报 18 条假新增")
 
-    print(f"\n静态护栏 {11} 条")
+    # D7-P1-1（水印入仓化）：审计水印必须**在仓内**（inventory/），且不得被 .gitignore 忽略。
+    #   依据: docs/research/2026-09-18_证据流审计常跑…md §D-b 的升级条件（"若将来多人/多机，
+    #   再升级为入仓"）—— D7 即该条件所指的"多机"。代价是提交摩擦（**这正是留痕来源**）。
+    gi = (ROOT / ".gitignore").read_text(encoding="utf-8", errors="replace")
+    # ⚠ 按本仓纪律「扫代码文本的断言要区分"代码"与"注释"」：只看**非注释行** ——
+    #   否则"已移除此项"的留档注释（含该字串）会让断言**假红**（本会话已犯过一次同型错）。
+    gi_code = "\n".join(l for l in gi.splitlines() if not l.lstrip().startswith("#"))
+    gi_removed = "ops/.audit-baseline.json" not in gi_code
+    path_moved = '"inventory" / "audit-baseline.json"' in cl
+    need("D7-P1-1 水印入仓化（路径在 inventory/ 且未被 gitignore）",
+         path_moved and gi_removed,
+         f"路径已改={path_moved} gitignore 已移除={gi_removed}（只判非注释行）")
+
+    print(f"\n静态护栏 {12} 条")
     if fails:
         print("FAIL:")
         for x in fails:
