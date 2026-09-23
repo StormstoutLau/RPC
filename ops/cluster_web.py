@@ -585,59 +585,91 @@ PAGE_HTML = r"""<!DOCTYPE html>
 <html lang="zh"><head><meta charset="utf-8">
 <title>三机推理集群 · 框架管理</title>
 <style>
-:root{--bg:#f6f7f9;--card:#fff;--line:#e3e6ea;--fg:#1f2328;--mut:#6b7280;
-      --ok:#16a34a;--warn:#d97706;--err:#dc2626;--accent:#2563eb;--radius:10px}
+/* ── 设计：Edward Tufte 信息设计原则 × GitHub Dark 调色板 ──
+   为什么是这套：本页是“一个人每天看的运维台”，核心价值是高密度、诚实、可横向比较的数据
+   ⇒ Tufte 的纪律（data-ink ratio / small multiples / 颜色只承载信息 / 表格如安静的公园）天然对口。
+   配色取 GitHub 官方深色语义令牌（非“均匀深蓝 + 通用霓虹 glow”的 AI 通用解：
+   GitHub Dark 是真实设计系统，颜色**只承状态语义**，无渐变、无 glow。）
+   ⚠ 改配色务必同步 JS 侧的内联色（已全部改用本文件的 CSS 变量，见 var(--err)/var(--warn)）。 */
+:root{
+  /* GitHub Primer dark 语义令牌 */
+  --bg:#0d1117; --card:#161b22; --inset:#010409; --line:#30363d; --line-mut:#21262d;
+  --fg:#e6edf3; --mut:#8b949e; --dim:#6e7681;
+  --accent:#58a6ff; --accent-emph:#1f6feb;
+  --ok:#3fb950; --warn:#d29922; --err:#f85149;
+  /* 语义底色（深色下用低饱和叠加，不用亮色块） */
+  --ok-bg:#12261e; --warn-bg:#272115; --err-bg:#2d1618; --neutral-bg:#21262d;
+  --row-action:#272115;      /* 需动作行：极淡底 + 左侧语义细规 */
+  --radius:6px;
+  --serif:Georgia,'Songti SC','SimSun',serif;
+  --mono:Consolas,ui-monospace,'SFMono-Regular',Menlo,monospace;
+}
 *{box-sizing:border-box}
-.warnbar{margin:10px;padding:10px 12px;border:1px solid #f0c36d;background:#fffaf0;
-         border-radius:8px;color:#8a5a00;font-size:13px;line-height:1.5}
-body{font-family:'Segoe UI','Microsoft YaHei',system-ui,sans-serif;margin:0;background:var(--bg);color:var(--fg);font-size:14px}
-header{background:var(--card);border-bottom:1px solid var(--line);padding:13px 22px;display:flex;
-       align-items:center;gap:14px;flex-wrap:wrap;position:sticky;top:0;z-index:10}
-header h1{font-size:16px;margin:0;font-weight:600}
+body{font-family:'Segoe UI','Microsoft YaHei',system-ui,sans-serif;margin:0;
+     background:var(--bg);color:var(--fg);font-size:14px;line-height:1.5;text-wrap:pretty}
+/* 报头：衬线标题（台账感）；Tufte：结构靠规线，不靠容器堆叠 */
+header{background:var(--card);border-bottom:1px solid var(--line);padding:12px 22px;
+       display:flex;align-items:center;gap:12px;flex-wrap:wrap;position:sticky;top:0;z-index:10}
+header h1{font-family:var(--serif);font-size:17px;margin:0;font-weight:600;letter-spacing:.01em}
 .spacer{flex:1}
-button{font-family:inherit;font-size:13px;padding:7px 14px;border:1px solid var(--line);background:#fff;
-       border-radius:8px;cursor:pointer;transition:.15s}
-button:hover:not(:disabled){background:#f0f2f5;border-color:#c9cfd6}
-button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-button.primary:hover:not(:disabled){background:#1d4ed8}
-button.danger{color:var(--err);border-color:#f3c7c7}
+button{font-family:inherit;font-size:13px;padding:6px 13px;border:1px solid var(--line);
+       background:var(--neutral-bg);color:var(--fg);border-radius:var(--radius);cursor:pointer;transition:.15s}
+button:hover:not(:disabled){background:#30363d;border-color:#484f58}
+button.primary{background:var(--accent-emph);border-color:var(--accent-emph);color:#fff}
+button.primary:hover:not(:disabled){background:#388bfd}
+button.danger{color:var(--err);border-color:#582226}
+button.danger:hover:not(:disabled){background:#2d1618;border-color:var(--err)}
 button:disabled{opacity:.45;cursor:not-allowed}
-button.mini{padding:3px 10px;font-size:12px;border-radius:6px}
-select{font-family:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:#fff}
+button.mini{padding:3px 9px;font-size:12px}
+select{font-family:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--line);
+       border-radius:var(--radius);background:var(--neutral-bg);color:var(--fg)}
 .wrap{padding:18px 22px 80px}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:16px}
+.warnbar{margin:0 0 14px;padding:9px 12px;border:1px solid #6b5324;background:var(--warn-bg);
+         border-left:2px solid var(--warn);border-radius:0;color:#e3b341;font-size:13px;line-height:1.5}
+.login{background:var(--warn-bg);border:1px solid #6b5324;border-left:2px solid var(--warn);
+       padding:11px 14px;margin:16px 22px 0;border-radius:var(--radius)}
+.login input{font-family:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--line);
+             border-radius:var(--radius);background:var(--inset);color:var(--fg);min-width:220px}
+/* small multiples：三站同构 —— 等宽网格 + 字段顺序固定，便于纵向比对（Tufte） */
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:14px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
-.card-head{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.card-head b{font-size:15px}
+.card-head{padding:11px 15px;border-bottom:1px solid var(--line);display:flex;
+           align-items:center;gap:9px;flex-wrap:wrap;background:var(--inset)}
+.card-head b{font-size:14px;font-family:var(--serif);font-weight:600}
 .card-body{padding:0;max-height:460px;overflow:auto}
 .dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex:0 0 auto}
-.ok{background:var(--ok)}.off{background:#c3c8ce}.err{background:var(--err)}.warn{background:var(--warn)}
-.badge{font-size:11px;padding:2px 8px;border-radius:20px;background:#eef1f4;color:var(--mut);white-space:nowrap}
-.badge.conf{background:#e7f5ec;color:#15803d}
-.badge.noconf{background:#fdf1e3;color:#b45309}
-.badge.ok{background:#e7f5ec;color:#15803d}
-.badge.err{background:#fdecec;color:#b91c1c}
+.ok{background:var(--ok)}.off{background:var(--dim)}.err{background:var(--err)}.warn{background:var(--warn)}
+.badge{font-size:11px;padding:2px 8px;border-radius:20px;background:var(--neutral-bg);
+       color:var(--mut);white-space:nowrap;border:1px solid var(--line-mut)}
+.badge.conf,.badge.ok{background:var(--ok-bg);color:var(--ok);border-color:#1f4d2e}
+.badge.noconf{background:var(--warn-bg);color:var(--warn);border-color:#6b5324}
+.badge.err,.badge.warnb{background:var(--err-bg);color:var(--err);border-color:#582226}
+.stmeta{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.metrics{display:flex;gap:6px;flex-wrap:wrap;padding:8px 15px;
+         border-bottom:1px solid var(--line);background:var(--inset)}
+/* 表格：Tufte —— 只有行规线，无外框、无斑马纹；数字等宽对齐 */
 table{width:100%;border-collapse:collapse}
-th,td{text-align:left;padding:8px 12px;font-size:13px;border-bottom:1px solid var(--line)}
-th{background:#fafbfc;color:var(--mut);font-weight:600;font-size:12px;position:sticky;top:0}
-tr.loaded{background:#f0f8f2}
+th,td{text-align:left;padding:7px 11px;font-size:13px;border-bottom:1px solid var(--line-mut);
+      font-variant-numeric:tabular-nums}
+th{background:var(--inset);color:var(--mut);font-weight:600;font-size:11px;letter-spacing:.04em;
+   text-transform:uppercase;position:sticky;top:0;border-bottom:1px solid var(--line)}
+tr.loaded{background:var(--ok-bg)}
 td.acts{white-space:nowrap;text-align:right}
 .mut{color:var(--mut);font-size:12px}
-.mmeta{font-size:11px;color:#8a949e;margin-top:2px}
-details{margin-top:16px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius)}
-summary{padding:12px 16px;cursor:pointer;font-weight:600;font-size:13px}
-details>div{padding:0 16px 16px}
-#log{position:fixed;left:0;right:0;bottom:0;max-height:40vh;overflow:auto;background:#0f172a;color:#c9e2ff;
-     font-family:Consolas,monospace;font-size:12px;padding:14px 18px 18px;white-space:pre-wrap;display:none;
-     border-top:1px solid #1e293b;z-index:20}
+.mmeta{font-size:11px;color:var(--dim);margin-top:2px}
+.empty{color:var(--mut);padding:12px}
+details{margin-top:14px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius)}
+summary{padding:11px 15px;cursor:pointer;font-weight:600;font-size:13px;color:var(--fg)}
+summary:hover{background:#1c2129}
+details>div{padding:0 15px 15px}
+details[open]>summary{border-bottom:1px solid var(--line)}
+/* 输出面板（等宽；GitHub dark inset） */
+#log{position:fixed;left:0;right:0;bottom:0;max-height:40vh;overflow:auto;background:var(--inset);
+     color:#c9d1d9;font-family:var(--mono);font-size:12px;padding:13px 17px 17px;
+     white-space:pre-wrap;display:none;border-top:1px solid var(--line);z-index:20}
 #log.show{display:block}
 #logBar{position:fixed;right:14px;bottom:calc(40vh + 8px);z-index:21;display:none}
 #logBar.show{display:block}
-.login{background:#fffbeb;border:1px solid #fde68a;padding:12px 16px;margin:16px 22px 0;border-radius:var(--radius)}
-.stmeta{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.metrics{display:flex;gap:6px;flex-wrap:wrap;padding:8px 16px;border-bottom:1px solid var(--line);background:#fbfcfe}
-.empty{color:var(--mut);padding:12px}
-.badge.warnb{background:#fef2f2;color:#b91c1c}
 </style></head><body>
 <header>
   <h1>三机推理集群 · 模型与框架管理</h1>
@@ -1047,7 +1079,7 @@ async function loadVersions(){
       for(const st of ['A','B','C']){
         const s=S[st]||{};
         const main = esc(String(keyf(s)===undefined?'?':keyf(s)));
-        h += '<td'+(same?'':' style="color:#dc2626;font-weight:600"')+'>'+main
+        h += '<td'+(same?'':' style="color:var(--err);font-weight:600"')+'>'+main
            + (extf && extf(s) ? '<div class="mut">'+esc(String(extf(s)))+'</div>' : '')
            + '</td>';
       }
@@ -1227,7 +1259,7 @@ async function loadAgent(){
       h += '<tr><td><b>'+esc(b.station)+'</b></td><td>'+esc(b.proj)+'</td><td>'+stTxt+'</td>'
          + '<td class="mut">'+(on?esc(b.t)+'s':'-')+'</td>'
          + '<td>'+esc(b.bytes)+'</td><td><b>'+esc(b.bytes_s)+'</b></td>'
-         + '<td'+(on&&b.stale?' style="color:#b91c1c"':'')+'>'+fmtAge(b.age_s)+'</td>'
+         + '<td'+(on&&b.stale?' style="color:var(--err)"':'')+'>'+fmtAge(b.age_s)+'</td>'
          + '<td class="mut">NA<div class="mut">无 max_output 目标</div></td>'
          + '<td class="mut">'+esc(b.beat_at)+'</td></tr>';
     }
@@ -1237,7 +1269,7 @@ async function loadAgent(){
        + '与「引擎请求/token 统计」的引擎耗时口径 t/s 互不可比, 不要并列平均。'
        + 'ETA 需目标量(max_output 只在 run 结束的 run.json 里) ⇒ 运行中一律 NA。'
        + '节拍阈值 '+esc(d.beat_stale_s)+'s。'
-       + (sm.stale?(' <b style="color:#b91c1c">'+sm.stale+' 条节拍陈旧(疑似卡死)</b>'):'')
+       + (sm.stale?(' <b style="color:var(--err)">'+sm.stale+' 条节拍陈旧(疑似卡死)</b>'):'')
        + (sm.unreachable?(' <b>'+sm.unreachable+' 站不可达</b>'):'') + '</div>';
 
     const lf = d.ledger_freshness||{};
@@ -1305,7 +1337,7 @@ async function loadInbox(){
     const closedRows = rows.filter(r=>r.group==='closed');
     let h = '<div style="padding:8px 12px">'
       + '<b>受理区健康快照</b>: 共 '+sm.total+' 笔 · '
-      + (sm.action?('<b style="color:#b45309">需动作 '+sm.action+'</b> · '):('需动作 0 · '))
+      + (sm.action?('<b style="color:var(--warn)">需动作 '+sm.action+'</b> · '):('需动作 0 · '))
       + '进行中 '+sm.active
       + '<span class="mut">(需动作 = 等需求方/等外部条件/等验收, 聚合于下方)</span></div>';
     if(!rows.length){
@@ -1315,7 +1347,7 @@ async function loadInbox(){
       h += '<table style="margin:8px 12px"><tr><th>受理项目</th><th>状态</th>'
          + '<th>下一动作 (待办聚合)</th><th>最近变更</th></tr>';
       for(const r of activeRows){
-        const rowCss = r.group==='action' ? ' style="background:#fdf6ec"' : '';
+        const rowCss = r.group==='action' ? ' style="background:var(--row-action);box-shadow:inset 2px 0 0 var(--warn)"' : '';
         h += '<tr'+rowCss+'><td><b>'+esc(r.dir)+'</b></td><td>'+inboxBadge(r.state)+'</td>'
            + '<td>'+esc(r.next)+'</td><td class="mut">'+esc(r.updated_at)+'</td></tr>';
       }
