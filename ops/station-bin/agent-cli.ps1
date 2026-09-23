@@ -1307,6 +1307,17 @@ function Invoke-Task {
         return 2
     }
     if (-not $hostName) { $hostName = Get-TargetHost $station }
+    else {
+        # 2026-09-23 (O-28 RC①): **让站覆盖完整**。dispatch 传给 task 的站覆盖参数是 `-RemoteHost`
+        #   (见 `Invoke-Task -hostName $RemoteHost`), 而顶层 `-HostName` 对 task **无效** —— 这是个
+        #   易踩的双参数陷阱。旧实现只让 `$hostName` 变、`$station` 不变 ⇒ **半覆盖**:
+        #   同步/执行去了 A 站, 而 slot-gate / 记账 / 显示仍按 route 的站 ⇒ 三站并发时
+        #   "三张卡被当成同站" ⇒ 撞 per-(proj,站) 锁(实测 LOCK_HELD 同一 owner)。
+        #   此处由 hostName 反推 station, 使覆盖自洽。
+        foreach ($s in @('A', 'B', 'C')) {
+            if ((Get-TargetHost $s) -eq $hostName) { $station = $s; break }
+        }
+    }
 
     # 6.4 complexity routing: CLI --complexity/--task-type > card front-matter > default(reason)
     $cx = if ($complexity) { $complexity } else { if ($fm['complexity']) { $fm['complexity'] } else { 'auto' } }
@@ -1509,6 +1520,15 @@ mkdir -p "`$W/.attach/$name"
     # 5) fused remote script: orphan->flock->state->opencode(stdin)->state->output (R14)
     $W = "$Script:WORKSPACE_ROOT/$proj"
     $ts = [DateTime]::Now.ToString('yyyyMMddHHmmssffff')
+    # 2026-09-23 (O-28 RC②): **并发 ts 去重**。Windows 时钟粒度(~15.6ms)使**同一滴答内启动的两个进程
+    #   取到完全相同的 ts**(实测两进程都是 202609232242536720) ⇒ `agent-out\<ts>` 与
+    #   `%TEMP%\agent-cli-ev-<ts>` 互踩(EVIDENCE_PULL_WARN: being used by another process + COLLECT_FAIL)。
+    #   **刻意保持 18 位数字形状**(scrubber 的长度判据与全仓 204 处引用依赖它) ⇒ **只做"已存在则递增"**,
+    #   不改 ts 的形状/位数。
+    $tsOutRoot = Join-Path $projRoot 'agent-out'
+    $tsN = [Int64]$ts
+    while (Test-Path (Join-Path $tsOutRoot ([string]$tsN))) { $tsN++ }
+    if ([string]$tsN -ne $ts) { Write-Host "TS_DEDUP: $ts -> $tsN (concurrent collision, O-28 RC2)"; $ts = [string]$tsN }
 
     # 4c) golden (O-12, IMPLEMENTATION §3.2 M2): authoritative golden test injected BEFORE dispatch
     #     (inv 3: after sync, before $body; clean-inject = .golden equals current injection).
