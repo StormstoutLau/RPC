@@ -174,7 +174,17 @@ def main() -> int:
          (not naked) and len(ledger_calls) >= 3,
          f"ledger 上的裸 Add-Content 命中={naked}；Add-LedgerLine 出现数={len(ledger_calls)}（应为 定义1 + 两路各1 = 3）")
 
-    print(f"\n静态护栏 {9} 条")
+    # O-29：`golden-cmd` 必须**条件列**（与 accept-* 同纪律），不得裸列进 subjects 基线。
+    #   裸列 ⇒ 无 golden 的卡每 run 记一条 missing-artifact 可重放 gap（实测连续 3 个 run 命中）。
+    #   检查法：`golden-cmd` 不得出现在**裸 `$list = @(` 块内** ⇒ 近似判据 = 同一行组里
+    #   `golden-cmd` 必须与 `if ($goldenActive)` 同现（见 Get-FrameworkSubjects）。
+    g_cond = re.search(r"if \(\$goldenActive\) \{[\s\S]{0,600}?golden-cmd", src)
+    g_naked = re.search(r"@\{ name = 'golden-cmd'[\s\S]{0,80}?@\{ name = 'progress-trace'", src)
+    need("O-29 golden-cmd 条件列（无 golden 卡不再记 gap）",
+         bool(g_cond) and not g_naked,
+         f"条件列命中={bool(g_cond)} · 裸列命中={bool(g_naked)} ⇒ 裸列会让无 golden 的卡每 run 记一条 gap")
+
+    print(f"\n静态护栏 {10} 条")
     if fails:
         print("FAIL:")
         for x in fails:
