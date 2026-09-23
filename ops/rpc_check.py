@@ -54,6 +54,11 @@ def _iter_source_files():
 
     范围选 git 跟踪文件而非"整个工作区": pre-commit 阶段新文件已 `git add`,
     故会出现在 ls-files 中; 而 tmp/ 等未跟踪目录不应参与提交门禁。
+
+    ⚠ **2026-09-23（O-34）**：上面这条是**假设**，它**只在 pre-commit 钩子里成立** ——
+    手动直跑（本仓推荐做法）若处于"文件已新建/重命名但未暂存"的中间态，范围会与提交时**不同**
+    ⇒ **同一命令两种结论**。故配套 `_untracked_count()`，由消费者把它**显式报出来**，
+    而不是让"范围已收窄"静默影响结论。
     """
     try:
         out = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT,
@@ -64,6 +69,19 @@ def _iter_source_files():
                 for p in ROOT.rglob("*") if p.is_file() and ".git" not in p.parts]
     for r in rels:
         yield r, ROOT / r
+
+
+def _untracked_count() -> int:
+    """**未跟踪**（⇒ 不在门禁范围内）的文件数；`--exclude-standard` ⇒ 尊重 `.gitignore`。
+
+    用途（O-34）：让"范围已收窄"**可见** —— 干净仓库/正常提交路径上恒为 0 ⇒ **零噪声**。
+    """
+    try:
+        out = subprocess.run(["git", "ls-files", "--others", "--exclude-standard", "-z"],
+                             cwd=ROOT, capture_output=True, check=True).stdout
+        return len([p for p in out.decode("utf-8", "replace").split("\0") if p])
+    except Exception:
+        return 0
 
 
 def _is_binary(path):
@@ -107,6 +125,11 @@ def check_secrets(ctx):
     note = f"扫描 {scanned} 个文本文件 (跳过 {skipped_bin} 个二进制), 命中 {len(hits)} 处"
     if allowed:
         note += f", 白名单 {len(allowed)} 处"
+    # O-34: 范围 = git 跟踪文件；若此刻有未跟踪文件 ⇒ 本结论**可能**与 pre-commit 时不同，必须报出来。
+    _un = _untracked_count()
+    if _un:
+        note += (f" · ⚠ 另有 {_un} 个**未跟踪**文件未计入（范围=git 跟踪文件；"
+                 f"pre-commit 时新文件已暂存 ⇒ 手动跑与提交跑结论可能不同，见台账 O-34）")
     return ("FAIL" if hits else "PASS"), note, detail
 
 
