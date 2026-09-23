@@ -3255,36 +3255,69 @@ def _gap_key(kind: str, label: str, sub: str) -> str:
 #   ⇒ 本轮执行入仓化（**执行已登记的决策，不是新决策**）。
 #   代价（刻意接受）：每次 `--accept` 会改动仓内文件 ⇒ **提交摩擦** —— 而**这正是留痕的来源**。
 #   已知未决：多机并发 `--accept` 会产生合并冲突（后续可改"按机分文件"，见 D7-P1-1 待办）。
-AGENT_AUDIT_BASELINE = Path(__file__).resolve().parent.parent / "inventory" / "audit-baseline.json"
+# 2026-09-23（D7-P1-1 后续）：**按机分文件 + 读时并集** —— 治"多机并发 `--accept` 合并冲突"。
+#   为什么这样治: 水印语义本就是**单调并集**（非快照）⇒ **并集天然可合并** ⇒
+#   把"一台机一个分片"分开写、读时取并集 ⇒ **零冲突、零锁**（不需要 flock，也不需要重放）。
+#   代价: 文件数 = 机器数（很小）；好处是"哪台机接受了什么"直接体现在**文件名**上。
+#   兼容: 目录不存在但旧的单文件 `audit-baseline.json` 还在 ⇒ 仍读它（迁移期无需停机）。
+AGENT_AUDIT_BASELINE_DIR = Path(__file__).resolve().parent.parent / "inventory" / "audit-baseline"
+AGENT_AUDIT_BASELINE = AGENT_AUDIT_BASELINE_DIR / "audit-baseline.json"   # 兼容名（旧单文件/文档引用）
+
+
+def _audit_host() -> str:
+    """本机标识（用作分片文件名）。取 COMPUTERNAME/HOSTNAME，缺 ⇒ `local`。"""
+    h = os.environ.get("COMPUTERNAME") or os.environ.get("HOSTNAME") or "local"
+    return re.sub(r"[^A-Za-z0-9._-]", "_", h).lower()
 
 
 def agent_audit_baseline_load() -> dict:
-    """读水印；缺失/损坏 ⇒ 空基线（**不抛** —— 缺基线只意味着"首跑会把存量当新增报一次"，自愈）。"""
-    try:
-        d = json.loads(AGENT_AUDIT_BASELINE.read_text(encoding="utf-8"))
-        if isinstance(d, dict) and isinstance(d.get("keys"), list):
-            return d
-    except Exception:
-        pass
-    return {"version": 1, "keys": [], "created": "", "updated": ""}
+    """读水印 —— **并集所有机的分片**；缺失/损坏 ⇒ 空基线（**不抛**：缺基线=首跑把存量当新增报一次，自愈）。
+
+    真值源 = **目录下所有 `*.json` 的并集**（单调并集语义 ⇒ 并集即正确值）。
+    单分片损坏**不拖垮整体**（跳过它，其余仍有效）。
+    """
+    files = []
+    if AGENT_AUDIT_BASELINE_DIR.is_dir():
+        files = sorted(AGENT_AUDIT_BASELINE_DIR.glob("*.json"))
+    elif AGENT_AUDIT_BASELINE.is_file():
+        files = [AGENT_AUDIT_BASELINE]          # 迁移期兼容：旧的单文件
+    keys, created, updated, srcs = set(), "", "", []
+    for p in files:
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not (isinstance(d, dict) and isinstance(d.get("keys"), list)):
+            continue
+        keys |= {str(k) for k in d["keys"]}
+        created = created or (d.get("created") or "")
+        updated = max(updated, d.get("updated") or "")
+        srcs.append(p.name)
+    return {"version": 1, "keys": sorted(keys), "created": created,
+            "updated": updated, "sources": srcs}
 
 
 def agent_audit_baseline_accept(keys) -> dict:
-    """把当前 gap key 集合**并入**水印（**单调**：并集，绝不移除）。
+    """把当前 gap key 集合**并入水印**（**单调**：并集，绝不移除）—— **只写本机分片**。
 
     单调的理由: 非单调（快照式）会在"runDir 被删后又恢复"时把老 gap 读成新增 ⇒ 假告警。
     代价（已在调研 §10.3 记账）: 同一处 gap 被修复后再次出现**不会二次告警**。
+
+    2026-09-23: 写目标由"单一共享文件"改为 **本机分片** `audit-baseline/<host>.json`
+      ⇒ 多机并发 `--accept` **不再产生 git 合并冲突**（各写各的文件；读时并集）。
     """
     cur = agent_audit_baseline_load()
     old = set(cur.get("keys") or [])
     new = sorted(set(str(k) for k in keys) - old)
     merged = sorted(old | set(str(k) for k in keys))
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
-    out = {"version": 1, "keys": merged,
-           "created": cur.get("created") or ts, "updated": ts}
-    AGENT_AUDIT_BASELINE.write_text(json.dumps(out, ensure_ascii=False, indent=1) + "\n",
-                                    encoding="utf-8")
-    return {"added": new, "total": len(merged), "path": str(AGENT_AUDIT_BASELINE)}
+    host = _audit_host()
+    AGENT_AUDIT_BASELINE_DIR.mkdir(parents=True, exist_ok=True)
+    out = {"version": 1, "host": host, "keys": merged,
+           "created": (cur.get("created") or ts), "updated": ts}
+    tgt = AGENT_AUDIT_BASELINE_DIR / f"{host}.json"
+    tgt.write_text(json.dumps(out, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    return {"added": new, "total": len(merged), "path": str(tgt)}
 
 
 def agent_audit(limit: int = 0, save: bool = False) -> dict:

@@ -206,10 +206,13 @@ def main() -> int:
     #   否则"已移除此项"的留档注释（含该字串）会让断言**假红**（本会话已犯过一次同型错）。
     gi_code = "\n".join(l for l in gi.splitlines() if not l.lstrip().startswith("#"))
     gi_removed = "ops/.audit-baseline.json" not in gi_code
-    path_moved = '"inventory" / "audit-baseline.json"' in cl
-    need("D7-P1-1 水印入仓化（路径在 inventory/ 且未被 gitignore）",
-         path_moved and gi_removed,
-         f"路径已改={path_moved} gitignore 已移除={gi_removed}（只判非注释行）")
+    path_moved = '"inventory" / "audit-baseline"' in cl and "AGENT_AUDIT_BASELINE_DIR" in cl
+    per_host = "_audit_host()" in cl and "load()" in cl   # 按机分片 + 读时并集
+    gi_code = "\n".join(l for l in gi.splitlines() if not l.lstrip().startswith("#"))
+    gi_removed = "ops/.audit-baseline.json" not in gi_code
+    need("D7-P1-1 水印入仓化（inventory/ 分片 + 未被 gitignore + 按机分文件）",
+         path_moved and per_host and gi_removed,
+         f"路径已改={path_moved} 按机分片={per_host} gitignore 已移除={gi_removed}（只判非注释行）")
 
     print(f"\n静态护栏 {12} 条")
     if fails:
