@@ -624,7 +624,13 @@ function Assert-AgentOutWritable {
     # AFTER a long run. Probe early and fail fast instead of wasting a run.
     param([string]$projRoot)
     $outRoot = Join-Path $projRoot 'agent-out'
-    $probe = Join-Path $outRoot "_preflight_$([DateTime]::Now.ToString('HHmmss')).probe"
+    # 2026-09-23 (F-1 / O-28 RC③): 探针名必须带 **per-invocation 身份**。
+    #   旧名 `_preflight_HHmmss.probe` **只有秒级精度** ⇒ 同一秒内启动的两个进程**撞同一个探针文件**:
+    #   一方 `Set-Content`、另一方 `Remove-Item`/读 ⇒ 实测 `PREFLIGHT-FAIL … Stream was not readable` + ABORT exit 12。
+    #   危害不在"失败", 而在它**把"并发"伪装成"环境不可写"**(错误归因 ⇒ 运维去查权限, 而真因是并发)。
+    #   修法**照抄本仓既有样板** `$Script:TMP_ROOT`(用 RUN_TOKEN 做 per-invocation 隔离) —— 不发明新机制。
+    #   ⚠ 本函数被 **task 与 split 两处**调用(F-10) ⇒ **修在函数内, 两处同时受益**, 不必改调用点。
+    $probe = Join-Path $outRoot "_preflight_$($Script:RUN_TOKEN).probe"
     try {
         if (-not (Test-Path $outRoot)) { New-Item -ItemType Directory -Path $outRoot -Force | Out-Null }
         Set-Content -Path $probe -Value 'ok' -ErrorAction Stop
