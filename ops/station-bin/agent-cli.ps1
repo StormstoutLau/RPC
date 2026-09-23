@@ -3052,15 +3052,19 @@ function Invoke-ClaudeFly-Station {
           [string]$WorkDir)
     if (-not (Test-Path $stdin)) { [IO.File]::WriteAllText($stdin, '', (New-Object System.Text.UTF8Encoding $false)) }
     $ru = "$remoteUser@$hostName"
-    $rIn = '/tmp/_p3_claude_in.txt'; $rOut = '/tmp/_p3_claude_out.txt'; $rErr = '/tmp/_p3_claude_err.txt'
+    # 2026-09-23 (O-31)：站上临时名**加本次唯一 id** —— 固定名会让**同站两个备路 run 互踩**
+    #   （stdin 互相覆盖、stdout/stderr 混写）。用 GUID 前缀而**不依赖上层是否有 `$ts`**。
+    #   注：`/tmp/_p3_run.sh`（投递的脚本）**仍用固定名** —— 内容恒定 + scp 幂等覆盖 ⇒ 并发无害。
+    $p3id = 'p3_' + [Guid]::NewGuid().ToString('N').Substring(0, 12)
+    $rIn = "/tmp/${p3id}_in.txt"; $rOut = "/tmp/${p3id}_out.txt"; $rErr = "/tmp/${p3id}_err.txt"
     try {
         # [1] 落盘站上运行脚本(R14: 远程命令一律脚本落盘, 免引号地狱)
         $runSh = @'
 #!/bin/bash
 # _p3_claude_run.sh — 站上跑 claude headless 并指向**站上本地引擎**(物理不出网)
-# 由 agent-cli.ps1 的 Invoke-ClaudeFly-Station 生成; 参数: $1=argStr  $2=budgetS  $3=workdir
+# 由 agent-cli.ps1 的 Invoke-ClaudeFly-Station 生成; 参数: $1=argStr  $2=budgetS  $3=workdir  $4=pfx(站上临时名前缀, O-31)
 set -uo pipefail
-ARGSTR="$1"; BUDGET="$2"; WORK="$3"
+ARGSTR="$1"; BUDGET="$2"; WORK="$3"; PFX="$4"
 KEYF="$HOME/.config/rpc/unsloth.key"
 K=""; [ -f "$KEYF" ] && K=$(tr -d '[:space:]' < "$KEYF")
 # 引擎真实 ctx(自对齐; 取不到则退回保守值)
@@ -3080,8 +3084,9 @@ echo "P3_STATION: engine_ctx=$CTX max_context_tokens=$MAXC base_url=http://127.0
 #   **fail-closed**: 目录不可用就当场退 8 —— 绝不在错的 cwd 下跑完(那正是"假绿灯"的形状)。
 [ -n "$WORK" ] && [ -d "$WORK" ] || { echo "P3_STATION_ERR: workdir 不可用: '$WORK'"; exit 8; }
 cd "$WORK" || exit 8
-timeout "$BUDGET" claude --settings "$SET" $ARGSTR < /tmp/_p3_claude_in.txt \
-  > /tmp/_p3_claude_out.txt 2> /tmp/_p3_claude_err.txt
+# O-31: 三个临时名由 $PFX 前缀隔离 —— 固定名会让**同站两个备路 run 互相覆盖/混写**。
+timeout "$BUDGET" claude --settings "$SET" $ARGSTR < "${PFX}_in.txt" \
+  > "${PFX}_out.txt" 2> "${PFX}_err.txt"
 RC=$?
 rm -f "$SET"
 echo "P3_STATION_RC=$RC"
@@ -3093,7 +3098,7 @@ exit $RC
         & scp -q -o BatchMode=yes -o ConnectTimeout=8 $localSh "${ru}:/tmp/_p3_run.sh" 2>&1 | Out-Null
         & scp -q -o BatchMode=yes -o ConnectTimeout=8 $stdin "${ru}:${rIn}" 2>&1 | Out-Null
         # [3] 执行(预算在**站上** timeout 里; ssh 自身不设超时以免掩盖真实 rc)
-        $out = & ssh -o BatchMode=yes -o ConnectTimeout=8 $ru "bash /tmp/_p3_run.sh '$argStr' $budgetS '$WorkDir'" 2>&1
+        $out = & ssh -o BatchMode=yes -o ConnectTimeout=8 $ru "bash /tmp/_p3_run.sh '$argStr' $budgetS '$WorkDir' '$p3id'" 2>&1
         $rc = $LASTEXITCODE
         foreach ($l in @($out)) { Write-Host "  [station-claude $hostName] $l" }
         # [4] 收 stdout/stderr(上层编排只看这两个文件)
