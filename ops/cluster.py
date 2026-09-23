@@ -8,6 +8,9 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
     python ops/cluster.py load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm]
     python ops/cluster.py frames
     python ops/cluster.py unload
+    python ops/cluster.py estimate <alias> [--station A|B|C] [--ctx N] [--parallel N] [--ctk q8_0] [--ctv q8_0]  # 事前预估 (内存/耗时)
+    python ops/cluster.py models {list|orphan|link|prune|verify|meta} [--station A|B|C] [--go]  # 模型全生命周期
+    python ops/cluster.py versions                                         # 引擎版本矩阵 (RPC/单机/LM Studio/opencode/内核)
     python ops/cluster.py e2e
     python ops/cluster.py studio status                                     # studio 套件矩阵 (版本/修复/防线 pin/引擎同版/复原路径; 只读)
     python ops/cluster.py secrets {status|scan|push|pull}
@@ -34,6 +37,14 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
              对 llama-rpc 类模型: 显式 --backend 单机后端(非 llama-rpc) 视为强制单机加载, 走正常路径。
     frames   三站框架级运行状态一览 (llama-server/unsloth/vllm/litellm/opencode), 恒 exit 0
     unload   三站并行幂等卸载
+    estimate 事前预估 (P1-1): 给定 alias 预估加载后的内存/耗时, 不实际加载 (只读)。
+             支持 --station/--ctx/--parallel/--ctk/--ctv 覆盖 conf 推测值。
+    models   模型全生命周期 (P1-2): list=按 (repo,模型目录) 聚合的清单(体积/量化/conf/是否已加载);
+             orphan=物理库有但聚合视图看不到; link=给孤儿建软链; prune=清断链;
+             verify 校验, meta=单站元数据。改站上状态的子命令**默认只出计划, --go 才动手**。
+    versions 引擎版本矩阵 (P1-3): RPC 引擎 / 单机引擎 / LM Studio / opencode / 内核 三站并列,
+             暴露版本漂移与受控路径完整性缺口 (MANIFEST md5 计数)。
+    studio   studio 套件矩阵 (只读): 三站版本/修复项/防线 pin/引擎是否同版/复原路径。
     e2e      三站引擎在线冒烟 (直连 :8080, 不经 LiteLLM 网关——网关已退役)
     secrets  站内凭据治理 (平面②): status=落点+权限+明文巡检+"站内产物"型凭据与正本是否一致;
              scan=明文扫描; push=从主控下发 (对"站内产物"型凭据默认**跳过**覆盖, --force 强制);
