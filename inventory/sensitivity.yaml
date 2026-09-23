@@ -8,6 +8,19 @@
 #              (agent-cli.ps1:784-786) ⇒ **"漏标"的方向是"更宽松"**。
 #   ⇒ 本表把"内容 → 档位"从**口头判断**变成**可查真值**, 供卡面 `input-provenance` 引用。
 #
+# ── ⚠⚠ `sanitized` 的**实际保护范围**（2026-09-24 一手核对, 防误读）────────────────
+#   `sanitized` = C1 ∧ C2 ∧ ¬C3 档, 其"脱敏"由 `agent-cli.ps1` 的 `Invoke-Scrubber` 实现
+#   （规则单一真值源 = `Get-ScrubRules`, 9 条）。**实测射程与"脱敏后出"这句并不等宽**：
+#     · **只作用在 `$promptFull`**（卡正文 + 附件**文件名**）—— **accept 命令与附件内容都不经它**
+#       （附件走 scp 原文; 见 docs/security/2026-09-21_scrubber规则扩充裁定与影响面.md §2.2）;
+#     · 9 条规则 = 私钥块(拒发) / GH-PAT / AWS-AK / Slack / JWT / `sk-` / `Bearer` / email / Windows 路径;
+#     · ★ **刻意不含**: 内网 IP · `.local` 主机名 · **Linux 绝对路径** · UNC · 用户名 · 手机号 ·
+#       身份证 · 银行卡（理由: 前三类是项目自身日常寻址方式, 抹掉=抹掉任务可执行性; 那类的正确防线
+#       是**档位**, 不是正则 —— 裁定原文）。
+#   ⇒ ⇒ **结论（写死在此, 不许再含糊）**: `sanitized` **对 C3 类不提供保护**（IP/主机名/Linux 路径/
+#      用户名会原样出网）; 它只兜"有固定格式前缀的凭据类"。
+#      **含 C3 的内容不得靠 `sanitized` 兜底** —— 要么人工剔除后按 `public` 走, 要么按 `local-only` 走。
+#
 # ── 判定规则 (fail-closed; 三条充分条件须【全部满足】才可升为 public) ──
 #   C1 不含用户未发表论文 / 未发表研究内容
 #   C2 不含他方项目的未发表内容 (Paper / Auto_Prover / Cpp_Hub 的稿件·裁决材料·内部实现)
@@ -15,7 +28,7 @@
 #
 #   档位取值 (与 agent-cli.ps1 route `--Sensitivity` 三档一致: public|sanitized|local-only):
 #     public      = C1 ∧ C2 ∧ C3        直接可出网
-#     sanitized   = C1 ∧ C2 ∧ ¬C3       可出网, 但必须过 scrubber (脱敏后出)
+#     sanitized   = C1 ∧ C2 ∧ ¬C3       可出网, 仅当敏感项是**凭据类**时"脱敏后出"（⚠ 见上节: 对 C3 无保护）
 #     local-only  = ¬C1 ∨ ¬C2           字节永不出主控站 (站内模型; O-16 血泪的适用范围)
 #     unverified  = 尚未逐份核验 ⇒ **按 local-only 处置** (fail-closed; 不许默认放宽)
 #
@@ -26,11 +39,19 @@
 #     ③ 卡的 `sensitivity` **不得宽于**表里对应项的 `tier` (顺序 local-only < sanitized < public)。
 #   ⇒ 该规则**可机判**; 断言接入见文末 "待接入" 段。
 #
+# ── 其它两条**卡面/传输**纪律（2026-09-24 一手取证; 详见 spec/d6-agent-standard/dogfood-cards/README.md）──
+#   · **卡正文会进 prompt**（实测 `prompt.txt` = `[proj:x]` + task 行 + 正文全文）⇒ 走出网档的卡,
+#     其**正文不得含 C3 指纹**; front-matter 的 `accept:` 不进 prompt, 且 accept 由站上执行时
+#     已 `cd "$W"` ⇒ 不必写绝对路径。
+#   · **附件内容不经 scrubber**; 带附件 + 出网后端 + 卡未写 `attach-egress: ok` ⇒ `REJECT … exit 4`。
+#
 # 维护: 新增/修改 D6·D7 文档时同步本表; 档位只由 Scott 裁定 (本表不给"建议档位")。
 # 真值表家族: impact.yaml (影响面) / models.yaml / net.yaml / ops.yaml / plugins.yaml / ports.yaml
 #           + **本表 (内容可去哪)** —— 前者管"改这里会动到谁", 本表管"这份内容能去哪"。
+# ⚠ 2026-09-24: 本表此前**从未被任何工具解析过**(门禁 `syntax` 不覆盖 yaml) ⇒ 首次 `yaml.safe_load`
+#   即报 `ScannerError`（多处 `why:` 纯量里含 `: `）⇒ 已按合法 YAML 重写(改折叠块)并验证通过。
 
-updated: 2026-09-23
+updated: 2026-09-24
 owner: Scott (鹏)
 rule_version: 1
 default_tier: local-only        # fail-closed: 未登记 = local-only
@@ -40,73 +61,118 @@ documents:
   - path: docs/2026-09-23_D6-D7分阶段执行方案.md
     tier: local-only
     fails: [C2, C3]
-    why: 含九项目内部实测 / 他方项目细节与过期 IP / 影响面与受理机制内情
+    why: >-
+      含九项目内部实测 / 他方项目细节与过期 IP / 影响面与受理机制内情
   - path: docs/2026-09-23_D7调研_立项·机制·统一基座.md
     tier: local-only
     fails: [C1, C2, C3]
-    why: 含九项目密集实测 + 用户研究方向 (Lean4 线 / 金融因子方法论) + 基础设施细节
+    why: >-
+      含九项目密集实测 + 用户研究方向 (Lean4 线 / 金融因子方法论) + 基础设施细节
   - path: docs/2026-09-23_Spec_Workflow能否作为D6-D7工作流基准_调研.md
     tier: local-only
     fails: [C2]
-    why: 含对面仓库 ADR 内情、其失效条件原文与跨仓复核记录 (他方未发表)
+    why: >-
+      含对面仓库 ADR 内情、其失效条件原文与跨仓复核记录 (他方未发表)
   - path: docs/2026-09-23_Ds工作区扫描_对agent编排与D7的可借鉴分析.md
     tier: local-only
     fails: [C2, C3]
-    why: 含外部工作区源码细节与内部路径
+    why: >-
+      含外部工作区源码细节与内部路径
   - path: docs/2026-09-23_二次裁定取证_证据与断言.md
     tier: local-only
     fails: [C3]
-    why: 含本仓门禁/脚本内部缺陷与逐行锚点 (攻击面)
+    why: >-
+      含本仓门禁/脚本内部缺陷与逐行锚点 (攻击面)
   - path: docs/2026-09-23_inbox治理_合并实施计划.md
     tier: local-only
     fails: [C2, C3]
-    why: 含受理机制内情与项目侧材料形态
+    why: >-
+      含受理机制内情与项目侧材料形态
   - path: docs/2026-09-23_项目进度看板_调研与方案.md
     tier: unverified
     fails: []
-    why: 未逐份核验跨项目进度快照的暴露面 ⇒ 按 local-only 处置
+    why: >-
+      未逐份核验跨项目进度快照的暴露面 ⇒ 按 local-only 处置
   - path: docs/2026-09-23_cluster.py模块化重构_调研与方案.md
     tier: public
     fails: []
-    why: 仅本仓代码结构与方法论 (本仓开源范围); 无 IP/主机名/脚本内部缺陷
+    why: >-
+      仅本仓代码结构与方法论 (本仓开源范围); 无 IP/主机名/脚本内部缺陷
   - path: docs/2026-09-23_D7统一基座_数理证明与知识提取三线调研.md
     tier: local-only
     fails: [C1]
-    why: 含用户研究三线 (NS 证明线 / 教材定理线 / 论文提取线)
+    why: >-
+      含用户研究三线 (NS 证明线 / 教材定理线 / 论文提取线)
   - path: docs/DEV-LOG-012-d6-d7-roadmap-and-impact.md
     tier: local-only
     fails: [C2, C3]
-    why: 含七条关键发现 (受理副本 / 手册过期 / impact.yaml 未使用) 与撤回记录
+    why: >-
+      含七条关键发现 (受理副本 / 手册过期 / impact.yaml 未使用) 与撤回记录
 
 # ── 常被卡引用的契约/载体文档 ──
 contracts:
   - path: docs/三机推理集群使用手册.md
     tier: local-only
     fails: [C3]
-    why: 含站 IP / 主机名 / 端口映射 / 内部流程节点 —— 属基础设施指纹
+    why: >-
+      含站 IP / 主机名 / 端口映射 / 内部流程节点 —— 属基础设施指纹
   - path: spec/d6-agent-standard/CROSS-PROJECT-WORK-STANDARD.md
     tier: sanitized
     fails: [C3]
-    why: 工作流面契约本身可公开; 但含站 IP 示例与本地端子 (需脱敏)
+    why: >-
+      工作流面契约本身可公开; 但含站 IP 示例与本地端子 (需脱敏)。⚠ 注意: 若草拟卡直接**内嵌**其片段,
+      内嵌的 IP/主机名**不会**被 scrubber 抹(不在 9 条规则内) ⇒ 内嵌前须人工剔除 C3
   - path: spec/d6-agent-standard/test-cards/
     tier: local-only
     fails: [C3]
-    why: 卡面含 proj 路径 / 站标识 / 站上落点 ⇒ 按目录整体 local-only
+    why: >-
+      卡面含 proj 路径 / 站标识 / 站上落点 ⇒ 按目录整体 local-only
+  - path: spec/d6-agent-standard/dogfood-cards/
+    tier: public
+    fails: []
+    why: >-
+      ★ 吃狗粮卡面**专用目录** (Scott 2026-09-24 裁定) —— 与 test-cards/ 分开, 因后者含站标识/站上落点。
+      本目录的卡面必须**正文零 C3 指纹**(不写 IP/主机名/Linux 绝对路径/用户名; accept 用相对路径),
+      否则"声明 public 出网"就是带着指纹出。依据: 卡正文会进 prompt(实测 prompt.txt = [proj:] + task 行 + 正文全文);
+      front-matter 的 accept 不进 prompt, 且 accept 由站上执行前已 cd "$W" ⇒ 不必写绝对路径
+  - path: spec/d6-agent-standard/dogfood-cards/inputs/d7-dialect-excerpt.md
+    tier: public
+    fails: []
+    why: >-
+      B1(U-2 方言映射) 的输入。由 local-only 文档**人工摘录 + 脱敏**(Scott 2026-09-24 裁定 B1 = public + 摘要):
+      只保留"符号 → 阶段/档位含义"的抽象对照, 已剔除主机名/IP/用户目录/源码标识符/行号/键名。
+      ⚠ 它不承载原文档的完整性 ⇒ 卡面已明写"缺失项就是缺失, 不许补"
   - path: inbox/
     tier: local-only
     fails: [C2]
-    why: ★ 理由不是"本仓私有", 而是**承载他方未发表内容** (Paper / Auto_Prover 的稿件与裁决材料)
+    why: >-
+      ★ 理由不是"本仓私有", 而是**承载他方未发表内容** (Paper / Auto_Prover 的稿件与裁决材料)
   - path: secrets/
     tier: local-only
     fails: [C3]
-    why: 真实凭据 (scrubber 只兜 sk- 类, 不该赌)
+    why: >-
+      真实凭据 (scrubber 只兜 sk- 类, 不该赌)
+
+# ── 门禁/工具**源码** (供"审代码"类卡作附件; ★ 逐文件登记, 不整目录) ──
+code:
+  - path: ops/rpc_check.py
+    tier: public
+    fails: []
+    why: >-
+      本仓开源门禁代码 (Scott 2026-09-24 裁定)。⚠ 只登记本文件: ops/station-bin/ 下的站上脚本
+      含站标识/站上落点/锁语义 ⇒ 仍为 local-only, 不得随本行放宽。
+      用途: dogfood-cards 的 B2(门禁假绿审计) 以附件形式送它。★ 带附件的出网卡必须写
+      attach-egress: ok (否则 REJECT attach-egress-unconfirmed exit 4 整单拒); 而附件不经 scrubber
 
 # ── 待接入 (如实登记"尚未接上", 不假装已接) ──
 # 本表 2026-09-23 建立时**尚未接入任何断言** ⇒ 属"有真值表但未门禁化"状态。
+# 2026-09-24 复核: 全仓 (含 ops/*.py 与 ops/station-bin/*.ps1) 对 `input-provenance` **零代码命中**
+#   ⇒ 义务目前**仅文档级**; 且本表自身**此前从未被解析**过 ⇒ 首次 yaml.safe_load 即失败(已修)。
 # 接入任务归 **D6-P1-1** (生成物清单 + --check), 最小断言候选:
 #   ① 每条 path 必须存在 (防表腐化);
 #   ② tier ∈ {public, sanitized, local-only, unverified};
 #   ③ docs/ 下 2026-09-23_* 与 DEV-LOG-01x 全部在表内 (防漏登记);
 #   ④ 卡面 `input-provenance` 非空时, 其每项在表内且卡档位不宽于该项 tier (可机判, 见上文"卡的义务")。
+#   ⑤ 【2026-09-24 新增】本表必须能被 `yaml.safe_load` 解析 (否则"真值"根本读不出来)。
 # ⚠ 接入即"改门禁" ⇒ 按 §12 盲区 **B2** 要求, 须同时给出"已知会红"的注入用例
 #   (否则无法证明新断言真的在判, 而不是又一条假绿)。
