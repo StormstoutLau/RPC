@@ -110,6 +110,21 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
   对照：`TMP_ROOT` **早已**用 `RUN_TOKEN` 做 per-invocation 隔离，**agent-out 与 evidence 临时目录没跟上**。
 - **与 O-26 的关系**：`decompose`（拆片并行）**已闭环可用**（465.1s ≪ 720.8s）⇒ **同卡拆片走的是"两个分片各一站"**，
   与"同卡在三站各跑一次"是**两种并行**；后者（三站同卡）**当前无通道**。
+- **✅ 修复（2026-09-23，两条 RC 均已落地并被实跑部分验证）**：
+  1. **RC① 修法不是加 alias**（那会撞 `ROUTE_TABLE` 的"不新立模型清单"纪律），而是**让站覆盖自洽** ——
+     dispatch 传给 task 的站覆盖参数是 **`-RemoteHost`**（`Invoke-Task -hostName $RemoteHost`），
+     **顶层 `-HostName` 对 task 无效**（且 param 块**不能再加参数**，见 `[:3475-3476](../../ops/station-bin/agent-cli.ps1)`）
+     —— 这是个易踩的**双参数陷阱**。旧实现只让 `$hostName` 变而 `$station` 不变 ⇒ **半覆盖**；
+     现由 `$hostName` 反推 `$station`（`Get-TargetHost` 三站比对）。**实跑验证**：`-RemoteHost 192.168.1.37`
+     ⇒ 输出 `station=C`（此前恒为 B）✓
+  2. **RC② 已修**：`$ts` 加**并发去重**（已存在则递增），**刻意保持 18 位数字形状**（scrubber 长度判据与全仓 204 处引用依赖它）。
+- **⚠ 并发实跑又暴露两条新脆弱点（RC③/RC④，未修）**：
+
+  | # | 现象 | 判定 |
+  |---|---|---|
+  | **RC③** | `PREFLIGHT-FAIL: agent-out NOT writable … **Stream was not readable**` + `ABORT exit 12`（同一并发批次里另一次成功） | **`Assert-AgentOutWritable` 探针本身并发不安全**（多进程同探同一目录 ⇒ I/O 竞争）；⇒ **前置探针也必须并发安全**，否则"门"会变成随机失败源 |
+  | **RC④** | C 站：`/home/…/dogfood/out/.agent-output.txt: 没有那个文件或目录`（A/B 同批次无此错） | 站上工作区**缺 `out/`** ⇒ **空目录不被 tar 携带**的老问题在**新建站的首次派发**上复现（本地载体已用 `out/.keep` 规避，但**站侧骨架创建路径未覆盖**）。**根因待诊断（未猜）** |
+
 
 #### O-29：无 `accept-golden` 的卡持续产生可重放性 gap
 
