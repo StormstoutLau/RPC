@@ -22,6 +22,7 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
     python ops/cluster.py ttl {status|check|enable|disable} [--ttl N] [--dry-run] [--go]  # 空闲 TTL 自动卸载 (默认关)
     python ops/cluster.py agent {runs|live|tail|chain|verify|audit|audit-judge} [--limit N] [--station X] [--json]  # 进度/吞吐 + 证据链 + 可复现性审计 + judge 校准
     python ops/cluster.py inbox                                             # 受理区跨项目进度 (每笔 <proj>-<date> 的 state/时间, 一行一条)
+    python ops/cluster.py inbox seal <proj-dir> [--run <ts>|--all-runs] [--grade Reproduced|Replicated] [--go]  # 交付证据束钉死 (默认只出计划)
 
 子命令:
     status   三站 llama /health + 当前加载实例 + 引擎清单一屏聚合
@@ -4347,13 +4348,127 @@ def cmd_ttl(argv) -> int:
     return 0
 
 
-def cmd_inbox(argv) -> int:
-    """cluster.py inbox  — 受理区 dashboard: 每笔目录 + 状态 + 更新时间, 一行一条。
+INBOX_ROOT = Path(__file__).resolve().parent.parent / "inbox"
 
-    纯本地无站上依赖 (ADR-0008); STATE.json 缺失/非法按行内提示, 不抛异常。
+
+def _inbox_seal(argv) -> int:
+    """cluster.py inbox seal <proj-dir> [--run <ts>|--all-runs] [--grade Reproduced|Replicated] [--go]
+
+    交付证据束钉死 (ADR-0008 §5.1): 把项目根 `agent-out/<ts>/` 的**实际存在的**证据件逐个 sha256,
+    写入 `inbox/<proj-dir>/30_evidence/MANIFEST.sha256`（与 00_handoff 同格式，`sha256sum -c` 可校验）。
+
+    为什么钉"实际存在的全部文件"而不是 `AGENT_EVIDENCE_FILES` 那 6 件:
+      实测真实 run 目录并**不齐**那 6 件（judgment-record/accept-* 只在配了 accept/golden 的任务里才有）
+      ⇒ 那 6 件是**链校验的"声明件"**，不等于"本次交付束"。硬套会导致常态失败。
+    ⚠ 默认**只出计划**; `--go` 才落盘（与 flow / models link / egress borrow 同纪律）。
+    """
+    if not argv:
+        print("用法: cluster.py inbox seal <proj-dir> [--run <ts>|--all-runs] "
+              "[--grade Reproduced|Replicated] [--go]")
+        return 1
+    name = argv[0]
+    only_ts, all_runs, grade, go = None, False, "Reproduced", False
+    i = 1
+    while i < len(argv):
+        a = argv[i]
+        if a == "--run" and i + 1 < len(argv):
+            only_ts = argv[i + 1]; i += 2; continue
+        if a == "--all-runs":
+            all_runs = True; i += 1; continue
+        if a == "--grade" and i + 1 < len(argv):
+            grade = argv[i + 1]; i += 2; continue
+        if a == "--go":
+            go = True; i += 1; continue
+        print(f"[seal] 未知参数: {a}")
+        return 1
+    if grade not in ("Reproduced", "Replicated"):
+        print("[seal] --grade 只接受 Reproduced(内部同基座复验) 或 Replicated(异基座独立审计)")
+        return 1
+
+    entry = INBOX_ROOT / name
+    if not (entry / "40_state" / "STATE.json").is_file():
+        print(f"[seal] 不是受理目录 (缺 40_state/STATE.json): {entry}")
+        return 1
+
+    # 目录名 = <proj>-<yyyy-mm-dd> ⇒ 去日期得 proj; proj→root 真值在 agent-cli.ps1 (不在此再抄一份)
+    proj = re.sub(r"-\d{4}-\d{2}-\d{2}$", "", name)
+    roots, note = _agent_proj_roots()
+    root = roots.get(proj)
+    if not root:
+        print(f"[seal] 项目根未知: proj={proj!r}; 已知 {sorted(roots) or note}")
+        return 1
+    ao = root / "agent-out"
+    if not ao.is_dir():
+        print(f"[seal] 项目根下无 agent-out: {ao}")
+        return 1
+
+    all_cand = sorted((p for p in ao.iterdir() if p.is_dir() and p.name.isdigit()),
+                      key=lambda p: p.name, reverse=True)
+    if only_ts:
+        runs = [p for p in all_cand if p.name == only_ts]
+    elif all_runs:
+        runs = all_cand
+    else:
+        runs = all_cand[:1]
+    runs = [r for r in runs if any(f.is_file() for f in r.iterdir())]
+    if not runs:
+        print(f"[seal] 没有可钉的 run 目录 (在 {ao}; 候选 {len(all_cand)} 个)")
+        return 1
+
+    lines, total = [], 0
+    for r in runs:
+        for f in sorted(r.iterdir()):
+            if not f.is_file():
+                continue
+            lines.append(f"{hashlib.sha256(f.read_bytes()).hexdigest()}  agent-out/{r.name}/{f.name}")
+            total += 1
+
+    dst = entry / "30_evidence" / "MANIFEST.sha256"
+    when = datetime.datetime.now().astimezone().isoformat()
+    head = [
+        "# MANIFEST.sha256 — 30_evidence 交付证据束 (ADR-0008 §5.1)",
+        "# 作用：钉住本次交付的证据件字节态 —— 证明「这一批产出就是这些」，且回收之后未被改动。",
+        f"# 受理目录: inbox/{name}    项目根: {root}    交付分级: {grade}",
+        f"# 生成时间: {when}    件数: {total}    run: {', '.join(r.name for r in runs)}",
+        f"# 校验: 在项目根 ({root}) 下 `sha256sum -c {dst}`（忽略 # 行）; Windows 侧用 python 递归比对。",
+        "# 重放语义: 本清单只支持「重放**验证**」(哈希/退出码/diff 白名单), "
+        "不承诺「重放**生成**」逐位一致 (见 inbox/README §5.3)。",
+    ]
+    payload = "\n".join(head + lines) + "\n"
+
+    print(f"[seal] 受理目录 : inbox/{name}")
+    print(f"[seal] 项目     : {proj}  ->  {root}")
+    print(f"[seal] 钉住 run : {', '.join(r.name for r in runs)}")
+    print(f"[seal] 件数     : {total}    分级: {grade}")
+    print(f"[seal] 目标     : {dst}")
+    for ln in lines[:5]:
+        print(f"         {ln}")
+    if total > 5:
+        print(f"         …另 {total - 5} 件")
+    if not go:
+        print("[seal] 以上为**计划**（未写文件）。确认无误后加 --go 落盘。")
+        return 0
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_text(payload, encoding="utf-8")
+    print(f"[seal] 已写入 {dst}（{len(payload)} 字节）。")
+    print("[seal] 提示: 交付态 (release/done/accepted-by-requester) 门禁要求本文件存在; 结案后本目录冻结。")
+    return 0
+
+
+def cmd_inbox(argv) -> int:
+    """cluster.py inbox [seal ...]  — 受理区 dashboard / 交付证据束钉死。
+
+    无参数 = 列出每笔目录 + 状态 + 更新时间（纯本地无站上依赖, ADR-0008）。
+    `seal` 子命令见 `_inbox_seal`（ADR-0008 §5.1 交付证据束）。
     合法状态白名单与自洽判定在 rpc_check.py 的 inbox 断言 (quick)。
     """
-    root = Path(__file__).resolve().parent.parent / "inbox"
+    if argv and argv[0] == "seal":
+        return _inbox_seal(argv[1:])
+    if argv:
+        print("用法: cluster.py inbox | inbox seal <proj-dir> [--run <ts>|--all-runs] "
+              "[--grade Reproduced|Replicated] [--go]")
+        return 1
+    root = INBOX_ROOT
     if not root.is_dir():
         print("inbox/ 不存在")
         return 0
