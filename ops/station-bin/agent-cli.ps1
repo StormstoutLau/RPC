@@ -1662,7 +1662,11 @@ SB0=`$(( `$(date +%s%N) / 1000000 ))   # sampler clock base (ms), captured befor
 : > "`$W/out/.progress"
 sample_progress() {
   while [ "`$SAMPLE" = t ]; do
-    ob=`$(wc -c < "`$W/out/.agent-output.txt" 2>/dev/null)
+    # 2026-09-23 (RC4) **必须容忍文件尚未创建**: agent 启动前 `out/.agent-output.txt` 不存在,
+    #   而 bash 的**重定向失败消息由 shell 打印, 不受本命令 `2>/dev/null` 抑制** ⇒ 实测每 5s 刷一条
+    #   "行 61: … 没有那个文件或目录" 噪音, 并把 run 打成 excode=255(采样器处中断)。
+    #   ⚠ 连续两轮我都误判为"站上缺 out/" —— 真相是"采样器读了还没创建的文件"(取证定性, 见 O-32)。
+    ob=0; [ -f "`$W/out/.agent-output.txt" ] && ob=`$(wc -c < "`$W/out/.agent-output.txt" 2>/dev/null)
     sw=`$(( `$(date +%s%N) / 1000000 - SB0 ))   # ms since sampler start
     st=`$(( sw / 1000 ))                        # s since sampler start
     bps=`$(( ob*1000/(sw+1) ))
