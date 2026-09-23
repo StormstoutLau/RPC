@@ -95,10 +95,17 @@ rejected（可从 triage / accepted / plan-review / plan-revise 任一进入）
 > [ADR-0007](../adr/ADR-0007-证据流阶段推进路线与改动验证闭环.md)）在结案点钉成**交付物标准**。
 > 模板见 `_template/30_evidence/README.md`。
 
-1. **链死**：结案时把项目根 `agent-out/<ts>/` 的 `run.json`（含 `evidence_manifest`）
-   + 单 run 证据束（`.meta`/`.prompt.txt`/`.progress`/`.accept-cmds.txt`/`.golden-cmd.txt`/
-   `.workspace-diff.txt`/`.attach-manifest.txt`/`.session-meta.txt`）哈希写入
-   `30_evidence/MANIFEST.sha256`（与 `00_handoff` 同格式）。**未附证据束 → 不 `done`**。
+1. **链死**：结案时把项目根 `agent-out/<ts>/` 的**实际存在的全部证据件**逐个 sha256，
+   写入 `30_evidence/MANIFEST.sha256`（与 `00_handoff` 同格式，`sha256sum -c` 可校验）。
+   **未附证据束 → 不 `done`**。
+   - **一条命令**：`python ops/cluster.py inbox seal <proj-dir> [--run <ts>|--all-runs] [--grade Reproduced|Replicated] [--go]`
+     （默认只出计划，`--go` 落盘；proj→项目根的真值取自 `agent-cli.ps1` 的 `$Script:PROJECTS`，不另抄一份）。
+   - ⚠ 钉的是**目录里实际有的文件**，不是固定的 6 件清单：实测真实 run 目录并**不齐**
+     `AGENT_EVIDENCE_FILES`（`judgment-record.txt`/`accept-*` 只在配了 accept/golden 的任务里才有）
+     —— 那 6 件是**链校验的"声明件"**，不等于"本次交付束"，硬套会导致常态失败。
+   - 站上原始名（`.meta`/`.progress`/`.accept-cmds.txt`/`.golden-cmd.txt`/`.workspace-diff.txt`/
+     `.attach-manifest.txt`/`.session-meta.txt`）在 **collect 阶段**已被归并/改名进 run 目录，
+     故本清单按回收后的文件名钉（`.agent-run.json`/`agent-output.txt`/`prompt.txt`/`card.md`/`stderr.txt` …）。
 2. **artifact freeze**：`done` 后 `30_evidence/` 与 `00_handoff/` 同样冻结，不再改动；
    后续新需求开新 `open`。
 3. **重放语义**：验收判据 = **重放验证、非重放生成**（沿 ADR-0007）——可证伪的是哈希/diff/退出码/
@@ -125,6 +132,11 @@ rejected（可从 triage / accepted / plan-review / plan-revise 任一进入）
   ① 有 `00_handoff/` ② `40_state/STATE.json` 存在、可解析、state ∈ 白名单
   ③ 状态内容自洽（`accepted+` 须有 `10_admin/受理决定.md`；`plan-review/plan-revise` 须有 `20_plan/`；
   `release+` 须有 `30_evidence/` 记录）。
+- **交付态强判据（2026-09-23 收紧）**：`release` / `done` / `accepted-by-requester` 三态
+  **必须存在 `30_evidence/MANIFEST.sha256`**（不再只是"目录非空"）。
+  加严理由：原判据放个无关文件即可通过 ⇒「未附证据束不 `done`」形同虚设（空转的软约束）。
+  生成：`cluster.py inbox seal <proj-dir> --go`。
+  `rejected-by-requester`（可能交付前就终止）不进本集，只保留"目录非空"。
 - **dashboard**：
   - `cluster.py inbox` —— 列出所有受理目录 + state + updated_at，一行一条（CLI）。
   - **web 看板**（推荐，零手动）—— `cluster.py web` 管理页的**「受理区 · 跨项目进度 + 待办聚合」卡片**：

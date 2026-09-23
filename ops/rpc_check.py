@@ -2463,6 +2463,15 @@ def check_inbox(ctx):
             if not _nonempty(d / "30_evidence"):
                 n_bad += 1
                 bad.append(f"{name}: STATE={state} 须有 30_evidence/ 证据束记录 (非空)")
+        # 2026-09-23 收紧: **交付态**必须真的钉死证据束，不能只是"目录非空"。
+        #   为什么收紧: 原判据放个无关文件就能过 ⇒ "未附证据束不 done" 形同虚设（空转的软约束）。
+        #   判据 = 30_evidence/MANIFEST.sha256 存在。
+        #   `rejected-by-requester`(可能交付前就终止) 不进本集, 只保留上面的"非空"。
+        if state in {"release", "done", "accepted-by-requester"}:
+            if not (d / "30_evidence" / "MANIFEST.sha256").is_file():
+                n_bad += 1
+                bad.append(f"{name}: STATE={state} 须有 30_evidence/MANIFEST.sha256 (交付证据束未钉死); "
+                           f"生成: cluster.py inbox seal {name} --go")
 
     note = f"受理目录 {n_dir} · 状态可机读 {n_state} · 违规 {n_bad}"
     return ("FAIL" if n_bad else "PASS"), note, bad
