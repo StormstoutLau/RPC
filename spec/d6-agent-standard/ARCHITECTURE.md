@@ -60,6 +60,9 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0002]
 **边界职责**（继承 DESIGN §3.3）：
 - **职责内**：wrapper 编排、工作区生命周期、任务卡/契约/状态机、并发锁协议、敏感路由、.agentsync 模板
 - **职责外**：两站 CLI 生态（D5）、模型加载与网关（infer-load）、trae 派发与站间互审（D7）、模型选型（model-eval）
+- **D7 那两项已不再是"待定"**（2026-09-23 补）：`review --peer` 与 `trae 派发` 的**路线、阶段、依赖图与退出判据已定稿** ⇒
+  后续 D7 开发者**从这里接着读**：[D6/D7 升级路线总表](../../docs/2026-09-23_D6-D7分阶段执行方案.md) **§4**（`D7-P0` 定案 → `D7-P1` 统一基座 → `D7-P2` 机械门与结论契约 → `D7-P3` 权限与编排 → `D7-P4` 多轮与收束）；
+  **D6/D7 的边界判据**（`B-1` 需非产出方给结论 / `B-2` 需同产物多轮 / `B-3` 仅本次派发内的质量门）见 [D7 调研合并稿](../../docs/2026-09-23_D7调研_立项·机制·统一基座.md) **§1**。
 
 ## 2. 模块划分（对应 IMPLEMENTATION §3 代码结构）
 
@@ -177,8 +180,8 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0002]
 | readonly 层2锁     | §4 层 2 schema 字段在                                              | V2        |
 | 跨站扇出           | ~~B:18081→A:8080 隧道~~ **2026-09-15: 改 `agent-cli --RemoteHost <站>` + 站内自发现端口 (隧道方案弃用)**；路由表可按需加跨站模型名 | 已落地      |
 | 后端并发探测         | 触发条件=queue_s 排队成常态；调 /slots + 槽位占则拒/等                        | 升级项 (F1)  |
-| review --peer     | 站间互审协议                                                         | D7+       |
-| trae 派发          | 任务卡 schema 冻结即接口                                                 | D7        |
+| `review --peer`     | 站间互审协议 —— **已定稿**：批次见 [路线总表 §4](../../docs/2026-09-23_D6-D7分阶段执行方案.md)（`D7-P2` 机械门与结论契约 / `D7-P3` 权限与编排）<br>⚠ **"跨族"须靠判据保证**：**跨站不自动带来异构**（三站均可走 `openrouter`、可加载不同模型）⇒ 判据 = `judge.family ≠ producer.family` **与** `judge.input ≠ producer.input`（后者 = 盲写的机器化） | D7+       |
+| trae 派发          | 任务卡 schema 冻结即接口 —— **已定稿**：见 [路线总表 §4](../../docs/2026-09-23_D6-D7分阶段执行方案.md)（六相 + 三信封，`D7-P0-2` 定案）                                               | D7        |
 | 复杂度路由 L0       | per-request 推理参数（enable_thinking/max_tokens），需 vLLM 引擎              | 待 vLLM    |
 | 复杂度路由 L1/L2/L3 | 实例风味 preset（nothink/think/long）+ opencode provider limit + prompt 尾注 | **已落地（D-16）** |
 | wrapper 稳定性      | Preflight + ledger 先行 + collectOk（D-17）                              | **已落地** |
