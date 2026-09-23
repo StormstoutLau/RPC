@@ -53,11 +53,31 @@
 
 ### 派发形态
 
+```powershell
+# ⚠ 直接用 PowerShell 调用时参数名是 `-Card` / `-Attach`（不是用法文本里的 `--card`；
+#   `--` 形式会被当成位置参数 ⇒ "A positional parameter cannot be found that accepts argument '--card'"）
+& ops/station-bin/agent-cli.ps1 task dogfood -Card "spec/d6-agent-standard/dogfood-cards/<卡>.md"
+# B1 / B2 另需 -Attach（卡里已写 attach-egress: ok）:
+& ops/station-bin/agent-cli.ps1 task dogfood -Card "...\b2-gate-falsegreen-audit.md" -Attach "ops/rpc_check.py"
 ```
-agent-cli.ps1 task dogfood --card spec/d6-agent-standard/dogfood-cards/<卡>.md
-# B1 / B2 另需: --attach spec/d6-agent-standard/dogfood-cards/inputs/d7-dialect-excerpt.md
-#              （或 ops/rpc_check.py）—— 卡里已写 attach-egress: ok
-```
+
+### ⚠⚠ 并发纪律（2026-09-24 派发时实测修正）
+
+| 约束 | 事实 | 后果 |
+|---|---|---|
+| **同站同 proj 有互斥锁** | `LOCK_ACQUIRED … mode=exclusive`（per-`(proj,站)`；O-28 RC① 记录过 `LOCK_HELD` 同一 owner） | **同 proj 的两张卡不能并行** ⇒ 第二张会撞锁 |
+| **出网档只落 B 站** | `ROUTE_TABLE`：`lightning`/`ultra`/`free-1m` 全 `station='B'` | 于是"换站错开"也做不到 ⇒ **本目录四张卡只能串行** |
+
+⇒ 要真正并行，两条**需要额外动作**的路：① 给 `A`/`C` 增出网档别名（改 `ROUTE_TABLE` = 改运行时脚本，另案）；
+② 一张走 B 站 opencode、另一张走**主控本地** `cli: claude` 备路（`station=''`，同走 openrouter，代价是执行器不同）。
+
+### ★ 首轮派发已实测的两点（2026-09-24）
+
+- **A1 ✅ 通过**：`ACCEPT_OK=1 / TASK_RC=0 / RUN_S=117`，产物 `out/station-reality.json` 合格且诚实
+  （`nvidia-smi`/`rocm-smi` 均 127 ⇒ 回退链落到 `/sys/class/drm`，两条失败**如实**记进 `probe_errors`）。
+- ★ **产物不在 run 目录**：卡的产物只落在**站上工作区**（`~/agent-workspaces/dogfood/out/`），主控 run 目录
+  只收 `agent-output.txt` 等固定证据件，`workspace-diff.txt` 为**空**（`WORKSPACE_DIFF_LINES=0`）
+  ⇒ **要拿产物必须另行回收**，或按 ADR-0007 在卡里声明 `evidence-manifest.subjects`。
 
 > ⚠ **B1 的档位已定案 = `public` + 摘要**（Scott 2026-09-24）：不再走 `sanitized`，也不再走站内。
 > 理由：`sanitized` 对 C3 类不提供保护（见 `inventory/sensitivity.yaml` 表头），保护必须前移到**输入准备**这一步。
