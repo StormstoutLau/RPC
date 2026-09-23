@@ -42,8 +42,8 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | O-16 | 演进    | —    | review --peer 站间互审 / trae 派发（任务卡=接口）                                                                                                                                                                                                                                                                                                                                                                                                                            | ✅ closed（2026-09-12 评审环落地；--peer 站间互审留 D7） | D7+                      | <br /> | <br /> |
 | O-17 | 演进    | —    | readonly 层 2 锁激活（V2 按任务卡字段细化）                                                                                                                                                                                                                                                                                                                                                                                                                                   | ✅ **已闭环（2026-09-12）**                      | V2                       | <br /> | <br /> |
 | O-18 | 约束    | P1   | 同站内多并发被统一内存带宽顶起（\~2.8× 恶化）；落地铁律=扇出优先跨站各 1 并发                                                                                                                                                                                                                                                                                                                                                                                                                    | ✅ 已定案                        | 架构导入                     | <br /> | <br /> |
-| O-19 | 环境    | —    | 两站模型全卸载 → agent 层 opencode 连 8080 但 `/v1/models` 空无法推理；跨界代码任务另暴露 A 站工作区无 `.venv`（accept pytest rc=127）。4-agent 吃狗粮因此中止                                                                                                                                                                                                          | ✅ **closed（2026-09-09 4/4 闭环）** | 见 §O-19 关闭记录 | <br /> | <br /> |
-| O-20 | 功能缺陷  | P1   | Invoke-Workspace 同步目标站判定被 PowerShell 动态作用域污染：从 Invoke-Task 调用时 `$HostName` 解析为 SSH 主机串（非 'A'/'B'）→ `$station` 恒回退 'B' → **跨站任务源码流恒错推到 B，A 站任务在空壳工作区跑**（specaudit 卡虚构产物根因）                                                                                                                                                                                                                                                                                       | ✅ 已修复+实机验证                   | 2026-09-05               | <br /> | <br /> |
+| O-19 | 环境    | —    | 两站模型全卸载 → agent 层 opencode 连 8080 但 `/v1/models` 空无法推理；跨界代码任务另暴露 A 站工作区无 `.venv`（accept pytest rc=127）。4-agent 吃狗粮因此中止                                                                                                                                                                                                          | ✅ **closed（2026-09-09 4/4 闭环）**<br>⚠ **2026-09-23 补注**：当时的闭环是"**先加载模型**"绕过，**根因（station-ready 未按通道分流、把出网通道也锁在引擎门上）直到 2026-09-23 裁定 A 才处理**；详见 O-30 | 见 §O-19 关闭记录 | <br /> | <br /> |
+| O-20 | 功能缺陷  | P1   | Invoke-Workspace 同步目标站判定被 PowerShell 动态作用域污染：从 Invoke-Task 调用时 `$HostName` 解析为 SSH 主机串（非 'A'/'B'）→ `$station` 恒回退 'B' → **跨站任务源码流恒错推到 B，A 站任务在空壳工作区跑**（specaudit 卡虚构产物根因）                                                                                                                                                                                                                                                                                       | ⚠ **实测复现（2026-09-23）**：`-HostName A/C` 三次派发**全部落 B 站**（`LOCK_HELD` 同一 owner）⇒ "已修复"不成立；详见 **O-28** | 2026-09-05 | <br /> | <br /> |
 | O-21 | 性能/超时 | P1   | specaudit 卡 900s 硬超时/`exit1`——**三重返证后真根因尘埃落定**：①外层层 `timeout 900` 强杀正常推进 agent；②曾误判 opencode 对本地 passthrough 模型 64k 硬默认（根因实错）；③**决定性返证**：`/props` 运行时 `n_ctx=65536` 而 `/v1/models` 仅通告 `n_ctx_train=131072` → **服务端 llama-server 实以** **`-c 65536`** **加载**，那条 `exceeds the available context size` 是**服务端 400**，opencode 任何配置都无法抬升。修复=conf `CTX 65536→131072` 重载 A 站 gpt-oss；实机复验 `n_ctx=131072`、specaudit 卡重跑 `RUN_S=502/TASK_RC=0/ACCEPT=1` **全程无 65536 错误** | ✅ 已闭环（服务端 ctx 修复 2026-09-06） | 服务端 `-c 131072` 重载       | <br /> | <br /> |
 | O-22 | 运维缺陷 | P1   | `.meta` 残留误导：只在 run 结束写、无 task_id → 二次 run 时读到上次终态（RUN_S=900/RC=124 误判"又超时"，实为残留） | ✅ 已收口（2026-09-12） | 契约修复 + 观测判据订正 | 2026-09-07 | <br /> |
 | O-23 | 架构/超时 | P1   | **复杂度路由 ctx 解耦**：profile.context(code=8192/reason=32768/long=262144) 只是元数据、从未传给引擎；opencoe 用 opencode.jsonc 固定 limit.context=131072，引擎 ctx 由手动 flavor 预设决定 → 三者解耦。**凌晨 refdedupe timeout 真根因**=`request exceeds available context size (8192)`：nothink 档引擎 `-c 8192` < refdedupe 请求 12536 tokens → 服务端 400 → agent 永久挂死 → 900s timeout | ✅ 已修复+实机验证（引擎 ctx=唯一真相） | 2026-09-07 radical fix B | <br /> | <br /> |
@@ -52,6 +52,86 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | O-26 | 演进/编排 | P2   | **单任务分解派发并行（Split-Dispatcher）**：现派发=单卡→单站；一张可切分 readonly 大任务卡在单节点（物理上界 3：A/B/C 各1 并发，O-18）无法利用多站。缺口=任务卡无 `decompose` 声明、编排层无拆/并、无 Merge | ✅ **已闭环（2026-09-12）**：decompose 拆 2 分片 A/B 双站并行，全子卡 accept，Merge 正确，并行 465.1s ≪ 串行 720.8s（ratio 0.645）；落地修复 2 bug | V2 fan-out L2.5（schema 冻结前加 decompose 键） | <br /> | <br /> |
 
 ## 2. 各未决项详情
+
+### 2.0 2026-09-23 新增（吃狗粮暴露；**登记在此而非另建文档** —— 本表是未决问题单一真值）
+
+| ID   | 类别      | 严重度 | 简述 | 状态 | 归属批次 |
+| ---- | ------- | --- | --- | --- | ---- |
+| **O-27** | 验证/判据   | **P1** | **`_VERDICT_RC_MAP` 未覆盖"远端 0 ⇄ 整体 1"** ⇒ **任何 `accept` 失败的 run 都让 `evidence` FAIL 从而阻断提交** | ✅ **已闭环（2026-09-23 按裁定 b 修复 + 正反注入）**：见下方"修复记录" | ✅ 已修 |
+| **O-28** | 并发/命名空间 | **P1** | `$ts` 与 `%TEMP%\agent-cli-ev-<ts>` / `agent-out\<ts>` **不含站与 pid** ⇒ 同 ts 并发互踩；**Root cause ①**：`task` 目标站调用方无法覆盖（每站需独立 alias） | ⏳ 待办 | D6-P2 / 并发批次 |
+| **O-29** | 框架/卡面   | P2  | **无 `accept-golden` 的卡每次 run 产生 1 条可重放性 gap**（框架默认每卡都有 golden） | ⏳ 待办（本轮已 `audit --accept` 接受 2 条） | D6-P1 |
+| **O-30** | 环境/卡面   | P2  | 站上 agent **对 `/proc/*` 无读权限**（opencode `external_directory` auto-reject）；**B 站无 `nvidia-smi`**；**`readonly: true` 与"必须落文件"互斥** | ⏳ 待办（卡已按此修） | D6-P1 / D7-P1 |
+
+#### O-27：`_VERDICT_RC_MAP` 未覆盖"验收失败"路径（**阻断级**）
+
+- **证据（一手）**：run `dogfood/202609232240596105` —— `.meta` 里 `TASK_RC=0`，`run.json` 里 `exit_code=1`，
+  断言 `allowed = _VERDICT_RC_MAP[0] = {0}` ⇒ `1 ∉ {0}` ⇒ **FAIL**（[cluster.py:2707](../../ops/cluster.py) 映射表 · [:2768-2779](../../ops/cluster.py) 判据）。
+- **成因（代码语义）**：远端码 9（**验收失败**）在 `run.json` 里被映射成 1
+  （`$codeReal = $code; if ($code -eq 9) { $code = 1 }`）⇒ **映射表的键本应是 9**；
+  但实测 `.meta` 写的是 **0（远端执行码）** ⇒ **键与值的域不一致**。
+- **同型先例**：2026-09-21 的 `124` 条目 —— 本表注释自记"旧表无 124 条目 ⇒ **把每个合法超时 run 都误报 FAIL**（实测 3 个 run 全部命中）"。
+- **影响面（严重）**：**"任务执行成功但验收失败"是最常见的负面结果**，而它**会让 `evidence` FAIL、进而阻断一切提交**。
+  此前未被发现，**因为这条负路径从未被走过**。
+- **候选修法**：
+
+  | 选项 | 内容 | 取向 |
+  |---|---|---|
+  | **(a)** 补映射表 | `0: {0, 1}`（与 `9: {1,9}` 同型） | 快，但**放宽判据** |
+  | **(b)** 治同源 | 让 `.meta` 的 `TASK_RC` 与 `run.json exit_code` **同域**（`.meta` 写整体码） | 慢，但**不放宽判据** |
+
+- **★ 哪种更有利于 D6/D7 升级 —— 结论：(b) 为主 + 版本化并存，不选 (a)**：
+
+  1. **(a) 是本仓已记录两次的同一错误模式的第三次**：`ROUTE_TABLE` 注释（W1a 2026-09-21）原话 ——
+     "**白名单式判据每加一个云后端就漏一次，已漏两次**"。枚举"码组合"与枚举"后端"同病：
+     **每出现一个新的合法组合就要打一次补丁**，且补丁会**掩盖该组合之外的异常形态**。
+  2. **(b) 治的是同源性**：`.meta.TASK_RC` 与 `run.json.exit_code` 是**同一事实的两份记录**，
+     让它们**同域**即"**同一事实只有一处定义**" —— 这直接服务：
+     **D7-P1-1（U-1 产物身份）· D7-P1-2（U-2 字典）· D7-P2-2（结论契约：码的语义唯一）**。
+  3. **(b) 还能顺带产出 D7 的第一个 schema 版本化用例**：`.meta` 加 `rc_domain=v2`（或保留
+     `TASK_RC_REMOTE` 并新增 `TASK_RC_FINAL`），历史 run 按版本选映射 ⇒ **不掩盖历史信号**。
+     这正是 **U-1「产物身份 + schema 版本」** 的真实需求来源（而非纸面推演）。
+  4. **(b) 与 D7 的红线同源**：P0 固化"判据与 golden"，其中就包括**码的语义** ——
+     码语义应在**源头固化**，而不是在下游靠映射表适配。
+
+- **注入用例设计要求（按 §12 盲区 B2，改判据必须自带正反）**：
+  正例 = 一次 **`accept` 成功**的 run（远端 0 ⇄ 整体 0）；反例 = 本 run（远端 0 ⇄ 整体 1）。
+  两者必须在同一断言下**一绿一红**，否则无法证明改动真的在判。
+
+#### O-28：并发命名空间未按站/进程隔离 + `task` 目标站不可覆盖
+
+- **Root cause ①（确定，**且与 O-20 同源**）**：`task` 的目标站只能由 `ROUTE_TABLE` 的 `station` 决定，**调用方无法覆盖**。
+  - 锁本是 **per-(proj, 站)**（`$W/.agent-lock`，`$W=/home/<user>/agent-workspaces/<proj>`）⇒ **撞锁只可能是三次都在同一站**。
+  - 实测：`-HostName A/B/C` 三次派发**全部落 B 站**（`LOCK_HELD owner_pid=2968117 mode=exclusive` 同一 owner）。
+  - ⇒ **要三站并发，唯一通道是"每站一个 alias"**（如 `ultra-a/-b/-c`，与既有 `m27-q4ks-a/-b` 同法）。
+    ⚠ 但 `ROUTE_TABLE` 注释明写"**本表只镜像，不新立模型清单**"（权威真值在 `secrets/openrouter.conf`）⇒ **扩表须裁定**。
+- **Root cause ②（确定）**：`$ts = [DateTime]::Now.ToString('yyyyMMddHHmmssffff')` **在两次并发里取到同一值**，
+  而 `%TEMP%\agent-cli-ev-<ts>` 与 `agent-out\<ts>` **都不含站与 pid** ⇒ 互踩
+  （`EVIDENCE_PULL_WARN: … being used by another process` + `COLLECT_FAIL: … does not exist`）。
+  对照：`TMP_ROOT` **早已**用 `RUN_TOKEN` 做 per-invocation 隔离，**agent-out 与 evidence 临时目录没跟上**。
+- **与 O-26 的关系**：`decompose`（拆片并行）**已闭环可用**（465.1s ≪ 720.8s）⇒ **同卡拆片走的是"两个分片各一站"**，
+  与"同卡在三站各跑一次"是**两种并行**；后者（三站同卡）**当前无通道**。
+
+#### O-29：无 `accept-golden` 的卡持续产生可重放性 gap
+
+- **证据**：两轮 run 各产生 1 条 —— `subject 'golden-cmd' 声明的 golden-cmd.txt 不在 runDir`。
+- **成因**：框架 subjects 清单（`Get-FrameworkSubjects`）**默认每张卡都有 golden**；而吃狗粮卡（如 A1）**无 golden** ⇒ 每条 run 都记 gap。
+- **处置**：本轮按仓指定路径 `cluster.py agent audit --accept` 推进水印（存量 16 → 18）。
+- **⚠ 但**：门禁自身的处置建议写明"若明细是「已归档但未被任何 subject 覆盖」⇒ **应改 `Get-FrameworkSubjects`，而不是接受它**"。
+  本条是**反向情形**（subject 声明了、文件不在）⇒ **接受是权宜；正解是让框架支持"无 golden 卡"**，
+  否则**非 golden 卡会持续污染该审计**（且需人工每次 `--accept`）。
+
+#### O-30：站上环境与卡面约束（三条）
+
+| 子项 | 实测 | 影响 |
+|---|---|---|
+| **`/proc/*` 不可读** | `permission requested: external_directory (/proc/*); auto-rejecting` ⇒ `cat /proc/meminfo` 被拒 | **任何依赖 `/proc` 的采集不可行**（须改走 `free -m` 等二进制）；**直接约束 D7 的"基于 agent 的计量"** |
+| **B 站无 `nvidia-smi`** | `未找到命令` | 三站为 AMD UMA 机型 ⇒ 须走 `rocm-smi` / `/sys/class/drm`；采集类卡**必须写回退链** |
+| **`readonly: true` 与"必须落文件"互斥** | 同 run：模型跑了 6 条命令、数据齐全，**但产物文件始终未生成** | **卡面纪律**：要求落文件的卡**不得**用 `readonly: true` |
+
+- **附带线索（未追）**：站上 `~/agent-workspaces` 实测有 **`_p3_claude_ws`** 与 **`v0probe`** 两个
+  **未在 `$PROJECTS` 注册**的目录 ⇒ 存在**绕过 proj 注册的落点**（P3 = claude 通道），值得单独追。
+
+
 
 ### O-01：--attach 传输未实现
 

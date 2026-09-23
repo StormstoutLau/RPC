@@ -1313,12 +1313,27 @@ function Invoke-Task {
     $tt = if ($taskType) { $taskType } else { if ($fm['task-type']) { $fm['task-type'] } else { '' } }
 
     # radical fix B (order): station-ready MUST run before profile resolve so the real
-    # engine n_ctx is known -> profile.context clamped to min(intent, engine ctx).
-    # This kills the engine-ctx < request 400 deadlock at its source.
+    #   engine n_ctx is known -> profile.context clamped to min(intent, engine ctx).
+    #   This kills the engine-ctx < request 400 deadlock at its source.
+    # 2026-09-23 (ruling A): **station-ready gated by channel** -- probe the engine face ONLY
+    #   when the resolved backend does NOT egress (i.e. it IS a local in-cluster engine).
+    #   Why: the engine-face probes (/v1/models, /props n_ctx, chat round-trip) are IRRELEVANT
+    #   to egress channels (openrouter/*); yet this gate was unconditional, so the three
+    #   egress tiers (lightning/ultra/free-1m, re-pointed to station-side openrouter on
+    #   2026-09-21 precisely so they need NO local engine) were locked behind an engine.
+    #   Asymmetry: the `claude` fallback channel is also egress + zero-engine and it works,
+    #   because it branches BEFORE this gate. Judgement criterion = BACKEND PROPERTY
+    #   (Get-BackendEgress, W1a 2026-09-21), NOT a mode-string prefix.
+    #   Semantics retained: local/* MUST still pass this gate (exit 10 unchanged).
     $baseAliasE = ($m -split '/')[-1]
     $readyInfo = $null
-    try { $readyInfo = Invoke-StationReady -HostName $hostName -Alias $baseAliasE }
-    catch { Write-Host "STATION_NOT_READY: $($_.Exception.Message)"; return 10 }
+    if (Get-BackendEgress $id) {
+        Write-Host "STATION_READY_SKIPPED: egress backend ($id) - engine-face probes not applicable (ruling A 2026-09-23)"
+    }
+    else {
+        try { $readyInfo = Invoke-StationReady -HostName $hostName -Alias $baseAliasE }
+        catch { Write-Host "STATION_NOT_READY: $($_.Exception.Message)"; return 10 }
+    }
     $engineCtx = if ($readyInfo -and $readyInfo['engine_ctx']) { [int]$readyInfo['engine_ctx'] } else { 0 }
 
     # O-25 P1: slot gate AFTER station-ready (engine port known), BEFORE sync/run dispatch.
@@ -1705,16 +1720,23 @@ QUEUE=`$(( (R0-Q0)/1000000000 ))    # P2-1: queue = lock wait + intake (sleep 2 
 RUNS=`$(( (R1-R0)/1000000000 ))      # P2-1: run = agent generation wall time
 echo "QUEUE_S=`$QUEUE"
 echo "RUN_S=`$RUNS"
-echo "TASK_RC=`$RC"
+# 2026-09-23 (ruling b, O-27) RC DOMAIN FIX: .meta 的 TASK_RC 必须与控制台看到的
+#   **整体退出码**同域。旧实现在此打印 agent 的 `$RC`(=0), 而 accept/golden 失败时本脚本
+#   往下 exit 9, 控制台又把 9 映射成 run.json `exit_code`=1 (DESIGN 9.5) ⇒ **两域不一致**,
+#   而 `_VERDICT_RC_MAP` 假设同域 ⇒ 每个"验收失败"的 run 都被判 evidence FAIL(阻断提交)。
+#   现: 先算 FINAL_RC(与下面 exit 同值)写进 .meta, 并加 `RC_DOMAIN=v2` 标记;
+#   cluster.py 据此选域(无标记的历史 run 走 v1 有界宽容)。
+FINAL_RC="`$RC"
+if { [ "`$GOLDEN_ACTIVE" -eq 1 ] && [ "`$ACCEPT_GOLDEN_OK" -ne 1 ]; } \
+ || { [ -n "`$ACCEPT_B64" ] && [ "`$ACCEPT_OK" -ne 1 ]; }; then FINAL_RC=9; fi
+echo "TASK_RC=`$FINAL_RC"
 echo "ACCEPT_OK=`$ACCEPT_OK"
 echo "OUT_BYTES=`$(wc -c < "`$W/out/.agent-output.txt" 2>/dev/null)"
-printf 'TASK_ID=%s\nQUEUE_S=%s\nRUN_S=%s\nTASK_RC=%s\nACCEPT_OK=%s\nACCEPT_GOLDEN_OK=%s\nREVIEW_NEEDED=%s\n' "$ts" "`$QUEUE" "`$RUNS" "`$RC" "`$ACCEPT_OK" "`$ACCEPT_GOLDEN_OK" "`$RN" > "`$W/out/.meta"
+printf 'TASK_ID=%s\nQUEUE_S=%s\nRUN_S=%s\nTASK_RC=%s\nRC_DOMAIN=v2\nACCEPT_OK=%s\nACCEPT_GOLDEN_OK=%s\nREVIEW_NEEDED=%s\n' "$ts" "`$QUEUE" "`$RUNS" "`$FINAL_RC" "`$ACCEPT_OK" "`$ACCEPT_GOLDEN_OK" "`$RN" > "`$W/out/.meta"
 # task succeeds only if agent ok AND (golden active -> golden ok) AND (no accept criteria OR accept all pass)
 # O-12 P3-1: exit 9 reused for BOTH golden-fail and self-accept-fail (deliberate; run.json
 # accept_golden.passed / accept.passed disambiguate at contract layer - IMPLEMENTATION §6.2)
-if { [ "`$GOLDEN_ACTIVE" -eq 1 ] && [ "`$ACCEPT_GOLDEN_OK" -ne 1 ]; } \
- || { [ -n "`$ACCEPT_B64" ] && [ "`$ACCEPT_OK" -ne 1 ]; }; then exit 9; fi
-exit `$RC
+exit `$FINAL_RC
 "@
     $code = Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-task-$ts.sh"
     # DESIGN §9.5 exit-code dispatch: 124(timeout by `timeout`) -> 6; other remote run rc preserved as failure
