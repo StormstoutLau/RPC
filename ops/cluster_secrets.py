@@ -13,10 +13,13 @@
     cluster._secrets_verdict / cluster.probe_providers）与 cluster.py 内部调用点均不变。
 """
 import hashlib
+import json
 import os
 import re
+import threading
 from pathlib import Path
 
+from cluster_const import STATIONS
 from cluster_ssh import _connect, ssh_run
 
 # ── 凭据平面 (secrets / providers) ─────────────────────
