@@ -27,6 +27,7 @@ entry:
 entry_modules:
   - ops/cluster_const.py
   - ops/cluster_ssh.py
+  - ops/cluster_model.py
 
 # 站上运行时件: 入口/systemd 调用的被调方 (不是并列入口)
 station_runtime:
