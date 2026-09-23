@@ -22,6 +22,7 @@
 | 4 | **附件内容不经 scrubber** ⇒ 附件必须本身是 `public` 档 | 附件走 `scp` 原文；scrubber 只改 `$promptFull`（含附件**文件名**，不含内容） |
 | 5 | **要脱敏就别用附件** —— 受限输入应**内嵌进卡正文**（只在正文会过 scrub） | 同上 |
 | 6 | 声明 `public`/`sanitized` **且带输入**时，**逐项写 `input-provenance`**，每项须在 `sensitivity.yaml` 有 `tier`，且**卡档位不得宽于该项** | `CROSS-PROJECT-WORK-STANDARD §4`；⚠ **该义务目前未被机判**（2026-09-24 全仓核对：`input-provenance` 在 `ops/` 下**零命中**） |
+| 7 | ★ **卡的射程 = 工作区**（`~/agent-workspaces/<proj>`）：**不要指示模型去读工作区外的目录** | **一手实测（2026-09-24，A2 首跑失败的直接原因）**：`permission requested: external_directory (/home/scott-lau/scripts/*); auto-rejecting` ⇒ 站上 agent 对外部目录**一律 auto-reject**（= O-30 第一条的第二实例）。⇒ 要取证**工作区外**的站上实况（`~/scripts`、`/proc`、系统目录），**必须由主控 ssh 直接做**；agent 只能跑**可执行命令**（如 `infer-list`/`free -m`/`ss -ltn` —— A1 正是靠这个成功的） |
 
 ## 档位选择的正确顺序（`sensitivity.yaml` 的用法）
 
@@ -41,6 +42,10 @@
 | B | [b2-gate-falsegreen-audit.md](b2-gate-falsegreen-audit.md) | `ops/rpc_check.py`（附件，已登记 `public`） | `public` + **`attach-egress: ok`** | ✗ |
 
 ⇒ **四张卡都不需要站上引擎**（全部走 `model: ultra` = `openrouter/*` 出网档）。
+
+> **首轮实测状态（2026-09-24）**：**A1 ✅ 通过**（117s）· **B2 ✅ 通过**（789s，含附件 + `attach-egress`）·
+> **A2 ❌ 设计错误**（要读工作区外的 `~/scripts` ⇒ `external_directory` **auto-reject**；须改设计，
+> 或把该取证**改为由主控 ssh 直接做** —— 见纪律 7）· **B1 未跑**。
 
 ### ⚠ 派发前必读：出网档的**落站事实**（2026-09-24 一手读 `ROUTE_TABLE`）
 
