@@ -721,11 +721,17 @@ def check_doclinks(ctx):
 #       1024、截断匹配 127/808...)。文本里的数字没有唯一语义。
 #     · 模型: 以 gguf 结尾的强标识 114 个, 100% 是路径/文件名, 纯噪声。
 #   改为只对**结构化声明源**做对账 —— 精确、零噪声、可长期维护:
-#     (a) ops/cluster.py 的端口常量 (如 STATION_PORT) 与模型路由常量 (如 ROUTE)
+#     (a) 入口及其拆分模块的端口常量 (如 STATION_PORT) 与模型路由常量 (如 ROUTE)
+#         —— 见 DECL_CLUSTER_FILES (常量层 2026-09-23 抽到 cluster_const.py)
 #     (b) docs/三机推理集群使用手册.md 的端点表格行
 #   声明源里出现而 inventory 未登记 => FAIL, 并提示"登记真值"或"修正过期引用"。
 INVENTORY_DIR = ROOT / "inventory"
 DECL_CLUSTER_PY = ROOT / "ops" / "cluster.py"
+# 2026-09-23 (阶段 1a 拆分): 声明源可能已搬到"入口的拆分模块"—— 常量层在 cluster_const.py。
+# ⚠ **改这里之前先想清楚**: 不覆盖新模块会让本断言**静默降级**（实测: ROUTE/STATION_ROUTES
+#   搬走后仍只扫 cluster.py ⇒ "声明源 3 模型标识" 掉成 "0"，而断言照旧 PASS —— 门禁空转的假绿）。
+#   凡"常量层再拆分/搬家"，必须同步本清单。
+DECL_CLUSTER_FILES = [ROOT / "ops" / "cluster.py", ROOT / "ops" / "cluster_const.py"]
 DECL_MANUAL = ROOT / "docs" / "三机推理集群使用手册.md"
 
 CONST_DICT_RE = r"^(?P<name>%s[A-Z_]*)\s*=\s*\{(?P<body>[^}]*)\}"
@@ -767,20 +773,26 @@ def load_inventory():
 
 
 def _declared():
-    """从声明源解析 (端口, 模型标识)。返回 ({port: [来源]}, {name: [来源]})。"""
+    """从声明源解析 (端口, 模型标识)。返回 ({port: [来源]}, {name: [来源]})。
+
+    声明源 = 入口及其拆分模块 (DECL_CLUSTER_FILES) + 手册端点表。"""
     ports, models = {}, {}
-    text = _read_text(DECL_CLUSTER_PY) if DECL_CLUSTER_PY.is_file() else ""
-    for m in PORT_CONST_RE.finditer(text):
-        for v in re.findall(r":\s*(\d{2,5})", m.group("body")):
-            ports.setdefault(int(v), []).append(f"cluster.py:{m.group('name')}")
-    for m in MODEL_CONST_RE.finditer(text):
-        # STATION_ROUTES 是**派生表** (键 = 站上真实别名 + 站后缀, 值 = (站, 真实别名)),
-        # 不逐条登记到 inventory —— 那会与基础别名重复, 且引入双份要同步的真值。
-        # 它的正确性由 aliases 断言的 (7) 子项校验 (更强: 含站维度, 要求 (别名,站) 已声明 conf)。
-        if m.group("name") == "STATION_ROUTES":
+    for src in DECL_CLUSTER_FILES:
+        if not src.is_file():
             continue
-        for k in re.findall(r"[\"']([^\"']+)[\"']\s*:", m.group("body")):
-            models.setdefault(k, []).append(f"cluster.py:{m.group('name')}")
+        label = src.name
+        text = _read_text(src)
+        for m in PORT_CONST_RE.finditer(text):
+            for v in re.findall(r":\s*(\d{2,5})", m.group("body")):
+                ports.setdefault(int(v), []).append(f"{label}:{m.group('name')}")
+        for m in MODEL_CONST_RE.finditer(text):
+            # STATION_ROUTES 是**派生表** (键 = 站上真实别名 + 站后缀, 值 = (站, 真实别名)),
+            # 不逐条登记到 inventory —— 那会与基础别名重复, 且引入双份要同步的真值。
+            # 它的正确性由 aliases 断言的 (7) 子项校验 (更强: 含站维度, 要求 (别名,站) 已声明 conf)。
+            if m.group("name") == "STATION_ROUTES":
+                continue
+            for k in re.findall(r"[\"']([^\"']+)[\"']\s*:", m.group("body")):
+                models.setdefault(k, []).append(f"{label}:{m.group('name')}")
     if DECL_MANUAL.is_file():
         for i, line in enumerate(_read_text(DECL_MANUAL).splitlines(), 1):
             if not line.startswith("|"):
