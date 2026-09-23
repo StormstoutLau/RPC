@@ -60,7 +60,7 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | O-33 | 文档/一致性 | P2 | **水印入仓化后，引用旧路径 `ops/.audit-baseline.json` 的文档未跟随**（ADR-0007×2 · 调研稿×4 · ARCHITECTURE · REMEDIATION-PLAN · 本文 §1 · 路线总表 §10 A8） | ⏳ 待办（**处置分两类：历史记录不改正文 / 现状陈述就地更新**） | D7-P1-1 |
 | O-34 | 门禁/一致性 | P2 | **迁移/重命名后「首次」门禁为 FAIL(1 项失败 / 绿灯 9)，而提交时同一命令为 PASS(绿灯 10)** —— **已定位**：`_iter_source_files()` 以 `git ls-files` 取范围，其假设"**pre-commit 阶段新文件已 `git add`**"**只在钩子里成立**；手动直跑 + 未暂存 ⇒ 范围不同 | ✅ **已修（2026-09-23）**：新增 `_untracked_count()`，`secrets` 报数行在未跟踪数 >0 时显式追加提示 ⇒ **让"范围已收窄"可见** | ✅ 已修 |
 | O-35 | 并发/引擎 | P1 | **站上本地引擎是否支持并发请求 —— 未验证**（与 O-31 **不是同一问题**：O-31 修的是**文件名冲突**［文件层］，本条是**引擎并发行服务**［引擎层］） | ⏳ **待立项验证**（含"输出错配"这一最危险形态） | D6-P2 · D7 |
-| O-37 | 工具/信号 | **P1** | **`.progress` 采样器 `t=0` 读上一轮残留**：启动时只 `: > .progress`、**不清 `out/.agent-output.txt`** ⇒ 首样本 `bytes_s` 假高（1.4e6+ B/s），**且 `bytes>0` 在 t=0 即成立** = **假进度/假完成信号**（与 T-1、O-22 同病族） | ◐ **已定性（铁证）+ 已修**，待站上复跑验证 | ✅ |
+| O-37 | 工具/信号 | **P1** | **`.progress` 采样器 `t=0` 读上一轮残留**：启动时只 `: > .progress`、**不清 `out/.agent-output.txt`** ⇒ 首样本 `bytes_s` 假高（1.4e6+ B/s），**且 `bytes>0` 在 t=0 即成立** = **假进度/假完成信号**（与 T-1、O-22 同病族） | ✅ **已修 + 正反均已实测**（反例 = A1/B2 两条铁证；正例 = A2 复跑 `t=0 bytes=0`） | ✅ |
 | O-38 | 文档/一致性 | P2 | **O-25 P2 看板缺磁盘证据**：其计划件写的 `ops/station-bin/make-dashboard.ps1` 与产物 `dashboard.html` **全仓 + 归档区均无**，`inventory/ops.yaml` 也未登记 ⇒ 台账"P2 看板 ✓ 已落地"**存疑** | ⏳ 待复核（是否从未入库/被清理） | O-25 · D6-P1-1 |
 | O-39 | 可观测/基准 | P2 | **派发前预估对出网档恒 MISS**：`ESTIMATE: … no-bench (MISS) - skip dispatch estimate`（基准表只覆盖 `local/*`）⇒ **吃狗粮全链路无预估** | ⏳ 待决定（补 bench 行 or 显式声明"不估算"） | O-25 |
 | O-40 | 证据/回收 | **P1** | **卡的产物不进 run 目录**（`WORKSPACE_DIFF_LINES=0`）：产物只留站上工作区 ⇒ 目前**只能手动 `scp`** 取回（非持久位置） | ⏳ 待建（卡里声明 `evidence-manifest.subjects` / 复验器按声明走 —— ADR-0007 阶段 1 已支持"声明+落 run.json"） | D6-P1-1 · ADR-0007 |
@@ -169,6 +169,13 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | **B 站无 `nvidia-smi`** | `未找到命令` | 三站为 AMD UMA 机型 ⇒ 须走 `rocm-smi` / `/sys/class/drm`；采集类卡**必须写回退链** |
 | **`readonly: true` 与"必须落文件"互斥** | 同 run：模型跑了 6 条命令、数据齐全，**但产物文件始终未生成** | **卡面纪律**：要求落文件的卡**不得**用 `readonly: true` |
 
+- ★ **第二实例（2026-09-24，吃狗粮 A2 卡）**：同一条纪律又在**工作区外目录**上命中 ——
+  `permission requested: external_directory (/home/scott-lau/scripts/*); auto-rejecting` ⇒ 站上 agent
+  **只能读它自己的工作区**（`~/agent-workspaces/<proj>`），**工作区外一律 auto-reject**。
+  ⇒ **代价实证**：我据此写的 A2 卡（"遍历站上 `~/scripts/` 逐个 sha256"）**设计上就不可执行**，首跑 `TASK_RC=9`（验收失败）。
+  ⇒ **纪律（应入册）**：**卡的射程 = 工作区**；要取证**工作区外的站上实况**（`~/scripts`、`/proc`、系统工具输出）
+  必须**由主控 ssh 直接做**（或由主控把清单/文件拷进工作区）—— **不要指望 agent 越界**。
+  反例参照：A1 卡能拿到 `infer-list` / `free -m` / `ss -ltn`，是因为这些是**可执行命令**（不是"读外部目录"）。
 - **附带线索（未追）**：站上 `~/agent-workspaces` 实测有 **`_p3_claude_ws`** 与 **`v0probe`** 两个
   **未在 `$PROJECTS` 注册**的目录 ⇒ 存在**绕过 proj 注册的落点**（P3 = claude 通道），值得单独追。
 
@@ -289,8 +296,8 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
   ⚠ O-22 只修了**主控侧** `.meta`；**站上 `out/.agent-output.txt` 是同类漏网**。
 - **修法（2026-09-24 落地）**：在 `: > .progress` 之后、`sample_progress &` **之前**加
   `: > "$W/out/.agent-output.txt"`（时序：清空 → 启动采样器 → opencode 以自己的 `>` 再截断）。
-- **验证（正反）**：**反例已在盘上**（本条两条铁证即"改前 t=0 非 0"）；
-  **正例 = 修后重跑一张卡，其 `.progress` 的 `t=0` 必须为 `bytes=0`**（见执行记录）。
+- **验证（正反）—— ✅ 均已完成**：**反例已在盘上**（本条两条铁证即"改前 t=0 非 0"）；
+  **正例 = 修后复跑**（run `202609240121190214`）：`.progress` 首行 **`t=0 bytes=0 bytes_s=0`** ✓（改前同位置是 4434/4470）
 
 #### O-38：**O-25 P2 看板"已落地"缺磁盘证据**（待复核）
 
