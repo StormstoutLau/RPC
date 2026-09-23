@@ -40,7 +40,7 @@ $Script:GNU_TAR = 'C:\Program Files\Git\usr\bin\tar.exe'   # S1: not Win10 bsdta
 $Script:REMOTE_USER = 'scott-lau'
 $Script:WORKSPACE_ROOT = '/home/scott-lau/agent-workspaces'
 $Script:WORKSPACE_ARCHIVE_ROOT = '/home/scott-lau/agent-workspaces-archive'   # O-02 (2026-09-14): archive snapshot root
-$Script:PROJECTS = @{ paper = 'D:\Paper'; Cpp_Hub = 'F:\Cpp_Hub'; Auto_Prover = 'F:\Auto_Prover' }    # console project root mapping (2026-09-14 Cpp_Hub 修正指真实主项目 F:)
+$Script:PROJECTS = @{ paper = 'D:\Paper'; Cpp_Hub = 'F:\Cpp_Hub'; Auto_Prover = 'F:\Auto_Prover'; dogfood = 'd:\RPC\tmp\dogfood-ws' }    # console project root mapping (2026-09-14 Cpp_Hub -> real root F:); 2026-09-23 add dogfood standalone carrier (ruling-38 alternative: do NOT register D:\RPC; carrier holds only cards + artifacts, so this repo's sync surface stays untouched)
 $Script:TMP_ROOT = Join-Path $env:TEMP 'agent-cli'
 # O-12 REPO_ROOT: repo root for golden source resolution (this file is d:\RPC\ops\station-bin\ ->
 # two parents up = d:\RPC). NEW script var (IMPLEMENTATION §3.2 P1-1: not inherited/现役).

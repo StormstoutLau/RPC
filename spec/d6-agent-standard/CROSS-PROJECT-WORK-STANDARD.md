@@ -47,6 +47,14 @@ D6 `DESIGN.md` 顶层目标已声明：为 RPC / Paper / Auto_Prover / Cpp_Hub �
 - `accept-golden`（主控独立断言，`source`+`cmd`；实现/测试分离）
 - 可选：`isolate-xdg`（同站并行兜底）、`decompose`（拆片 A/B 并行）
 - 可选（**"显式接受出网"家族**）：`review-model`（把该卡的 review 钉到指定 judge）、**`attach-egress: ok`**（**附件默认不出网** —— 有附件且后端会出网时，必须写它才放行；判据 = **可判性**，见 [REMEDIATION-PLAN §5.5.2](REMEDIATION-PLAN.md)）
+- **可选但受条件约束**（2026-09-23 新增，待裁 **37** 落地）：**`input-provenance`** —— 卡的**输入来源清单**（本仓相对路径，逐项）。
+  **义务**：卡声明 `sensitivity: public` / `sanitized` **且带输入**时，**本字段必填**；其中每个路径必须在
+  [`inventory/sensitivity.yaml`](../../inventory/sensitivity.yaml) 里有 `tier`，且**卡的 `sensitivity` 不得宽于该项 tier**
+  （顺序 `local-only` < `sanitized` < `public`）。
+  **为什么需要**：`sensitivity` 是**卡作者的声明**，不是**内容的属性** —— 闸看不到"这份输入实际是什么"
+  （实测：不写默认 `public`；且无 front-matter 卡静默退化 ⇒ 漏标的方向是"更宽松"，见 `agent-cli.ps1:445/784-786`）。
+  ⇒ 本字段把"内容 → 档位"从**口头判断**变成**可查真值**（判定规则与逐份档位见该表；**未登记 = `local-only`**）。
+  ⇒ **断言接入**归 `D6-P1-1`（该表文末已如实登记"尚未接上断言"，不假装已接）。
 
 **验收铁律**: 模型不自我盖章——`accept` / `accept-golden` 由主控独立断言；得分/核对由主控侧做，不采信站自报。
 
