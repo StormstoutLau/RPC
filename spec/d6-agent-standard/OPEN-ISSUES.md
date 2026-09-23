@@ -65,6 +65,7 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | O-39 | 可观测/基准 | P2 | **派发前预估对出网档恒 MISS**：`ESTIMATE: … no-bench (MISS) - skip dispatch estimate`（基准表只覆盖 `local/*`）⇒ **吃狗粮全链路无预估** | ⏳ 待决定（补 bench 行 or 显式声明"不估算"） | O-25 |
 | O-40 | 证据/回收 | **P1** | **卡的产物不进 run 目录**（`WORKSPACE_DIFF_LINES=0`）：产物只留站上工作区 ⇒ 目前**只能手动 `scp`** 取回（非持久位置） | ⏳ 待建（卡里声明 `evidence-manifest.subjects` / 复验器按声明走 —— ADR-0007 阶段 1 已支持"声明+落 run.json"） | D6-P1-1 · ADR-0007 |
 | O-41 | 门禁自审 | P2 | **B2 审计报出的两条"疑似未登记假绿"**：① `doclinks` 对**绝对路径/盘符/URL 一律"不可判"跳过**（可写不存在路径而不报错）② `engine` 的**残留阈值 2048MB 硬编码**（1.5GB 且不监听端口的残留进程会被判正常） | ⏳ 待人工复核后登记 / 加固 | D6-P0-1（门禁自审） |
+| O-42 | 权限/通道 | **P1** | **`claude` 通道 `-p` 无写权限 ⇒ 产物型任务不可用**：烟测中模型自报"文件写入被拒"，`ACCEPT_OK=0`；调用形式 `'-p "" --model "<id>"'`（[agent-cli.ps1:2729](../../ops/station-bin/agent-cli.ps1)）**不带任何权限开关**，`settings.json` 的 `defaultMode: acceptEdits` 在 `-p` 下不生效 | ⏳ **待裁**（加 `--permission-mode acceptEdits` / `--allowedTools`）；**须处理与卡面 `readonly: true` 的关系** | D6-P2 · claude 通道 |
 
 ## 2. 各未决项详情
 
@@ -336,6 +337,22 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 - ⇒ **复核后**：若无对应条目 ⇒ 按 **O-41** 拆分登记；并纳入 **D6-P0-1 的"门禁自审"**（用已知会红的注入验新判据自身）。
 - ⚠ 同批产出中**另有 4 条是"独立命中已知"**（`secrets` 未跟踪文件 / `inventory` 声明源列表 / `aliases`·`evidence` 缺 paramiko / `inbox` 目录缺失即 PASS）
   ⇒ 这既是**模型读懂了**的证据，也是**局限**（它没超出人类已记录的范围）；如实标注，避免高估。
+
+#### O-42：`claude` 通道 `-p` **无写权限** ⇒ 产物型任务不可用（**待裁**）
+
+- **实测（2026-09-24，烟测卡 `dogfood-cards/smoke-claude-channel.md`，run `202609240130344985`）**：
+  **链路全通** —— `CLI=claude route_station=`（空 ⇒ **主控本地**）· `CLAUDE_SPAWN=…claude.exe` ·
+  **`claude first rc=0`** · 42s · 认证走 `~/.claude/settings.json` 的 **`apiKeyHelper` → OpenRouter** ·
+  模型 = `thinkingmachines/inkling:free`（**免费档**）· `ACCEPT_MODE=bash-local`（验收在主控 Git Bash，cwd = 载体根）。
+- **但产物没落**：模型自报 **"文件写入被拒 → `SMOKE_BLOCKED`"**；载体 `out/` 只剩 `.keep`；`stderr.txt` 为空 ⇒ **`ACCEPT_OK=0`**。
+- **根因（一手读码）**：[agent-cli.ps1:2729](../../ops/station-bin/agent-cli.ps1) 调用形式 = `'-p "" --model "<id>"'`
+  —— **不带任何权限开关**（无 `--permission-mode` / `--allowedTools`）；`settings.json` 的 `"defaultMode": "acceptEdits"` 在 `-p` 下**不生效**。
+- **待裁的修法**：加 `--permission-mode acceptEdits`（或最小化 `--allowedTools`）。
+  ⚠ **两个必须先想清的点**：
+  ① 这是**能力放宽**（agent 从"只输出"变"可写"）⇒ 按本项目纪律须**配正反注入**（改后：能写 ✓；**`readonly: true` 的卡仍不得写** ✓）；
+  ② **必须显式处理与卡面 `readonly: true` 的关系** —— 否则 claude 通道会把"只读卡"也变成可写 ⇒ **破卡面契约**（与 D-06/D-07 同级的安全面）。
+- **现状定性**：**claude 通道目前只能接"纯输出型"任务**；产物型（本目录 A1/A2/B1/B2 全部）**只能走 opencode**。
+- **状态**：⏳ **待 Scott 裁定**（是否放宽 + 以什么最小权限形态）
 
 ### O-01：--attach 传输未实现
 
