@@ -2122,7 +2122,11 @@ exit `$FINAL_RC
     if ($mergedSubjects.Count -gt 0) {
         $mergedVer = "$($evm['version'])".Trim()
         if (-not $mergedVer) { $mergedVer = '1' }   # 卡未写 version ⇒ 取 1(基线 = 框架件, 与阶段1 同代)
-        $run['evidence_manifest'] = [ordered]@{ version = $mergedVer; subjects = $mergedSubjects }
+        # 2026-09-23 (O-29 / D6-P1-1): 加 `framework_version` —— **框架期望件集的版本**
+        #   (与卡的 `version` 区分: 后者是卡声明的 manifest 版本)。
+        #   消费者: cluster.py 的 `_gap_key` 用它给 gap key 分桶 ⇒ 判据演化后历史 gap 与新 gap 不再混淆。
+        #   当前代 = '2': accept-* 与 golden-cmd 改为**条件列**这一代(O-29)。
+        $run['evidence_manifest'] = [ordered]@{ version = $mergedVer; framework_version = '2'; subjects = $mergedSubjects }
     }
     # O-12 M4: accept_golden contract field (only when golden active; optional key, backward compatible)
     if ($goldenActive) {

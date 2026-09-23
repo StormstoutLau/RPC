@@ -2576,6 +2576,8 @@ def _run_digest(run_dir: Path, recipe: str = AGENT_DIGEST_RECIPE):
         except Exception:
             return None
         subs = ((j.get("evidence_manifest") or {}).get("subjects")) or []
+        # 2026-09-23 (O-29): 设本 run 的**框架代**供 `_gap_key` 分桶 —— 缺字段 ⇒ 空串 ⇒ key 退回旧形状。
+        _fwver_set((j.get("evidence_manifest") or {}).get("framework_version"))
         if not subs:
             return None                       # 声明了 v2 却无 subjects ⇒ 不可验(调用方报 manifest_missing)
         lines, files = [], {}
@@ -3200,6 +3202,20 @@ def agent_ledger_freshness(rows) -> dict:
     return {"label": newest.get("label"), "age_s": int(time.time() - t)}
 
 
+# 2026-09-23 (O-29 / D6-P1-1)：**框架期望件集的版本** —— 判据演化时用它分桶。
+#   当前代 = "2"：accept-* 与 golden-cmd 改为**条件列**这一代（此前为裸列，见 O-29）。
+#   ⚠ `_FWVER_SCOPE` 默认 **空串** ⇒ `_gap_key` **保持旧形状** ⇒ 历史 gap 的 key **不变**。
+#     （若默认非空，存量 18 条的 key 会**全部改变** ⇒ 水印比对时一次性报 18 条假"新增"——**比不做更糟**。）
+FRAMEWORK_SUBJECTS_VERSION = "2"
+_FWVER_SCOPE = ""
+
+
+def _fwver_set(v) -> None:
+    """审计循环在**每个 run 处理前**调用（设置点见 readiness 的 run 循环）。"""
+    global _FWVER_SCOPE
+    _FWVER_SCOPE = str(v or "")
+
+
 def _gap_key(kind: str, label: str, sub: str) -> str:
     """把 gap 归一为**可比较标识**（ADR-0007 路A 的硬前置 K1）。
 
@@ -3210,7 +3226,14 @@ def _gap_key(kind: str, label: str, sub: str) -> str:
       ⇒ 拿文本比对会把"同一 gap 换了种表现"读成**新增 gap** ⇒ **假告警**。
     形状: `<kind>|<label>|<sub>`；`sub` = subject 名，undeclared 型 = **排序后件名**逗号连接
       （排序保证集合可比；新增/减少件确实改变 key —— 那是**真信息**，应当告警）。
+
+    **2026-09-23 追加（O-29）**：key 前**再加一维框架代** ⇒ `<fwver>|<kind>|<label>|<sub>`。
+      目的：**判据演化之后，历史 gap 与新 gap 的 key 天然不同** ⇒ 水印机制**自动分桶**，
+      无需另写"按版本判"的分支；报告层的 `current=N · legacy=M` 计数可后补（见 P1-1）。
+      `_FWVER_SCOPE` 为空时**退化为旧形状**（保证历史 key 不变，见上）。
     """
+    if _FWVER_SCOPE:
+        return f"{_FWVER_SCOPE}|{kind}|{label}|{sub}"
     return f"{kind}|{label}|{sub}"
 
 
