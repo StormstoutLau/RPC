@@ -113,12 +113,22 @@ def main() -> int:
     tmp_names = re.findall(r"/tmp/([A-Za-z0-9_.$(){}%:\-]+)", src)
     # 已登记待核实项: 允许存在, 但**必须在此显式列出** —— 防"新增未分类路径混进来"。
     #   ⚠ 它们**尚未核实**, 故不进 EXEMPT(豁免要求"确实恒定无害"); 核实后应转 EXEMPT 或修掉。台账见 O-31。
-    KNOWN_PENDING = {
-        "_p3_claude_in.txt": "P3/claude 备路站上暂存名; 待核实是否位于带 ts 的 scratch 目录下(见 O-31)",
+    # 已登记项: 允许存在, 但**必须在此显式列出** —— 防"新增未分类路径混进来"。
+    #   · EXEMPT    = **已核实**确实恒定无害(可长期留)
+    #   · KNOWN_DEFECTS = **已核实是缺陷, 但本轮未修**(必须带修法; 修掉后应删除本行)
+    #   ⚠ 2026-09-23 核实结论(见 O-31): `_p3_claude_{in,out,err}.txt` **是真缺陷** ——
+    #     本地 scratch 带 ts([agent-cli.ps1:2527](../../ops/station-bin/agent-cli.ps1)), 但**站上名是固定名**
+    #     ([:3016](../../ops/station-bin/agent-cli.ps1) `$rIn='/tmp/_p3_claude_in.txt'`), 且 claude 备路的
+    #     站上脚本**不持 flock**([:3019-3050](../../ops/station-bin/agent-cli.ps1)) ⇒ **同站并发两个备路 run 互踩**。
+    #     ⇒ 与 F-1/F-2/F-14 **同因**(漏照抄两个样板) ⇒ **第四例**。
+    KNOWN_DEFECTS = {
+        "_p3_claude_in.txt":  "站上固定名 + 备路无 flock ⇒ 并发互踩。修法: 站上名加 ts/pid, 并让站上脚本从参数取 tmp 前缀",
         "_p3_claude_out.txt": "同上",
         "_p3_claude_err.txt": "同上",
-        "_p3_run.sh": "同上",
+        "_p3_run.sh":         "脚本内容恒定(here-string 常量)+scp 幂等覆盖 ⇒ 可转 EXEMPT; 随上条一并处理",
     }
+    KNOWN_PENDING = KNOWN_DEFECTS   # 兼容旧名(断言只关心"是否已显式登记")
+    bad_lines = []
     # ⚠ 采用**行级**检查而非"解析路径名" —— 2026-09-23 实测: 按名解析会被 `:`、`/`、`$(` 等
     #   反复截断, 产出 `agent-cli-ev-` 这类**残缺名**, 把"已带身份"误判成"无身份"(连续两次假红)。
     #   行级检查更粗但**不会被截断骗**。

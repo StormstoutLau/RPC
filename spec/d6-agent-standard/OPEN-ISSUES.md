@@ -165,9 +165,16 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 - **本条目 = 剩下的 4 个"待核实"项**：站上 `/tmp/_p3_claude_{in,out,err}.txt` · `/tmp/_p3_run.sh`
   —— **尚未核实**它们是否位于带 ts 的 scratch 目录下（若在，则名字虽固定但**目录带身份** ⇒ 可转豁免；
   若不在，则是**第四例同类缺陷**，须加 token）。
-- **为什么单列而不直接豁免**：豁免的语义是"**确实**恒定无害"；未核实就豁免 = 用未判定的判据放行。
-  ⇒ 它们被登记在测试的 `KNOWN_PENDING` 里（**允许存在但显式列出**），保证"**新增**未分类路径仍会立刻红"。
-- **状态**：⏳ 待核实（核实后 → 转 EXEMPT 或修）
+- **✅ 核实完成（2026-09-23）—— 结论：它是真缺陷（第四例），不是"目录带身份"**：
+  - **本地 scratch 确实带 ts**：`$scratch = Join-Path $env:TEMP "agent-cli-claude-$ts"`（[agent-cli.ps1:2527](../../ops/station-bin/agent-cli.ps1)）✓
+  - **但站上名是固定名**：`$rIn='/tmp/_p3_claude_in.txt'` · `$rOut=…_out.txt` · `$rErr=…_err.txt`（[:3016](../../ops/station-bin/agent-cli.ps1)）⇒ **不含 ts** ❌
+  - **且 claude 备路的站上脚本不持 `flock`**（[:3019-3050](../../ops/station-bin/agent-cli.ps1) 只有 `SET`/`cd`/`timeout`，无锁）
+    ⇒ **同站并发两个备路 run 会互踩**（stdin 互相覆盖、输出混写）⇒ **与 F-1/F-2/F-14 同因（漏照抄两个样板）⇒ 第四例**
+  - `_p3_settings_$$.json`（[:3033](../../ops/station-bin/agent-cli.ps1)）**含远端 shell pid** ⇒ 有身份 ✓（不需修）
+  - `_p3_claude_run.sh`：本地在带 ts 的 scratch 下；站上名固定但**内容恒定**（here-string 常量 + 参数传入）⇒ 可转 EXEMPT
+- **修法（本轮未做，因需回归验证，而 P3 是备路）**：站上三个文件名加 `$ts` 或 pid，并**让站上脚本从参数取 tmp 前缀**
+  （现为 here-string 字面量 `/tmp/_p3_claude_in.txt` 写死，:3044/:3045；`'@` 单引号 here-string 不插值 ⇒ 须改为传参或 `"@`）。
+- **状态**：⏳ **已核实为缺陷，待修**（已在测试里单列 `KNOWN_DEFECTS`，与"待核实"分开 —— 语义不同：前者已定性，后者未定性）
 
 
 
