@@ -875,7 +875,6 @@ function Get-FrameworkSubjects($accept, [bool]$goldenActive) {
         @{ name = 'judgment-record'; path = 'judgment-record.txt' }
         @{ name = 'prompt';          path = 'prompt.txt' }
         @{ name = 'accept-cmds';     path = 'accept-cmds.txt' }
-        @{ name = 'golden-cmd';      path = 'golden-cmd.txt' }
         @{ name = 'progress-trace';  path = 'progress-trace.txt' }
         @{ name = 'session-meta';    path = 'session-meta.txt' }
         @{ name = 'attach-manifest'; path = 'attach-manifest.txt' }
@@ -886,7 +885,15 @@ function Get-FrameworkSubjects($accept, [bool]$goldenActive) {
     $hasAccept = $false
     foreach ($a in @($accept)) { if ("$a".Trim()) { $hasAccept = $true } }
     if ($hasAccept) { $list += @{ name = 'accept-output'; path = 'accept-output.txt' } }
-    if ($goldenActive) { $list += @{ name = 'accept-golden-output'; path = 'accept-golden-output.txt' } }
+    # 2026-09-23 (O-29): `golden-cmd.txt` 只在 `$goldenActive` 时才由远端写入(见 IM 里的 $goldenBlock,
+    #   它把命令落盘到 `out/.golden-cmd.txt`) ⇒ **必须与 accept-* 一样条件列**。
+    #   旧实现把它**裸列**在本节顶部 ⇒ 无 golden 的卡该件必缺 ⇒ **每个 run 都记一条 missing-artifact 可重放 gap**
+    #   (实测吃狗粮 3 个 run 连续命中, 且每次都要人工 `audit --accept` 才能让门禁回绿)。
+    #   ⚠ 原则本就在本节注释里写着"accept/golden 件按激活与否条件列" —— 本条是**该原则漏应用的一个件**。
+    if ($goldenActive) {
+        $list += @{ name = 'golden-cmd'; path = 'golden-cmd.txt' }
+        $list += @{ name = 'accept-golden-output'; path = 'accept-golden-output.txt' }
+    }
     return $list
 }
 
