@@ -169,13 +169,13 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | **B 站无 `nvidia-smi`** | `未找到命令` | 三站为 AMD UMA 机型 ⇒ 须走 `rocm-smi` / `/sys/class/drm`；采集类卡**必须写回退链** |
 | **`readonly: true` 与"必须落文件"互斥** | 同 run：模型跑了 6 条命令、数据齐全，**但产物文件始终未生成** | **卡面纪律**：要求落文件的卡**不得**用 `readonly: true` |
 
-- ★ **第二实例（2026-09-24，吃狗粮 A2 卡）**：同一条纪律又在**工作区外目录**上命中 ——
-  `permission requested: external_directory (/home/scott-lau/scripts/*); auto-rejecting` ⇒ 站上 agent
-  **只能读它自己的工作区**（`~/agent-workspaces/<proj>`），**工作区外一律 auto-reject**。
+- ★ **第二实例（2026-09-24，吃狗粮 A2 卡）**：同一条纪律又在**工作区根以外的目录**上命中 ——
+  `permission requested: external_directory (/home/scott-lau/scripts/*); auto-rejecting` ⇒ **该目录被 auto-reject**。
   ⇒ **代价实证**：我据此写的 A2 卡（"遍历站上 `~/scripts/` 逐个 sha256"）**设计上就不可执行**，首跑 `TASK_RC=9`（验收失败）。
-  ⇒ **纪律（应入册）**：**卡的射程 = 工作区**；要取证**工作区外的站上实况**（`~/scripts`、`/proc`、系统工具输出）
-  必须**由主控 ssh 直接做**（或由主控把清单/文件拷进工作区）—— **不要指望 agent 越界**。
-  反例参照：A1 卡能拿到 `infer-list` / `free -m` / `ss -ltn`，是因为这些是**可执行命令**（不是"读外部目录"）。
+  ⇒ ★ **边界（2026-09-24 修正，勿再简化为"工作区内外"）**：**A1 卡的 `ls -1 ~/agent-workspaces` 成功**（工作区**根**可读），
+  而 `~/scripts`、`/proc` 被拒 ⇒ 真边界是**白名单**（含工作区根）。
+  ⇒ **纪律（应入册）**：**工作区根之外的取证不由 agent 做**（改由**主控 ssh**），agent 侧只用**可执行命令**。
+  ⚠ **白名单确切内容未定**（站上 `~/.config/opencode/` **无显式 `permission` 配置** ⇒ 走默认），待查。
 - **附带线索（未追）**：站上 `~/agent-workspaces` 实测有 **`_p3_claude_ws`** 与 **`v0probe`** 两个
   **未在 `$PROJECTS` 注册**的目录 ⇒ 存在**绕过 proj 注册的落点**（P3 = claude 通道），值得单独追。
 
