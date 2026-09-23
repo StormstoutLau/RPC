@@ -33,7 +33,9 @@ ops/.egress_daily.json
 ops/.or-borrow.json
 # ADR-0007 路A: 审计增量水印 —— 主控本地状态(单机单贡献者, 入仓换来的"跨机一致"当前无收益);
 # 由显式命令 `cluster.py agent audit --accept` 推进, 门禁只读不改它。
-ops/.audit-baseline.json
+# 2026-09-23 (D7-P1-1): `.audit-baseline.json` **已入仓**（移至 inventory/）——
+#   决策依据见 docs/research/2026-09-18_证据流审计常跑…md §D-b 的升级条件（多机 ⇒ 入仓）。
+#   故此处**不再忽略**它；留痕即 `git log inventory/audit-baseline.json`。
 ops/__pycache__/
 
 # agent-cli / 评测 运行日志与结果快照 (不入库)
