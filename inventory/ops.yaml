@@ -17,6 +17,16 @@ entry:
   - ops/rpc_check.py
   - ops/rpc.ps1
 
+# 入口的**拆分模块** (2026-09-23 新增类目): 被上面某个入口 import 的实现模块,
+# 不是并列入口、也不是独立脚本 —— 三者的区别在"谁能直接被当命令跑":
+#   entry                = 可直接执行的管理入口
+#   entry_modules        = 只被入口 import 的实现模块 (不可直接跑)
+#   station_runtime      = 入口/systemd 调起的站上件
+# 为什么单列而不塞进 entry: entry 的语义是"入口", 塞模块会让"入口 4"这种计数失去意义。
+# 拆分方案见 docs/2026-09-23_cluster.py模块化重构_调研与方案.md (阶段 1 逐批抽取)。
+entry_modules:
+  - ops/cluster_const.py
+
 # 站上运行时件: 入口/systemd 调用的被调方 (不是并列入口)
 station_runtime:
   - ops/rpc-nodes
