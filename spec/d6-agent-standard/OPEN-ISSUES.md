@@ -66,7 +66,7 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | O-40 | 证据/回收 | **P1** | **卡的产物不进 run 目录**（`WORKSPACE_DIFF_LINES=0`）：产物只留站上工作区 ⇒ 目前**只能手动 `scp`** 取回（非持久位置） | ⏳ 待建（卡里声明 `evidence-manifest.subjects` / 复验器按声明走 —— ADR-0007 阶段 1 已支持"声明+落 run.json"） | D6-P1-1 · ADR-0007 |
 | O-41 | 门禁自审 | P2 | **B2 审计报出的两条"疑似未登记假绿"**：① `doclinks` 对**绝对路径/盘符/URL 一律"不可判"跳过**（可写不存在路径而不报错）② `engine` 的**残留阈值 2048MB 硬编码**（1.5GB 且不监听端口的残留进程会被判正常） | ⏳ 待人工复核后登记 / 加固 | D6-P0-1（门禁自审） |
 | O-42 | 权限/通道 | **P1** | **`claude` 通道 `-p` 无写权限 ⇒ 产物型任务不可用**：烟测中模型自报"文件写入被拒"，`ACCEPT_OK=0`；调用形式 `'-p "" --model "<id>"'`（[agent-cli.ps1:2729](../../ops/station-bin/agent-cli.ps1)）**不带任何权限开关**，`settings.json` 的 `defaultMode: acceptEdits` 在 `-p` 下不生效 | ⏳ **待裁**（加 `--permission-mode acceptEdits` / `--allowedTools`）；**须处理与卡面 `readonly: true` 的关系** | D6-P2 · claude 通道 |
-| O-43 | 通道/归因 | **P1** | **zen（`opencode/*`）"需要 tty"被误判为"缺凭据"**（2026-09-21 结论）：非 tty 挂死 `RC=124` 且 DEBUG 日志**无任何 401/403/凭据错误**；套 `script -qec` **伪 tty** 后**同一模型 43s 返回 `ZEN_OK`** ⇒ **恢复 zen 不需要登录**，门槛是"给非交互路径伪 tty + **PTY 输出净化**" | ◐ **已定性 + 已更正 3 处文档**（ROUTE_TABLE 注释 / REMEDIATION-PLAN / 本条）；**是否切回 zen 待裁** | D6-P2 · ROUTE_TABLE |
+| O-43 | 通道/归因 | **P1** | **zen（`opencode/*`）"需要 tty"被误判为"缺凭据"**（2026-09-21 结论）：非 tty 挂死 `RC=124` 且 DEBUG 日志**无任何 401/403/凭据错误**；套 `script -qec` **伪 tty** 后**同一模型 43s 返回 `ZEN_OK`** ⇒ **恢复 zen 不需要登录**，门槛是"给非交互路径伪 tty + **PTY 输出净化**" | ✅ **试点 PASS**（`_zen_pty_pilot.sh` 双臂实测：zen 伪 tty 下**产出文件** + 净化 0 残留）· **待裁**：切回前须做**稳定性采样**（zen 时延 43/54/73s，另有一次 90s 超时） | D6-P2 · ROUTE_TABLE |
 
 ## 2. 各未决项详情
 
@@ -381,6 +381,48 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
   - ▶ zen 的**留存/训练政策仍未核**（只核过 OpenRouter）⇒ 政策核实前，**含未发表内容的卡不宜走 zen**。
 - **经济意义（Scott 的原始动机）**：zen 可用 ⇒ 可**不消耗 openrouter 免费配额**（1000/天/账户，留给 claude 通道等）。
 - **状态**：◐ 已定性 + 文档已更正；**是否切回 zen 待裁**。
+
+##### ★ 试点结果（2026-09-24，定稿脚本 [`ops/station-bin/_zen_pty_pilot.sh`](../../ops/station-bin/_zen_pty_pilot.sh)）
+
+**双臂实测（同一最小任务：在**工作区**内写出 `out/pilot-arm-<臂>.txt`）**：
+
+| 臂 | 方式 | RC | 耗时 | 产物 | 净化残留 |
+|---|---|---|---|---|---|
+| **Z** | zen + **伪 tty**（`script -qec`） | **0** | 73s | ✅ `ARM_Z_OK` | ESC=0 · CSI=0 |
+| **O** | openrouter + 普通管道（对照） | **0** | 50s | ✅ `ARM_O_OK` | ESC=0 · CSI=0 |
+
+净化后输出**可读且信息量更高**（能看到工具调用与结果）：
+
+```
+> build · nemotron-3.5-lightning-free
+$ mkdir -p out && echo "ARM_Z_OK" > out/pilot-arm-Z.txt && echo "DONE_Z"
+DONE_Z
+```
+
+⇒ **结论：伪 tty 下 zen 完全可用（不只回话，而是执行工具调用并产出文件）**；对照组无回归。
+
+**净化解法演进（关键：为什么用 python3 而不是 sed）**：
+
+| 解法 | 结果 |
+|---|---|
+| sed `s/\[[0-9;?]*[ -\/]*[@-~]//g`（r1，一路用了 6 轮） | ✗ **实测不匹配**（真实 raw 残余 4 处；GNU sed 4.9） |
+| sed `s/\[[0-9?;]*[a-zA-Z]//g`（r2）· `s/\[[^a-zA-Z]*[a-zA-Z]//g`（r3） | ✓ 可用（残余 0） |
+| **python3（定稿）** | ✓ 站上已有 **Python 3.12.3**；`\x1b\[…` 无歧义，残余 0 |
+
+**四条实测要点（已写进脚本头注释）**：
+1. **zen 需要 tty**；2. **必须先 `cd` 到工作区**（否则产物落到 `~/out/`，造出"模型没干活"的**假失败**）；
+3. **净化用 python3**（sed 的 CSI 正则不可靠）；4. **硬断言**：净化为空即 FAIL。
+
+**⚠ 未决风险（切回前必须量化）**：**zen 时延波动大** —— 四次观测 43s / 54s / 73s / **一次 90s 超时（`RC=124`，无产出）**；
+对照臂 openrouter 稳定（37s / 50s）。⇒ 切回 zen 需先定**预算与重试**策略，否则会把"慢"误判成"挂死"。
+
+**⚠ 本轮"我的观测设计缺陷"共 5 次（全部当场自纠，一并记账）**：
+① 上一轮只凭 `auth.json` 为空就断言"缺凭据"（**无对照组**）；
+② 试点 v1/v2 漏 `cd "$W"` ⇒ 两臂同时假失败（**正是对照臂暴露了它**）；
+③ 净化正则 r1 从一开始就是坏的（**"残留=0"的检查是空文件造成的假通过**）；
+④ 把 PCRE 的 `(?:…)` 写进 sed（ERE 不支持）⇒ sed 报错输出空 ⇒ 又一次假通过；
+⑤ 断言写成 `grep -c … || echo 0`（`grep -c` 失败时**也打印 0** ⇒ 变两行 ⇒ 比较恒假）⇒ 假 FAIL。
+⇒ **教训**：**探针/断言本身必须先被验红**（合成用例 + 对照组 + 非空断言），否则"通过"没有意义。
 
 ### O-01：--attach 传输未实现
 
