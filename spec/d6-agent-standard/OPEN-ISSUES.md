@@ -125,6 +125,17 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
   | **RC③** | `PREFLIGHT-FAIL: agent-out NOT writable … **Stream was not readable**` + `ABORT exit 12`（同一并发批次里另一次成功） | **`Assert-AgentOutWritable` 探针本身并发不安全**（多进程同探同一目录 ⇒ I/O 竞争）；⇒ **前置探针也必须并发安全**，否则"门"会变成随机失败源 |
   | **RC④** | C 站：`/home/…/dogfood/out/.agent-output.txt: 没有那个文件或目录`（A/B 同批次无此错） | 站上工作区**缺 `out/`** ⇒ **空目录不被 tar 携带**的老问题在**新建站的首次派发**上复现（本地载体已用 `out/.keep` 规避，但**站侧骨架创建路径未覆盖**）。**根因待诊断（未猜）** |
 
+- **★ 面级扩展：见 [BLINDSCAN-v3-concurrency.md](BLINDSCAN-v3-concurrency.md)（2026-09-23）** ——
+  "逐个撞"效率太低（新冒出的两条不在路由/命名空间层，而在**前置探针与工作区骨架**层）⇒ 改为**先扫面**。
+  扫描结论（13 条共享资源，3 条不安全）**修正并加强了本条目**：
+  - **RC④ 根因已定位（不必再猜）**：**`.agentsync` 四类模板全部排除 `out/`**（[agent-cli.ps1:117-120](../../ops/station-bin/agent-cli.ps1)）
+    ⇒ staging 的 `out/` 被排除 ⇒ **空目录不入 tar** ⇒ 站上全新工作区无 `out/`，而远端脚本第一件事就是写 `out/.agent-output.txt`。
+    **与"只有 C 站报错"完全吻合**（既有工作区的 `out/` 早先已有文件 ⇒ tar 会带非空目录）。
+  - **新发现 F-2（严重度高于 RC③）**：[agent-cli.ps1:2131](../../ops/station-bin/agent-cli.ps1) `Remove-Item … 'agent-out\.agent-run.json'`
+    **删除共享固定路径**且 `-ErrorAction SilentlyContinue` ⇒ 并发时 **A 的收尾会删掉 B 的 run 记录** ⇒ **静默数据丢失**（比"随机 abort"隐蔽得多）。
+  - **RC③ 定性**：`Assert-AgentOutWritable` 用**固定名探针** ⇒ 并发下把"并发"**伪装成"环境不可写"**（**错误归因**）；
+    且该探针被 **task / split 两处**调用 ⇒ 修复须同时覆盖。
+
 
 #### O-29：无 `accept-golden` 的卡持续产生可重放性 gap
 
