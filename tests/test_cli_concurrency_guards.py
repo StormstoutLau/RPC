@@ -90,7 +90,72 @@ def main() -> int:
          "退回共享固定名 agent-cli-sync-<proj>.tar ⇒ **sync 在远端 flock 之前** ⇒ 同 proj 并发互删"
          "（实测 sync failed: Cannot find path '…Temp\\agent-cli-sync-dogfood.tar'）")
 
-    print(f"\n静态护栏 {7} 条")
+    # ── ★ 纪律断言化（2026-09-23）─────────────────────────────────────────────
+    # BLINDSCAN-v3 §3 的跨条目纪律: **凡"共享路径", 要么带 per-invocation 身份
+    #   (`$Script:RUN_TOKEN` / `$ts`), 要么走真锁(`flock`)。**
+    # 为什么要把逐个 F 编号换成一条通用规则: F-1(探针) / F-2(死路径) / F-14(sync tar)
+    #   三条**同一病因** —— "漏照抄本仓已有的两个样板"(TMP_ROOT 的 token / 远端 flock)。
+    #   换个编号继续撞没有意义; **把它写成判据后, 它自己抓出了 F-14(扫描没列的那条)**。
+    # 实现: 扫所有"临时/暂存路径构造点"(Join-Path $env:TEMP "…" 与 /tmp/…), 逐个要求含身份。
+    # 身份 token: 直接身份(`$Script:RUN_TOKEN`/`$ts`/随机/pid) **或**派生自 TMP_ROOT 的局部变量
+    #   (`$Script:TMP_ROOT` 本身已带 RUN_TOKEN ⇒ 从中派生的路径**传递地带身份**, `:169` 即此形)。
+    IDENTITY = ("RUN_TOKEN", "$ts", "$tsN", "$tsOutRoot", "Get-Random", "$$",
+                "$localPath", "$LocalName", "$tmpSm", "$tmp", "$localSh")
+    # 豁免: 内容恒定、幂等覆盖、且**不承载 per-run 数据**的只读脚本投递点(并发 scp 同内容无害)。
+    #   ⚠ 新增豁免必须在此显式登记并写理由 —— 防"豁免清单腐化"。
+    EXEMPT = {
+        "_station_ready.sh": "内容恒定只读脚本, scp 幂等覆盖, 不承载 per-run 数据",
+        "_slot_gate.sh": "同上",
+        "_oc_session_meta.sh": "同上(经 $Script:TMP_ROOT 投递, 此处仅列远端名)",
+    }
+    temp_names = re.findall(r'Join-Path \$env:TEMP "([^"]+)"', src)
+    # ⚠ 字符类必须含 `:` —— 否则 `$Script:RUN_TOKEN` 会在 `:` 处被截断 ⇒ 把"已带身份"误判成"无身份"(假红)。
+    tmp_names = re.findall(r"/tmp/([A-Za-z0-9_.$(){}%:\-]+)", src)
+    # 已登记待核实项: 允许存在, 但**必须在此显式列出** —— 防"新增未分类路径混进来"。
+    #   ⚠ 它们**尚未核实**, 故不进 EXEMPT(豁免要求"确实恒定无害"); 核实后应转 EXEMPT 或修掉。台账见 O-31。
+    KNOWN_PENDING = {
+        "_p3_claude_in.txt": "P3/claude 备路站上暂存名; 待核实是否位于带 ts 的 scratch 目录下(见 O-31)",
+        "_p3_claude_out.txt": "同上",
+        "_p3_claude_err.txt": "同上",
+        "_p3_run.sh": "同上",
+    }
+    # ⚠ 采用**行级**检查而非"解析路径名" —— 2026-09-23 实测: 按名解析会被 `:`、`/`、`$(` 等
+    #   反复截断, 产出 `agent-cli-ev-` 这类**残缺名**, 把"已带身份"误判成"无身份"(连续两次假红)。
+    #   行级检查更粗但**不会被截断骗**。
+    #   ⚠⚠ 判定必须用**完整行** —— 我把 `[:70]` 的显示截断误用到了判定上, 又一次自伤(第三次假红)。
+    #
+    # **射程（有意收窄）**：只盯**我们自己构造、且承载 per-run 数据**的路径 —— 即前缀 `agent-cli-`。
+    #   依据：本纪律的三个真实实例 F-1(`_preflight_*.probe`) / F-2(`agent-out\*.json`) / F-14(`agent-cli-sync-*.tar`)
+    #   **全部**是这种。而 `/tmp/` 下**投递的只读脚本**（`_station_ready.sh` / `_slot_gate.sh`：
+    #   内容恒定 + scp 幂等覆盖 + 不承载 per-run 数据）**不在射程** —— 它们的名字常经变量拼接,
+    #   从行内无法判定, 强行纳入只会把判据变成噪声源。
+    def _in_scope(code: str) -> bool:
+        return "agent-cli-" in code
+    temp_lines = [(i, ln) for i, ln in enumerate(src.splitlines(), 1)
+                  if "Join-Path $env:TEMP" in ln.split('#', 1)[0] and _in_scope(ln)]
+    tmp_lines = [(i, ln) for i, ln in enumerate(src.splitlines(), 1)
+                 if "/tmp/" in ln.split('#', 1)[0] and _in_scope(ln)]
+    bad_lines = []
+    for i, ln in tmp_lines + temp_lines:
+        code = ln.split('#', 1)[0]
+        # 样板本身: `$Script:TMP_ROOT` 的定义行(它就是被照抄的那个样板, 不必自证)
+        if code.strip().startswith("$Script:TMP_ROOT"):
+            continue
+        if any(tok in code for tok in IDENTITY):
+            continue
+        if any(k in code for k in EXEMPT) or any(k in code for k in KNOWN_PENDING):
+            continue
+        bad_lines.append((i, code.strip()[:70]))
+    print(f"  · 纪律扫描(行级): temp 构造行 {len(temp_lines)} · /tmp 引用行 {len(tmp_lines)}")
+    need("★ 纪律: 无【新增】的共享临时/暂存路径行（已登记项除外）",
+         not bad_lines,
+         f"以下行既无 RUN_TOKEN/ts 也未登记 ⇒ 并发会互踩: {sorted(set(bad_lines))}；"
+         "修法 = 照抄样板加 $($Script:RUN_TOKEN)，或在 EXEMPT/KNOWN_PENDING 显式登记理由")
+    pend = sorted({k for k in (EXEMPT | KNOWN_PENDING) if any(k in ln for _, ln in tmp_lines + temp_lines)})
+    if pend:
+        print(f"  · 已登记(豁免/待核实, 见 O-31): {pend}")
+
+    print(f"\n静态护栏 {8} 条")
     if fails:
         print("FAIL:")
         for x in fails:

@@ -326,7 +326,7 @@ function Invoke-Workspace {
 
     if ($act -eq 'create') {
         # 1. build skeleton (AGENTS.md/CLAUDE.md/.agentsync/out) in local staging
-        $stag = Join-Path $env:TEMP "agent-cli-stag-$proj"
+        $stag = Join-Path $env:TEMP "agent-cli-stag-$proj-$($Script:RUN_TOKEN)"
         if (Test-Path $stag) { Remove-Item $stag -Recurse -Force }
         New-Item -ItemType Directory -Path "$stag\out" -Force | Out-Null
 
@@ -342,7 +342,7 @@ function Invoke-Workspace {
         [System.IO.File]::WriteAllLines((Join-Path $stag '.agentsync'), $excl, (New-Object System.Text.UTF8Encoding $false))
 
         # 2. tar skeleton (full: AGENTS.md/CLAUDE.md/.agentsync/out)
-        $tarFile = Join-Path $env:TEMP "agent-cli-create-$proj.tar"
+        $tarFile = Join-Path $env:TEMP "agent-cli-create-$proj-$($Script:RUN_TOKEN).tar"
         if (Test-Path $tarFile) { Remove-Item $tarFile -Force }
         Push-Location $stag
         try {
@@ -351,7 +351,7 @@ function Invoke-Workspace {
         } finally { Pop-Location }
 
         # 3. scp
-        scp -q -o BatchMode=yes -o ConnectTimeout=10 $tarFile "${hostName}:/tmp/agent-cli-create-$proj.tar"
+        scp -q -o BatchMode=yes -o ConnectTimeout=10 $tarFile "${hostName}:/tmp/agent-cli-create-$proj-$($Script:RUN_TOKEN).tar"
         if ($LASTEXITCODE -ne 0) { throw "NETFAIL: scp skeleton failed" }
 
         # 4. remote mkdir + extract
@@ -360,7 +360,7 @@ set -eu
 W="$Script:WORKSPACE_ROOT/$proj"
 mkdir -p "`$W"
 cd "`$W"
-tar -xf /tmp/agent-cli-create-$proj.tar -C "`$W"
+tar -xf /tmp/agent-cli-create-$proj-$($Script:RUN_TOKEN).tar -C "`$W"
 mkdir -p out
 echo '--- workspace files:'
 find "`$W" -maxdepth 2 -type f | sort
