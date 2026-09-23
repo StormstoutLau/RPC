@@ -157,6 +157,19 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 - **附带线索（未追）**：站上 `~/agent-workspaces` 实测有 **`_p3_claude_ws`** 与 **`v0probe`** 两个
   **未在 `$PROJECTS` 注册**的目录 ⇒ 存在**绕过 proj 注册的落点**（P3 = claude 通道），值得单独追。
 
+#### O-31：纪律断言化的"已登记待核实"项（`_p3_*` 暂存名）
+
+- **背景**：把 `BLINDSCAN-v3 §3` 的跨条目纪律**断言化**后（`tests/test_cli_concurrency_guards.py` 第 8 条护栏），
+  首跑扫出 **11 处未分类共享路径** ⇒ 其中 **2 处是真问题（已修）**：`agent-cli-create-$proj.tar` 与 `agent-cli-stag-$proj`
+  （`workspace create` 路径，与 F-14 同型）⇒ 三处 tar + staging 已全部加 `$Script:RUN_TOKEN`。
+- **本条目 = 剩下的 4 个"待核实"项**：站上 `/tmp/_p3_claude_{in,out,err}.txt` · `/tmp/_p3_run.sh`
+  —— **尚未核实**它们是否位于带 ts 的 scratch 目录下（若在，则名字虽固定但**目录带身份** ⇒ 可转豁免；
+  若不在，则是**第四例同类缺陷**，须加 token）。
+- **为什么单列而不直接豁免**：豁免的语义是"**确实**恒定无害"；未核实就豁免 = 用未判定的判据放行。
+  ⇒ 它们被登记在测试的 `KNOWN_PENDING` 里（**允许存在但显式列出**），保证"**新增**未分类路径仍会立刻红"。
+- **状态**：⏳ 待核实（核实后 → 转 EXEMPT 或修）
+
+
 
 
 ### O-01：--attach 传输未实现
