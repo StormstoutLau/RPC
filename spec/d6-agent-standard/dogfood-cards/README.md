@@ -22,7 +22,7 @@
 | 4 | **附件内容不经 scrubber** ⇒ 附件必须本身是 `public` 档 | 附件走 `scp` 原文；scrubber 只改 `$promptFull`（含附件**文件名**，不含内容） |
 | 5 | **要脱敏就别用附件** —— 受限输入应**内嵌进卡正文**（只在正文会过 scrub） | 同上 |
 | 6 | 声明 `public`/`sanitized` **且带输入**时，**逐项写 `input-provenance`**，每项须在 `sensitivity.yaml` 有 `tier`，且**卡档位不得宽于该项** | `CROSS-PROJECT-WORK-STANDARD §4`；⚠ **该义务目前未被机判**（2026-09-24 全仓核对：`input-provenance` 在 `ops/` 下**零命中**） |
-| 7 | ★ **卡的射程 = 工作区**（`~/agent-workspaces/<proj>`）：**不要指示模型去读工作区外的目录** | **一手实测（2026-09-24，A2 首跑失败的直接原因）**：`permission requested: external_directory (/home/scott-lau/scripts/*); auto-rejecting` ⇒ 站上 agent 对外部目录**一律 auto-reject**（= O-30 第一条的第二实例）。⇒ 要取证**工作区外**的站上实况（`~/scripts`、`/proc`、系统目录），**必须由主控 ssh 直接做**；agent 只能跑**可执行命令**（如 `infer-list`/`free -m`/`ss -ltn` —— A1 正是靠这个成功的） |
+| 7 | ★ **卡的射程 = 平台注册的工作区根**（实测 `~/agent-workspaces` **可读**）—— 该根**之外**的站上路径（`~/scripts`、`/proc`、系统目录）**不要指示模型去读** | **一手实测（2026-09-24）+ 一次自我修正**：A2 首跑的 `cd ~/scripts …` 被 `permission requested: external_directory (/home/scott-lau/scripts/*); auto-rejecting` 拒（= O-30 第一条第二实例，`TASK_RC=9`）；**但同一批 A1 的 `ls -1 ~/agent-workspaces` 成功**（工作区**根**可读）⇒ 边界**不是**"工作区内/外"，而是**白名单**（含工作区根；`~/scripts`、`/proc` 均不在）。⇒ 工作区根之外的取证**由主控 ssh 直接做**；agent 可安全依赖的是**可执行命令**（`infer-list`/`free -m`/`ss -ltn`/`hostname` —— A1 正是靠这些成功）。⚠ **白名单的确切边界未定**（`~/.config/opencode/` 下**无显式 `permission` 配置** ⇒ 走默认；待查 opencode 默认规则） |
 
 ## 档位选择的正确顺序（`sensitivity.yaml` 的用法）
 
