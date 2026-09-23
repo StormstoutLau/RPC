@@ -40,7 +40,7 @@
 | **F-8** | 远端 `$W/out/*`（`.prompt.txt` / `.agent-output.txt` / `.meta` / `.accept-output.txt`） | [:1677](../../ops/station-bin/agent-cli.ps1) / [:1726](../../ops/station-bin/agent-cli.ps1) / [:1808](../../ops/station-bin/agent-cli.ps1) | ✅ **安全** | 由 `$W/.agent-lock` 的 **flock** 保护（同 proj 同站串行）；跨站文件本身不同 |
 | **F-9** | 远端 `$W/.agent-lock` / `.agent-state.json` | [:578](../../ops/station-bin/agent-cli.ps1) / [:593](../../ops/station-bin/agent-cli.ps1) / [:1620](../../ops/station-bin/agent-cli.ps1) | ✅ **安全** | **per-(proj, 站)** 且用 **`flock`（真锁）** ⇒ 这是本仓**并发最正确的一处** |
 | **F-10** | `Assert-AgentOutWritable` 的**两次调用**（task / split 各一） | [:1416](../../ops/station-bin/agent-cli.ps1) / [:2208](../../ops/station-bin/agent-cli.ps1) | ⚠ 与 F-1 同源 | 同一探针被两个入口调用 ⇒ 修复要**同时**覆盖两处 |
-| **F-11** | `ops/.audit-baseline.json` | 门禁 `evidence` 读 · `cluster.py agent audit --accept` 写 | ◐ **未被 agent-cli 触碰** | 不在本次范围；但**并发跑门禁**会互踩 ⇒ 留作 D6-P1 的检查项 |
+| **F-11** | `ops/.audit-baseline.json` | 门禁 `evidence` 读 · `cluster.py agent audit --accept` 写 | ◐ **未被 agent-cli 触碰** | 不在本次范围；但**并发跑门禁**会互踩 ⇒ 留作 D6-P1 的检查项 · **⚠ 2026-09-23 后续（本行保留原状，只加标注）**：路径已变（→ `inventory/audit-baseline/<host>.json` 分片，见台账 **O-33**）；**且"按机分片"只治了跨机、未治同机** ⇒ 同机两个 `--accept` 并发仍是 read-modify-write 竞态（**留在下文**，见 O-33 追加） |
 | **F-12** | `archive/evidence-chain/*`（链与锚） | git hook（+ `cluster.py agent chain`） | ◐ **未被 agent-cli 触碰** | 已在 `.gitignore` 说明里标注"跨机一致当前无收益"；**并发提交**仍可能互踩 ⇒ 同上留作检查项 |
 | **F-13** | `.agentsync` 模板**本身** | [:117-120](../../ops/station-bin/agent-cli.ps1) | ℹ **说明性** | 模板**同时排除** `out/` / `.agent-lock` / `.agent-state.json` / `.attach/` ⇒ **设计上认为这些"不该上站"**，但**远端脚本又必须写 `out/`** ⇒ **两处假设互相矛盾**（见 §2） |
 
