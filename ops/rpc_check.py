@@ -1924,6 +1924,19 @@ def check_evidence(ctx):
     _gtext = {it["key"]: it["text"] for it in (ra.get("gap_items") or [])}
     note += (f" · 可重放 gap {len(_cur)} 条(存量 {len(_cur & _bkeys)}"
              + (f", **新增 {len(_pending)}**" if _pending else "") + ")")
+    # 2026-09-23 (O-29 的 2c): **按框架代分桶** —— 判据演化后历史 gap 与新 gap 混在一起，
+    #   "新增"会看起来永远清不完（本轮实测：改完判据仍报 3 条，我一度误判为"没修好"）。
+    #   key 形状 `<fwver>|<kind>|<label>|<sub>`（**旧形状 3 段 ⇒ 记 legacy**）。
+    #   真值源: `cluster.FRAMEWORK_SUBJECTS_VERSION`（与 `_gap_key` 同源，不另立常量）。
+    def _fwv(_k: str) -> str:
+        return _k.split("|", 1)[0] if _k.count("|") >= 3 else "legacy"
+    _bk = {}
+    for _k in _cur:
+        _bk[_fwv(_k)] = _bk.get(_fwv(_k), 0) + 1
+    if _bk:
+        _curv = getattr(cluster, "FRAMEWORK_SUBJECTS_VERSION", None)
+        _nc = _bk.get(_curv, 0)
+        note += f" · 按框架代分桶: current({_curv})={_nc} · legacy={len(_cur) - _nc}"
     if _pending:
         details.append(
             f"**可重放性审计: 新增 {len(_pending)} 条** gap"
