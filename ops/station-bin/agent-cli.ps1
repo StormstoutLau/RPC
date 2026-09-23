@@ -1691,6 +1691,12 @@ CONT_B64="Q29udGludWUgdGhlIHVuZmluaXNoZWQgdGFzayBmcm9tIHdoZXJlIGl0IHN0b3BwZWQuIF
 SAMPLE=t
 SB0=`$(( `$(date +%s%N) / 1000000 ))   # sampler clock base (ms), captured before first run
 : > "`$W/out/.progress"
+# O-37 (2026-09-24): **同时清空 agent 输出文件** —— 否则采样器第一个样本(t=0)读到的是**上一轮残留**。
+#   实测两条铁证: A1 `t=0 bytes=4434` == 上一轮 `OUT_BYTES=4434`; B2 `t=0 bytes=4470` == A1 的 `OUT_BYTES=4470`。
+#   后果 ① 首样本 bytes_s 假高(实测 1.4e6+ B/s); ② ★ `bytes>0` 在 t=0 即成立 ⇒ 任何"以字节增长判已产出"
+#   的消费者会在第 0 秒看到**假进度/假完成**(与 T-1「完成信号须与证据同源」、O-22「.meta 残留」同病族)。
+#   ⚠ 时序: 本行 → `sample_progress &` → opencode(自己的 `>` 再截断) ⇒ **必须在这里清**, 晚于此即有残留窗口。
+: > "`$W/out/.agent-output.txt"
 sample_progress() {
   while [ "`$SAMPLE" = t ]; do
     # 2026-09-23 (RC4) **必须容忍文件尚未创建**: agent 启动前 `out/.agent-output.txt` 不存在,
