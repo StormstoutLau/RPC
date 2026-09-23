@@ -59,9 +59,17 @@ try:
     bad, gap, ok = C._verdict_check(d, "1111", "t/1111")
     chk("T4 accept mismatch => issue", bool(bad) and "ACCEPT_OK" in bad[0], f"bad={bad}")
 
-    d = mk(tmp / "t5", META_OK.format(ts="1111"), dict(BASE, exit_code=1))
+    # 2026-09-23（裁定 b, O-27）：T5 **显式声明 v2 域** —— v2 下 `.meta TASK_RC` 是**整体码**、
+    #   与 run.json `exit_code` 同域 ⇒ `(0,1)` **必须**报 issue（它证明断言仍在判，没被放宽）。
+    #   v1（无域标记）下同一组合是**历史合法歧义** ⇒ 见 T5b。判据见 `cluster._verdict_allowed`。
+    d = mk(tmp / "t5", META_OK.format(ts="1111").replace("TASK_RC=0", "TASK_RC=0\nRC_DOMAIN=v2"),
+           dict(BASE, exit_code=1))
     bad, gap, ok = C._verdict_check(d, "1111", "t/1111")
-    chk("T5 rc map violation => issue", bool(bad) and "TASK_RC" in bad[0], f"bad={bad}")
+    chk("T5 rc map violation (v2) => issue", bool(bad) and "TASK_RC" in bad[0], f"bad={bad}")
+
+    d = mk(tmp / "t5b", META_OK.format(ts="1111"), dict(BASE, exit_code=1))
+    bad, gap, ok = C._verdict_check(d, "1111", "t/1111")
+    chk("T5b v1 无域: (0,1) 属历史有界宽容 => 不报", not bad, f"bad={bad}")
 
     d = mk(tmp / "t6", META_OK.format(ts="1111").replace("TASK_RC=0", "TASK_RC=9"),
            dict(BASE, exit_code=1))

@@ -2707,6 +2707,26 @@ def _anchor_check(chain: dict) -> list:
 _VERDICT_RC_MAP = {0: {0}, 6: {6}, 9: {1, 9}, 14: {14}, 24: {24}, 124: {6}}
 
 
+def _verdict_allowed(rc: int, rc_domain):
+    """TASK_RC → run.json `exit_code` 的**允许集**（**判据只在此处定义**，供断言与单测共用）。
+
+    2026-09-23（裁定 b, O-27）：**按 `RC_DOMAIN` 选域** —— 这是一次"治同源"而非"放宽判据"。
+      · **v2**（`agent-cli.ps1` 2026-09-23 起写）：`.meta TASK_RC` 已是**整体退出码**（映射前），
+        与 run.json `exit_code`（映射后，9→1）**同域** ⇒ 直接用映射表，**不放宽**。
+        旧实现写的是 **agent 码**（accept 失败时为 0，而整体码是 9→1）⇒ 两域不一致，
+        导致**每个"验收失败"的 run 都被误判 evidence FAIL**（阻断提交）—— 与 2026-09-21 的
+        `124` 条目同型（"旧表无该条目 ⇒ 把合法 run 都误报 FAIL"）。
+      · **v1**（无标记的历史 run）：**有界宽容** —— 仅把 `0` 放宽到 `{0, 1}`，其余照旧。
+        依据：v1 的 `TASK_RC=0` 有两种合法来源（agent 成功且验收成功 ⇄ agent 成功但验收失败）；
+        该歧义**自 v2 起不再产生**（源头已修）。
+    """
+    if (rc_domain or "").strip().lower() == "v2":
+        return _VERDICT_RC_MAP.get(rc, {rc})
+    if rc == 0:
+        return {0, 1}
+    return _VERDICT_RC_MAP.get(rc, {rc})
+
+
 def _meta_parse(p: Path) -> dict:
     """解析 `KEY=VALUE` 行 (原文照收件的读取, **不做规范化**)。"""
     d = {}
@@ -2765,7 +2785,7 @@ def _verdict_check(run_dir: Path, ts: str, label: str) -> tuple:
     rc = meta.get("TASK_RC")
     if rc is not None and rc.lstrip("-").isdigit():
         rci = int(rc)
-        allowed = _VERDICT_RC_MAP.get(rci, {rci})
+        allowed = _verdict_allowed(rci, meta.get("RC_DOMAIN"))
         ec = j.get("exit_code")
         judged += 1
         # 形状守卫 (2026-09-18 实测): 环境层污染曾使 `exit_code` 变成**数组** `[null, 0]` ⇒ 原写法
