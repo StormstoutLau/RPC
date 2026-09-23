@@ -66,6 +66,7 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | O-40 | 证据/回收 | **P1** | **卡的产物不进 run 目录**（`WORKSPACE_DIFF_LINES=0`）：产物只留站上工作区 ⇒ 目前**只能手动 `scp`** 取回（非持久位置） | ⏳ 待建（卡里声明 `evidence-manifest.subjects` / 复验器按声明走 —— ADR-0007 阶段 1 已支持"声明+落 run.json"） | D6-P1-1 · ADR-0007 |
 | O-41 | 门禁自审 | P2 | **B2 审计报出的两条"疑似未登记假绿"**：① `doclinks` 对**绝对路径/盘符/URL 一律"不可判"跳过**（可写不存在路径而不报错）② `engine` 的**残留阈值 2048MB 硬编码**（1.5GB 且不监听端口的残留进程会被判正常） | ⏳ 待人工复核后登记 / 加固 | D6-P0-1（门禁自审） |
 | O-42 | 权限/通道 | **P1** | **`claude` 通道 `-p` 无写权限 ⇒ 产物型任务不可用**：烟测中模型自报"文件写入被拒"，`ACCEPT_OK=0`；调用形式 `'-p "" --model "<id>"'`（[agent-cli.ps1:2729](../../ops/station-bin/agent-cli.ps1)）**不带任何权限开关**，`settings.json` 的 `defaultMode: acceptEdits` 在 `-p` 下不生效 | ⏳ **待裁**（加 `--permission-mode acceptEdits` / `--allowedTools`）；**须处理与卡面 `readonly: true` 的关系** | D6-P2 · claude 通道 |
+| O-43 | 通道/归因 | **P1** | **zen（`opencode/*`）"需要 tty"被误判为"缺凭据"**（2026-09-21 结论）：非 tty 挂死 `RC=124` 且 DEBUG 日志**无任何 401/403/凭据错误**；套 `script -qec` **伪 tty** 后**同一模型 43s 返回 `ZEN_OK`** ⇒ **恢复 zen 不需要登录**，门槛是"给非交互路径伪 tty + **PTY 输出净化**" | ◐ **已定性 + 已更正 3 处文档**（ROUTE_TABLE 注释 / REMEDIATION-PLAN / 本条）；**是否切回 zen 待裁** | D6-P2 · ROUTE_TABLE |
 
 ## 2. 各未决项详情
 
@@ -353,6 +354,33 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
   ② **必须显式处理与卡面 `readonly: true` 的关系** —— 否则 claude 通道会把"只读卡"也变成可写 ⇒ **破卡面契约**（与 D-06/D-07 同级的安全面）。
 - **现状定性**：**claude 通道目前只能接"纯输出型"任务**；产物型（本目录 A1/A2/B1/B2 全部）**只能走 opencode**。
 - **状态**：⏳ **待 Scott 裁定**（是否放宽 + 以什么最小权限形态）
+
+#### O-43：zen（`opencode/*`）**"需要 tty"** 被误判为"缺凭据"（**归因更正 · 待裁切回**）
+
+- **起因**：Scott 反馈"**我可以在 A/B/C 三站直接打开终端输入 `opencode` 用免费模型**，为什么你提示我登录？"
+- **一手实验（2026-09-24，站 B）**：
+
+| # | 实验 | 结果 |
+|---|---|---|
+| ① | `printf '只回复一个词: ZEN_OK' \| timeout 45 opencode run -m opencode/nemotron-3.5-lightning-free`（**非 tty**） | **`RC=124`（挂死，45s 零产出）** |
+| ①' | 同上加 `--print-logs --log-level DEBUG` | 请求**已发出**（`llm runtime selected llm.provider=opencode`）；**无任何 401/403/credential 报错** ⇒ **不是凭据问题** |
+| ② | **同一模型**套伪 tty：`script -qec "opencode run -m <zen-id>"` | ✅ **`RC=0`，43s 返回 `ZEN_OK`** |
+| ③ | 对照组 `openrouter/thinkingmachines/inkling:free`（**普通管道**） | ✅ `RC=0`（≈16s）⇒ **只有 zen 这一路要 tty** |
+| ④ | 三站 `auth.json` / `opencode auth list` | A = `{}`（2 字节）· B/C = **文件不存在** ⇒ 0 凭据；**但这不是失败原因**（③④ 与 ② 共同证明） |
+
+- **⇒ 结论**：**2026-09-21 的"0 credentials ⇒ 静默挂死"归因错误**，真因 = **zen 免费档需要 tty**；
+  Scott 的 TUI 能用，正因为 **TUI 有真 tty**。**恢复 zen 不需要任何登录/凭据**。
+- **已更正 3 处**（防止第 3 次误导）：
+  ① [agent-cli.ps1](../../ops/station-bin/agent-cli.ps1) 的 `ROUTE_TABLE` 注释块（原写"若要恢复 zen 就登录"）；
+  ② [REMEDIATION-PLAN.md](REMEDIATION-PLAN.md) 的「登录 zen」行（划掉并写明前提错了）；
+  ③ 本条。
+- **未做的（待裁 / 待设计）**：
+  - ▶ **切回 zen 的前置 = PTY 输出净化**：`script` 会把 **banner + ANSI 控制字符 + "脚本启动于…"** 混入 stdout
+    ⇒ 会污染 `out/.agent-output.txt`（连带 **O-37** 的字节计数、产物解析、`accept` 判据）⇒ 须先定净化方案；
+  - ▶ **`_probe_opencode_provider.sh` 对 zen 不可用**（它只测非 tty 形态 ⇒ **恒报 `RC=124`**）⇒ 待改用**伪 tty 对照**；
+  - ▶ zen 的**留存/训练政策仍未核**（只核过 OpenRouter）⇒ 政策核实前，**含未发表内容的卡不宜走 zen**。
+- **经济意义（Scott 的原始动机）**：zen 可用 ⇒ 可**不消耗 openrouter 免费配额**（1000/天/账户，留给 claude 通道等）。
+- **状态**：◐ 已定性 + 文档已更正；**是否切回 zen 待裁**。
 
 ### O-01：--attach 传输未实现
 
