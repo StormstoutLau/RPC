@@ -26,6 +26,7 @@ entry:
 # 拆分方案见 docs/2026-09-23_cluster.py模块化重构_调研与方案.md (阶段 1 逐批抽取)。
 entry_modules:
   - ops/cluster_const.py
+  - ops/cluster_ssh.py
 
 # 站上运行时件: 入口/systemd 调用的被调方 (不是并列入口)
 station_runtime:
