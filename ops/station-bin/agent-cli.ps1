@@ -60,12 +60,18 @@ $Script:ROUTE_TABLE = @{
     'qwen'       = @{ id = 'local/qwen';                              station = 'B' }
     'gpt-oss'    = @{ id = 'local/gpt-oss';                           station = 'A' }
     'gpt-oss-20b'= @{ id = 'local/gpt-oss-20b';                       station = 'B' }   # O-13 sympy 收口卡 (B 站 20b, 2026-09-14)
-    # ⚠ **2026-09-21 实测：zen（`opencode/*`）当前不可用 ⇒ 这三个档位已重指到"站上 openrouter"**。
-    #   事实：三站 `opencode auth list` 均为 **0 credentials**；`opencode/*` 是 opencode 自带网关(zen)，
-    #   **无凭据时不报错、只静默挂死**（实测 `timeout 120` 被掐 3 次 = **360s**，输出只有 `> build · <model>`
-    #   banner；**同一模型**走站上 `openrouter/*` 则 **16s** 出结果 ⇒ 差异只在凭据）。复验工具：
-    #   `_probe_opencode_provider.sh <model> 25`（`RC=124`=静默挂死 / `RC=0`=可用）。若要恢复 zen：
-    #   `opencode auth login --provider opencode`（要 https://opencode.ai/auth 的 API key，且 clack TUI 需 tty）。
+    # ⚠⚠ **2026-09-24 实测修正（推翻 2026-09-21 的"缺凭据"归因）：zen（`opencode/*`）不是缺凭据，而是"需要 tty"**。
+    #   证据①（非 tty ⇒ 挂死）：`printf '只回复一个词: ZEN_OK' | timeout 45 opencode run -m opencode/nemotron-3.5-lightning-free`
+    #     ⇒ `RC=124`（45s 零产出）；DEBUG 日志显示请求**已发出**（`llm runtime selected llm.provider=opencode`），
+    #     且**无任何 401/403/credential 报错** ⇒ **不是凭据问题**（三站 `auth.json` 为空/不存在，`auth list` = 0 credentials）。
+    #   证据②（伪 tty ⇒ 可用）：**同一模型**套 `script -qec "opencode run -m <zen-id>"` ⇒ **`RC=0`，43s 返回 `ZEN_OK`**。
+    #   证据③（对照组）：`openrouter/*` **普通管道**即 `RC=0`（≈16s）⇒ **只有 zen 这一路要 tty**；TUI 能用亦因它是真 tty。
+    #   ⇒ **恢复 zen 不需要登录/凭据**，只需让**非交互派发路径**提供伪 tty（`script -qec`，或 `ssh -tt`）。
+    #   ⚠ 但 `script` 会把 PTY 回显（banner + ANSI 控制字符 + "脚本启动于…"）混入 stdout ⇒ 会污染
+    #     `out/.agent-output.txt`（连带 O-37 的字节计数与产物解析）⇒ **改运行时前须先设计输出净化**。
+    #   ⚠ 复验工具：`_probe_opencode_provider.sh` 只测**非 tty**形态 ⇒ 对 zen **恒报 `RC=124`**，
+    #     **不能用来判 zen 死活**；判 zen 须用**伪 tty 对照**（实验组 `script -qec` + 对照组 `openrouter` 普通管道）。
+    #   现状：三档仍重指到"站上 openrouter"（可用且已实测）；**是否切回 zen 待裁**（切换前须先解决输出净化）。
     #   新 id 取 `secrets/openrouter.conf` 的 **`harness_priority` 前两档**（该键是**权威真值**，本表只镜像，
     #   **不新立模型清单**）—— 与 `claude`/`claude-opus` 同源；站上 `openrouter` provider 已有 key 且实测可用。
     #   ⚠ **别名命名的是"档位"（快 / 高保真 / 1M），不是厂商** —— 故重指不改名、调用方零改动。
