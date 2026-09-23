@@ -60,7 +60,7 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | O-33 | 文档/一致性 | P2 | **水印入仓化后，引用旧路径 `ops/.audit-baseline.json` 的文档未跟随**（ADR-0007×2 · 调研稿×4 · ARCHITECTURE · REMEDIATION-PLAN · 本文 §1 · 路线总表 §10 A8） | ⏳ 待办（**处置分两类：历史记录不改正文 / 现状陈述就地更新**） | D7-P1-1 |
 | O-34 | 门禁/一致性 | P2 | **迁移/重命名后「首次」门禁为 FAIL(1 项失败 / 绿灯 9)，而提交时同一命令为 PASS(绿灯 10)** —— **已定位**：`_iter_source_files()` 以 `git ls-files` 取范围，其假设"**pre-commit 阶段新文件已 `git add`**"**只在钩子里成立**；手动直跑 + 未暂存 ⇒ 范围不同 | ✅ **已修（2026-09-23）**：新增 `_untracked_count()`，`secrets` 报数行在未跟踪数 >0 时显式追加提示 ⇒ **让"范围已收窄"可见** | ✅ 已修 |
 | O-35 | 并发/引擎 | P1 | **站上本地引擎是否支持并发请求 —— 未验证**（与 O-31 **不是同一问题**：O-31 修的是**文件名冲突**［文件层］，本条是**引擎并发行服务**［引擎层］） | ⏳ **待立项验证**（含"输出错配"这一最危险形态） | D6-P2 · D7 |
-| O-36 | 环境/守护 | P2 | **解释器口径漂移 ⇒ 默认路径下守护静默失效**：PATH 上的 `python` = hermes venv（3.11.16，**无 paramiko**），而**带 paramiko 的是 `Python312`（5.0.0）**；`cluster.py:87` 却声明"主控站 hermes venv 已装"（**与实测相反**），门禁提示亦**不指名**用哪个 ⇒ 按默认 `python` 跑 = **4/6 测试崩 + `aliases`/`evidence` 两项长期黄灯跳过**（`syntax` 行自报 `.py@3.11.16` ⇒ **门禁自己用的就是那个解释器**） | ◐ **已定性（2026-09-24 一手对照实测）**，处置候选 a~d 待裁 | D6-P1 |
+| O-36 | 环境/守护 | P2 | **解释器口径漂移 ⇒ 默认路径下守护静默失效**：PATH 上的 `python` = hermes venv（3.11.16，**无 paramiko**），而**带 paramiko 的是 `Python312`（5.0.0）**；`cluster.py:87` 却声明"主控站 hermes venv 已装"（**与实测相反**），门禁提示亦**不指名**用哪个 ⇒ 按默认 `python` 跑 = **4/6 测试崩 + `aliases`/`evidence` 两项长期黄灯跳过**（`syntax` 行自报 `.py@3.11.16` ⇒ **手动跑时门禁用的就是那个解释器**；★ **而 pre-commit 钩子写死 `py.exe`（有 paramiko）⇒ 提交/手动是两套口径**） | ◐ **已定性（2026-09-24：手动/提交双路径 + 三种解释器对照实测）**，处置候选 a~d 待裁 | D6-P1 |
 
 ## 2. 各未决项详情
 
@@ -213,7 +213,7 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 
 | ID | 类别 | 严重度 | 简述 | 状态 | 归属批次 |
 | ---- | ------- | --- | --- | --- | ---- |
-| **O-36** | 环境/守护 | P2 | **解释器口径漂移** —— PATH 上的 `python` ≠ 本仓需要的那个（缺 `paramiko`）⇒ 默认路径下 **4/6 测试套件 + 2/14 门禁项静默失效** | ◐ 已定性（有对照实测），处置待裁 | D6-P1 |
+| **O-36** | 环境/守护 | P2 | **解释器口径漂移** —— PATH 上的 `python` ≠ 本仓需要的那个（缺 `paramiko`）⇒ 默认路径下 **4/6 测试套件 + 2/14 门禁项静默失效**；★ **提交/手动走两个解释器**（钩子写死 `py.exe` ⇒ 实测 = `Python312`（paramiko 5.0.0）⇒ 10 绿；交互 `python` = hermes venv（无）⇒ 9 绿 2 黄），与 O-34 同族 | ◐ 已定性（有对照实测），处置待裁 | D6-P1 |
 
 #### O-36：解释器口径漂移 ⇒ 默认路径下的守护静默失效（**已定性**）
 
@@ -227,9 +227,20 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 - **三处「声明 ↔ 实测」不符**：
   1. [cluster.py:87](../../ops/cluster.py) 声明 **"依赖: paramiko（主控站 hermes venv Python 3.11 已装）"** —— 实测该 venv **无** paramiko ⇒ **声明本身写错**（与 **T-1**「完成信号与证据不同源」同型）。
   2. 门禁提示只写"请用**装有 paramiko 的 Python** 运行"，**不指名是哪一个** ⇒ 无从机械判定该切哪个（本机同时存在 3 个解释器：hermes venv / Python312 / Anaconda3，**其中只有 Python312 装了**）。
-  3. `syntax` 报数行自曝 `.py@3.11.16` ⇒ **门禁自己跑在没 paramiko 的那个解释器上**（14 项里 2 项对它天然无效）。
+  3. `syntax` 报数行自曝 `.py@3.11.16` ⇒ **手动用 `python` 跑门禁时，跑的就是没 paramiko 的那个解释器**（14 项里 2 项对它天然无效）。
+- **★ 补证（2026-09-24，提交 `ba85629` 时取得）—— 分裂的确切机制：提交与手动走的是两个解释器**
+
+  | 路径 | 解释器来源 | 实测结果 |
+  |---|---|---|
+  | **提交（pre-commit 钩子）** | `.git/hooks/pre-commit:7` **写死** `PY='C:/Users/Peng/AppData/Local/Programs/Python/Launcher/py.exe'`（该钩子由 `ops/rpc.ps1 install-hooks` 生成）；**`py` 实测指向 `Python312`（paramiko 5.0.0）** | **10 绿 / 1 黄 / 0 红** —— `aliases` **PASS** |
+  | **手动（交互 `python`）** | PATH ⇒ `…\.hermes\hermes-agent\venv`（3.11.16） | **9 绿 / 2 黄** —— `aliases` / `evidence` 双双跳过 |
+
+  ⇒ **这正是 O-34 的同族现象**：O-34 = `git ls-files` **范围**不同（已修），本条 = **解释器**不同。
+  ⇒ **三条口径互不相同**：钩子用 `py.exe` ✅ 能跑 · `cluster.py:87` 注释称 hermes venv ❌ 无 paramiko · 门禁 WARN 提示**不指名**。
+  ⇒ 因此处置候选 **(a) 应以钩子为准**：**`py.exe` 就是事实上的规范解释器**（它已是唯一"能跑全绿"的路径），
+  应把它写成**一处真值**，并让门禁自检报出"**本项由 \<解释器\> 运行**" —— 否则"手动跑"会长期比"提交跑"少两项守护。
 - **后果（★ 真正的守护缺口，不是"调试不便"）**：
-  - 按**默认动作**（`python tests/run_py_tests.py`）跑 ⇒ **4 个套件静默不跑**；其中 `test_inbox_seal.py` 是**仓内唯一的 `MANIFEST.sha256` 格式复验器**（其 `data_lines()` = python 版 `-c`）⇒ 刚裁的 **D-24 / D-25**（`#` 注释行 + 哈希行格式固定）**当前零机械守护**。
+  - 按**默认动作**（`python tests/run_py_tests.py`）跑 ⇒ **4 个套件静默不跑**；其中 `test_inbox_seal.py` 是**仓内唯一的 `MANIFEST.sha256` 格式复验器**（其 `data_lines()` = python 版 `-c`）⇒ 刚裁的 **D-24 / D-25**（`#` 注释行 + 哈希行格式固定）**在手动复验路径上是零机械守护**（⚠ **提交路径不受影响** —— 钩子走 `py.exe`，跑得到）。
   - `aliases` / `evidence` **长期黄灯** ⇒ **黄灯免疫**：看起来"有守护、只是黄"，实际是**没跑**。与 **D6-P1**「完成信号须与证据同源」同类。
 - **★ 更正留档（本轮自己犯的同型错）**：我上一轮把此现象记成"**本机缺 paramiko**"，只探了 PATH `python` / `py -3.11` / `.venv` 就下结论 —— **实测推翻**：本机**有**带 paramiko 的解释器（`Python312`，5.0.0）。真因是**口径漂移**，**不是能力缺失**。教训与 O-32 同：**结论不得由"探不到"反推，须枚举全部候选再判**。
 - **处置候选（本轮未做）**：
@@ -238,7 +249,10 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
   - **(c) 给 hermes venv 装 paramiko**：最小动作，但**不改口径**，且改环境须登记；
   - **(d) `cluster.py` 惰性导入 paramiko**（只在真正用到 ssh 的函数内 import）：让纯本地路径不再被远程依赖拖垮，最彻底但触及核心模块。
   - **建议顺序**：**(a) + (b) 先做**（不动环境，纯"口径 + 自检"，立刻消除"不知道用哪个"），(c) / (d) 视需要。
-- **状态**：◐ **已定性（2026-09-24，有对照实测）**，处置待裁（候选 a~d）
+- **★ 直接探测（2026-09-24 补齐，取代先前"由行为反推"）**：`py -c "import sys,paramiko"` ⇒
+  `sys.executable = C:\Users\Peng\AppData\Local\Programs\Python\Python312\python.exe` · `paramiko = 5.0.0`
+  ⇒ **钩子用的解释器就是 `Python312`，即本机唯一带 paramiko 的那个** —— 与行为推断一致，且现已是**直接测量**。
+- **状态**：◐ **已定性（2026-09-24：手动/提交双路径 + 三种解释器对照实测）**，处置待裁（候选 a~d）
 
 ### O-01：--attach 传输未实现
 
