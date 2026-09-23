@@ -84,7 +84,13 @@ def main() -> int:
          "退回 _preflight_HHmmss.probe ⇒ 同一秒启动的两进程撞同一探针 ⇒ Stream was not readable，"
          "且会把『并发』伪装成『环境不可写』（错误归因）")
 
-    print(f"\n静态护栏 {6} 条")
+    # F-14：sync tar 名必须带 per-invocation 身份（本地与站上同名）
+    need("F-14 sync tar 名带 RUN_TOKEN",
+         not re.search(r"agent-cli-sync-\$proj\.tar", src),
+         "退回共享固定名 agent-cli-sync-<proj>.tar ⇒ **sync 在远端 flock 之前** ⇒ 同 proj 并发互删"
+         "（实测 sync failed: Cannot find path '…Temp\\agent-cli-sync-dogfood.tar'）")
+
+    print(f"\n静态护栏 {7} 条")
     if fails:
         print("FAIL:")
         for x in fails:

@@ -378,7 +378,11 @@ md5sum AGENTS.md CLAUDE.md .agentsync
         # incremental push source subset per .agentsync; never overwrite out/ (unidirectional, inv 6)
         $excl = Get-AgentsyncExcludes $proj $type
         $exArgs = Convert-ToExcludeArgs $excl
-        $tarFile = Join-Path $env:TEMP "agent-cli-sync-$proj.tar"
+        # 2026-09-23 (F-14): 三处 tar 名都必须带 per-invocation 身份 —— 原为共享固定名
+        #   `agent-cli-sync-<proj>.tar`(本地 temp 与**站上 /tmp** 同名), 而 **sync 发生在远端 flock 之前**
+        #   ⇒ 同 proj 并发 sync 互删 ⇒ 实测 `sync failed: Cannot find path '…\Temp\agent-cli-sync-dogfood.tar'`。
+        #   这是 BLINDSCAN-v3 §3 那条跨条目纪律的**第三次实例**(前两次 = F-1 探针 / F-2 死路径)。
+        $tarFile = Join-Path $env:TEMP "agent-cli-sync-$proj-$($Script:RUN_TOKEN).tar"
         if (Test-Path $tarFile) { Remove-Item $tarFile -Force }
         Push-Location $projRoot
         try {
@@ -388,14 +392,14 @@ md5sum AGENTS.md CLAUDE.md .agentsync
         } finally { Pop-Location }
         $size = (Get-Item $tarFile).Length
         if ($size -gt 200MB) { throw "sync pkg $([math]::Round($size/1MB,1))MB > 200MB cap, add excludes (G4)" }
-        scp -q -o BatchMode=yes -o ConnectTimeout=10 $tarFile "${hostName}:/tmp/agent-cli-sync-$proj.tar"
+        scp -q -o BatchMode=yes -o ConnectTimeout=10 $tarFile "${hostName}:/tmp/agent-cli-sync-$proj-$($Script:RUN_TOKEN).tar"
         if ($LASTEXITCODE -ne 0) { throw "NETFAIL: scp sync failed (rc=$LASTEXITCODE) - station likely down" }
         $body = @"
 set -eu
 W="$Script:WORKSPACE_ROOT/$proj"
 mkdir -p "`$W"
 cd "`$W"
-tar -xf /tmp/agent-cli-sync-$proj.tar -C "`$W"
+tar -xf /tmp/agent-cli-sync-$proj-$($Script:RUN_TOKEN).tar -C "`$W"
 echo "sync OK: `$(du -sh "`$W" | cut -f1)"
 "@
         Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-ws-sync.sh" | Out-Null
