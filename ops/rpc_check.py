@@ -2542,7 +2542,47 @@ CHECKS = [
     {"id": "stations", "title": "三站实况对账", "fn": check_stations, "quick": False,
      "fix": "conf/权重/凭据/端口/插件任一项不符 —— 见明细, 一律以站上实况为准改仓库侧"},
 ]
-MARKS = {"PASS": "✓", "WARN": "▲", "FAIL": "✕"}
+MARKS = {"PASS": "✓", "WARN": "▲", "FAIL": "✕", "SKIP_FAILED": "⊘"}
+# D6-P0-1 (2026-09-23): **"非执行"必须三分, 不许含混** —— 这是本仓"假绿"的头号来源。
+#   · **MODE_SKIP**   = `--quick`/`--only` 未选中该断言(**模式性省略**) ⇒ **合法, 不计失败**
+#   · **SKIP_FAILED** = `needs` 里有 FAIL/SKIP_FAILED ⇒ **算失败**(不许静默降级)
+#   · **WARN**        = **环境降级**(如缺 paramiko ⇒ 断言自报 WARN) ⇒ 不进 FAIL 集, 但必须可见
+#     依据: `docs/2026-09-23_D6-D7分阶段执行方案.md` §11.1-A —— 若把环境降级误判成"级联 skip",
+#     会让**每个 release 都因环境缺包变红**(假红淹真信号)。
+MODE_SKIP = "MODE_SKIP"
+
+
+def _validate_graph(checks):
+    """断言依赖图校验 —— **配置错误必须 FAIL, 不许静默**(D6-P0-1)。
+
+    `needs` = 必须先通过的断言 id 列表。校验两件事：
+      · **未知 id**（打错字 / 引用了已删断言）⇒ 报错；
+      · **成环** ⇒ 报错（拓扑执行会死锁 / 漏跑）。
+    **纯函数** ⇒ 便于单测与注入（正反用例）。
+    """
+    ids = {c["id"] for c in checks}
+    errs = []
+    for c in checks:
+        for n in c.get("needs", []):
+            if n not in ids:
+                errs.append(f"{c['id']}: needs 引用了不存在的断言 '{n}'")
+    needs_of = {c["id"]: list(c.get("needs", [])) for c in checks}
+    color = {}
+
+    def dfs(u, stack):
+        color[u] = 1
+        for v in needs_of.get(u, []):
+            if color.get(v) == 1:
+                errs.append("needs 成环: " + " -> ".join(stack + [v]))
+                continue
+            if color.get(v, 0) == 0:
+                dfs(v, stack + [v])
+        color[u] = 2
+
+    for c in checks:
+        if color.get(c["id"], 0) == 0:
+            dfs(c["id"], [c["id"]])
+    return errs
 
 
 def main():
@@ -2567,14 +2607,31 @@ def main():
     mode = "quick" if args.quick else "全量"
     print(f"\nrpc check · 模式={mode} · {ROOT}\n")
 
+    # D6-P0-1: **图校验先行** —— 配置错误(未知 id / 成环)不许静默, 直接阻断
+    graph_errs = _validate_graph(CHECKS)
+    if graph_errs:
+        print("  ── 断言依赖图校验 ──")
+        for e in graph_errs:
+            print(f"    ✕ {e}")
+        print("\n  结论: FAIL (断言依赖图配置错误) → 阻断\n")
+        return 1
+
     results, failures = [], 0
+    status_of = {}
     for c in selected:
-        try:
-            status, note, detail = c["fn"]({})
-        except Exception as e:
-            status, note, detail = "FAIL", f"{type(e).__name__}: {e}", []
+        # D6-P0-1: **级联** —— needs 里有 FAIL/SKIP_FAILED ⇒ 本项 **SKIP_FAILED(算失败)**,
+        #   与"模式性省略"严格区分(MODE_SKIP 不计失败)。依据 §11.1-A 的"非执行三分"。
+        unmet = [n for n in c.get("needs", []) if status_of.get(n) in ("FAIL", "SKIP_FAILED")]
+        if unmet:
+            status, note, detail = "SKIP_FAILED", f"依赖未满足: {', '.join(unmet)} ⇒ 本项未执行(算失败)", []
+        else:
+            try:
+                status, note, detail = c["fn"]({})
+            except Exception as e:
+                status, note, detail = "FAIL", f"{type(e).__name__}: {e}", []
+        status_of[c["id"]] = status
         results.append((c["id"], c["title"], status, note, detail))
-        if status == "FAIL":
+        if status in ("FAIL", "SKIP_FAILED"):
             failures += 1
 
     for cid, title, status, note, _ in results:
@@ -2593,14 +2650,14 @@ def main():
                 print(f"    … 另有 {len(detail) - 40} 条")
 
     # 处置建议: 红灯必须给出"下一步", 不能只报"哪里不对" (P2-2 健康引擎形态)
-    bad = [r for r in results if r[2] in ("FAIL", "WARN")]
+    bad = [r for r in results if r[2] in ("FAIL", "WARN", "SKIP_FAILED")]
     if bad:
         fixes = {c["id"]: c.get("fix", "") for c in CHECKS}
         print("\n  ── 处置建议 (红灯优先) ──")
         for cid, _t, status, _n, _d in sorted(bad, key=lambda r: r[2] != "FAIL"):
             print(f"    {MARKS[status]} {cid:10s} {fixes.get(cid, '')}")
 
-    n_fail = sum(1 for r in results if r[2] == "FAIL")
+    n_fail = sum(1 for r in results if r[2] in ("FAIL", "SKIP_FAILED"))
     n_warn = sum(1 for r in results if r[2] == "WARN")
     n_ok = len(results) - n_fail - n_warn
     tail = f"绿灯 {n_ok} · 黄灯 {n_warn} · 红灯 {n_fail}"
