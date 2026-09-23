@@ -2128,7 +2128,13 @@ exit `$FINAL_RC
             if (Test-Path $smSrc) { Move-Item $smSrc (Join-Path $runDir 'session-meta.txt') -Force | Out-Null }
             # D4a: 合批暂存目录(5 个小件已 Move 走)一并清掉, 不留 TEMP 残留
             if (Test-Path $evDir) { Remove-Item $evDir -Recurse -Force -ErrorAction SilentlyContinue | Out-Null }
-            Remove-Item (Join-Path $projRoot 'agent-out\.agent-run.json') -ErrorAction SilentlyContinue | Out-Null
+            # 2026-09-23 (F-2) **已删除**此处原有的一行:
+            #   Remove-Item (Join-Path $projRoot 'agent-out\.agent-run.json') -ErrorAction SilentlyContinue
+            # 取证(全文件仅此一处引用该**共享固定名**路径, 且**无任何写入方** —— 本函数写的是 per-`<ts>` 的
+            #   `$runDir\.agent-run.json`) ⇒ 它是**死路径清理**: 删不到东西, 却制造"共享固定路径是活路径"的
+            #   错误印象(审查误导), 且 `-ErrorAction SilentlyContinue` 掩盖一切。
+            # ⚠ 若将来有人恢复写该共享名(回滚/分支), 它会**立刻变成真破坏**(并发时删掉他人 run 记录) ⇒ 索性删除。
+            # 护栏: tests/test_cli_concurrency_guards.py 静态断言该共享名不再出现。
         }
         catch {
             $collectOk = $false
