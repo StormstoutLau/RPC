@@ -2785,10 +2785,15 @@ mkdir -p "$stWorkDir/.attach/$nm2"
     #   ⚠ 信息不丢: 请求的路由 id 仍可从**归档的卡**(`card.md`, run 的证据件之一)+ `ROUTE_TABLE` 复原。
     $stModelAlias = 'main'   # 单一真值: 既用于 `--model` 实参, 也用于上面这个执行身份串(免得两处漂移)
     $execModel = if ($useStation) { "station:$st/$stModelAlias" } else { $id }
+    # O-42 (2026-09-24): claude 通道 `-p` 的权限开关。`settings.json` 的 `defaultMode` 在 `-p` 下**不生效**,
+    #   须 CLI 显式传。产物型任务(readonly=$false)需要写 ⇒ `--permission-mode acceptEdits`;
+    #   `readonly: true` 的卡**不加**(保持只读 —— 破卡面契约 = D-06/D-07 同级安全面)。
+    #   空串时 argStr 不变(向后兼容)。正反注入见 _fm_golden_test.ps1 的 O-42 段。
+    $pmArg = if ($readonly) { '' } else { ' --permission-mode acceptEdits' }
     if ($useStation) {
-        $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('-p "" --model "' + $stModelAlias + '"') -stdin $promptIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $timeout -WorkDir $stWorkDir
+        $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('-p "" --model "' + $stModelAlias + '"' + $pmArg) -stdin $promptIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $timeout -WorkDir $stWorkDir
     } else {
-        $rcov = Invoke-ClaudeFly -argStr ('-p "" --model "' + $id + '"') -stdin $promptIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $timeout -cwd $projRoot
+        $rcov = Invoke-ClaudeFly -argStr ('-p "" --model "' + $id + '"' + $pmArg) -stdin $promptIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $timeout -cwd $projRoot
     }
     $rc = $rcov['code']; $rcMsg = $rcov['msg']; if ($rcMsg) { Write-Host "CLAUDE_RUN_WARN: $rcMsg" }
     Write-Host "claude first rc=$rc"
@@ -2801,9 +2806,9 @@ mkdir -p "$stWorkDir/.attach/$nm2"
         Add-Content $outTxt "`n=== RESUME[$contAttempt] prev_rc=$rc ==="
         [IO.File]::WriteAllText($contIn, ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($contB64))), $utf8NoBom)
         if ($useStation) {
-            $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('--continue -p "" --model "' + $stModelAlias + '"') -stdin $contIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $continueTimeout -WorkDir $stWorkDir
+            $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('--continue -p "" --model "' + $stModelAlias + '"' + $pmArg) -stdin $contIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $continueTimeout -WorkDir $stWorkDir
         } else {
-            $rcov = Invoke-ClaudeFly -argStr ('--continue -p "" --model "' + $id + '"') -stdin $contIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $continueTimeout -cwd $projRoot
+            $rcov = Invoke-ClaudeFly -argStr ('--continue -p "" --model "' + $id + '"' + $pmArg) -stdin $contIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $continueTimeout -cwd $projRoot
         }
         $rc = $rcov['code']; $rcMsg = $rcov['msg']; if ($rcMsg) { Write-Host "CLAUDE_RESUME_WARN: $rcMsg" }
         Add-Content $outTxt "`n=== RESUME[$contAttempt] rc=$rc ==="

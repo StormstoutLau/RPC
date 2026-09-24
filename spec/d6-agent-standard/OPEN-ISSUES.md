@@ -65,7 +65,7 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | O-39 | 可观测/基准 | P2 | **派发前预估对出网档恒 MISS**：`ESTIMATE: … no-bench (MISS) - skip dispatch estimate`（基准表只覆盖 `local/*`）⇒ **吃狗粮全链路无预估** | ⏳ 待决定（补 bench 行 or 显式声明"不估算"） | O-25 |
 | O-40 | 证据/回收 | **P1** | **卡的产物不进 run 目录**（`WORKSPACE_DIFF_LINES=0`）：产物只留站上工作区 ⇒ 目前**只能手动 `scp`** 取回（非持久位置） | ⏳ 待建（卡里声明 `evidence-manifest.subjects` / 复验器按声明走 —— ADR-0007 阶段 1 已支持"声明+落 run.json"） | D6-P1-1 · ADR-0007 |
 | O-41 | 门禁自审 | P2 | **B2 审计报出的两条"疑似未登记假绿"**：① `doclinks` 对**绝对路径/盘符/URL 一律"不可判"跳过**（可写不存在路径而不报错）② `engine` 的**残留阈值 2048MB 硬编码**（1.5GB 且不监听端口的残留进程会被判正常） | ⏳ 待人工复核后登记 / 加固 | D6-P0-1（门禁自审） |
-| O-42 | 权限/通道 | **P1** | **`claude` 通道 `-p` 无写权限 ⇒ 产物型任务不可用**：烟测中模型自报"文件写入被拒"，`ACCEPT_OK=0`；调用形式 `'-p "" --model "<id>"'`（[agent-cli.ps1:2729](../../ops/station-bin/agent-cli.ps1)）**不带任何权限开关**，`settings.json` 的 `defaultMode: acceptEdits` 在 `-p` 下不生效 | ⏳ **待裁**（加 `--permission-mode acceptEdits` / `--allowedTools`）；**须处理与卡面 `readonly: true` 的关系** | D6-P2 · claude 通道 |
+| O-42 | 权限/通道 | **P1** | **`claude` 通道 `-p` 无写权限 ⇒ 产物型任务不可用**：烟测中模型自报"文件写入被拒"，`ACCEPT_OK=0`；调用形式 `'-p "" --model "<id>"'`（[agent-cli.ps1:2729](../../ops/station-bin/agent-cli.ps1)）**不带任何权限开关**，`settings.json` 的 `defaultMode: acceptEdits` 在 `-p` 下不生效 | **✅ 已修**（2026-09-24）：`-p` 按卡 `readonly` 动态加 `--permission-mode acceptEdits`（false 才可写；true 空串保只读）；claude 烟测端到端 `ACCEPT_OK=1` + `out/smoke.txt`=`SMOKE_OK`（run `202609241047036207`） | D6-P2 · claude 通道 |
 | O-43 | 通道/归因 | **P1** | **zen（`opencode/*`）"需要 tty"被误判为"缺凭据"**（2026-09-21 结论）：非 tty 挂死 `RC=124` 且 DEBUG 日志**无任何 401/403/凭据错误**；套 `script -qec` **伪 tty** 后**同一模型 43s 返回 `ZEN_OK`** ⇒ **恢复 zen 不需要登录**，门槛是"给非交互路径伪 tty + **PTY 输出净化**" | **✅ 机制已验通 · ✅ 采样结论：不建议纳入运行时路由**（zen 5 次 **1/5 成功**、其后连续 4 次 152s 零输出=限流/空闲流卡死；**官方 = 限时免费实验资产**、随时下架 ⇒ 不接 ROUTE_TABLE，仅人工试点偶用） | D6-P2 · ROUTE_TABLE |
 | O-44 | 门禁自审 | P2 | **`scripts` 把「未提交的新脚本」报成"清单项已不存在(应移除)"**：`gone` 基于**git 跟踪集**（`_iter_source_files`，同 O-34）⇒ 未跟踪的新脚本在冻结清单里"消失"；而该提示措辞**鼓励删除登记**（照做则提交后立刻"未登记"⇒ FAIL） | ⏳ 待修（三候选：① 加"未跟踪脚本未计入"提示 ② 措辞区分"未提交"与"确已不存在" ③ `gone` 改判**文件是否真不存在**） | D6-P0-1 · **O-34 同源第二处消费者** |
 | O-45 | 安全/执行面 | P2 | **`collect` 命令的"真执行器"未实现、且须带沙箱**（ADR-0007 line 475 明确"若执行需沙箱约束，否则卡可借 `collect` 任意执行"）。本轮 P1-1 先走**白名单 scp**（A-②）**不选此路**；本文档登记为待办，**须独立立项**：解析 → 远端执行 → 产物拉回 → **沙箱约束**（禁绝对路径 / 禁出 `$W` / 禁网络 / 禁 `..` / 白名单工具） | ⏳ 待立项（独立，非本轮） | D6-P2 · ADR-0007 |
@@ -355,7 +355,7 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
   ① 这是**能力放宽**（agent 从"只输出"变"可写"）⇒ 按本项目纪律须**配正反注入**（改后：能写 ✓；**`readonly: true` 的卡仍不得写** ✓）；
   ② **必须显式处理与卡面 `readonly: true` 的关系** —— 否则 claude 通道会把"只读卡"也变成可写 ⇒ **破卡面契约**（与 D-06/D-07 同级的安全面）。
 - **现状定性**：**claude 通道目前只能接"纯输出型"任务**；产物型（本目录 A1/A2/B1/B2 全部）**只能走 opencode**。
-- **状态**：⏳ **待 Scott 裁定**（是否放宽 + 以什么最小权限形态）
+- **状态**：✅ **已修**（2026-09-24）—— `-p` 加 `--permission-mode acceptEdits`（**按卡 `readonly` 动态**：`readonly=false` 才可写，`readonly=true` 空串保只读）；claude 烟测端到端 `ACCEPT_OK=1` + `out/smoke.txt`=`SMOKE_OK`（run `202609241047036207`）。`readonly:true` 的卡**仍保持只读**。
 
 #### O-43：zen（`opencode/*`）**"需要 tty"** 被误判为"缺凭据"（**归因更正 · 待裁切回**）
 
