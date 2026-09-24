@@ -10,16 +10,21 @@
 #   action = 需需求方/管理员动作(高亮) · active = 进行中 · closed = 已关闭(折叠)
 #   缺失 group ⇒ 会静默落进 closed（真静默缺口）⇒ 门禁 FAIL。
 # 字段: next = 该状态的下一动作(待办聚合用, 人读文本)
+# 字段: requires = 该状态**门禁要求存在**的件(由 check_inbox 派生为"状态子集", 不再各处枚举) ——
+#   键 ∈ { decide:10_admin/受理决定.md · plan:20_plan/ 非空 · evidence:30_evidence/ 非空 ·
+#          manifest:30_evidence/MANIFEST.sha256 }。
+#   缺失 requires(或含未知键) ⇒ 门禁 FAIL(否则该规则会**静默不适用**)。
+# 字段: badge ∈ {ok, warn, err, none} —— 看板徽章(由 cluster_web 注入前端, 不再在 JS 里硬编码)。
 states:
-  open:                   {group: active, next: "待管理员初筛 → 产出 10_admin/裁决报告.md"}
-  triage:                 {group: active, next: "核对 DR/CR/接口 → 产出 10_admin/裁决报告.md + 受理决定.md"}
-  waiting:                {group: action, next: "等需求方补充 / 外部条件；解除后 → 产出 10_admin/裁决报告.md"}
-  accepted:               {group: active, next: "产出 20_plan/ 派发计划(含容量预估) → 交需求方复核"}
-  plan-review:            {group: action, next: "等需求方复核意见(10_admin/复核意见-N.md)"}
-  plan-revise:            {group: active, next: "按复核意见修订 20_plan(版本 vN) → 再交复核"}
-  running:                {group: active, next: "机群执行中(观测见「Agent 任务」卡片)"}
-  release:                {group: action, next: "已交付证据束，等需求方验收签收"}
-  done:                   {group: closed, next: "运维已结案(artifact 冻结)"}
-  accepted-by-requester:  {group: closed, next: "需求方已验收签收"}
-  rejected-by-requester:  {group: closed, next: "需求方拒收 / 终止"}
-  rejected:               {group: closed, next: "已驳回 / 暂缓"}
+  open:                   {group: active, next: "待管理员初筛 → 产出 10_admin/裁决报告.md", requires: [], badge: none}
+  triage:                 {group: active, next: "核对 DR/CR/接口 → 产出 10_admin/裁决报告.md + 受理决定.md", requires: [], badge: none}
+  waiting:                {group: action, next: "等需求方补充 / 外部条件；解除后 → 产出 10_admin/裁决报告.md", requires: [], badge: warn}
+  accepted:               {group: active, next: "产出 20_plan/ 派发计划(含容量预估) → 交需求方复核", requires: [decide], badge: none}
+  plan-review:            {group: action, next: "等需求方复核意见(10_admin/复核意见-N.md)", requires: [decide, plan], badge: warn}
+  plan-revise:            {group: active, next: "按复核意见修订 20_plan(版本 vN) → 再交复核", requires: [decide, plan], badge: none}
+  running:                {group: active, next: "机群执行中(观测见「Agent 任务」卡片)", requires: [decide], badge: none}
+  release:                {group: action, next: "已交付证据束，等需求方验收签收", requires: [decide, evidence, manifest], badge: warn}
+  done:                   {group: closed, next: "运维已结案(artifact 冻结)", requires: [decide, evidence, manifest], badge: ok}
+  accepted-by-requester:  {group: closed, next: "需求方已验收签收", requires: [decide, evidence, manifest], badge: ok}
+  rejected-by-requester:  {group: closed, next: "需求方拒收 / 终止", requires: [decide, evidence], badge: err}
+  rejected:               {group: closed, next: "已驳回 / 暂缓", requires: [], badge: err}
