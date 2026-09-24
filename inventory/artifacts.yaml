@@ -32,6 +32,14 @@ items:
     authority: "ops/** 目录实况（frozen_ops_scripts 必须与扫描集一致；只允许'只减不增'）"
     check: scripts
 
+  # ── 受理交付物：**按项目一份**（不是仓库里的静态路径）─────────────────────
+  # D6-P1-1 §11.1-C 纪律 1/2/3：登记为生成物 · `--check` 等价物（重算→比对）· freshness 决定能否结案。
+  #   ⚠ `check: inbox` 不只是判存在 —— 门禁 `inbox` 对该清单**逐条重算 sha256 比对**（见 check_inbox ④），
+  #   把"生成物**禁手改**"变成机判；根不在本机时只报"未校验"（可移植性 ≠ 篡改）。
+  - path: "inbox/<proj>-<date>/30_evidence/MANIFEST.sha256"
+    authority: "cluster.py inbox seal <proj-dir> --go（真值 = 项目根 agent-out/<ts>/；done 后冻结）；核对 = 同命令 --check"
+    check: inbox
+
   # ── 运行时生成物（**不入仓**，见 .gitignore；故 check 无对象，显式豁免）────────
   - path: ops/agent-dashboard.html
     exempt: "由 `cluster.py agent dashboard` 生成的自包含快照；**机器产物不入仓**（.gitignore，同 ops/cluster_status.html 先例）"
