@@ -498,6 +498,16 @@ DONE_Z
 - **本轮**：P1-1 走 **A-②（复用 subject `path` 的 `out/` 前缀 + 白名单 scp）**，不触碰此路。
 - **状态**：⏳ 待立项（独立，非本轮）。
 
+#### O-46：**出网档上游 Nvidia（`openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`）503/504 反复**（**P1，稳定性**）
+
+- **一手实况（2026-09-24，B2 门禁假绿审计，B 站）**：7 次派发中 5 次被上游打断——`Error: {"code":503,"message":"Upstream error from Nvidia: Service temporarily overloaded","metadata":{"error_type":"provider_overloaded"}}` 与 `504 idle timeout` 交替出现。agent 常已完成分析（`Now I have a full understanding...`）在**收尾写文件前**断掉，`resume` 两次仍失败 ⇒ `TASK_RC` 非 0。6 次中断对应 run：`...1417530950` / `...1459385898` / `Own` 等。
+- **后果**：
+  - **稳定性直接损耗**：同一张卡需重试多次才成功（B2 第 6 次才 `TASK_RC=0`），浪费 `budget=1800s` 槽位与调度时间。
+  - **放大假绿风险**：失败 run 残留 `.meta`/`.progress`/`out/falsegreen.md` 不清理，后续派发要么 `LOCK_HELD`/`META_STALE` 拒发，要么 accept/EVM 回收**命中旧产物**恒真（B2 run-1）——是"门禁假绿"的外因之一。
+- **为何不是本地问题**：`STATION_READY_SKIPPED`（egress 后端不适用引擎面探针）+ `SLOT-GATE: skip` ⇒ 与三站本地推理无关，纯上游 provider 过载/空闲超时。
+- **候选缓解（未实施，仅登记）**：① `resume` 次数从 2 提到 3-4 且**每次等待退避**（现 idle timeout 即连续双重试）；② 失败 run 结束后**主动清理**远端 `.meta`/`.progress`/`out/` 声明产物，避免残留触发 `LOCK_HELD`/`META_STALE`/假绿；③ 出网档换更稳的 provider 档位（如私有 key 的非 free 档）；④ 上限重试仍失败则**整单标记 EGRESS_UNSTABLE** 而非仅 rc=1。
+- **状态**：⏳ 待裁（本轮 B2 吃狗粮首度一手采样；不阻断门禁绿灯）。
+
 ### O-01：--attach 传输未实现
 
 - **证据**: CHECKLIST §6 S8——param 块无 --Attach 参数，attach 恒 \[]；IMPL M4 声明未交付；schema 字段在、传输通道不在
