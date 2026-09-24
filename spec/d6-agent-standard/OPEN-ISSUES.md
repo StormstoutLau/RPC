@@ -74,7 +74,7 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | O-49 | 通道/模型 | P2 | **`harness_priority` 5 档在本链路是否可用 —— 未采过** | **✅ 已采样（2026-09-24）：5 档全过**（档1 inkling 16s · 档3 inkling-small 15s · 档4 super-120b 23s · 档5 laguna 56s · 档2 ultra 已知可）⇒ ★ **opencode 是 harness ⇒ conf 注记的"harness-only(403)/限流(429)"两条限制不适用**<br>**✅ 采样用别名已撤除**（Scott 裁定，结论留本条） | ROUTE_TABLE · O-43 |
 | O-50 | 文档/一致性 | P2 | **手册 §1.3 的"真实剩余 open = 4 项"枚举已过时**（其后新增 O-30/O-33/O-35/O-39/O-45/O-47/O-48/O-49）⇒ 两处各持一份枚举 | ◐ **本轮就地标注过时 + 校正计数**（门禁 15→18 项；gap 16→28；§2.4 同步）；**彻底取消手册第二份枚举** 留 D6-P1-2 | D6-P1-2 |
 | O-51 | 门禁/一致性 | P2 | **`inventory/sensitivity.yaml` 无任何消费者**（`ops/` 全域零命中）⇒ 真值表建了没人读（D6-P1-1 的"待裁 37"留白，当时已如实标注） | ⏳ 待立项（候选取三；⚠ 须先定权威再写断言）——**`artifacts` 断言所防病的活标本** | D6-P1-1 · 待裁 37 |
-| O-48 | 运维/孤儿进程 | P2 | **站上 `timeout 45` 诊断进程存活 17 小时**（B 站 `etimes=61817`，`timeout 45 opencode run --print-logs --log-level DEBUG …`）⇒ **`timeout` 未按预期终止**，孤儿进程长期驻留 | ⏳ 待复核（为何 `timeout` 失效；候选：`--kill-after` / 父进程回收 / O-43 收尾未清） | O-43 收尾残留 |
+| O-48 | 运维/孤儿进程 | P2 | **站上 `timeout 45` 诊断进程存活 17 小时**（B 站 `etimes=61817`，`timeout 45 opencode run --print-logs --log-level DEBUG …`）⇒ **`timeout` 未按预期终止**，孤儿进程长期驻留 | ◐ **2026-09-24 收尾复查：该孤儿已不复存在**（三站 `ps` 零 `timeout 45` 残留）⇒ **现象消除，但根因未修**（为何 `timeout` 能失效 / 谁最终回收，仍未定）→ 降为 P2 观察 | O-43 收尾残留 |
 
 ## 2. 各未决项详情
 
