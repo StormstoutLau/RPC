@@ -526,7 +526,12 @@ DONE_Z
 - **✅ 缓解 ①② 已实施（2026-09-24，`a5c8b6e`）**：
   - **①**（[`agent-cli.ps1`](../../ops/station-bin/agent-cli.ps1)）：opencode 通道 resume cap `2→3`，每次续接前 `grep` 上次输出命中 `503|504|provider_overloaded|Service temporarily overloaded|idle timeout` ⇒ 退避 **30s**（尊重 provider 冷却），否则 5s；claude 通道同步（cap 2→3 + 读 stderr 同类退避）。
   - **②**（同文件 collect 段）：**仅在归档成功块内**（遵守 ADR-0005 D4c「collect 失败不得清理」）且 `$code≠0` 时触发，清理远端 `out/.meta`/`out/.progress`/`.agent-lock`/`.agent-state.json` + 动态收集卡声明的 `out/*` 产物；待删路径单引号包裹 + `rm -f -- "$f"`（注入面收敛，非拼接执行）；失败仅 `O46_CLEAN_WARN` 不阻断。
-  - **验证**：PS 解析全绿 + 注入 bash `bash -n` 通过 + 门禁 quick 全绿（绿灯 10 / 红灯 0）。⚠ **深度端到端负向验证**（真触发一次失败 run 观察 `O46_CLEAN:` + 确认下次 accept 不再命中残留）留待后续吃狗粮派发复测。
+  - **验证**：PS 解析全绿 + 注入 bash `bash -n` 通过 + 门禁 quick 全绿（绿灯 10 / 红灯 0）。
+  - **✅ 端到端负向验证已做（2026-09-24，run `202609241819027923`）**：受控失败夹具 [`neg-o46-cleanup.md`](dogfood-cards/neg-o46-cleanup.md)（accept 故意必红）
+    ⇒ `TASK_RC=9` · `EVM_STATE: pulled=1` · **`O46_CLEAN: 失败 run 已清理远端 5 项`**；
+    **远端** `out/.meta`/`.progress`/`o46-probe.txt`/`.agent-lock`/`.agent-state.json` **全部 GONE**，**runDir 全部留存**（证明**拉取先于清理**）。
+    ⇒ 由"静态验证"升为"**端到端实证**"，并留下**可复用受控失败夹具**。
+    ⚠ **边界（如实登记）**：清理射程 = **本次声明的产物 + 4 个固定状态件**，**不覆盖历史未声明残留**（工作区级 GC 另案）；`readonly` 卡不适用。
   - **状态**：✅ 已裁 + 缓解 ①② 已实施（P1；③④ 后置暂缓；不阻断门禁绿灯）。
 
 ### O-01：--attach 传输未实现
