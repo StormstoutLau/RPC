@@ -179,6 +179,9 @@ function Invoke-RemoteScript {
     $localPath = Join-Path $Script:TMP_ROOT $LocalName
     if (-not (Test-Path $Script:TMP_ROOT)) { New-Item -ItemType Directory -Path $Script:TMP_ROOT -Force | Out-Null }
     $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    # 站上脚本 CRLF→LF 归一 (R9 /* set: -* / 根因, 2026-09-24): Windows checkout 下 here-string 是 CRLF,
+    #   直写 /tmp 脚本 ⇒ 站上 bash 把 `set -eu\r` 的 `\r` 当无效选项 ⇒ 报 `set: -`(实测复现)。
+    $ScriptBody = $ScriptBody -replace "`r`n", "`n"
     [System.IO.File]::WriteAllText($localPath, $ScriptBody, $utf8NoBom)
 
     scp -q -o BatchMode=yes -o ConnectTimeout=10 $localPath "${HostName}:/tmp/${LocalName}"
@@ -745,9 +748,11 @@ function Get-FrontMatter {
         elseif ($inFreq -and $curKey -eq 'evm-subjects' -and $l -match '^\s*-\s*name\s*:\s*(.+)$') {
             # ADR-0007 3-b-2 (2026-09-18): subject 增 `ephemeral`(设计性临时产物) —— 见代码内注释
             #   与 ADR-0007「3-b-2 本体」: 它把"产物在站上 /tmp、设计上就不进 runDir"与"件丢了"分开。
-            $h['evidence-manifest']['subjects'] += @{ name = $matches[1].Trim(); path = ''; collect = ''; digest = ''; ephemeral = $false }
+            # O-40/A-1 (2026-09-24): subject 增 `state`(站上相对工作区路径)——"产物拉回"的远端源。
+            #   path = runDir 落盘名(离线复现/链钉住); state = 站上源位置(collect 据此 scp 回); 有 state 才触发拉回。
+            $h['evidence-manifest']['subjects'] += @{ name = $matches[1].Trim(); path = ''; collect = ''; digest = ''; ephemeral = $false; state = '' }
         }
-        elseif ($inFreq -and $curKey -eq 'evm-subjects' -and $l -match '^\s{2,}(path|collect|digest|ephemeral)\s*:\s*(.+)$') {
+        elseif ($inFreq -and $curKey -eq 'evm-subjects' -and $l -match '^\s{2,}(path|collect|digest|ephemeral|state)\s*:\s*(.+)$') {
             $subs = $h['evidence-manifest']['subjects']
             if ($subs.Count -gt 0) { $subs[$subs.Count - 1][$matches[1].ToLower()] = $matches[2].Trim() }
         }
@@ -933,14 +938,39 @@ function Get-ClaudeFrameworkSubjects($accept, [bool]$goldenActive) {
     return $list
 }
 
+function Test-EvmStatePull([string]$state, [string]$path) {
+    # O-40/A-1 (2026-09-24): 产物拉回的**白名单判定** —— **纯函数**(只吃 state/path, 不碰站/文件系统)。
+    #   为什么提炼成纯函数: collect 段的"校验不过 ⇒ 拒收"必须**离线可测**(与 Get-SensitivityBackendReject
+    #   同族 —— 本项目纪律: 运行时关键路径的判据要能被正反夹具独立验证, 不能只靠真派发)。
+    #   返回 [ordered]@{ ok; reason }。ok=$true 才允许 scp; 否则 collect 段 WARN + 不落盘。
+    #   ★ 安全(ADR-0007 红线, OPEN-ISSUES O-45): **不执行** collect 命令, 只做受限 scp; 白名单收敛在此一处。
+    #   规则(任一不满足 ⇒ 拒):
+    #     ① state 必须 out/ 前缀(产物约定目录, ADR 已定"交付物写在 out/")
+    #     ② state 禁 ..          ③ state 禁绝对路径(Linux `/` / Windows `C:`)
+    #     ④ path(落盘名)禁 ..    ⑤ path 必须是扁平文件名(防目录穿越写入 runDir)
+    $st = "$state".Trim(); $rp = "$path".Trim()
+    if (-not $st) { return [ordered]@{ ok = $false; reason = 'state-empty' } }
+    if (-not $rp) { return [ordered]@{ ok = $false; reason = 'path-empty' } }
+    if ($st -notlike 'out/*') { return [ordered]@{ ok = $false; reason = 'not-out-prefix' } }
+    if ($st -match '(^|/)\.\.(/|$)') { return [ordered]@{ ok = $false; reason = 'state-dotdot' } }
+    if ($st -match '^\s*/|^[A-Za-z]:[\\/]') { return [ordered]@{ ok = $false; reason = 'state-absolute' } }
+    if ($rp -match '(^|/)\.\.(/|$)') { return [ordered]@{ ok = $false; reason = 'path-dotdot' } }
+    if ($rp -match '[/\\]') { return [ordered]@{ ok = $false; reason = 'path-not-flat' } }
+    return [ordered]@{ ok = $true; reason = 'ok' }
+}
+
 function Merge-EvidenceSubjects($cardSubjects, $accept, [bool]$goldenActive, $baselineFn = $null) {
     # baselineFn(2026-09-21): 可选**按路基线函数**(脚本块, 签名 (accept, goldenActive))。
     #   缺省 = 主路 Get-FrameworkSubjects; claude 备路传入 Get-ClaudeFrameworkSubjects(归档件集不同)。
     # 合并: **基线在前、卡声明在后**, 同 path(collect 型按同 name)**以先到者为准**。
     #   去重的理由: 夹具卡里还留着历史遗留的框架件声明(逐卡手写时代的产物), 不去重就会双份
     #   ⇒ 链上同一件出现两次、audit 的 covered 集合语义含糊。去重后**改卡与否都不影响结论**。
-    #   归一: 每项补齐 name/path/collect/digest/ephemeral 五键(与 run.json 发射形状一致),
+    #   归一: 每项补齐 name/path/collect/digest/ephemeral/state 六键(与 run.json 发射形状一致),
     #   免得下游按 subject 取键时遇到缺键(PS 哈希表缺键取值为 $null, 会静默传播)。
+    #   O-40/A-1 (2026-09-24) 初版不在此保留 state(collect 段直接从卡解析对象读);
+    #   O-37 补足 (2026-09-24): 收紧为**保留** —— 让 run.json 的 subjects 也带 `state` 足迹,
+    #     否则"collect 用 state 拉了但元数据里无痕"只能靠 collect 侧二次取卡对账。
+    #     collect 段仍可从合并结果读 state(见 collect 段), 与 run.json 形状同源。
     $seen = New-Object 'System.Collections.Generic.HashSet[string]'
     $out = New-Object System.Collections.ArrayList
     $baselineItems = if ($baselineFn) { @(& $baselineFn $accept $goldenActive) } else { @(Get-FrameworkSubjects $accept $goldenActive) }
@@ -954,7 +984,8 @@ function Merge-EvidenceSubjects($cardSubjects, $accept, [bool]$goldenActive, $ba
         $d = ([string]$s['digest']).Trim()
         if (-not $d) { $d = 'sha256' }
         $out.Add([ordered]@{ name = $n; path = $p; collect = ([string]$s['collect']).Trim()
-                             digest = $d; ephemeral = [bool]$s['ephemeral'] }) | Out-Null
+                             digest = $d; ephemeral = [bool]$s['ephemeral']
+                             state = ([string]$s['state']).Trim() }) | Out-Null
     }
     # 返回**扁平**数组。⚠ 别在这里用 `Write-Output -NoEnumerate`(首版就这么写的, 实测踩到):
     #   函数输出集合**本身**就会把结果包成数组 ⇒ 再加 `-NoEnumerate` 得到的是
@@ -2191,6 +2222,27 @@ exit `$FINAL_RC
             #   (解析若被误改, 可直接比对原件; 摘要未被链钉住 ⇒ 该上限同 attach-manifest, 见 ADR-0007)
             $smSrc = Join-Path $evDir '.session-meta.txt'
             if (Test-Path $smSrc) { Move-Item $smSrc (Join-Path $runDir 'session-meta.txt') -Force | Out-Null }
+            # O-40/A-1 (2026-09-24): **产物拉回** —— 卡声明的 `state`(站上相对工作区路径) 白名单 scp 到 runDir。
+            #   path = runDir 落盘名(A-① 语义); state = 站上源位置; 有 state 的 subject 才触发远端拉取。
+            #   ★ 安全(ADR-0007 红线, 记录见 OPEN-ISSUES O-45): **不执行** collect 命令, 只做受限 scp;
+            #     白名单收敛在**此一处**(校验不过 ⇒ WARN + 不落盘, 不静默)。
+            $evmStatePulled = 0; $evmStateRejected = 0
+            foreach ($evmSub in @($fm['evidence-manifest']['subjects'])) {
+                $st = ([string]$evmSub['state']).Trim()
+                if (-not $st) { continue }
+                $rp = ([string]$evmSub['path']).Trim()
+                $evmT = Test-EvmStatePull -state $st -path $rp
+                if (-not $evmT.ok) {
+                    Write-Host "EVM_STATE_REJECT: subject '$($evmSub['name'])' state=[$st] path=[$rp] 原因=$($evmT.reason)"; $evmStateRejected++; continue
+                }
+                $stDst = Join-Path $runDir $rp
+                scp -q -o BatchMode=yes -o ConnectTimeout=10 "${hostName}:$W/$st" "$stDst" 2>$null
+                if (Test-Path $stDst) { $evmStatePulled++ }
+                else { Write-Host "EVM_STATE_MISS: subject '$($evmSub['name'])' 远端 $W/$st 不存在或拉取失败" }
+            }
+            if (($evmStatePulled + $evmStateRejected) -gt 0) {
+                Write-Host "EVM_STATE: pulled=$evmStatePulled rejected=$evmStateRejected"
+            }
             # D4a: 合批暂存目录(5 个小件已 Move 走)一并清掉, 不留 TEMP 残留
             if (Test-Path $evDir) { Remove-Item $evDir -Recurse -Force -ErrorAction SilentlyContinue | Out-Null }
             # 2026-09-23 (F-2) **已删除**此处原有的一行:
@@ -3231,6 +3283,9 @@ function Invoke-RemoteCapture {
     $localPath = Join-Path $Script:TMP_ROOT $LocalName
     if (-not (Test-Path $Script:TMP_ROOT)) { New-Item -ItemType Directory -Path $Script:TMP_ROOT -Force | Out-Null }
     $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    # 站上脚本 CRLF→LF 归一 (R9 /* set: -* / 根因, 2026-09-24): Windows checkout 下 here-string 是 CRLF,
+    #   直写 /tmp 脚本 ⇒ 站上 bash 把 `set -eu\r` 的 `\r` 当无效选项 ⇒ 报 `set: -`(实测复现)。
+    $ScriptBody = $ScriptBody -replace "`r`n", "`n"
     [System.IO.File]::WriteAllText($localPath, $ScriptBody, $utf8NoBom)
     scp -q -o BatchMode=yes -o ConnectTimeout=10 $localPath "${HostName}:/tmp/${LocalName}"
     if ($LASTEXITCODE -ne 0) { throw "NETFAIL: scp failed: $LocalName" }
