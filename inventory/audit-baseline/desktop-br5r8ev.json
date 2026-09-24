@@ -5,6 +5,9 @@
   "2|missing-artifact|dogfood/202609241010175567|station-reality",
   "2|missing-artifact|dogfood/202609241106474522|dialect-map",
   "2|missing-artifact|dogfood/202609241529100808|prompt",
+  "2|missing-artifact|dogfood/202609241825261203|judgment-record",
+  "2|missing-artifact|dogfood/202609241825261203|o46-probe",
+  "2|missing-artifact|dogfood/202609241841378240|judgment-record",
   "2|undeclared|dogfood/202609241608498832|falsegreen.md",
   "collect-not-executed|paper/202609181118164876|workspace-diff",
   "collect-not-executed|paper/202609181119254134|workspace-diff",
@@ -29,5 +32,5 @@
   "undeclared|paper/202609221131192690|review.json"
  ],
  "created": "2026-09-19 00:23:13",
- "updated": "2026-09-24 17:13:15"
+ "updated": "2026-09-24 19:03:34"
 }
