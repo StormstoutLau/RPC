@@ -71,7 +71,11 @@ $Script:ROUTE_TABLE = @{
     #     `out/.agent-output.txt`（连带 O-37 的字节计数与产物解析）⇒ **改运行时前须先设计输出净化**。
     #   ⚠ 复验工具：`_probe_opencode_provider.sh` 只测**非 tty**形态 ⇒ 对 zen **恒报 `RC=124`**，
     #     **不能用来判 zen 死活**；判 zen 须用**伪 tty 对照**（实验组 `script -qec` + 对照组 `openrouter` 普通管道）。
-    #   现状：三档仍重指到"站上 openrouter"（可用且已实测）；**是否切回 zen 待裁**（切换前须先解决输出净化）。
+    #   ⚠⚠ **运行时路由结论（2026-09-24，稳定性采样 + 社区佐证）**：**不建议把 zen 免费档接回本表**。
+    #     采样（`_zen_stability_sample.sh` 7 轮）zen 仅 **1/5 成功**，其后连续 4 次 152s 零输出（限流/空闲流卡死）；
+    #     **官方标注这些免费模型"限时提供·收集反馈"**（`Nemotron 3.5 Lightning Free` 等 = 限时实验资产、随时可下架）
+    #     ⇒ 稳定性无保证，不进运行时路由。三档**维持 openrouter**（`harness_priority` 前两档），zen 仅**人工试点偶用**。
+    #     详见台账 O-43。
     #   新 id 取 `secrets/openrouter.conf` 的 **`harness_priority` 前两档**（该键是**权威真值**，本表只镜像，
     #   **不新立模型清单**）—— 与 `claude`/`claude-opus` 同源；站上 `openrouter` provider 已有 key 且实测可用。
     #   ⚠ **别名命名的是"档位"（快 / 高保真 / 1M），不是厂商** —— 故重指不改名、调用方零改动。
