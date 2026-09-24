@@ -732,6 +732,75 @@ def check_artifacts(ctx):
     return ("FAIL" if detail else "PASS"), note, detail
 
 
+SENSITIVITY_INV = ROOT / "inventory" / "sensitivity.yaml"
+# 封闭枚举 —— 与 `sensitivity.yaml` 表头第 29-33 行、及 `agent-cli.ps1` 的 `--Sensitivity` 三档一致
+SENSITIVITY_TIERS = ("public", "sanitized", "local-only", "unverified")
+SENSITIVITY_SECTIONS = ("documents", "contracts", "code")
+
+
+def validate_sensitivity_inv(inv, exists_fn):
+    """**纯函数**：`sensitivity.yaml` 的自洽判定（只吃解析后的对象 + 一个 exists 回调 ⇒ 离线可正反夹测）。
+
+    O-51 的定性：该表**权威源在自身**（它就是"内容→档位"的真值），但**建了之后 `ops/` 全域零命中**
+    ⇒ 是"**存在但无人读**"的活标本。⇒ 本判据把它的**自洽义务**接上（不新增第二份真值）：
+
+      ① 每条 `path` **必须真实存在**（文件或目录）—— 否则登记指向不存在的东西 = **记录与实效脱节**；
+      ② `tier` 必须 ∈ **封闭枚举**（拼错一个档位名不该静默通过）；
+      ③ ★ **同一 `path` 不得在两处以"不同 tier"出现** —— "同一事实两个定义点"是本仓头号形态，
+         各自看都对、合起来矛盾，且**没有一处会报警**。
+
+    返回 `(bad_list, stats)`；`stats` 供上层**报覆盖率**（"新增判据必须同时报覆盖率"）。
+    """
+    bad = []
+    seen = {}          # path -> (tier, section)
+    n = 0
+    per_tier = {}
+    for sec in SENSITIVITY_SECTIONS:
+        for it in (inv.get(sec) or []):
+            n += 1
+            p = (it or {}).get("path")
+            tier = (it or {}).get("tier")
+            if not p:
+                bad.append(f"[{sec}] 有条目缺 `path`")
+                continue
+            if tier not in SENSITIVITY_TIERS:
+                bad.append(f"[{sec}] {p}: tier={tier!r} 不在封闭枚举 {SENSITIVITY_TIERS}")
+            else:
+                per_tier[tier] = per_tier.get(tier, 0) + 1
+            if not exists_fn(p):
+                bad.append(f"[{sec}] {p}: **路径不存在** ⇒ 登记指向空物（记录与实效脱节）")
+            if p in seen and seen[p][0] != tier:
+                bad.append(f"{p}: **同一路径两处不同 tier**（{seen[p][1]}={seen[p][0]!r} vs {sec}={tier!r}）"
+                           f" ⇒ 同一事实两个定义点，各自看都对、合起来矛盾且无人报警")
+            else:
+                seen[p] = (tier, sec)
+    return bad, {"n": n, "tiers": per_tier}
+
+
+def check_sensitivity(ctx):
+    """`inventory/sensitivity.yaml` 的自洽断言（O-51：把"建了没人读"的真值表接上义务）。"""
+    try:
+        import yaml
+    except Exception:
+        return "WARN", "缺 pyyaml, 跳过 sensitivity 真值表断言", []
+    if not SENSITIVITY_INV.exists():
+        return "FAIL", "inventory/sensitivity.yaml 缺失", []
+    try:
+        inv = yaml.safe_load(SENSITIVITY_INV.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        return "FAIL", f"inventory/sensitivity.yaml 解析失败: {type(e).__name__}: {e}", []
+
+    default_tier = inv.get("default_tier")
+    bad, st = validate_sensitivity_inv(inv, lambda p: (ROOT / p).exists())
+    if default_tier != "local-only":
+        # fail-closed 的前提：未登记必须是**最严**档。若被改成 public/sanitized ⇒ 静默放宽，必须 FAIL。
+        bad.append(f"default_tier={default_tier!r} —— 必须为 'local-only'（fail-closed：未登记不得默认放宽）")
+
+    tiers = " · ".join(f"{k}={v}" for k, v in sorted(st["tiers"].items()))
+    note = f"条目 {st['n']} 条 · 档位分布 {tiers} · default={default_tier} · 枚举 {len(SENSITIVITY_TIERS)} 档"
+    return ("FAIL" if bad else "PASS"), note, bad
+
+
 # ── 断言: 文档内链接可达 (文档漂移的机械防线) ─────────────────────────
 # 触发背景 (2026-09-15, ADR-0004 第四批"文档漂移审计"): 用户提出"三站配置实况与手册/派发表
 # 存在漂移", 机械扫描全部 144 个 md 后查出 **65 条失效的仓库内相对链接** —— 典型两类:
@@ -2623,6 +2692,10 @@ CHECKS = [
     {"id": "artifacts", "title": "生成物清单", "fn": check_artifacts, "quick": True,
      "fix": "生成物**禁止手工编辑** —— 改源头 → 重跑 → 跑 --check (D6-P1-1); "
             "清单每条须给 `check`(真实断言 id) 或 `exempt`(豁免理由), 两者都缺 = 静默缺口会 FAIL"},
+    {"id": "sensitivity", "title": "内容档位真值表", "fn": check_sensitivity, "quick": True,
+     "fix": "O-51: sensitivity.yaml 是「内容→档位」的真值(权威源在自身) —— 断言其自洽: "
+            "① path 必须真实存在 ② tier 必须 ∈ 封闭枚举 ③ **同一 path 不得两处不同 tier** "
+            "④ default_tier 必须为 local-only (fail-closed)"},
     {"id": "ports", "title": "端口分配表自洽", "fn": check_ports, "quick": True,
      "fix": "按明细修 inventory/ports.yaml (缺字段/同组重复/跨组重叠/枚举拼错)"},
     {"id": "plugins", "title": "插件同构基线", "fn": check_plugins, "quick": True,
