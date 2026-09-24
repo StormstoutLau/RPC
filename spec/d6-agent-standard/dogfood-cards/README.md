@@ -32,7 +32,7 @@
 4. 若输入**已不含 C1/C2/C3**（人工剔除后）⇒ 用 `public`，**保护来自"输入准备"，不来自档位**；
 5. ⚠ **含 C3（IP/主机名/Linux 路径/用户名）的内容，`sanitized` 不提供保护** —— 不许靠它兜底。
 
-## 当前批次（2026-09-24 起草 · **4/4 已就位**）
+## 当前批次（2026-09-24 起草 · **5 张卡已全部跑完**）
 
 | 批 | 卡（本目录） | 输入 | 档位 / 开关 | 站上引擎？ |
 |---|---|---|---|---|
@@ -40,12 +40,25 @@
 | A | [a2-station-scripts-drift.md](a2-station-scripts-drift.md) | 无（比对在主控做） | `public` | ✗ |
 | B | [b1-u2-dialect-map.md](b1-u2-dialect-map.md) | [inputs/d7-dialect-excerpt.md](inputs/d7-dialect-excerpt.md)（**人工脱敏摘要**） | `public` + **`attach-egress: ok`** | ✗ |
 | B | [b2-gate-falsegreen-audit.md](b2-gate-falsegreen-audit.md) | `ops/rpc_check.py`（附件，已登记 `public`） | `public` + **`attach-egress: ok`** | ✗ |
+| （烟测） | [smoke-claude-channel.md](smoke-claude-channel.md) | 无 | `public`（`cli: claude` 主控本地） | ✗ |
 
-⇒ **四张卡都不需要站上引擎**（全部走 `model: ultra` = `openrouter/*` 出网档）。
+⇒ **全部不需要站上引擎**（`opencode` 卡走 `model: ultra` = `openrouter/*` 出网档；烟测卡走 `cli: claude` 主控本地）。
+> ⚠ **B1 有两个档位变体**（同一 U-2 目标、两处定义）：本表列的是 `public`+摘要 的**出网档定版** [b1-u2-dialect-map.md](b1-u2-dialect-map.md)；**实际执行**用的是 `local-only` 变体 [dogfood-d7-03-u2-dialect-map.md](dogfood-d7-03-u2-dialect-map.md)（读全文 §11.1，站内 `m27-q4ks`）。二者关系见文末「待核」。
 
-> **首轮实测状态（2026-09-24）**：**A1 ✅ 通过**（117s）· **B2 ✅ 通过**（789s，含附件 + `attach-egress`）·
-> **A2 ❌ 设计错误**（要读工作区外的 `~/scripts` ⇒ `external_directory` **auto-reject**；须改设计，
-> 或把该取证**改为由主控 ssh 直接做** —— 见纪律 7）· **B1 未跑**。
+### ★ 本轮实测最终状态（2026-09-24 收口 · **全部跑完**）
+
+| 卡 | 结果 | run | 通道 / 模型 | RUN_S |
+|---|---|---|---|---|
+| **A1** | ✅ `exit=0` | `202609241022501982` | opencode / `ultra`（出网） | 92 |
+| **A2**（v2 重设计） | ✅ `exit=0` | `202609241101555466` | opencode / `ultra`（出网） | 36 |
+| **B1**（`dogfood-d7-03` 变体） | ✅ `exit=0` | `202609241113114359` | opencode / `local/m27-q4ks`（**站内**） | 174 |
+| **B2** | ✅ `exit=0` | `202609241608498832` | opencode / `ultra`（出网） | 581 |
+| **smoke-claude** | ✅ `exit=0`（`ACCEPT_OK=1`） | `202609241047036207` | claude / `thinkingmachines/inkling:free` | 18 |
+
+- **A1**：首跑 117s（`202609240057242849`）；其后为修 O-37 `t=0` 残留改卡并复跑 ⇒ 上表 92s 为**当前卡版**结果。
+- **A2**：首跑 ❌ **设计错误**（读工作区外的 `~/scripts` ⇒ `external_directory` **auto-reject**，O-30 第二实例）；v2 重设计后 ✅。
+- **B2**：唯一真实成功是**第 6 次**（前 5 次被上游 503/504 打断，见 O-46）；且**用 D6 派发链抓到了门禁自己的假绿**（O-41）。
+- **smoke-claude**：首跑 ❌（`-p` 无写权限 ⇒ O-42）；加 `--permission-mode acceptEdits`（按卡 `readonly` 动态）后 ✅。
 
 ### ⚠ 派发前必读：出网档的**落站事实**（2026-09-24 一手读 `ROUTE_TABLE`）
 
@@ -86,3 +99,12 @@
 
 > ⚠ **B1 的档位已定案 = `public` + 摘要**（Scott 2026-09-24）：不再走 `sanitized`，也不再走站内。
 > 理由：`sanitized` 对 C3 类不提供保护（见 `inventory/sensitivity.yaml` 表头），保护必须前移到**输入准备**这一步。
+
+### ⏳ 待核：B1 的「定版」与「实际执行」不一致
+
+| 项 | 事实 | 出处 |
+|---|---|---|
+| **定版** | B1 = `b1-u2-dialect-map.md`（`public` + 人工脱敏摘要附件 + `attach-egress: ok`，**出网**） | 上「档位已定案」引述 · 卡 front-matter |
+| **实际执行** | run `202609241113114359` 用的卡 = `dogfood-d7-03-u2-dialect-map.md`（`local-only` + 站内 `m27-q4ks`，读**全文** §11.1） | 该 run `.agent-run.json` 的 `card.sha256 = f637e0bb…` = d7-03 卡 |
+
+⇒ **同一 U-2 目标存在两处定义**（本仓明令禁止的"同一事实两个定义点"）—— 需 Scott 裁定保留哪一个（或明确二者分工：出网档做**分析**、站内档做**转录**），再删另一份，避免后续误用。**本次仅如实登记，未擅自删卡。**
