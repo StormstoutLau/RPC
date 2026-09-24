@@ -573,7 +573,12 @@ function Get-ThroughputEstimate {
     # Dispatch-time budget estimate (O-25 criteria-3): prefill + decode phases x agent-loop fudge.
     # NON-linear: pure tok/throughput is a lower bound; tool-call/thought/retry adds real wall-clock.
     param([string]$modelId, [int]$maxOutput, [int]$context, [double]$fudge = 1.6)
-    if (-not $TpBench.ContainsKey($modelId)) { return @{ hit = $false } }
+    # O-39: **出网档（egress）按设计不提供预估** —— 无本地 prefill/decode（延迟在 provider 侧），
+    #   硬套 tok/s 公式只会产出**编造数字**（违反本表"no-bench 不打荒"纪律）⇒ 返回第三种状态 `na`。
+    #   ★ 必须与"本地档缺基准"**分开报**：两者混成同一句 MISS ⇒ 后者会**隐身**
+    #     （"出网档本该 MISS"成了遮住"某本地档一直没测"的挡箭牌 —— 本仓最贵的一类错：把两件事说成一件）。
+    if ($modelId -like 'openrouter/*') { return @{ hit = $false; na = $true } }
+    if (-not $TpBench.ContainsKey($modelId)) { return @{ hit = $false; na = $false } }
     $b = $TpBench[$modelId]
     $prefillSec = if ($b.prefill -and $context -gt 0) { ([double]$context / [double]$b.prefill) } else { 0.0 }
     $decodeSec  = if ($b.decode -gt 0) { ([double]$maxOutput / [double]$b.decode) } else { 0.0 }
@@ -1503,8 +1508,14 @@ function Invoke-Task {
             Write-Host ("TIMEOUT-WARN: est_total_s={0:N0} > timeout_s={1} (x{2:N1}) - first run likely killed; raise timeout_s/continue-timeout-s or lower complexity/max_output" -f $est.total, $timeout, ($est.total / $timeout))
         }
     }
+    elseif ($est.na) {
+        # O-39: 出网档 —— **按设计不提供预估**（不编造数字）。显式说明以免被误读成"机制坏了"。
+        Write-Host "ESTIMATE: model=$id egress - N/A by design (provider-side latency; no local prefill/decode) [O-39]"
+    }
     else {
-        Write-Host "ESTIMATE: model=$id no-bench (MISS) - skip dispatch estimate"
+        # O-39: 这是**另一种** MISS —— **本地档但缺基准行** ⇒ 是**真缺口**（该补 $TpBench），
+        #   与上面"出网档不适用"**不是一回事**。分开报，后者才不会藏在前者背后。
+        Write-Host "ESTIMATE: model=$id no-bench (MISS) - local model missing bench row => should add `$TpBench entry [O-39]"
     }
 
     # TODO-2 pre-flight (2026-09-07): fail fast on unwritable agent-out BEFORE station-ready/sync/run.

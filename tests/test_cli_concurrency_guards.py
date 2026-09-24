@@ -218,7 +218,17 @@ def main() -> int:
          f"旧固定名已清除={o31_old} p3id={o31_id} PFX 传递={o31_pfx} ⇒ "
          "固定名会让同站两个备路 run 互踩（O-31）")
 
-    print(f"\n静态护栏 {13} 条")
+    # O-39：**出网档「不适用」与本地档「缺基准」必须分开报**（否则后者**隐身**）。
+    #   依据 = 本仓头号失败形态「把两件事说成一件」：混成同一句 MISS ⇒
+    #   "出网档本该 MISS"会成为遮住"某本地档一直没测"的**挡箭牌**（真缺口从此无人补）。
+    o39_egress = "$modelId -like 'openrouter/*'" in src and "na = $true" in src
+    o39_branch = "elseif ($est.na)" in src and "N/A by design" in src
+    o39_local = "missing bench row" in src
+    need("O-39 出网档『不适用』与本地档『缺基准』分报（不得混成同一句）",
+         o39_egress and o39_branch and o39_local,
+         f"egress 判定={o39_egress} na 分支={o39_branch} 本地缺基准另有措辞={o39_local}")
+
+    print(f"\n静态护栏 {14} 条")
     if fails:
         print("FAIL:")
         for x in fails:
