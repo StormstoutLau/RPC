@@ -973,9 +973,16 @@ function Test-EvmStatePull([string]$state, [string]$path) {
     if ($st -notlike 'out/*') { return [ordered]@{ ok = $false; reason = 'not-out-prefix' } }
     if ($st -match '(^|/)\.\.(/|$)') { return [ordered]@{ ok = $false; reason = 'state-dotdot' } }
     if ($st -match '^\s*/|^[A-Za-z]:[\\/]') { return [ordered]@{ ok = $false; reason = 'state-absolute' } }
+    # ★ O-52 (2026-09-24): **字符集白名单** —— 既约束通配符，又把任何 shell 元字符挡在门外。
+    #   为什么必须限字符集: 本 pattern 会被**送到站上**参与一次固定枚举命令（`ls`）⇒ 若允许 `'`/`;`/`$` 等
+    #   就等于开了一个**注入面**。允许集 = 字母数字 + `. _ -` + 通配 `* ?`（其余一律拒）。
+    if ($st -notmatch '^out/[A-Za-z0-9._*?-]+$') { return [ordered]@{ ok = $false; reason = 'state-charset' } }
     if ($rp -match '(^|/)\.\.(/|$)') { return [ordered]@{ ok = $false; reason = 'path-dotdot' } }
     if ($rp -match '[/\\]') { return [ordered]@{ ok = $false; reason = 'path-not-flat' } }
-    return [ordered]@{ ok = $true; reason = 'ok' }
+    # O-52: 含通配 ⇒ **glob 型**（产物名事先不可知）。调用方须先**远端枚举**并把**解析后的具体名**
+    #   **再经本函数校验一遍**（名字来自站上文件系统 ⇒ 按不可信输入对待），才允许 scp。
+    $isGlob = ($st -match '[*?]')
+    return [ordered]@{ ok = $true; reason = 'ok'; glob = $isGlob }
 }
 
 function Merge-EvidenceSubjects($cardSubjects, $accept, [bool]$goldenActive, $baselineFn = $null) {
@@ -2267,6 +2274,28 @@ exit `$FINAL_RC
                 $evmT = Test-EvmStatePull -state $st -path $rp
                 if (-not $evmT.ok) {
                     Write-Host "EVM_STATE_REJECT: subject '$($evmSub['name'])' state=[$st] path=[$rp] 原因=$($evmT.reason)"; $evmStateRejected++; continue
+                }
+                if ($evmT.glob) {
+                    # O-52 (2026-09-24): 产物名**事先不可知** ⇒ **远端固定枚举**（ls），要求**恰好 1 个**匹配。
+                    #   pattern 已过 `Test-EvmStatePull` 的**字符集白名单**（无引号/无元字符），且此处**单引号包裹**
+                    #   ⇒ 它只作 `ls` 的**参数**，**不构成拼接执行**（这是"仍不执行用户命令"的落点）。
+                    #   **恰好 1 个才继续；0 或 >1 一律拒（不猜）** —— "猜一个"会在证据链上留下错件。
+                    $lst = @(ssh -o BatchMode=yes -o ConnectTimeout=10 $hostName "ls -1 -d -- '$st' 2>/dev/null" 2>$null |
+                             Where-Object { "$_".Trim() })
+                    if ($lst.Count -ne 1) {
+                        Write-Host "EVM_STATE_REJECT: subject '$($evmSub['name'])' state=[$st] glob 匹配 $($lst.Count) 个（要求恰好 1）"
+                        $evmStateRejected++; continue
+                    }
+                    # ★ **解析出的名字来自站上文件系统 ⇒ 按不可信输入重新校验一遍**
+                    #   （防站上放了带 shell 元字符的文件名 —— 它随后要进 scp 的命令行）
+                    $resolved = "$($lst[0])".Trim()
+                    $evmT2 = Test-EvmStatePull -state $resolved -path $rp
+                    if (-not $evmT2.ok -or $evmT2.glob) {
+                        Write-Host "EVM_STATE_REJECT: subject '$($evmSub['name'])' 解析名=[$resolved] 复校验不过 原因=$($evmT2.reason)"
+                        $evmStateRejected++; continue
+                    }
+                    Write-Host "EVM_STATE_GLOB: subject '$($evmSub['name'])' $st -> $resolved"
+                    $st = $resolved
                 }
                 $stDst = Join-Path $runDir $rp
                 scp -q -o BatchMode=yes -o ConnectTimeout=10 "${hostName}:$W/$st" "$stDst" 2>$null

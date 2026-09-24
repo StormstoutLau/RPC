@@ -228,7 +228,19 @@ def main() -> int:
          o39_egress and o39_branch and o39_local,
          f"egress 判定={o39_egress} na 分支={o39_branch} 本地缺基准另有措辞={o39_local}")
 
-    print(f"\n静态护栏 {14} 条")
+    # O-52：glob 采集面的**四条不变量** —— 核心是"glob **不引入**执行用户命令"。
+    #   ① 字符集白名单（挡 `'`/`;`/`$` 等元字符，因为 pattern 要送到站上）② 解析出的名字**必须复校验**
+    #   ③ 恰好 1 匹配才收（0/>1 拒，**不猜**）④ 枚举命令**固定**（`ls`）+ pattern 单引号包裹 ⇒ 只作参数、不拼接。
+    o52_charset = "state-charset" in src and "'^out/[A-Za-z0-9._*?-]+$'" in src
+    o52_reglob = "$evmT.glob" in src and "$evmT2.glob" in src
+    o52_exactly1 = "glob 匹配" in src and ".Count -ne 1" in src
+    o52_fixed = "ls -1 -d -- '" in src
+    need("O-52 glob 采集面（字符集白名单 + 解析名复校验 + 恰好 1 匹配 + 固定枚举不拼接）",
+         o52_charset and o52_reglob and o52_exactly1 and o52_fixed,
+         f"字符集={o52_charset} 复校验={o52_reglob} 恰1={o52_exactly1} 固定枚举={o52_fixed} ⇒ "
+         "缺任一即等于在采集面开了注入面或留下猜件")
+
+    print(f"\n静态护栏 {15} 条")
     if fails:
         print("FAIL:")
         for x in fails:
