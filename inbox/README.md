@@ -134,8 +134,9 @@ rejected（可从 triage / accepted / plan-review / plan-revise 任一进入）
 - 本目录**不参与** `scripts` 断言（是文档/交接物，非脚本）。
 - **`inbox` 断言（`rpc_check.py`，quick 已启用）**：校验每个 `<proj>-<date>/`
   ① 有 `00_handoff/` ② `40_state/STATE.json` 存在、可解析、state ∈ 白名单
-  ③ 状态内容自洽（`accepted+` 须有 `10_admin/受理决定.md`；`plan-review/plan-revise` 须有 `20_plan/`；
-  `release+` 须有 `30_evidence/` 记录）。
+  ③ 状态内容自洽 —— **各态的"必需件"由** [`inventory/inbox.yaml`](../inventory/inbox.yaml) **的 `requires` 字段定义**
+  （门禁 `inbox` 派生执行，改需求只改 yaml 一处；下面是人读概览，非真值）：
+  `accepted` 及之后须有受理决定 · `plan-review`/`plan-revise` 须有派发计划 · 交付态须有证据束。
 - **交付态强判据（2026-09-23 收紧）**：`release` / `done` / `accepted-by-requester` 三态
   **必须存在 `30_evidence/MANIFEST.sha256`**（不再只是"目录非空"）。
   加严理由：原判据放个无关文件即可通过 ⇒「未附证据束不 `done`」形同虚设（空转的软约束）。

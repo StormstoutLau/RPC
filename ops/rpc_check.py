@@ -923,6 +923,20 @@ def read_inbox_truth(path):
     return states
 
 
+# 受理"必需件"键(requires)的封闭枚举 —— 与 inventory/inbox.yaml 的注释同步
+INBOX_REQUIRES_KEYS = {"decide", "plan", "evidence", "manifest"}
+# 看板徽章(badge)的封闭枚举 —— 与 inventory/inbox.yaml 同步 (cluster_web 注入前端)
+INBOX_BADGE_VALUES = {"ok", "warn", "err", "none"}
+
+
+def inbox_requires_sets(states, key):
+    """**纯函数**: 从真值 `requires` 派生"需要某类件"的状态集。
+
+    D6-P1-2 #7: check_inbox 原有 **4 处硬编码状态子集**, 现全部由真值派生(副本消失)。
+    """
+    return {s for s, sp in states.items() if key in ((sp or {}).get("requires") or [])}
+
+
 def read_judge_main(text):
     """从 `agent-cli.ps1` 读 `JUDGE_TABLE['main']` 的三个契约字段（id / egress / compliance）。"""
     m = re.search(r"'main'\s*=\s*@\{([^}]*)\}", text)
@@ -984,6 +998,18 @@ def validate_inbox_mirror(states, readme_text):
                        f"(须 ∈ action/active/closed; 缺省会静默落进 closed)")
         if not spec.get("next"):
             bad.append(f"inbox.yaml: 状态 {name!r} 缺 next (加了状态忘加下一动作 = M-6)")
+        rq = spec.get("requires")
+        if not isinstance(rq, list):
+            bad.append(f"inbox.yaml: 状态 {name!r} 缺 requires 列表 "
+                       f"(否则该态的『必需件』规则会**静默不适用**)")
+        else:
+            unk = sorted(set(rq) - INBOX_REQUIRES_KEYS)
+            if unk:
+                bad.append(f"inbox.yaml: 状态 {name!r} 的 requires 含未知键 {unk} "
+                           f"(合法: {sorted(INBOX_REQUIRES_KEYS)})")
+        if spec.get("badge") not in INBOX_BADGE_VALUES:
+            bad.append(f"inbox.yaml: 状态 {name!r} 的 badge={spec.get('badge')!r} 不合法 "
+                       f"(须 ∈ {sorted(INBOX_BADGE_VALUES)}; 前端徽章由它派生)")
     keys = set(states)
     # 只在 §3 段落内找白名单行/状态表(避免误抓别节里同形的表)
     sec = re.search(r"##\s*3\..*?(?=\n##\s)", readme_text, re.S)
@@ -1005,23 +1031,55 @@ def validate_inbox_mirror(states, readme_text):
     return bad
 
 
+def validate_manual_states(states, manual_text):
+    """**纯函数**: 手册 §1.3 的「受理区位置 … 状态机」段必须**逐个提到**真值的每个状态 (#9)。
+
+    D6-P1-2 #9: 手册是**对外契约母版**(Paper 项目 agent 据此写下游文档); 实测原图**漏了 `rejected`**
+    (11/12 态)。此处只做 **⊇ 方向**(真值 ⊆ 手册) —— 手册与 README 图同族, 都是**主路径精选视图**,
+    做"12 态全等"会**假红**(同 M-3 `ROUTE_TABLE` / M-4 ports 的豁免理由)。
+    """
+    m = re.search(r"受理区位置.*?受理流程与状态机见", manual_text, re.S)
+    if not m:
+        return ["手册 §1.3 定位不到『受理区位置 … 受理流程与状态机见』段(结构改了?)"]
+    blk = m.group(0)
+    miss = [s for s in sorted(states)
+            if not re.search(rf"(?<![a-z\-]){re.escape(s)}(?![a-z\-])", blk)]
+    if miss:
+        return [f"手册 §1.3 状态机段漏了状态 {miss} (对外契约不全; 改真值后忘改手册?)"]
+    return []
+
+
+def validate_readme_requires(states, readme_text):
+    """**纯函数**: README §5.3「交付态强判据」行 == 真值里 `requires` 含 `manifest` 的状态集。
+
+    ⚠ 只钉**这一行**(它本就是精确枚举)。§5.3 其余用 `accepted+`/`release+` 的"+"记法是**有损人读摘要**,
+    不做全等对账(会假红) —— 精确集由代码侧 `inbox_requires_sets` 从真值派生, 不靠文档。
+    """
+    want = inbox_requires_sets(states, "manifest")
+    m = re.search(r"交付态强判据[^\n]*", readme_text)
+    if not m:
+        return ["README §5.3 找不到『交付态强判据』行(结构改了?)"]
+    got = set(re.findall(r"`([^`]+)`", m.group(0)))
+    if got != want:
+        return [f"README §5.3『交付态强判据』行与真值不一致: 文档多 {sorted(got - want)} / "
+                f"少 {sorted(want - got)}"]
+    return []
+
+
 def check_mirror(ctx):
-    """P1-2: 事实源 ↔ 镜像 一致性 —— 2 处合格镜像(判官行 M-1 / 受理状态机 M-5+M-6)。"""
+    """P1-2: 事实源 ↔ 镜像 一致性 —— 2 处合格镜像(判官行 M-1 / 受理状态机 M-5+M-6+#7#9)。"""
     if not AGENT_CLI.exists() or not MANUAL.exists():
         return "WARN", "缺 agent-cli.ps1 或手册，跳过镜像断言", []
     bad = []
+    manual_text = MANUAL.read_text(encoding="utf-8", errors="replace")
     # ── M-1: 手册 §1.3 判官行 ↔ `JUDGE_TABLE['main']` ─────────────────
     judge = read_judge_main(AGENT_CLI.read_text(encoding="utf-8", errors="replace"))
-    row = ""
-    for line in MANUAL.read_text(encoding="utf-8", errors="replace").splitlines():
-        if "JUDGE_TABLE['main']" in line:
-            row = line
-            break
+    row = next((l for l in manual_text.splitlines() if "JUDGE_TABLE['main']" in l), "")
     if not row:
         bad.append("手册 §1.3 里找不到判官行（`JUDGE_TABLE['main']` 那行）")
     else:
         bad += validate_mirror(judge, row)[0]
-    # ── M-5/M-6: 受理状态机真值 ↔ README §3 + 两处代码同源 ─────────────
+    # ── M-5/M-6 + #7/#9: 受理状态机真值 ↔ README §3 / 手册 §1.3 + 两处代码同源 ──
     n_state = 0
     if not INBOX_TRUTH_YAML.exists() or not INBOX_README.exists():
         bad.append("缺 inventory/inbox.yaml 或 inbox/README.md（状态机真值 / 文档镜像不在）")
@@ -1032,8 +1090,10 @@ def check_mirror(ctx):
             bad.append(f"inventory/inbox.yaml 读不出（真值源坏了）: {e}")
         else:
             n_state = len(states)
-            bad += validate_inbox_mirror(states, INBOX_README.read_text(encoding="utf-8",
-                                                                        errors="replace"))
+            readme_text = INBOX_README.read_text(encoding="utf-8", errors="replace")
+            bad += validate_inbox_mirror(states, readme_text)
+            bad += validate_readme_requires(states, readme_text)
+            bad += validate_manual_states(states, manual_text)
             # 两处代码**消费同一真值**(防"回归硬编码"): 直接核对运行时集合
             sys.path.insert(0, str(ROOT / "ops"))
             try:
@@ -1046,8 +1106,8 @@ def check_mirror(ctx):
             except Exception as e:
                 bad.append(f"导入 cluster_web 失败, 无法核对状态机消费面: {e}")
     j = judge or {}
-    note = (f"合格镜像 2 处（判官行 3 字段 + 受理状态机 {n_state} 态）· 事实源 id={j.get('id')} "
-            f"egress={j.get('egress')} compliance={j.get('compliance')}")
+    note = (f"合格镜像 2 处（判官行 3 字段 + 受理状态机 {n_state} 态 ↔ README §3/手册 §1.3/两处代码）"
+            f"· 事实源 id={j.get('id')} egress={j.get('egress')} compliance={j.get('compliance')}")
     return ("FAIL" if bad else "PASS"), note, bad
 
 
@@ -2852,11 +2912,12 @@ def check_models(ctx):
 # D6-P1-2 M-5/M-6: 白名单**已收敛**到 inventory/inbox.yaml —— 由 check_mirror 对账(README §3 + 两处代码)
 INBOX_DIR = ROOT / "inbox"
 try:
-    INBOX_STATES = set(read_inbox_truth(INBOX_TRUTH_YAML))
+    _INBOX_TRUTH = read_inbox_truth(INBOX_TRUTH_YAML)
 except Exception:
     # fail-closed: 真值不可读 => 白名单为空 => 任何 STATE 都 FAIL;
     # 真正的报错点见 check_mirror(它会点名「inbox.yaml 读不出」)
-    INBOX_STATES = set()
+    _INBOX_TRUTH = {}
+INBOX_STATES = set(_INBOX_TRUTH)
 INBOX_PROJ_RE = re.compile(r"^[^_].+-\d{4}-\d{2}-\d{2}$")   # <proj>-<yyyy-mm-dd>, 排除 _template
 
 
@@ -2866,6 +2927,8 @@ def check_inbox(ctx):
     bad = []
     if not INBOX_DIR.is_dir():
         return "PASS", "inbox/ 不存在, 跳过", []
+    # 必需件状态集: 由真值 requires 派生 (D6-P1-2 #7: 原为 4 处硬编码子集, 已收敛到一处)
+    need = {k: inbox_requires_sets(_INBOX_TRUTH, k) for k in INBOX_REQUIRES_KEYS}
     for d in sorted(p for p in INBOX_DIR.iterdir() if p.is_dir()):
         name = d.name
         if name.startswith("_") or not INBOX_PROJ_RE.match(name):
@@ -2898,25 +2961,24 @@ def check_inbox(ctx):
             """目录存在且至少有一个非 .gitkeep 文件。"""
             return p.is_dir() and any(x.is_file() and x.name != ".gitkeep" for x in p.iterdir())
 
-        # ③ 状态内容自洽
-        if state in {"accepted", "plan-review", "plan-revise", "running", "release", "done",
-                     "accepted-by-requester", "rejected-by-requester"}:
+        # ③ 状态内容自洽 (必需件集由真值 requires 派生 —— 见 inventory/inbox.yaml)
+        if state in need["decide"]:
             if not (d / "10_admin" / "受理决定.md").is_file():
                 n_bad += 1
                 bad.append(f"{name}: STATE={state} 须有 10_admin/受理决定.md (受理通过依据)")
-        if state in {"plan-review", "plan-revise"}:
+        if state in need["plan"]:
             if not _nonempty(d / "20_plan"):
                 n_bad += 1
                 bad.append(f"{name}: STATE={state} 须有 20_plan/ 派发计划 (非空)")
-        if state in {"release", "done", "accepted-by-requester", "rejected-by-requester"}:
+        if state in need["evidence"]:
             if not _nonempty(d / "30_evidence"):
                 n_bad += 1
                 bad.append(f"{name}: STATE={state} 须有 30_evidence/ 证据束记录 (非空)")
         # 2026-09-23 收紧: **交付态**必须真的钉死证据束，不能只是"目录非空"。
         #   为什么收紧: 原判据放个无关文件就能过 ⇒ "未附证据束不 done" 形同虚设（空转的软约束）。
         #   判据 = 30_evidence/MANIFEST.sha256 存在。
-        #   `rejected-by-requester`(可能交付前就终止) 不进本集, 只保留上面的"非空"。
-        if state in {"release", "done", "accepted-by-requester"}:
+        #   `rejected-by-requester`(可能交付前就终止) 本态 requires 无 `manifest` ⇒ 不进本集。
+        if state in need["manifest"]:
             if not (d / "30_evidence" / "MANIFEST.sha256").is_file():
                 n_bad += 1
                 bad.append(f"{name}: STATE={state} 须有 30_evidence/MANIFEST.sha256 (交付证据束未钉死); "
@@ -2956,8 +3018,10 @@ CHECKS = [
     {"id": "mirror", "title": "事实源↔镜像一致", "fn": check_mirror, "quick": True,
      "fix": "P1-2: ① M-1 手册 §1.3 判官行须与 `JUDGE_TABLE['main']` 的 id/egress/compliance 三项一致; "
             "② M-5/M-6 受理状态机真值(`inventory/inbox.yaml`)须与 inbox/README §3 白名单/状态表一致, "
-            "且 `cluster_web.py`/`rpc_check.py` 消费同一真值(不得回归硬编码) —— "
-            "**改状态只改 `inventory/inbox.yaml` 一处**, 文档 §3 跟着改; "
+            "且 `cluster_web.py`/`rpc_check.py` 消费同一真值(不得回归硬编码); "
+            "③ #7/#9 真值的 `requires`(必需件)须齐全, 手册 §1.3 状态机段须逐个提到真值状态, "
+            "README §5.3『交付态强判据』行须 == 真值 `manifest` 集 —— "
+            "**改状态/必需件只改 `inventory/inbox.yaml` 一处**, 文档跟着改; "
             "⚠ M-2 已被 O-50 判为『不再维护第二份枚举』故不并入"},
     {"id": "ports", "title": "端口分配表自洽", "fn": check_ports, "quick": True,
      "fix": "按明细修 inventory/ports.yaml (缺字段/同组重复/跨组重叠/枚举拼错)"},

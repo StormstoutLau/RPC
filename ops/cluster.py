@@ -4510,6 +4510,18 @@ def cmd_ttl(argv) -> int:
 
 
 INBOX_ROOT = Path(__file__).resolve().parent.parent / "inbox"
+_INBOX_YAML = Path(__file__).resolve().parent.parent / "inventory" / "inbox.yaml"
+
+
+def _inbox_truth():
+    """读受理状态机真值 (`inventory/inbox.yaml`) —— 与 `rpc_check.py` / `cluster_web.py` **同源**,
+    不再各抄一份(ADR-0008 状态机单一真值; D6-P1-2 #8: seal 提示语原为第三份副本)。"""
+    import yaml
+    data = yaml.safe_load(_INBOX_YAML.read_text(encoding="utf-8"))
+    states = data.get("states") if isinstance(data, dict) else None
+    if not isinstance(states, dict):
+        raise ValueError(f"{_INBOX_YAML} 缺 `states:` 映射段")
+    return states
 
 
 def _inbox_seal(argv) -> int:
@@ -4612,7 +4624,9 @@ def _inbox_seal(argv) -> int:
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(payload, encoding="utf-8")
     print(f"[seal] 已写入 {dst}（{len(payload)} 字节）。")
-    print("[seal] 提示: 交付态 (release/done/accepted-by-requester) 门禁要求本文件存在; 结案后本目录冻结。")
+    _delivery = "/".join(s for s, sp in _inbox_truth().items()
+                         if "manifest" in ((sp or {}).get("requires") or []))
+    print(f"[seal] 提示: 交付态 ({_delivery}) 门禁要求本文件存在; 结案后本目录冻结。")
     return 0
 
 

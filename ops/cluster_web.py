@@ -310,6 +310,8 @@ INBOX_STATES = set(_INBOX_TRUTH)
 _INBOX_NEXT = {k: (v or {}).get("next", "") for k, v in _INBOX_TRUTH.items()}
 # 状态 → 待办分组 (action/active/closed) —— 分组也来自真值, 不再靠 `else ⇒ closed` 兜底
 _INBOX_GROUP = {k: (v or {}).get("group", "closed") for k, v in _INBOX_TRUTH.items()}
+# 状态 → 看板徽章类 (ok/warn/err/none) —— 由真值 `badge` 派生 (原为前端 JS 里第 5 份硬编码)
+_INBOX_BADGE = {k: (v or {}).get("badge", "err") for k, v in _INBOX_TRUTH.items()}
 
 
 def _collect_inbox():
@@ -1322,14 +1324,10 @@ async function loadAgent(){
 // 派生视图: 从 STATE.json 读状态 / 下一动作, 无人手维护。分组:
 //   action(需动作, 黄底) = waiting/plan-review/release · active(进行中) · closed(关闭,折叠)。
 let inboxBusy=false;
+const INBOX_BADGE = {{INBOX_BADGE}};   // 状态→徽章类, 由真值 inventory/inbox.yaml 注入 (见 _build_page)
 function inboxBadge(st){
-  if(st==='waiting') return '<span class="badge warn">waiting</span>';
-  if(st==='plan-review'||st==='release') return '<span class="badge warn">'+esc(st)+'</span>';
-  if(st==='running'||st==='triage'||st==='accepted'||st==='plan-revise'||st==='open')
-    return '<span class="badge">'+esc(st)+'</span>';
-  if(st==='done'||st==='accepted-by-requester') return '<span class="badge ok">'+esc(st)+'</span>';
-  if(st==='rejected-by-requester'||st==='rejected') return '<span class="badge err">'+esc(st)+'</span>';
-  return '<span class="badge err">'+esc(st)+'</span>';
+  const b = INBOX_BADGE[st] || 'err';  // 未知态显红(与旧兜底一致)
+  return '<span class="badge'+(b==='none'?'':' '+b)+'">'+esc(st)+'</span>';
 }
 async function loadInbox(){
   if(inboxBusy) return; inboxBusy=true;
@@ -1383,7 +1381,8 @@ refreshAll();
 def _build_page():
     # ALIAS_OPTIONS 已废弃 (2026-09-15): 模型列表由前端 /api/models 动态渲染。
     backend_opts = "".join(f'<option value="{b}">{b}</option>' for b in sorted(cluster.BACKENDS))
-    return PAGE_HTML.replace("{{BACKEND_OPTIONS}}", backend_opts)
+    return (PAGE_HTML.replace("{{BACKEND_OPTIONS}}", backend_opts)
+                     .replace("{{INBOX_BADGE}}", json.dumps(_INBOX_BADGE, ensure_ascii=False)))
 
 
 def serve(argv=None):
