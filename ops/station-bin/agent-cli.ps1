@@ -1798,7 +1798,10 @@ echo "ATTACH_MANIFEST_LINES=`$(wc -l < "`$W/out/.attach-manifest.txt" 2>/dev/nul
 #   diff 恒空。后续用 `find -newer` 列出本窗口内被改动的文件(与 git 无关: 实测工作区非
 #   git 仓库, git diff 会静默返回空 = 假的"未越界")。
 : > "`$W/.run-marker"
-timeout $timeout opencode run -m "$id" < "`$W/out/.prompt.txt" > "`$W/out/.agent-output.txt" 2>&1
+# O-48: `-k 10` = 到点先 TERM、10s 后仍不退则 KILL。**裸 `timeout` 对忽略 SIGTERM 的子进程会一直等**
+#   (受控复现: `timeout 2 bash -c 'trap "" TERM; sleep 6'` ⇒ rc=124 但**耗时 6s**; 同命令加 `-k 1` ⇒ rc=137 **3s**)
+#   ⇒ opencode 挂死时**永不返回**、留孤儿占槽(B 站实测孤儿曾活 17.2h)。
+timeout -k 10 $timeout opencode run -m "$id" < "`$W/out/.prompt.txt" > "`$W/out/.agent-output.txt" 2>&1
 RC=`$?
 # O-24 P0-① resume loop: on failure retry <=2 via `--continue` (opencode isolates sessions
 # per workspace path -> in $W it resumes THIS run's session, verified 2026-09-09 on A station;
@@ -1817,7 +1820,7 @@ while [ `$RC -ne 0 ] && [ `$CONT_ATTEMPT -lt 3 ]; do
   echo "=== RESUME[`$CONT_ATTEMPT] prev_rc=`$RC ===" >> "`$W/out/.agent-output.txt"
   # O-24 P0-①: resume runs under its OWN timeout budget (continue-timeout-s), not the first budget
   echo "`$CONT_B64" | base64 -d \
-    | timeout $continueTimeout opencode run --continue -m "$id" \
+    | timeout -k 10 $continueTimeout opencode run --continue -m "$id" \
        >> "`$W/out/.agent-output.txt" 2>&1
   RC=`$?
   echo "=== RESUME[`$CONT_ATTEMPT] rc=`$RC ===" >> "`$W/out/.agent-output.txt"
@@ -1891,8 +1894,12 @@ printf 'TASK_ID=%s\nQUEUE_S=%s\nRUN_S=%s\nTASK_RC=%s\nRC_DOMAIN=v2\nACCEPT_OK=%s
 exit `$FINAL_RC
 "@
     $code = Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-task-$ts.sh"
-    # DESIGN §9.5 exit-code dispatch: 124(timeout by `timeout`) -> 6; other remote run rc preserved as failure
-    if ($code -eq 124) { $code = 6 }
+    # DESIGN §9.5 exit-code dispatch: `timeout` 哨兵 -> 6; other remote run rc preserved as failure
+    # O-48: 加 `-k 10` 后 **KILL 生效**时 `timeout` 返回 **137**(=128+9) 而非 124 ⇒ 两者都归 6。
+    #   ⚠ 137 与 OOM-kill 同码(仅凭 rc 无法区分) —— 但"归 timeout 后走续跑/备路"严格优于旧的
+    #   "永久挂死"; 故**先打印原始码留痕**(不把信号抹掉) 再归并。
+    Write-Host "TASK remote raw excode=$code"
+    if ($code -eq 124 -or $code -eq 137) { $code = 6 }
     Write-Host "TASK remote excode=$code"
 
     # ADR-0007 缺口 8 (2026-09-18): 站在 **opencode 会话库**取本 run 遥测(session_id / tokens / tool_uses /
@@ -2906,7 +2913,7 @@ mkdir -p "$stWorkDir/.attach/$nm2"
     }
     $sw.Stop()
     $runS = [int]$sw.Elapsed.TotalSeconds
-    if ($rc -eq 124) { $rc = 6 }   # timeout sentinel -> 6 (镜像远程 DESIGN §9.5)
+    if ($rc -eq 124 -or $rc -eq 137) { $rc = 6 }   # `timeout` 哨兵 -> 6 (含 `-k` KILL 的 137; 镜像远程 DESIGN §9.5)
 
     # ---- golden gate (先于 accept, inv 2/5) ----
     $acceptGoldenOk = 1
@@ -3248,7 +3255,7 @@ echo "P3_STATION: engine_ctx=$CTX max_context_tokens=$MAXC base_url=http://127.0
 [ -n "$WORK" ] && [ -d "$WORK" ] || { echo "P3_STATION_ERR: workdir 不可用: '$WORK'"; exit 8; }
 cd "$WORK" || exit 8
 # O-31: 三个临时名由 $PFX 前缀隔离 —— 固定名会让**同站两个备路 run 互相覆盖/混写**。
-timeout "$BUDGET" claude --settings "$SET" $ARGSTR < "${PFX}_in.txt" \
+timeout -k 10 "$BUDGET" claude --settings "$SET" $ARGSTR < "${PFX}_in.txt" \
   > "${PFX}_out.txt" 2> "${PFX}_err.txt"
 RC=$?
 rm -f "$SET"
@@ -3470,7 +3477,7 @@ set -eu
 D=`$(mktemp -d)
 printf '%s' "$b64" | base64 -d > "`$D/judge-in.txt"
 cd "`$D"
-timeout $timeoutS opencode run -m "$($judge['id'])" < "`$D/judge-in.txt" > "`$D/judge-out.txt" 2>&1
+timeout -k 10 $timeoutS opencode run -m "$($judge['id'])" < "`$D/judge-in.txt" > "`$D/judge-out.txt" 2>&1
 echo "REVIEW_B64_START"
 base64 -w0 "`$D/judge-out.txt" 2>/dev/null || base64 "`$D/judge-out.txt"
 echo ""

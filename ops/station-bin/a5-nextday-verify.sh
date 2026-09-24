@@ -64,7 +64,7 @@ section "T2 跨会话引用测试 (核心)"
 
 echo "  启动新 opencode 会话, 问'上次这个 repo 做了什么'..."
 echo
-timeout 300 $OC run -m local/nemotron \
+timeout -k 10 300 $OC run -m local/nemotron \
   'Last time I worked on this repo, I deployed something. What did I do? Use your memory to recall.' \
   </dev/null 2>"$WORK/t2.err" | tee "$WORK/t2.out" | tail -20
 RC=$?

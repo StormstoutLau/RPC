@@ -5,7 +5,7 @@ set -uo pipefail
 
 echo '--- R1 m27 生产链路 (infer-load → 生成 → unload) ---'
 INFER=/usr/local/bin/infer-load
-timeout 300 $INFER m27 2>&1 | tail -3
+timeout -k 10 300 $INFER m27 2>&1 | tail -3
 for i in $(seq 1 60); do
   curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1 && { echo "health OK (${i}x5s)"; break; }
   sleep 5
@@ -33,7 +33,7 @@ echo '--- R1 收尾: unload ---'
 sleep 5
 
 echo '--- R3 gpt-oss 单机 (空值 conf, 命令行不含 --rpc) ---'
-timeout 300 $INFER gpt-oss 2>&1 | tail -2
+timeout -k 10 300 $INFER gpt-oss 2>&1 | tail -2
 sleep 3
 PSLINE=$(ps -ef | grep 'llama[-]server' | grep -i 'gpt' | head -1)
 echo "$PSLINE" | head -c 300; echo

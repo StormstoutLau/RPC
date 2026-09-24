@@ -245,7 +245,38 @@ def main() -> int:
          f"字符集={o52_charset} 复校验={o52_reglob} 恰1={o52_exactly1} "
          f"固定枚举+工作区内={o52_fixed} 未加引号={o52_noquote} ⇒ 加引号会让通配**静默失效**")
 
-    print(f"\n静态护栏 {15} 条")
+    # O-48（2026-09-24）：**命令位**的 `timeout` 一律带 `-k`。
+    #   根因（受控复现）：裸 `timeout` 对**忽略 SIGTERM** 的子进程会**一直等**，不是"到点即杀" ——
+    #   `timeout 2 bash -c 'trap "" TERM; sleep 6'` ⇒ rc=124 但**耗时 6s**；加 `-k 1` ⇒ rc=137 **3s**。
+    #   ⇒ opencode 挂死（DEBUG 日志卡在流上）时裸 timeout **永不返回**、留孤儿占槽（B 站实测活 17.2h）。
+    #   锚点须是**命令位**（行首 / `;`/`&`/`|` / `$(` 之后），否则 `$timeout`、`"…timeout after…"` 会误报。
+    bare = []
+    for i, ln in enumerate(src.splitlines(), 1):
+        code = ln.split('#', 1)[0]
+        for m in re.finditer(r"(?:^|[;&|]|\$\()\s*timeout\s+", code):
+            tail = code[m.end():]
+            if not (tail.startswith("-k") or tail.startswith("--kill-after")):
+                bare.append((i, ln.strip()[:80]))
+    need("O-48 命令位 `timeout` 一律带 `-k`（无裸 timeout）",
+         not bare,
+         f"裸 timeout 对忽略 SIGTERM 的子进程**一直等** ⇒ 挂死时永不返回、留孤儿占槽；命中={bare}")
+
+    o48_sites = sum(src.count(x) for x in (
+        "timeout -k 10 $timeout opencode run -m",
+        "timeout -k 10 $continueTimeout opencode run --continue",
+        'timeout -k 10 "$BUDGET" claude',
+        "timeout -k 10 $timeoutS opencode run -m"))
+    need("O-48 4 处生产派发命令位都已加 `-k`（主路/续跑/claude 备路/judge）",
+         o48_sites == 4,
+         f"只命中 {o48_sites}/4 ⇒ 有命令位漏改（漏的那个悬挂时永不返回）")
+
+    o48_rc = ("$code -eq 124 -or $code -eq 137" in src) and ("$rc -eq 124 -or $rc -eq 137" in src)
+    need("O-48 rc 映射把 `-k` 的 KILL 码 137 与 124 一并归 6",
+         o48_rc,
+         "加 `-k` 后 KILL 生效时 timeout 返回 137（非 124）⇒ 不归并会让「超时」落成**未映射失败**，"
+         "丢掉续跑/备路（且 137 与 OOM 同码，已在注释里留痕说明）")
+
+    print(f"\n静态护栏 {18} 条")
     if fails:
         print("FAIL:")
         for x in fails:
