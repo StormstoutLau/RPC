@@ -12,6 +12,13 @@ accept:
   - test -f out/falsegreen.md
   - test "$(grep -c '^- ' out/falsegreen.md)" -ge 10
   - grep -qE 'secrets|doclinks|inbox' out/falsegreen.md
+evidence-manifest:
+  version: 1
+  subjects:
+    - name: falsegreen
+      path: falsegreen.md
+      state: out/falsegreen.md
+      digest: sha256
 ---
 ## 任务描述
 
