@@ -48,7 +48,7 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | O-22 | 运维缺陷 | P1   | `.meta` 残留误导：只在 run 结束写、无 task_id → 二次 run 时读到上次终态（RUN_S=900/RC=124 误判"又超时"，实为残留） | ✅ 已收口（2026-09-12） | 契约修复 + 观测判据订正 | 2026-09-07 | <br /> |
 | O-23 | 架构/超时 | P1   | **复杂度路由 ctx 解耦**：profile.context(code=8192/reason=32768/long=262144) 只是元数据、从未传给引擎；opencoe 用 opencode.jsonc 固定 limit.context=131072，引擎 ctx 由手动 flavor 预设决定 → 三者解耦。**凌晨 refdedupe timeout 真根因**=`request exceeds available context size (8192)`：nothink 档引擎 `-c 8192` < refdedupe 请求 12536 tokens → 服务端 400 → agent 永久挂死 → 900s timeout | ✅ 已修复+实机验证（引擎 ctx=唯一真相） | 2026-09-07 radical fix B | <br /> | <br /> |
 | O-24 | 架构/闭环 | P1   | **单机 agent CLI 工作流闭环断点（分析定案）**：单机形态（无第二站分摊/换站/互审）存在 4 类断点——①review --peer 缺（产出→ledger 后无机器复核门）②超时续接 --continue 缺（长卡单机唯一韧性出路）③claude 备通道缺（单引擎死锁=停摆）④单机排队/上下文治理缺。P0=review 单机版 + continue 续接 | ⏳ **P0-① 已落地实证**（续跑循环入 $body，RESUME 出线+超时卡全链+零回归）；P0-② ✅（被 O-16 覆盖闭环） | O-24 实施记录 | <br /> | <br /> |
-| O-25 | 演进/可观测 | P2   | **agent 任务执行进度可观测性（派发前预估 + 派发中节拍）**：派发后黑盒——ledger/.meta/.agent-run 均为 run-end 快照，无运行中采样 → 长卡状态不可观测、无吞吐、无 ETA；预算估算用单一 wall-clock 而非分相 | 🔵 P0 完成 + 判据③已落地：①吞吐基准表✓（THROUGHPUT-BASELINE.md+metrics-log Phase 6.2）；②`.progress` 打点✓（远端5s采样+teardown终值+collect拉取+parse回填）；③派发前预估✓（Get-ThroughputEstimate 分相估算，HIT才给/MISS不打荒，TIMEOUT-WARN预警；实证 gpt-oss 682s、回归9/9）；**P1槽位门✓（并入O-08/F1：`_slot_gate.sh`+`Invoke-SlotGate`+task接入，busy默认reject exit 24，`--slot-allow-busy`放行，slot记入run.json）**；**P2看板✓（2026-09-12 落地，L3 单文件 HTML：`make-dashboard.ps1` 生成器→内联 ledger+run.json→self-contained `dashboard.html`，file:// 直开零网络请求；已完成总览 22 行+run 详情展开；正在跑/Live tab 由 `-Live` 拉远端 .progress，无则 no-live-data；见 O-25 详情节）** | 🔵 **O-25 已全收口（①-④+P1/P2 全落地 + 2026-09-12 实机在线实测全通，见详情节）** | 一期 | <br /> |
+| O-25 | 演进/可观测 | P2   | **agent 任务执行进度可观测性（派发前预估 + 派发中节拍）**：派发后黑盒——ledger/.meta/.agent-run 均为 run-end 快照，无运行中采样 → 长卡状态不可观测、无吞吐、无 ETA；预算估算用单一 wall-clock 而非分相 | 🔵 P0 完成 + 判据③已落地：①吞吐基准表✓（THROUGHPUT-BASELINE.md+metrics-log Phase 6.2）；②`.progress` 打点✓（远端5s采样+teardown终值+collect拉取+parse回填）；③派发前预估✓（Get-ThroughputEstimate 分相估算，HIT才给/MISS不打荒，TIMEOUT-WARN预警；实证 gpt-oss 682s、回归9/9）；**P1槽位门✓（并入O-08/F1：`_slot_gate.sh`+`Invoke-SlotGate`+task接入，busy默认reject exit 24，`--slot-allow-busy`放行，slot记入run.json）**；**P2看板✓（2026-09-12 落地，L3 单文件 HTML：`make-dashboard.ps1` 生成器→内联 ledger+run.json→self-contained `dashboard.html`，**📌 2026-09-24 注：该生成器与产物已按 ADR-0004 D5 脚本清减移除（`3712f06`），能力由 [`ops/cluster_web.py`](../../ops/cluster_web.py) 统一管理页承接 —— 见 O-38**，file:// 直开零网络请求；已完成总览 22 行+run 详情展开；正在跑/Live tab 由 `-Live` 拉远端 .progress，无则 no-live-data；见 O-25 详情节）** | 🔵 **O-25 已全收口（①-④+P1/P2 全落地 + 2026-09-12 实机在线实测全通，见详情节）** | 一期 | <br /> |
 | O-26 | 演进/编排 | P2   | **单任务分解派发并行（Split-Dispatcher）**：现派发=单卡→单站；一张可切分 readonly 大任务卡在单节点（物理上界 3：A/B/C 各1 并发，O-18）无法利用多站。缺口=任务卡无 `decompose` 声明、编排层无拆/并、无 Merge | ✅ **已闭环（2026-09-12）**：decompose 拆 2 分片 A/B 双站并行，全子卡 accept，Merge 正确，并行 465.1s ≪ 串行 720.8s（ratio 0.645）；落地修复 2 bug | V2 fan-out L2.5（schema 冻结前加 decompose 键） | <br /> | <br /> |
 
 | O-27 | 验证/判据 | P1 | 证据链 `_VERDICT_RC_MAP` 未覆盖"远端 0 ⇄ 整体 1"（验收失败路径）⇒ **任何 accept 失败的 run 都阻断提交** | ✅ 已闭环（裁定 b **治同源** + 12 条正反注入） | ✅ 已修 |
@@ -61,14 +61,17 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | O-34 | 门禁/一致性 | P2 | **迁移/重命名后「首次」门禁为 FAIL(1 项失败 / 绿灯 9)，而提交时同一命令为 PASS(绿灯 10)** —— **已定位**：`_iter_source_files()` 以 `git ls-files` 取范围，其假设"**pre-commit 阶段新文件已 `git add`**"**只在钩子里成立**；手动直跑 + 未暂存 ⇒ 范围不同 | ✅ **已修（2026-09-23）**：新增 `_untracked_count()`，`secrets` 报数行在未跟踪数 >0 时显式追加提示 ⇒ **让"范围已收窄"可见** | ✅ 已修 |
 | O-35 | 并发/引擎 | P1 | **站上本地引擎是否支持并发请求 —— 未验证**（与 O-31 **不是同一问题**：O-31 修的是**文件名冲突**［文件层］，本条是**引擎并发行服务**［引擎层］） | ⏳ **待立项验证**（含"输出错配"这一最危险形态） | D6-P2 · D7 |
 | O-37 | 工具/信号 | **P1** | **`.progress` 采样器 `t=0` 读上一轮残留**：启动时只 `: > .progress`、**不清 `out/.agent-output.txt`** ⇒ 首样本 `bytes_s` 假高（1.4e6+ B/s），**且 `bytes>0` 在 t=0 即成立** = **假进度/假完成信号**（与 T-1、O-22 同病族） | ✅ **已修 + 正反均已实测**（反例 = A1/B2 两条铁证；正例 = A2 复跑 `t=0 bytes=0`） | ✅ |
-| O-38 | 文档/一致性 | P2 | **O-25 P2 看板缺磁盘证据**：其计划件写的 `ops/station-bin/make-dashboard.ps1` 与产物 `dashboard.html` **全仓 + 归档区均无**，`inventory/ops.yaml` 也未登记 ⇒ 台账"P2 看板 ✓ 已落地"**存疑** | ⏳ 待复核（是否从未入库/被清理） | O-25 · D6-P1-1 |
+| O-38 | 文档/一致性 | P2 | **O-25 P2 看板缺磁盘证据**：其计划件写的 `ops/station-bin/make-dashboard.ps1` 与产物 `dashboard.html` **全仓 + 归档区均无**，`inventory/ops.yaml` 也未登记 ⇒ 台账"P2 看板 ✓ 已落地"**存疑** | **✅ 已复核（2026-09-24）**：**非虚报** —— 看板曾落地（`5f2b395`），后按 **ADR-0004 D5 脚本清减**删除（`3712f06`, 2026-09-15），**能力由 `ops/cluster_web.py` 统一管理页承接** ⇒ 仅**落点表述过时**（同 O-33 族） | O-25 · D6-P1-1 |
 | O-39 | 可观测/基准 | P2 | **派发前预估对出网档恒 MISS**：`ESTIMATE: … no-bench (MISS) - skip dispatch estimate`（基准表只覆盖 `local/*`）⇒ **吃狗粮全链路无预估** | ⏳ 待决定（补 bench 行 or 显式声明"不估算"） | O-25 |
-| O-40 | 证据/回收 | **P1** | **卡的产物不进 run 目录**（`WORKSPACE_DIFF_LINES=0`）：产物只留站上工作区 ⇒ 目前**只能手动 `scp`** 取回（非持久位置） | ⏳ 待建（卡里声明 `evidence-manifest.subjects` / 复验器按声明走 —— ADR-0007 阶段 1 已支持"声明+落 run.json"） | D6-P1-1 · ADR-0007 |
-| O-41 | 门禁自审 | P2 | **B2 审计报出的两条"疑似未登记假绿"**：① `doclinks` 对**绝对路径/盘符/URL 一律"不可判"跳过**（可写不存在路径而不报错）② `engine` 的**残留阈值 2048MB 硬编码**（1.5GB 且不监听端口的残留进程会被判正常） | **✅ 已复核（2026-09-24）**：**① 非缺陷**（= 射程声明"只判仓库内相对链接"，且不可判数已报数 ⇒ 留痕即关闭）· **② 真缺口**（字面成立，待加固） | D6-P0-1（门禁自审，仅 ② ） |
+| O-40 | 证据/回收 | **P1** | **卡的产物不进 run 目录**（`WORKSPACE_DIFF_LINES=0`）：产物只留站上工作区 ⇒ 目前**只能手动 `scp`** 取回（非持久位置） | **✅ 已实现（2026-09-24 复核）**：卡声明 `evidence-manifest.subjects[].state` + collect 段白名单 scp 回收 ⇒ 实测 `EVM_STATE: pulled=1`（B2 / 受控夹具 two runs）| D6-P1-1 · ADR-0007 |
+| O-41 | 门禁自审 | P2 | **B2 审计报出的两条"疑似未登记假绿"**：① `doclinks` 对**绝对路径/盘符/URL 一律"不可判"跳过**（可写不存在路径而不报错）② `engine` 的**残留阈值 2048MB 硬编码**（1.5GB 且不监听端口的残留进程会被判正常） | **✅ 已复核（2026-09-24）**：**① 非缺陷**（= 射程声明"只判仓库内相对链接"，且不可判数已报数 ⇒ 留痕即关闭）· **② 真缺口**（字面成立）⇒ **✅ 已加固**（`RESIDUAL_WARN_MB=1024` 预警带 + 单测 `test_rpc_check_engine_bands.py` 7/7） | D6-P0-1（门禁自审，仅 ② ） |
 | O-42 | 权限/通道 | **P1** | **`claude` 通道 `-p` 无写权限 ⇒ 产物型任务不可用**：烟测中模型自报"文件写入被拒"，`ACCEPT_OK=0`；调用形式 `'-p "" --model "<id>"'`（[agent-cli.ps1:2729](../../ops/station-bin/agent-cli.ps1)）**不带任何权限开关**，`settings.json` 的 `defaultMode: acceptEdits` 在 `-p` 下不生效 | **✅ 已修**（2026-09-24）：`-p` 按卡 `readonly` 动态加 `--permission-mode acceptEdits`（false 才可写；true 空串保只读）；claude 烟测端到端 `ACCEPT_OK=1` + `out/smoke.txt`=`SMOKE_OK`（run `202609241047036207`） | D6-P2 · claude 通道 |
 | O-43 | 通道/归因 | **P1** | **zen（`opencode/*`）"需要 tty"被误判为"缺凭据"**（2026-09-21 结论）：非 tty 挂死 `RC=124` 且 DEBUG 日志**无任何 401/403/凭据错误**；套 `script -qec` **伪 tty** 后**同一模型 43s 返回 `ZEN_OK`** ⇒ **恢复 zen 不需要登录**，门槛是"给非交互路径伪 tty + **PTY 输出净化**" | **✅ 机制已验通 · ✅ 采样结论：不建议纳入运行时路由**（zen 5 次 **1/5 成功**、其后连续 4 次 152s 零输出=限流/空闲流卡死；**官方 = 限时免费实验资产**、随时下架 ⇒ 不接 ROUTE_TABLE，仅人工试点偶用） | D6-P2 · ROUTE_TABLE |
-| O-44 | 门禁自审 | P2 | **`scripts` 把「未提交的新脚本」报成"清单项已不存在(应移除)"**：`gone` 基于**git 跟踪集**（`_iter_source_files`，同 O-34）⇒ 未跟踪的新脚本在冻结清单里"消失"；而该提示措辞**鼓励删除登记**（照做则提交后立刻"未登记"⇒ FAIL） | ⏳ 待修（三候选：① 加"未跟踪脚本未计入"提示 ② 措辞区分"未提交"与"确已不存在" ③ `gone` 改判**文件是否真不存在**） | D6-P0-1 · **O-34 同源第二处消费者** |
+| O-44 | 门禁自审 | P2 | **`scripts` 把「未提交的新脚本」报成"清单项已不存在(应移除)"**：`gone` 基于**git 跟踪集**（`_iter_source_files`，同 O-34）⇒ 未跟踪的新脚本在冻结清单里"消失"；而该提示措辞**鼓励删除登记**（照做则提交后立刻"未登记"⇒ FAIL） | **✅ 已修（2026-09-24）**：`gone` 改判**文件真实存在性**（③）+ 新增 `untracked_frozen` 桶单独报、措辞**劝阻删除**（①）；**正反自证**：`git rm --cached` ⇒ note 报"1 项未跟踪(勿删)"（不再误报"应移除"），`git add` 后复原 | D6-P0-1 · **O-34 同源第二处消费者** |
 | O-45 | 安全/执行面 | P2 | **`collect` 命令的"真执行器"未实现、且须带沙箱**（ADR-0007 line 475 明确"若执行需沙箱约束，否则卡可借 `collect` 任意执行"）。本轮 P1-1 先走**白名单 scp**（A-②）**不选此路**；本文档登记为待办，**须独立立项**：解析 → 远端执行 → 产物拉回 → **沙箱约束**（禁绝对路径 / 禁出 `$W` / 禁网络 / 禁 `..` / 白名单工具） | ⏳ 待立项（独立，非本轮） | D6-P2 · ADR-0007 |
+| O-46 | 稳定性/通道 | **P1** | **出网档上游 Nvidia（`nemotron-3-ultra:free`）503/504 反复**：B2 7 次派发 **5 次被上游打断**（`provider_overloaded` / `idle timeout`） | **✅ 已裁（2026-09-24）**：**上游 provider 容量/冷却**（OpenRouter 官方 + NVIDIA 论坛一手实例佐证），非本地 · **缓解 ①② 已实施**（resume 2→3 + 冷却退避；失败 run 主动清残留）· **端到端负向验证通过**（`O46_CLEAN` 清 5 项 / 远端全 GONE / runDir 留存） | O-22 · 吃狗粮 |
+| O-47 | 通道/模型 | P2 | **`lightning`（`openrouter/thinkingmachines/inkling:free`）实测不可用**：A1 卡 **5 分钟仅产出 51 字节**（非加载/网络卡点 —— 是**生成侧停滞**；进程活着、锁已取得、`out/.agent-output.txt` 几乎不增长） | ⏳ 待决定（暂观察 or 从三档剔除；与 O-43/O-46 同族：**免费档稳定性无保证**） | ROUTE_TABLE · O-43 · O-46 |
+| O-48 | 运维/孤儿进程 | P2 | **站上 `timeout 45` 诊断进程存活 17 小时**（B 站 `etimes=61817`，`timeout 45 opencode run --print-logs --log-level DEBUG …`）⇒ **`timeout` 未按预期终止**，孤儿进程长期驻留 | ⏳ 待复核（为何 `timeout` 失效；候选：`--kill-after` / 父进程回收 / O-43 收尾未清） | O-43 收尾残留 |
 
 ## 2. 各未决项详情
 
@@ -303,14 +306,22 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 - **验证（正反）—— ✅ 均已完成**：**反例已在盘上**（本条两条铁证即"改前 t=0 非 0"）；
   **正例 = 修后复跑**（run `202609240121190214`）：`.progress` 首行 **`t=0 bytes=0 bytes_s=0`** ✓（改前同位置是 4434/4470）
 
-#### O-38：**O-25 P2 看板"已落地"缺磁盘证据**（待复核）
+#### O-38：**O-25 P2 看板"已落地"缺磁盘证据**（**✅ 已复核：非虚报，是"有意清减 + 能力被取代、台账未回写"**，2026-09-24）
 
 - O-25 台账原文："**P2看板 ✓（2026-09-12 落地**，L3 单文件 HTML：`make-dashboard.ps1` 生成器→内联 ledger+run.json→self-contained `dashboard.html`）"。
 - **实测（2026-09-24）**：`Glob **/*dashboard*` 全仓只命中 `.trae/documents/O-25-P2-dashboard.md`（**计划件**）；
   `ops/station-bin/` 下**无生成器、无产物**；`inventory/ops.yaml` **未登记**它；`archive/scripts-history/` 也无。
-- ⇒ **要么它从未入库、要么被清理且未留痕** —— 与 **O-33**（文档引用旧路径）、**T-1**（完成信号与证据不同源）同族。
-- ⚠ 旁证：该计划件自己写明生成器路径 = `ops/station-bin/make-dashboard.ps1`、产物 = `ops/station-bin/dashboard.html` ⇒ **按该路径查证为空**。
-- **待办**：人工确认（git 历史里是否曾提交过）→ 若确无，则**修正 O-25 的"已落地"表述**并单列待建。
+- ★ **复核（2026-09-24，`git log --all --name-only` + 提交信息）—— 真相不是"从未入库"**：
+  | 提交 | 动作 |
+  |---|---|
+  | `5f2b395` chore(security) | **加入** `ops/station-bin/dashboard.html` + `make-dashboard.ps1` |
+  | **`3712f06`** refactor(governance) *"第一批脚本清减 (删 7 个)"*（**ADR-0004 D5**「统一管理入口为唯一管理面」, 2026-09-15） | **删除**上述两件 |
+- ⇒ **定性**：看板**曾以独立脚本形式落地**，后在 **ADR-0004 D5 的脚本清减中被人为移除**（**合规动作**，非丢失）；
+  且**同日**（2026-09-15）[`ops/cluster_web.py`](../../ops/cluster_web.py)（76KB，**已登记 `inventory/ops.yaml`**）**统一管理页改造定版** ⇒ **能力被承接/取代**。
+- ⇒ **结论**：**O-25 的"功能已落地"基本成立，错的是"落点"表述**（仍指向被删的 `make-dashboard.ps1`/`dashboard.html`）。
+  ⇒ **处置 = 修正落点表述并关闭本项**（同 **O-33** 族：「实体搬家后文档未跟随」，非缺陷、非虚报）。
+- ⚠ **方法论留痕**：本条一度被定性为"**台账凭空虚报**"——**是错的**。`git log --all -- <path>` 一步即可分辨
+  "从未入库 / 曾入库后被删"；**仅凭工作区 `Glob` 就下"虚报"结论，等于用"现在的快照"推断"历史"**（与"凭推断下结论"同病）。
 
 #### O-39：**派发前预估对出网档恒 MISS**（待决定）
 
@@ -327,6 +338,11 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 - **影响**：任何"产物即结论"的卡（A1/A2/B1/B2 全是）都**需要一个回收动作**，否则吃狗粮的产出留不住。
 - **候选**：① 卡里声明 `evidence-manifest.subjects`（ADR-0007 阶段 1 已支持"声明 + 落 run.json"，复验器按声明走）；
   ② 扩展 collect 白名单；③ 主控侧回收命令。**建议 ① 优先**（不新增机制，复用既有契约）。
+- **✅ 已实现（候选①，2026-09-24 复核确认）** —— 台账此前标"待建"**属滞后**：
+  - **机制在**：[`agent-cli.ps1` 的 collect 段](../../ops/station-bin/agent-cli.ps1) 有 EVM pull（白名单校验 + scp 回 runDir，O-40/A-1 落地）；
+  - **声明在**：`dogfood-cards/` **5 张卡**均已写 `evidence-manifest.subjects[].state`；
+  - **实证在**：B2 run `202609241608498832` 与受控夹具 run `202609241819027923` 均打出 **`EVM_STATE: pulled=1 rejected=0`**，产物 `o46-probe.txt`（内容 `HELLO_O46`）在 runDir 内可读。
+  - ⚠ **仍未覆盖的边界**：卡**必须显式声明**才回收（未声明 ⇒ 不拉，静默）；且**不覆盖 collect 命令本身**（那是 O-45）。
 
 #### O-41：B2 报出的**两条"疑似未登记假绿"** —— **已复核：① 非缺陷 / ② 真缺口**（2026-09-24）
 
@@ -348,8 +364,13 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 **② 复核依据**（[`rpc_check.py:2208`](../../ops/rpc_check.py#L2208) `RESIDUAL_RSS_MB = 2048`）：
 - `elif rss >= RESIDUAL_RSS_MB:` 才记 detail（判 FAIL）；`rss < 2048` 且无端口 ⇒ 落 `else` ⇒ **info「引擎未运行——零自加载方针下属正常」⇒ PASS**；
 - ⇒ **字面成立**：1.5GB 且不监听 `ENGINE_PORTS` 的残留 llama 进程被判"正常"（**内存被占着没干活**，会污染加载预估 —— 正是该断言的设立目的）。
-- **加固候选（归 D6-P0-1，不单独开批）**：① 阈值可配（真值表登记）② 改判"无端口 ∧ RSS > 某下限"为 WARN（非 FAIL，避免噪声）③ 至少把"未达阈值的非零 RSS"作 info 报出（让"被放过"可见）。
-- **关闭判据**：构造一个 `RSS ∈ [1024, 2048)` 且不监听引擎端口的残留进程 ⇒ 加固后**必须不判 PASS**（正反双向自证）。
+- **✅ 已加固（2026-09-24）**：新增常量 `RESIDUAL_WARN_MB = 1024`（[`rpc_check.py`](../../ops/rpc_check.py)），
+  `无端口 ∧ RSS ∈ [1024, 2048)` ⇒ 报 **WARN**（"疑似残留/启动中"，**不升 FAIL** —— 仍可能含瞬态且不阻塞加载）。
+  下沿取 1024 是**刻意**的：`ggml-rpc-server` 空转 ~0.3G 属既有阈值明确容忍的情形，不能被本条变成噪声。
+- **✅ 关闭判据已满足（正反自证）**：新增护栏 [`tests/test_rpc_check_engine_bands.py`](../../tests/test_rpc_check_engine_bands.py)
+  （monkeypatch `_health_probe` 离线覆盖全分带）⇒ **7/7 通过**，含关键用例
+  **「1536M 无端口 ⇒ WARN（旧实现判 PASS）」**、以及"300M 空转仍 PASS / 3000M 仍 FAIL / 端口在听但 RSS 过小仍 WARN"三向不回归。
+  另加结构护栏：`RESIDUAL_WARN_MB < RESIDUAL_RSS_MB`（顺序颠倒 ⇒ 预警带永不触发）。
 
 > ⚠ 同批产出中**另有 4 条是"独立命中已知"**（`secrets` 未跟踪文件 / `inventory` 声明源列表 / `aliases`·`evidence` 缺 paramiko / `inbox` 目录缺失即 PASS）
 > ⇒ 这既是**模型读懂了**的证据，也是**局限**（它没超出人类已记录的范围）；如实标注，避免高估。
@@ -500,7 +521,15 @@ DONE_Z
   ③ 更彻底：`gone` 只在**文件确实不存在**时才算（即 `not (ROOT/f).exists()`）。
 - **本次自纠**：我先前把这行判为"**改动前就存在的历史遗留**"——**错了**；它其实是当时**我自己那批未跟踪的新脚本**
   （先是 `_zen_pty_pilot.sh`、后是 `_zen_stability_sample.sh`）造成的，**提交后即自动消失**。
-- **状态**：⏳ 待修（本轮先登记；不影响门禁红灯 —— `bad` 只由 `unknown/missing_entry/missing_module` 决定）
+- **✅ 已修（2026-09-24）**：采用**候选 ③ + ① 组合**（③ 治本、① 保透明）——
+  `gone` 改为**文件真实存在性** `not (ROOT/f).exists()`；另拆出 `untracked_frozen` 桶
+  （**存在但未 git 跟踪**）单独报，措辞明确**劝阻删除**（"勿据此删登记，只需 `git add`"），并进 `note` 行。
+- **✅ 正反自证（2026-09-24 实测）**：
+  | 用例 | 操作 | 实测 |
+  |---|---|---|
+  | **反例** | `git rm --cached ops/lm-download/speedtest_asset.sh`（文件仍在盘上） | note = `清单含 1 项**未跟踪**(勿删, 仅需 git add)` —— **不再**误报"已不存在(应移除)" ✓ |
+  | **恢复** | `git add` 同文件 | note 回到干净（无未跟踪/无应移除）✓ |
+- **状态**：✅ 已修（含正反自证；`bad` 集未变 ⇒ 不影响红绿语义）
 
 #### O-45：**`collect` 命令的"真执行器"未实现、且须带沙箱**（待立项，独立）
 
@@ -533,6 +562,35 @@ DONE_Z
     ⇒ 由"静态验证"升为"**端到端实证**"，并留下**可复用受控失败夹具**。
     ⚠ **边界（如实登记）**：清理射程 = **本次声明的产物 + 4 个固定状态件**，**不覆盖历史未声明残留**（工作区级 GC 另案）；`readonly` 卡不适用。
   - **状态**：✅ 已裁 + 缓解 ①② 已实施（P1；③④ 后置暂缓；不阻断门禁绿灯）。
+  - ⚠ **★ 缓解① 的代价（2026-09-24 实测得出，须记）**：resume `2→3` 是**每个 attempt 各自满预算**
+    ⇒ 对"**卡死的模型**"（见 O-47）最坏墙钟从 `3×600s` 涨到 **`4×600s`（+退避）≈ 40+ 分钟**。
+    ⇒ 结论：① 的收益建立在"上游是**间歇性**过载、退避后能成功"这一前提上（O-46 的实测正是如此）；
+    对"**模型侧持续性停滞**"（O-47）① 只会**放大等待**，**不能治** —— 那类要靠**输出停滞探测器**（另案）。
+
+#### O-47：**`lightning`（`inkling:free`）实测不可用 —— 生成侧停滞**（2026-09-24）
+
+- **一手实况**（本会话并行派发实验，B 站，A1 卡，`-Model lightning`）：
+  | 观察 | 值 | 含义 |
+  |---|---|---|
+  | 锁 | `LOCK_ACQUIRED` ✓ | 非并发/锁问题 |
+  | 进程 | `opencode run -m openrouter/thinkingmachines/inkling:free` 存活（etimes 298s） | 进程活着、非崩溃 |
+  | `out/.agent-output.txt` | **51 字节**（5 分钟） | ★ **生成侧停滞**（对比：同刻 `ultra` 的同卡在 A/C 两站 **~70s 内完成**，exit=0） |
+- **定性**：与 **O-43**（zen 5 次 1/5 成功、其后 152s 零输出）、**O-46**（free 档上游过载）**同族** ——
+  ⇒ **三档免费档的稳定性均无保证**（官方均为"限时/免费实验资产"）。
+- **处置建议**：`lightning` **暂留表内但标注"稳定性未验/不推荐"**；要稳定选 **`ultra`**（本会话多次成功，含 A/C 两站）。
+  ⚠ 不要据此删档 —— 需先分辨是"模型侧"还是"账户限流"，本样本只有 1 次（**样本量不足，勿下结论**）。
+- **旁证**：终止该 run 后 **O-46② 清理仍正常触发**（`O46_CLEAN: 已清理远端 5 项`）⇒ 缓解② 对"被杀 run"也生效。
+- **状态**：⏳ 待决定（暂观察；候选：再采 2-3 次 / 或从三档剔除）
+
+#### O-48：**站上 `timeout 45` 诊断进程存活 17 小时**（2026-09-24，孤儿进程）
+
+- **一手实况**：B 站 `ps` 残留 `2993016 61817 bash -c cd /tmp; timeout 45 opencode run --print-logs --log-level DEBUG -m …`
+  ⇒ **`etimes = 61817s ≈ 17.2 小时**，而该命令自带 **`timeout 45`**（45 秒）。
+- **含义**：`timeout` **未按预期终止**子进程（`open`code 可能忽略 SIGTERM / 重新 parent 到 init）⇒ 孤儿进程长期驻留。
+- **影响**：占用 PID/句柄与（若有）网络连接；让"站上是否有 agent 在跑"的判据**误判**。
+- **处置候选**：① `timeout --kill-after=10 45 …`（先 TERM 后 KILL）；② 收尾脚本按 pattern 清理；
+  ③ 若属 O-43 试点残留 ⇒ 一并清理并**在 O-43 收尾清单里补"清进程"一步**。
+- **状态**：⏳ 待复核（**未擅自杀** —— 先确认它是否仍被某流程依赖；`--log-level DEBUG` 提示是 O-43 试验遗留）
 
 ### O-01：--attach 传输未实现
 

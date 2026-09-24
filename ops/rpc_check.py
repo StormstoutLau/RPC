@@ -629,7 +629,9 @@ def check_scripts(ctx):
     unknown = sorted(s for s in scripts if s not in known)
     missing_entry = [e for e in entry if not (ROOT / e).exists()]
     missing_module = [m for m in modules if not (ROOT / m).exists()]
-    gone = sorted(f for f in frozen if f not in scripts)
+    gone = sorted(f for f in frozen if not (ROOT / f).exists())          # O-44: 真不存在
+    untracked_frozen = sorted(f for f in frozen                          # O-44: 存在但未 git 跟踪
+                              if (ROOT / f).exists() and f not in scripts)
 
     detail = []
     if unknown:
@@ -646,12 +648,21 @@ def check_scripts(ctx):
         detail.append(f"冻结清单里已不存在的 {len(gone)} 项可从 inventory/ops.yaml 删掉 "
                       f"(只减不增, 删减是欢迎的方向): " + ", ".join(gone[:8])
                       + (" …" if len(gone) > 8 else ""))
+    # O-44 (2026-09-24): 与 `gone` 分开报 —— 这些**文件确实在**，只是本次扫描（git 跟踪集）没覆盖到。
+    #   旧实现把它们并入 `gone` 并提示"已不存在、可从清单删掉" ⇒ **照做则提交后立刻变"未登记" FAIL**。
+    #   措辞必须**明确劝阻删除**（O-34 同源：范围收窄必须让"收窄"本身可见）。
+    if untracked_frozen:
+        detail.append(f"冻结清单里 {len(untracked_frozen)} 项**文件存在但未被 git 跟踪**(未 `git add`) "
+                      f"⇒ 本次扫描未计入, **勿据此删登记**(只需 `git add`): "
+                      + ", ".join(untracked_frozen[:8]) + (" …" if len(untracked_frozen) > 8 else ""))
     bad = bool(unknown) or bool(missing_entry) or bool(missing_module)
     note = (f"扫描 {len(scripts)} 个脚本 · 入口 {len(entry)} · 拆分模块 {len(modules)} "
             f"· 站上运行时 {len(runtime)} · 冻结存量 {len(frozen)} · 未登记 {len(unknown)}")
     # 提示必须进 note: PASS 时明细块不打印, 只放 detail 等于没人看得到 (实测踩到)
     if gone:
         note += f" · 清单含 {len(gone)} 项已不存在(应移除)"
+    if untracked_frozen:
+        note += f" · 清单含 {len(untracked_frozen)} 项未跟踪(勿删, 仅需 git add)"
     return ("FAIL" if bad else "PASS"), note, detail
 
 
@@ -1746,6 +1757,11 @@ ENGINE_PORTS = ("8080", "8081", "18080", "18081", "50052")
 # 取 2G: 正常单机 llama-server 的 RSS 是几十 G 量级, 而 ggml-rpc-server 空转也有 ~0.3G,
 # 故 2G 能把"真占住了"和"进程刚起/空跑"分开 (本会话真的踩到过 62.6G 残留污染判定)。
 RESIDUAL_RSS_MB = 2048
+# O-41② (2026-09-24): **预警带下沿** —— `[1024, RESIDUAL_RSS_MB)` 且无引擎端口 ⇒ 报 WARN（不 FAIL）。
+#   为什么需要: 旧实现只有"≥2G = 残留 FAIL"与"否则 = 正常"，**1024~2048M 这一段完全无声**
+#   （O-41② 实测: 1.5G 无端口残留被判"正常"）。下沿取 1024 是为了**不误报 ggml-rpc-server 空转(~0.3G)**
+#   与"进程刚起"这两种刻意容忍的情形 ⇒ 只覆盖"明显占住了但没在服务"的带。
+RESIDUAL_WARN_MB = 1024
 
 # ── 站上件"部署一致性"跟踪清单 (2026-09-22 裁定接入 gates) ──────────────────────
 # 背景: 这些件是**站上件** —— 部署在 `/usr/local/bin/`, 仓库副本只是"快照"。
@@ -2209,6 +2225,14 @@ def check_engine(ctx):
             detail.append(f"{st} 站**残留**: 无任何引擎端口在听, 但 llama/rpc 进程仍占 "
                           f"{rss // 1024}G RSS —— 内存被占着没干活, 会污染加载预估 "
                           f"(先 infer-unload / 清残留再加载)")
+        elif rss >= RESIDUAL_WARN_MB:
+            # O-41② (2026-09-24): `rss_mb` 只统计 **llama 系进程**（见 `_health_probe` 的 PROC 段 awk
+            #   `grep -E 'llama-server|ggml-rpc-server|llama-cli'` 再求和）⇒ "无引擎端口 ∧ RSS 在预警带"
+            #   **本身就是残留信号**。旧实现让它落 `else` 判"正常"且**完全无声**
+            #   （O-41② 实测：1.5G 无端口残留被判正常 —— 正是该断言要防的那类）。
+            #   只报 **WARN** 不 FAIL：该带仍可能含"启动中/收尾中"瞬态，且不阻塞加载。
+            warn.append(f"{st} 站有 llama 系进程占 {rss}M 但无引擎端口在听 —— 疑似残留/启动中 "
+                        f"(预警带 ≥{RESIDUAL_WARN_MB}M, FAIL 阈值 {RESIDUAL_RSS_MB}M)")
         else:
             info.append(f"{st} 站引擎未运行 (RSS {rss}M) —— 零自加载方针下属正常")
 
