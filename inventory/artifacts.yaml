@@ -1,0 +1,45 @@
+# 生成物清单（D6-P1-1）—— "**权威源在别处**"的文件
+#
+# 为什么需要它：本仓有一批**由别处推导出来的**文件，此前**没有"生成物"这个概念** ⇒
+#   · 它们可能被**手工改**（改完看着对，但下次重跑就被覆盖 = 白改）；
+#   · 也可能**改了源头忘了重跑**（= 本会话"假绿"家族的镜像病）。
+#
+# 纪律（[路线总表 §3 D6-P1-1](../../docs/2026-09-23_D6-D7分阶段执行方案.md) 第 3 条）：
+#   **生成物禁止手工编辑** —— 一律 "改源头 → 重跑 → 跑 `--check`"。
+# ⚠ 同批第 4 条：**"语法/编译通过" ≠ "接线完整"** —— 本清单的作用正是把
+#   "**到底有没有人真的在判它**"变成机判（见 `check` 字段 + 断言的覆盖率报数）。
+#
+# 字段（每条**必须**满足其一：`check` 或 `exempt`；两者都给或都不给 ⇒ 断言 FAIL）：
+#   path      : 生成物（相对仓库根）
+#   authority : 权威源（一句话：由什么推导 / 由哪条命令重算）
+#   check     : 判它的**门禁断言 id** —— 必须是 `ops/rpc_check.py` 的 `CHECKS` 里**真实存在**的 id
+#   exempt    : 显式豁免理由（**不许既不判也不说明** —— 那正是静默缺口）
+version: 1
+items:
+  # ── 真生成物：权威源在别处，且已有断言在判 ────────────────────────────────
+  - path: archive/evidence-chain/agent-chain.json
+    authority: "cluster.py agent chain（派发时由 pre-commit 钩子自动追加）"
+    check: evidence
+  - path: archive/evidence-chain/ANCHOR.txt
+    authority: "cluster.py agent chain（锚文件，与上者同源）"
+    check: evidence
+  - path: inventory/audit-baseline/desktop-br5r8ev.json
+    authority: "cluster.py agent audit --accept（审计水印，按机分片存储）"
+    check: evidence
+
+  # ── 准生成物：既是登记表，又必须与实况一致 ──────────────────────────────
+  - path: inventory/ops.yaml
+    authority: "ops/** 目录实况（frozen_ops_scripts 必须与扫描集一致；只允许'只减不增'）"
+    check: scripts
+
+  # ── 显式豁免（有据，不是漏判）────────────────────────────────────────────
+  - path: .git/hooks/pre-commit
+    exempt: "由 ops/rpc.ps1 install-hooks 生成；位于 .git/ 内，不在门禁扫描射程（且手改会被下次 install 覆盖）"
+  - path: docs/2026-09-23_D6-D7分阶段执行方案.md
+    exempt: "其 §2.2 模型/路由表是 ROUTE_TABLE 的**精选视图** —— 路线总表 §3 P1-2 的 M-3 已显式豁免（加断言会误报）"
+
+# ── 附：本清单**不**列入 `items` 的一类，理由在此（避免"看着像漏了"）──────────
+# `inventory/` 其余真值表（models / ports / plugins / impact / net / sensitivity）：
+#   **权威源在自身** ⇒ 它们**不是生成物**（无"别处"可推导），故不属本清单。
+#   但它们的**可解析性**由本断言第 ① 项统一保证（见 `check_artifacts`）——
+#   因为"yaml 解析不了"是任何"重算 → 比对"的**前提失效**。

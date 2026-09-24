@@ -70,7 +70,8 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | O-44 | 门禁自审 | P2 | **`scripts` 把「未提交的新脚本」报成"清单项已不存在(应移除)"**：`gone` 基于**git 跟踪集**（`_iter_source_files`，同 O-34）⇒ 未跟踪的新脚本在冻结清单里"消失"；而该提示措辞**鼓励删除登记**（照做则提交后立刻"未登记"⇒ FAIL） | **✅ 已修（2026-09-24）**：`gone` 改判**文件真实存在性**（③）+ 新增 `untracked_frozen` 桶单独报、措辞**劝阻删除**（①）；**正反自证**：`git rm --cached` ⇒ note 报"1 项未跟踪(勿删)"（不再误报"应移除"），`git add` 后复原 | D6-P0-1 · **O-34 同源第二处消费者** |
 | O-45 | 安全/执行面 | P2 | **`collect` 命令的"真执行器"未实现、且须带沙箱**（ADR-0007 line 475 明确"若执行需沙箱约束，否则卡可借 `collect` 任意执行"）。本轮 P1-1 先走**白名单 scp**（A-②）**不选此路**；本文档登记为待办，**须独立立项**：解析 → 远端执行 → 产物拉回 → **沙箱约束**（禁绝对路径 / 禁出 `$W` / 禁网络 / 禁 `..` / 白名单工具） | ⏳ 待立项（独立，非本轮） | D6-P2 · ADR-0007 |
 | O-46 | 稳定性/通道 | **P1** | **出网档上游 Nvidia（`nemotron-3-ultra:free`）503/504 反复**：B2 7 次派发 **5 次被上游打断**（`provider_overloaded` / `idle timeout`） | **✅ 已裁（2026-09-24）**：**上游 provider 容量/冷却**（OpenRouter 官方 + NVIDIA 论坛一手实例佐证），非本地 · **缓解 ①② 已实施**（resume 2→3 + 冷却退避；失败 run 主动清残留）· **端到端负向验证通过**（`O46_CLEAN` 清 5 项 / 远端全 GONE / runDir 留存） | O-22 · 吃狗粮 |
-| O-47 | 通道/模型 | P2 | **`lightning`（`openrouter/thinkingmachines/inkling:free`）实测不可用**：A1 卡 **5 分钟仅产出 51 字节**（非加载/网络卡点 —— 是**生成侧停滞**；进程活着、锁已取得、`out/.agent-output.txt` 几乎不增长） | ⏳ 待决定（暂观察 or 从三档剔除；与 O-43/O-46 同族：**免费档稳定性无保证**） | ROUTE_TABLE · O-43 · O-46 |
+| O-47 | 通道/模型 | P2 | **`lightning`（`inkling:free`）B 站一次停滞**（A1 卡 5 分钟仅 51 字节） | **✅ 已复测（2026-09-24）：非不可用** —— C 站同链路 `ACCEPT_OK=1`/`RUN_S=16s` ⇒ 真实定性 = **偶发停滞**（station/时序），**不删档** | ROUTE_TABLE · O-43 · O-46 |
+| O-49 | 通道/模型 | P2 | **`harness_priority` 5 档在本链路是否可用 —— 未采过** | **✅ 已采样（2026-09-24）：5 档全过**（档1 inkling 16s · 档3 inkling-small 15s · 档4 super-120b 23s · 档5 laguna 56s · 档2 ultra 已知可）⇒ ★ **opencode 是 harness ⇒ conf 注记的"harness-only(403)/限流(429)"两条限制不适用** | ROUTE_TABLE · O-43 |
 | O-48 | 运维/孤儿进程 | P2 | **站上 `timeout 45` 诊断进程存活 17 小时**（B 站 `etimes=61817`，`timeout 45 opencode run --print-logs --log-level DEBUG …`）⇒ **`timeout` 未按预期终止**，孤儿进程长期驻留 | ⏳ 待复核（为何 `timeout` 失效；候选：`--kill-after` / 父进程回收 / O-43 收尾未清） | O-43 收尾残留 |
 
 ## 2. 各未决项详情
@@ -567,20 +568,35 @@ DONE_Z
     ⇒ 结论：① 的收益建立在"上游是**间歇性**过载、退避后能成功"这一前提上（O-46 的实测正是如此）；
     对"**模型侧持续性停滞**"（O-47）① 只会**放大等待**，**不能治** —— 那类要靠**输出停滞探测器**（另案）。
 
-#### O-47：**`lightning`（`inkling:free`）实测不可用 —— 生成侧停滞**（2026-09-24）
+#### O-47：**`lightning`（`inkling:free`）B 站一次**停滞 —— **已复测：非模型不可用**（2026-09-24）
 
-- **一手实况**（本会话并行派发实验，B 站，A1 卡，`-Model lightning`）：
-  | 观察 | 值 | 含义 |
-  |---|---|---|
-  | 锁 | `LOCK_ACQUIRED` ✓ | 非并发/锁问题 |
-  | 进程 | `opencode run -m openrouter/thinkingmachines/inkling:free` 存活（etimes 298s） | 进程活着、非崩溃 |
-  | `out/.agent-output.txt` | **51 字节**（5 分钟） | ★ **生成侧停滞**（对比：同刻 `ultra` 的同卡在 A/C 两站 **~70s 内完成**，exit=0） |
-- **定性**：与 **O-43**（zen 5 次 1/5 成功、其后 152s 零输出）、**O-46**（free 档上游过载）**同族** ——
-  ⇒ **三档免费档的稳定性均无保证**（官方均为"限时/免费实验资产"）。
-- **处置建议**：`lightning` **暂留表内但标注"稳定性未验/不推荐"**；要稳定选 **`ultra`**（本会话多次成功，含 A/C 两站）。
-  ⚠ 不要据此删档 —— 需先分辨是"模型侧"还是"账户限流"，本样本只有 1 次（**样本量不足，勿下结论**）。
-- **旁证**：终止该 run 后 **O-46② 清理仍正常触发**（`O46_CLEAN: 已清理远端 5 项`）⇒ 缓解② 对"被杀 run"也生效。
-- **状态**：⏳ 待决定（暂观察；候选：再采 2-3 次 / 或从三档剔除）
+- **首样本（B 站，A1 卡，5 分钟仅 51 字节，进程活着/锁已取得）** ⇒ 当时定性为"生成侧停滞"，**并自标"样本量不足，勿下结论"**。
+- ★ **复测（C 站，同链路）⇒ `ACCEPT_OK=1` · `TASK_RC=0` · `RUN_S=16s`** ⇒ **推翻"不可用"**：
+  真实定性 = **偶发停滞**（station/时序相关），**不是模型侧不可用**。
+- ⇒ **处置**：**保留 `lightning` 档**；不删档、不降级。若再遇停滞，按"**输出停滞探测器**"（另案）处理，而非换模型。
+
+#### O-49：`harness_priority` **5 档在 opencode harness 路径下全部可用**（2026-09-24 采样，与 conf 注记不符）
+
+- **采样设计**：新建 [`smoke-model-sample.md`](dogfood-cards/smoke-model-sample.md)（最小产物型卡：写 `out/smoke.txt`）
+  + `ROUTE_TABLE` 加**采样用别名**（`super-120b-a` / `inkling-small-b` / `inkling-c` / `laguna-b`，均**镜像** `harness_priority`，未新立模型）。
+  **并行策略**：3 站各 1 张同刻并发（D3 解锁的跨站并行）。
+- **结果 —— 5 档全过**：
+
+  | 档 | 模型（`secrets/openrouter.conf` `harness_priority` 序） | 采样站 | 结果 | RUN_S |
+  |---|---|---|---|---|
+  | 1 | `thinkingmachines/inkling:free`（= `lightning`） | C | ✅ `ACCEPT_OK=1` | 16 |
+  | 2 | `nvidia/nemotron-3-ultra-550b-a55b:free`（= `ultra`） | A / C | ✅ | ~70（A1 卡） |
+  | 3 | `thinkingmachines/inkling-small:free` | B | ✅ | 15 |
+  | 4 | `nvidia/nemotron-3-super-120b-a12b:free` | A | ✅ | 23 |
+  | 5 | `poolside/laguna-s-2.1:free` | B | ✅ | 56 |
+
+- ★ **关键结论：走 `opencode`（= 本身就是 agentic harness）时，conf 注记的两条限制都不适用**：
+  · `thinkingmachines/*:free` **"harness-only，裸 API 403"** ⇒ **harness 路径下正常**（档 1/3 均过）；
+  · `poolside/laguna-s-2.1:free` **"上游限流 429 当前不可用"** ⇒ **实测可用**（56s）—— 注记是**当时的临时状态**，已过期。
+- ⇒ **可执行结论**：**档位选择比 conf 注记宽松得多**（5 档任选）；要"参数规模尽量大"⇒ 档 2（550B）与档 4（120B）是主选，
+  且档 4 实测最快（23s）。
+- ⚠ **样本量**：每档 **1 次**（档 2 另有 A1 历史样本）⇒ 结论为"**可用性**"，**非吞吐/稳定性排序**；要排序须按脚本多轮采样（同 O-43 的做法）。
+- **状态**：✅ 已采样（结论可执行：5 档可用）· ⏳ 待决定：采样用别名是否**升格**（补全三站变体）或**撤除**（仅保留结论）
 
 #### O-48：**站上 `timeout 45` 诊断进程存活 17 小时**（2026-09-24，孤儿进程）
 

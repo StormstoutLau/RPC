@@ -666,6 +666,72 @@ def check_scripts(ctx):
     return ("FAIL" if bad else "PASS"), note, detail
 
 
+ARTIFACTS_INV = ROOT / "inventory" / "artifacts.yaml"
+
+
+def check_artifacts(ctx):
+    """生成物清单（D6-P1-1）：**"权威源在别处"的文件，有没有人真的在判它。**
+
+    为什么单独立一项：本仓最贵的失败形态是"**判据通过了，是因为它什么都没判**"——
+    而生成物特有的两种病是它的两个变体：
+      · **静默缺口**：某文件是推导出来的，**既没人判、也没说明为什么不判** ⇒ 可以长期错着没人知道；
+      · **挂名假判**：清单写了 `check: xxx`，但 `xxx` **不是真实断言 id**（改了名/删了项）⇒ 看着有人管。
+    本项把这两者都变成 FAIL，并**报覆盖率**（"新增判据必须同时报覆盖率"）。
+
+    第 ① 项（`inventory/*.yaml` 可解析）不是顺手加的：**解析不了 ⇒ 任何"重算 → 比对"都前提失效**，
+    而失败会以"下游某个数掉了"的形式远距离显形（本会话已见过 `inventory` 报数掉到 0 仍 PASS 的同族）。
+    """
+    try:
+        import yaml
+    except Exception:
+        return "WARN", "缺 pyyaml, 跳过生成物清单断言（不复现于 CI 环境即视为通过）", []
+    detail = []
+
+    # ① 前提：inventory 真值表必须**全部可解析**（"重算 → 比对"的前置）
+    yaml_files = sorted((ROOT / "inventory").glob("*.yaml"))
+    bad_parse = []
+    for p in yaml_files:
+        try:
+            yaml.safe_load(p.read_text(encoding="utf-8"))
+        except Exception as e:
+            bad_parse.append(f"{p.name}({type(e).__name__})")
+    if bad_parse:
+        detail.append("inventory/*.yaml 解析失败 ⇒ 其下游一切'重算比对'前提失效: " + ", ".join(bad_parse))
+
+    # ② 清单本身
+    if not ARTIFACTS_INV.exists():
+        return "FAIL", "inventory/artifacts.yaml 缺失（本断言的登记依据）", detail
+    try:
+        inv = yaml.safe_load(ARTIFACTS_INV.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        return "FAIL", f"inventory/artifacts.yaml 解析失败: {type(e).__name__}: {e}", detail
+
+    items = list(inv.get("items") or [])
+    known_ids = {c["id"] for c in CHECKS}
+    covered = exempt = 0
+    for it in items:
+        p = it.get("path") or "(缺 path)"
+        ck, ex = it.get("check"), it.get("exempt")
+        if ck and ex:
+            detail.append(f"{p}: `check` 与 `exempt` **互斥**（要么判、要么说明豁免，不能既判又豁免）")
+        elif ck:
+            if ck not in known_ids:
+                # 这一条正是"挂名假判"：看着有人管，其实那个 id 不存在（改名/删除后没人发现）
+                detail.append(f"{p}: check={ck!r} **不是真实断言 id**（挂在没人跑的判据上 = 挂名假判）")
+            else:
+                covered += 1
+        elif ex:
+            exempt += 1
+        else:
+            # 这一条正是"静默缺口"
+            detail.append(f"{p}: **既无 `check` 也无 `exempt`** ⇒ 静默缺口（没人判，也没说明为什么）")
+
+    # ③ 覆盖率必须报（"判据可能什么都没判"的对抗措施）
+    note = (f"生成物 {len(items)} 条 · 有断言覆盖 {covered} · 显式豁免 {exempt} "
+            f"· inventory yaml 可解析 {len(yaml_files) - len(bad_parse)}/{len(yaml_files)}")
+    return ("FAIL" if detail else "PASS"), note, detail
+
+
 # ── 断言: 文档内链接可达 (文档漂移的机械防线) ─────────────────────────
 # 触发背景 (2026-09-15, ADR-0004 第四批"文档漂移审计"): 用户提出"三站配置实况与手册/派发表
 # 存在漂移", 机械扫描全部 144 个 md 后查出 **65 条失效的仓库内相对链接** —— 典型两类:
@@ -2554,6 +2620,9 @@ CHECKS = [
             "`../y` 不是 `../spec/y`, 引 docs/ 是 `../../docs/z`); 确有不可修的登记 DOCLINK_ALLOW"},
     {"id": "inventory", "title": "真值登记", "fn": check_inventory, "quick": True,
      "fix": "端口/模型标识有变更时同步 inventory/*.yaml 真值表"},
+    {"id": "artifacts", "title": "生成物清单", "fn": check_artifacts, "quick": True,
+     "fix": "生成物**禁止手工编辑** —— 改源头 → 重跑 → 跑 --check (D6-P1-1); "
+            "清单每条须给 `check`(真实断言 id) 或 `exempt`(豁免理由), 两者都缺 = 静默缺口会 FAIL"},
     {"id": "ports", "title": "端口分配表自洽", "fn": check_ports, "quick": True,
      "fix": "按明细修 inventory/ports.yaml (缺字段/同组重复/跨组重叠/枚举拼错)"},
     {"id": "plugins", "title": "插件同构基线", "fn": check_plugins, "quick": True,

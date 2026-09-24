@@ -257,3 +257,65 @@
 | 门禁 `quick` | ✅ 绿灯 10 / 红灯 0 |
 | 新增台账项 | **O-47**（lightning/inkling 不可用）· **O-48**（孤儿进程）；并补齐 **O-46 在总览表的缺行**（同步缺口） |
 | 剩余 | O-30（纪律入册）· O-33（9 处旧路径）· O-35 · O-39 · O-45 · **D6-P1-1**（梯队 2 关键路径） |
+
+---
+
+## 9. 续：梯队 2 首片（D6-P1-1 生成物清单）+ 免费档 5 档采样（2026-09-24 深夜）
+
+### 9.1 D6-P1-1 首片：`inventory/artifacts.yaml` + 门禁 `artifacts` 断言
+
+**范围（依 [路线总表 §3 P1-1](../docs/2026-09-23_D6-D7分阶段执行方案.md)**，落点 `inventory/` + `ops/rpc_check.py`）：
+
+- **新增 [`inventory/artifacts.yaml`](../inventory/artifacts.yaml)**：显式列出"**权威源在别处**"的文件，
+  每条须给 `check`（判它的**真实断言 id**）或 `exempt`（豁免理由）——**两者都缺 = 静默缺口**。
+  覆盖：`agent-chain.json` / `ANCHOR.txt` / `audit-baseline/*.json`（→ `evidence`）· `ops.yaml`（→ `scripts`）·
+  `.git/hooks/pre-commit`、手册 §2.2（**显式豁免**，后者即 P1-2 的 M-3）。
+- **新增断言 `artifacts`**（第 18 项，`quick`）：① 前提 —— `inventory/*.yaml` **全部可解析**；
+  ② 清单每条须 `check`（**且 id 必须在 `CHECKS` 里真实存在**）或 `exempt`；③ **报覆盖率**。
+- ★ **它同时治两类病**（本仓"假绿"家族的两个变体）：
+  · **静默缺口**（没人判也没说明）· **挂名假判**（`check` 指向不存在的 id ⇒ 看着有人管）。
+
+**双向自证（8/8 通过，含逐字节复原校验）**：
+
+| 用例 | 实测 |
+|---|---|
+| 基线 artifacts / scripts | ✅ PASS |
+| ① 挂名假判（`check: no_such_gate`） | ✅ **FAIL** + 点名"不是真实断言 id" |
+| ② 静默缺口（抽掉 `exempt`） | ✅ **FAIL** + "静默缺口" |
+| ③ 前提失效（yaml 坏掉） | ✅ **FAIL** + "解析失败" |
+| ④ **手工改生成物**（删 `ops.yaml` 一条 frozen）| ✅ `scripts` **FAIL**（"未登记 1"）——**正是路线总表给本批定的验证判据** |
+| 复原 | ✅ 两文件 sha256 **逐字节复原**；复原后全绿 |
+
+- **持久护栏**：[`tests/test_rpc_check_artifacts.py`](../tests/test_rpc_check_artifacts.py)（**monkeypatch `ARTIFACTS_INV` 指向临时文件**
+  ⇒ 离线覆盖 5 分支 + 结构护栏"`artifacts` 已在 CHECKS 注册"，**不碰任何受版本控制的文件**）。
+  ⚠ 用例 ④ 需改真文件，故**不入**持久护栏，只作一次性实验（本表 + 复原校验即为它的证据）。
+- **本片未含**（如实留白）：P1-2 的 M-1/M-2/M-5/M-6（受理机制双向写点，须先收敛真值）· P1-3 的 `facade` 断言（46 符号可达性）。
+
+### 9.2 ★ 免费档 5 档采样 —— **全过，且推翻了 conf 注记的两条限制**
+
+**设计**：新建可复用采样卡 [`smoke-model-sample.md`](../spec/d6-agent-standard/dogfood-cards/smoke-model-sample.md)（最小产物型）；
+`ROUTE_TABLE` 加**采样用别名**（镜像 `harness_priority`，**未新立模型**）；**3 站各 1 张同刻并发**（用 D3 的跨站并行）。
+
+| 档 | 模型 | 站 | 结果 | RUN_S |
+|---|---|---|---|---|
+| 1 | `thinkingmachines/inkling:free`（`lightning`） | C | ✅ | **16** |
+| 2 | `nvidia/nemotron-3-ultra-550b-a55b:free`（`ultra`） | A/C | ✅ | ~70 |
+| 3 | `thinkingmachines/inkling-small:free` | B | ✅ | **15** |
+| 4 | `nvidia/nemotron-3-super-120b-a12b:free` | A | ✅ | **23** |
+| 5 | `poolside/laguna-s-2.1:free` | B | ✅ | 56 |
+
+- ★ **结论**：`opencode` **本身就是 agentic harness** ⇒ conf 注记的
+  "`thinkingmachines/*:free` harness-only（裸 API 403）" 与 "`laguna` 上游限流 429 不可用" **两条都不适用**。
+  ⇒ **档位选择比注记宽松得多**；要"**参数规模尽量大**"⇒ 档 2（550B）/ 档 4（120B）为主选，**档 4 最快**。
+- ★ **O-47 被自己推翻**：inkling 在 B 站那次停滞（5min/51B）**不是"不可用"** —— C 站同链路 16s 通过 ⇒
+  定性更正为 **偶发停滞**（station/时序），**不删档**。（这正是当时自标"样本量不足，勿下结论"的用处。）
+- **登记**：新 **O-49**（5 档可用性采样）；**O-47 结论更正**。
+- ⏳ **待决定**：采样用别名**升格**（补全三站变体）还是**撤除**（仅留结论）。
+
+### 9.3 本轮状态
+
+| 项 | 结果 |
+|---|---|
+| 全量单测 | ✅ **8/8**（新增 `test_rpc_check_artifacts.py`） |
+| 门禁 | ✅ **12 绿灯**（新增 `artifacts`）/ 黄灯 1 / 红灯 0 |
+| 新增 | `inventory/artifacts.yaml` · `artifacts` 断言 · 2 个测试文件 · 采样卡 · O-49 |
