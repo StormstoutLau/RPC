@@ -53,6 +53,7 @@
 | 2026-09-23_Ds工作区扫描_对agent编排与D7的可借鉴分析.md | 27 项来源的**外部工作区场景扫描** |
 | DEV-LOG-012-d6-d7-roadmap-and-impact.md | 阶段卷：D6/D7 路线厘清 + 影响面 + 盲区扫描（F 类 DevLog） |
 | DEV-LOG-013-dogfood-execution.md | 阶段卷：**吃狗粮首次成批执行**（卡区建立 · 出网档派发 · 反例注入 · O-25 监测核对）（F 类 DevLog） |
+| DEV-LOG-014-decision-refinement.md | 阶段卷：**待裁 4 点细化调研与执行**（B1 双卡 · O-41 拆分 · O-46 负向验证 · P2-3 出网档别名）（F 类 DevLog） |
 
 ## 维护规则
 
