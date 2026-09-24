@@ -38,12 +38,14 @@
 |---|---|---|---|---|
 | A | [a1-station-reality.md](a1-station-reality.md) | 无 | `public` | ✗（出网档） |
 | A | [a2-station-scripts-drift.md](a2-station-scripts-drift.md) | 无（比对在主控做） | `public` | ✗ |
-| B | [b1-u2-dialect-map.md](b1-u2-dialect-map.md) | [inputs/d7-dialect-excerpt.md](inputs/d7-dialect-excerpt.md)（**人工脱敏摘要**） | `public` + **`attach-egress: ok`** | ✗ |
+| B | [b1b-u2-dialect-map-analyze.md](b1b-u2-dialect-map-analyze.md) | [inputs/d7-dialect-excerpt.md](inputs/d7-dialect-excerpt.md)（**人工脱敏摘要**） | `public` + **`attach-egress: ok`** | ✗ |
+| B | [b1a-u2-dialect-map-transcribe.md](b1a-u2-dialect-map-transcribe.md) | 全文 §11.1（附件） | `local-only`（站内） | ✓（站上 `m27-q4ks`） |
 | B | [b2-gate-falsegreen-audit.md](b2-gate-falsegreen-audit.md) | `ops/rpc_check.py`（附件，已登记 `public`） | `public` + **`attach-egress: ok`** | ✗ |
 | （烟测） | [smoke-claude-channel.md](smoke-claude-channel.md) | 无 | `public`（`cli: claude` 主控本地） | ✗ |
 
-⇒ **全部不需要站上引擎**（`opencode` 卡走 `model: ultra` = `openrouter/*` 出网档；烟测卡走 `cli: claude` 主控本地）。
-> ⚠ **B1 有两个档位变体**（同一 U-2 目标、两处定义）：本表列的是 `public`+摘要 的**出网档定版** [b1-u2-dialect-map.md](b1-u2-dialect-map.md)；**实际执行**用的是 `local-only` 变体 [dogfood-d7-03-u2-dialect-map.md](dogfood-d7-03-u2-dialect-map.md)（读全文 §11.1，站内 `m27-q4ks`）。二者关系见文末「待核」。
+⇒ **除 B1a 外都不需要站上引擎**（`opencode` 卡走 `model: ultra` = `openrouter/*` 出网档；烟测卡走 `cli: claude` 主控本地）。
+> ✅ **B1 = 双卡两层，已裁**（[DEV-LOG-014](../../../docs/DEV-LOG-014-decision-refinement.md) D1）：**`b1a` = 转录底稿层**（只转录原文、站内、求真）· **`b1b` = 分析提案层**（含"统一字典候选轴"、出网、求用）。
+> 二者是**不同层**、都属 U-2「建映射、不迁移权威源」的必需件 ⇒ **并存**（原「同一事实两处定义」的同名混淆已由改名消除）。
 
 ### ★ 本轮实测最终状态（2026-09-24 收口 · **全部跑完**）
 
@@ -51,7 +53,7 @@
 |---|---|---|---|---|
 | **A1** | ✅ `exit=0` | `202609241022501982` | opencode / `ultra`（出网） | 92 |
 | **A2**（v2 重设计） | ✅ `exit=0` | `202609241101555466` | opencode / `ultra`（出网） | 36 |
-| **B1**（`dogfood-d7-03` 变体） | ✅ `exit=0` | `202609241113114359` | opencode / `local/m27-q4ks`（**站内**） | 174 |
+| **B1a**（转录底稿） | ✅ `exit=0` | `202609241113114359` | opencode / `local/m27-q4ks`（**站内**） | 174 |
 | **B2** | ✅ `exit=0` | `202609241608498832` | opencode / `ultra`（出网） | 581 |
 | **smoke-claude** | ✅ `exit=0`（`ACCEPT_OK=1`） | `202609241047036207` | claude / `thinkingmachines/inkling:free` | 18 |
 
@@ -97,14 +99,18 @@
   只收 `agent-output.txt` 等固定证据件，`workspace-diff.txt` 为**空**（`WORKSPACE_DIFF_LINES=0`）
   ⇒ **要拿产物必须另行回收**，或按 ADR-0007 在卡里声明 `evidence-manifest.subjects`。
 
-> ⚠ **B1 的档位已定案 = `public` + 摘要**（Scott 2026-09-24）：不再走 `sanitized`，也不再走站内。
+> ⚠ **B1b（出网/分析层）的档位 = `public` + 摘要**（Scott 2026-09-24）：不走 `sanitized`。
 > 理由：`sanitized` 对 C3 类不提供保护（见 `inventory/sensitivity.yaml` 表头），保护必须前移到**输入准备**这一步。
+> （**B1a/转录层**读含研究内容的全文 ⇒ 必须 `local-only` + 站内，与本条不冲突。）
 
-### ⏳ 待核：B1 的「定版」与「实际执行」不一致
+### ✅ 已裁：B1 = 双卡两层（原「同名两处定义」已消除）
 
-| 项 | 事实 | 出处 |
-|---|---|---|
-| **定版** | B1 = `b1-u2-dialect-map.md`（`public` + 人工脱敏摘要附件 + `attach-egress: ok`，**出网**） | 上「档位已定案」引述 · 卡 front-matter |
-| **实际执行** | run `202609241113114359` 用的卡 = `dogfood-d7-03-u2-dialect-map.md`（`local-only` + 站内 `m27-q4ks`，读**全文** §11.1） | 该 run `.agent-run.json` 的 `card.sha256 = f637e0bb…` = d7-03 卡 |
+| 层 | 卡 | 档位 | 产物性质 | 状态 |
+|---|---|---|---|---|
+| **转录底稿** | [b1a-u2-dialect-map-transcribe.md](b1a-u2-dialect-map-transcribe.md) | `local-only`（站内 `m27-q4ks`） | 三列转录：符号｜出处｜含义（**禁改写/禁脑补**） | ✅ run `202609241113114359` |
+| **分析提案** | [b1b-u2-dialect-map-analyze.md](b1b-u2-dialect-map-analyze.md) | `public` + **`attach-egress: ok`**（出网） | 四节分析（含**统一字典候选轴**） | ⏳ 未跑 |
 
-⇒ **同一 U-2 目标存在两处定义**（本仓明令禁止的"同一事实两个定义点"）—— 需 Scott 裁定保留哪一个（或明确二者分工：出网档做**分析**、站内档做**转录**），再删另一份，避免后续误用。**本次仅如实登记，未擅自删卡。**
+⇒ **裁定（[DEV-LOG-014](../../../docs/DEV-LOG-014-decision-refinement.md) D1）：两张都留** —— 二者是**不同层**（底稿求真 / 分析求用），删任何一个都丢真信息；
+**改名（`b1a`/`b1b`）已消除原「同名两处定义」的混淆**。
+> ⚠ 二者产物同名（均 `out/dialect-map.md`）：**不建议在同一 workspace 连跑**（后者覆盖前者）。
+> 各自 run 的产物由 collect 段白名单**拉回各自 runDir**（O-40），故**证据不互相污染**；如需并跑，可将 `b1b` 的产物名改为 `out/dialect-map-analysis.md`。

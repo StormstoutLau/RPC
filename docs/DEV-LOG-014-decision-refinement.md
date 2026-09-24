@@ -28,8 +28,9 @@
 
 ### 2.1 一手事实
 
-| | [b1-u2-dialect-map.md](../spec/d6-agent-standard/dogfood-cards/b1-u2-dialect-map.md) | [dogfood-d7-03-u2-dialect-map.md](../spec/d6-agent-standard/dogfood-cards/dogfood-d7-03-u2-dialect-map.md) |
+| | [b1b-u2-dialect-map-analyze.md](../spec/d6-agent-standard/dogfood-cards/b1b-u2-dialect-map-analyze.md) | [b1a-u2-dialect-map-transcribe.md](../spec/d6-agent-standard/dogfood-cards/b1a-u2-dialect-map-transcribe.md) |
 |---|---|---|
+| 原名 | `b1-u2-dialect-map.md` | `dogfood-d7-03-u2-dialect-map.md` |
 | 档位 | `public` + `attach-egress: ok`（**出网**） | `local-only`（**站内** `m27-q4ks`） |
 | 输入 | 人工脱敏**摘要**（`inputs/d7-dialect-excerpt.md`） | **全文** §11.1（`--attach`） |
 | 产物 | **四节分析**：对照表 + 冲突清单 + **统一字典候选轴** + 无法判断项 | **三列转录**：符号｜出处｜含义（**禁改写 / 禁脑补**） |
@@ -49,8 +50,10 @@
 ### 2.3 裁定
 
 > **✅ 选 C（并存 + 明确分工），并改名区分层** —— 理由：二者是**不同层**、删任何一个都丢真信息；
-> 但**必须改名**（现两张都叫 `u2-dialect-map`、产物都叫 `out/dialect-map.md` ⇒ 本次即被同名误导）。
-> 建议 `b1a-…-transcribe.md`（站内转录底稿）/ `b1b-…-analyze.md`（出网分析提案）。
+> 但**必须改名**（原两张都叫 `u2-dialect-map`、产物都叫 `out/dialect-map.md` ⇒ 本次即被同名误导）。
+> **已落地**：`b1a-u2-dialect-map-transcribe.md`（站内转录底稿）/ `b1b-u2-dialect-map-analyze.md`（出网分析提案）；
+> 两卡正文各加「本卡 = 哪一层」注 + 互链。
+> ⚠ **产物仍同名**（均 `out/dialect-map.md`）⇒ **不在同一 workspace 连跑**；各自 run 的产物由 collect 段拉回各自 runDir，**证据不互污**。
 
 ---
 

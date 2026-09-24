@@ -19,6 +19,10 @@ evidence-manifest:
       state: out/dialect-map.md
       digest: sha256
 ---
+> **本卡 = U-2 双卡的「转录底稿」层**（`b1a`）：**只转录原文、不分析**，站内 `local-only`（读含研究内容的全文）。
+> 与之配对的「分析提案」层 = [b1b-u2-dialect-map-analyze.md](b1b-u2-dialect-map-analyze.md)（`public` + 脱敏摘要，出网，含"统一字典候选轴"）。
+> ⇒ U-2 目标「建映射、不迁移权威源」**两层都要**：底稿求真、分析求用。裁定见 [DEV-LOG-014](../../../docs/DEV-LOG-014-decision-refinement.md) D1。
+
 ## 任务描述
 
 你是**只做整理**的取证 agent。只读附件 `.attach/2026-09-23_D7调研_立项·机制·统一基座.md` 的 **§11.1**（约行 709–731：符号冲突），**不要**读全文其它部分（§11.2+ / §12 等都不碰）。
@@ -55,7 +59,7 @@ evidence-manifest:
 > ```powershell
 > python ops\cluster.py load m27-q4ks
 > & .\ops\station-bin\agent-cli.ps1 task dogfood `
->     -Card spec\d6-agent-standard\dogfood-cards\dogfood-d7-03-u2-dialect-map.md `
+>     -Card spec\d6-agent-standard\dogfood-cards\b1a-u2-dialect-map-transcribe.md `
 >     -Attach @('docs\2026-09-23_D7调研_立项·机制·统一基座.md')
 > python ops\cluster.py unload
 > ```
