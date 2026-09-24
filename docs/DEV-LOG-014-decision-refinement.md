@@ -544,3 +544,64 @@
 ### 12.4 剩余（下一轮入口）
 
 **M-5/M-6**（受理状态机真值收敛 + 断言，**必须独立一轮**）· **O-48 根因** · O-52 的"产物隔离"方案（若要用 glob）。
+
+***
+
+## 13. D6-P1-2 M-5/M-6：受理状态机真值收敛 + 对账断言（2026-09-24）
+
+> **来源**：Scott 指令"继续 M5/M6"。依据计划 §3 P1-2 / §11.3 第 1·2 项 —— **须先收敛真值再加断言**（顺序反了会制造第 9 处副本）。
+
+### 13.1 侦察：副本实测 **9 处**（非"8 处"）
+
+| # | 位置 | 形态 | M-5/M-6 处置 |
+|---|---|---|---|
+| 1 | `inbox/README.md` §3：白名单行 + 状态表 | 文档（内部） | ✅ **加对账断言** |
+| 2 | `rpc_check.py` `INBOX_STATES` | 代码（门禁） | ✅ 收敛 → 消费 yaml |
+| 3 | `cluster_web.py` `INBOX_STATES` | 代码（看板） | ✅ 收敛 → 消费 yaml |
+| 4 | `cluster_web.py` `_INBOX_NEXT` | 代码 | ✅ 收敛 → 消费 yaml |
+| 5 | `cluster_web.py` `_ACTION/_ACTIVE_STATES` | 代码 | ✅ **删除**（分组改由真值 `group` 派生） |
+| 6 | `cluster_web.py` 前端 JS `inboxBadge` | 代码（前端） | ⏸ **暂缓**（见 13.3） |
+| 7 | `rpc_check.py` `check_inbox` 状态子集（业务规则） | 代码 | ⏸ 登记 **O-54** |
+| 8 | `cluster.py` `seal` 提示语"交付态三元组" | 代码 | ⏸ 登记 **O-54** |
+| **9** | **手册 §1.3:94-96** | **文档（对外契约）** | ⏸ 登记 **O-54**（**已漏 `rejected`**） |
+
+### 13.2 决策：真值载体 —— 选定 `inventory/inbox.yaml`（Scott 拍板）
+
+- **`inventory/inbox.yaml`（选定）**：与既有 8 个 `inventory/*.yaml` 同构；**两模块各自读同一文件 ⇒ 零 import 耦合**；避开 `cluster_const.py` 的两条纪律（"统一入口常量层" + docstring 明写"**不要直接 import**"）；文档可直接引用该文件。
+- `cluster_const.py`（未选）：零新文件、原生 `set/dict`；但 `rpc_check.py` 走子进程、不 `import cluster`，要么破"禁直接 import"纪律，要么给 `cluster.py` facade 加符号（联动 `facade` 断言）。
+
+### 13.3 决策：断言范围 —— 覆盖 ①②③，**暂缓 ④**（Scott 指令"分析后给明确建议"）
+
+| 候选 | 价值 | 成本 | 处置 |
+|---|---|---|---|
+| ① README §3 白名单 | ★★★ **唯一实质对账**（代码同源后"两端相等"退化为**恒真** ⇒ 只剩文档会漂移） | 中 | ✅ 做 |
+| ② `_INBOX_NEXT` 键集 | ★★ 防"加状态忘加下一动作" | 低 | ✅ 做（改为 **yaml 自洽**校验：每态必有 `next`） |
+| ③ `_ACTION/_ACTIVE` 分区 | ★★ 现值有**真静默缺口**（`else ⇒ closed`：新状态**静默落进"已关闭"**） | 低 | ✅ 做（yaml 带 `group` ⇒ **分区消失**，只校验三分解完备） |
+| ④ 前端 JS badge | ★ 纯展示，drift 最坏=徽章变中性（不误导） | **高**（须把状态集注入 HTML 模板） | ⏸ 暂缓（与"改动尽量小"冲突；①③ 已覆盖分组正确性） |
+
+### 13.4 ★ 方案细节修正：先验红**换入口**（原方案的"已知会红"已做不到）
+
+收敛后 `cluster_web.INBOX_STATES` **不再有字面量** ⇒ 原计划"往 `INBOX_STATES` 加假状态"**无从下手**。
+⇒ 先验红改为：**往 `inventory/inbox.yaml` 加一个假状态 ⇒ 门禁 `mirror` 必须红**（这才是真正的漂移入口）。
+
+**实测**：加 `bogus-state: {group: active, next: …}` ⇒ `mirror` **FAIL** 并点名
+`README §3 白名单与真值不一致: 文档多 [] / 少 ['bogus-state']`（+ 状态表同）；还原 ⇒ **PASS**。
+
+### 13.5 落地清单
+
+- **新增** `inventory/inbox.yaml`（真值源：`states:` 每态含 `group` + `next`）
+- **`cluster_web.py`**：`_load_inbox_truth()` 读 yaml ⇒ `INBOX_STATES`/`_INBOX_NEXT`/`_INBOX_GROUP` 全部派生；`_ACTION/_ACTIVE_STATES` **删除**；`_collect_inbox` 分组改 `_INBOX_GROUP.get(st,"closed")`
+- **`rpc_check.py`**：新增纯函数 `read_inbox_truth()` + `validate_inbox_mirror()`；`INBOX_STATES` 改为读 yaml（fail-closed：读不出 ⇒ 空白名单）；`check_mirror` 扩为 **2 处镜像**（判官行 + 受理状态机），并**导入 `cluster_web` 核对运行时集合**（防回归硬编码）
+- **`inbox/README.md`** §3：加"真值源"指引（§11.3 第 9 项：指明真值源在哪）
+- **测试** `tests/test_rpc_check_inbox_mirror.py`：真实数据双向自证（基线 + 4 负例：白名单删态 / 表删行 / 缺 `group` / 缺 `next`）+ 结构护栏 + 同源护栏
+- **台账**：登记 **O-54**（余 4 处副本）
+
+### 13.6 门禁
+
+**PASS · 绿灯 14 · 黄灯 1（evidence，存量）· 红灯 0**；`mirror` 报"合格镜像 2 处（判官行 3 字段 + 受理状态机 12 态）"。
+
+### 13.7 净方法论收益
+
+- **"收敛"优于"断言"**：③ 的处理是**让副本消失**（派生），不是"断言它俩相等"—— 相等断言只在两处都硬编码时才需要；**能派生就别对账**。
+- **同源即假绿**：把"两端白名单相等"这类断言**在收敛后自动失效**挑明 ⇒ 断言必须对准**不可自动消费的那一端**（此处 = 文档）。
+- **先验红要跟着方案改**：方案一改，原"已知会红"可能**变成做不到**（本例：字面量没了）⇒ 复核先验红入口是落地清单的一部分。

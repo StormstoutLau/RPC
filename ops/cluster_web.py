@@ -286,26 +286,30 @@ def _collect_agent(limit: int = 20):
 # 读 inbox/<proj>-<date>/40_state/STATE.json → 派生下一动作 (待办聚合, 无需用户手动给提示词)。
 # 分组: action(需动作,高亮: waiting/plan-review/release) · active(进行中) · closed(已关闭,折叠)。
 INBOX_ROOT = cluster.REPO_ROOT / "inbox"
-INBOX_STATES = {"open", "triage", "waiting", "accepted", "plan-review", "plan-revise",
-                "running", "release", "done", "accepted-by-requester",
-                "rejected-by-requester", "rejected"}
-# 状态 → 下一动作 (待办聚合的单一真值; 与 inbox/README §3 状态机对齐)
-_INBOX_NEXT = {
-    "open": "待管理员初筛 → 产出 10_admin/裁决报告.md",
-    "triage": "核对 DR/CR/接口 → 产出 10_admin/裁决报告.md + 受理决定.md",
-    "waiting": "等需求方补充 / 外部条件；解除后 → 产出 10_admin/裁决报告.md",
-    "accepted": "产出 20_plan/ 派发计划(含容量预估) → 交需求方复核",
-    "plan-review": "等需求方复核意见(10_admin/复核意见-N.md)",
-    "plan-revise": "按复核意见修订 20_plan(版本 vN) → 再交复核",
-    "running": "机群执行中(观测见「Agent 任务」卡片)",
-    "release": "已交付证据束，等需求方验收签收",
-    "done": "运维已结案(artifact 冻结)",
-    "accepted-by-requester": "需求方已验收签收",
-    "rejected-by-requester": "需求方拒收 / 终止",
-    "rejected": "已驳回 / 暂缓",
-}
-_ACTION_STATES = {"waiting", "plan-review", "release"}
-_ACTIVE_STATES = {"open", "triage", "accepted", "plan-revise", "running"}
+# 状态机真值**已收敛**到 inventory/inbox.yaml (D6-P1-2 M-5/M-6) —— 本文件不再各抄一份。
+# 消费形态: states 映射 -> 白名单/下一动作/分组三者由同一份真值派生 (改一处即全改)。
+_INBOX_YAML = cluster.REPO_ROOT / "inventory" / "inbox.yaml"
+
+
+def _load_inbox_truth():
+    """读受理状态机真值 (inventory/inbox.yaml 的 `states:` 段)。
+
+    失败**不静默兜底**(抛出) —— 真值源坏掉时宁可让 cluster_web 启动即错, 也不显示一份假状态机。
+    """
+    import yaml
+    data = yaml.safe_load(_INBOX_YAML.read_text(encoding="utf-8"))
+    states = data.get("states") if isinstance(data, dict) else None
+    if not isinstance(states, dict):
+        raise ValueError(f"{_INBOX_YAML} 缺 `states:` 映射段")
+    return states
+
+
+_INBOX_TRUTH = _load_inbox_truth()
+INBOX_STATES = set(_INBOX_TRUTH)
+# 状态 → 下一动作 (待办聚合; 与 inbox/README §3 状态机同源)
+_INBOX_NEXT = {k: (v or {}).get("next", "") for k, v in _INBOX_TRUTH.items()}
+# 状态 → 待办分组 (action/active/closed) —— 分组也来自真值, 不再靠 `else ⇒ closed` 兜底
+_INBOX_GROUP = {k: (v or {}).get("group", "closed") for k, v in _INBOX_TRUTH.items()}
 
 
 def _collect_inbox():
@@ -324,9 +328,8 @@ def _collect_inbox():
                     ts = j.get("updated_at", "")
                 except Exception:
                     st, broken = "BAD-JSON", "STATE.json 非法"
-            group = ("action" if st in _ACTION_STATES
-                     else "active" if st in _ACTIVE_STATES
-                     else "closed")
+            # 分组直接取自真值 (no-state/BAD-JSON 非法态 => closed, 与旧兜底行为一致)
+            group = _INBOX_GROUP.get(st, "closed")
             next_action = note or _INBOX_NEXT.get(st, "未知状态")
             rows.append({"dir": d.name, "state": st, "updated_at": ts,
                          "next": next_action, "group": group, "broken": broken})
