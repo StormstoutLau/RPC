@@ -2966,7 +2966,7 @@ INBOX_PROJ_RE = re.compile(r"^[^_].+-\d{4}-\d{2}-\d{2}$")   # <proj>-<yyyy-mm-dd
 
 def check_inbox(ctx):
     """受理区状态自洽: 目录结构 + STATE.json 合法 + 状态内容自洽。"""
-    n_dir = n_state = n_bad = 0
+    n_dir = n_state = n_bad = n_mf_skip = 0
     bad = []
     if not INBOX_DIR.is_dir():
         return "PASS", "inbox/ 不存在, 跳过", []
@@ -3027,7 +3027,30 @@ def check_inbox(ctx):
                 bad.append(f"{name}: STATE={state} 须有 30_evidence/MANIFEST.sha256 (交付证据束未钉死); "
                            f"生成: cluster.py inbox seal {name} --go")
 
+        # ④ 交付证据束 **freshness**（D6-P1-1 §11.1-C 纪律 2/3）：只要有 MANIFEST 就**重算 → 比对**
+        #   ⇒ 把"生成物**禁手改**"从空头承诺变成**机判**（改源头没重跑 / 手改清单 ⇒ 当场对不上）。
+        #   项目根取自 **MANIFEST 头注释**（自包含，换 clone 也能判）；根**不在本机** ⇒ **跳过并报数**
+        #   （那是可移植性问题，不是"被手改" ⇒ 不 FAIL，但必须可见）。判据实现与 CLI `--check` **同一个**。
+        mf = d / "30_evidence" / "MANIFEST.sha256"
+        if mf.is_file():
+            try:
+                import cluster as _cluster
+                mroot, _mok, _mmiss, mbad = _cluster.verify_manifest(mf.read_text(encoding="utf-8"))
+            except Exception as e:
+                n_bad += 1
+                bad.append(f"{name}: MANIFEST 校验无法执行（导入/读取失败）: {type(e).__name__}: {e}")
+            else:
+                if mroot and not Path(mroot).is_dir():
+                    n_mf_skip += 1
+                elif mbad:
+                    n_bad += 1
+                    _shown = "、".join(x.split(":", 1)[0] for x in mbad[:3])
+                    bad.append(f"{name}: MANIFEST.sha256 **重算不符 {len(mbad)} 条** ⇒ 证据束被手改或源被改动"
+                               f"（如 {_shown}）；核对: cluster.py inbox seal {name} --check")
+
     note = f"受理目录 {n_dir} · 状态可机读 {n_state} · 违规 {n_bad}"
+    if n_mf_skip:
+        note += f" · MANIFEST 未校验 {n_mf_skip}（项目根不在本机）"
     return ("FAIL" if n_bad else "PASS"), note, bad
 
 
@@ -3090,7 +3113,11 @@ CHECKS = [
     {"id": "inbox", "title": "受理区状态自洽", "fn": check_inbox, "quick": True,
      "fix": "按明细修: 缺 00_handoff/ = 转运包没冻结; STATE.json 缺失/非法/不在白名单 = 状态没走机读格式; "
             "状态内容不自洽(如 accepted 无受理决定) = 先补 10_admin/受理决定.md 再改状态 "
-            "(依据 inbox/README §3 状态机, ADR-0008; 状态只由管理员改, 每次变更追加 40_state/LOG.md)"},
+            "(依据 inbox/README §3 状态机, ADR-0008; 状态只由管理员改, 每次变更追加 40_state/LOG.md); "
+            "★ **MANIFEST.sha256 重算不符 = 交付证据束被手改或源被改动**（生成物**禁手改**）⇒ "
+            "**别去改清单**，走「改源头 → 重跑 → `cluster.py inbox seal <proj-dir> --go`」；"
+            "核对用 `cluster.py inbox seal <proj-dir> --check`（与门禁同一实现）；"
+            "报『MANIFEST 未校验 N』= 清单头写的项目根**不在本机**（换 clone/换机），不是篡改"},
     {"id": "usb4", "title": "USB4 三角环链路", "fn": check_usb4, "quick": False,
      "fix": "地址/路由不符 => 对照 inventory/net.yaml 与归档 §6.3/§6.6; "
             "链路不通 => 先查 BIOS USB4 安全等级与是否冷启动(归档 §6.5)"},

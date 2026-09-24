@@ -22,7 +22,7 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
     python ops/cluster.py ttl {status|check|enable|disable} [--ttl N] [--dry-run] [--go]  # 空闲 TTL 自动卸载 (默认关)
     python ops/cluster.py agent {runs|live|tail|chain|verify|audit|audit-judge} [--limit N] [--station X] [--json]  # 进度/吞吐 + 证据链 + 可复现性审计 + judge 校准
     python ops/cluster.py inbox                                             # 受理区跨项目进度 (每笔 <proj>-<date> 的 state/时间, 一行一条)
-    python ops/cluster.py inbox seal <proj-dir> [--run <ts>|--all-runs] [--grade Reproduced|Replicated] [--go]  # 交付证据束钉死 (默认只出计划)
+    python ops/cluster.py inbox seal <proj-dir> [--run <ts>|--all-runs] [--grade Reproduced|Replicated] [--go|--check]  # 交付证据束钉死/重算比对 (默认只出计划)
 
 子命令:
     status   三站 llama /health + 当前加载实例 + 引擎清单一屏聚合
@@ -4524,8 +4524,62 @@ def _inbox_truth():
     return states
 
 
+_MANIFEST_LINE_RE = re.compile(r"^([0-9a-f]{64})\s{2}(.+)$")
+
+
+def parse_manifest(text):
+    """**纯函数**: 解析 `MANIFEST.sha256` -> `(项目根, [(sha256, 相对路径)])`。
+
+    格式（`_inbox_seal` 生成，同 `sha256sum -c` 形）：
+      · `#` 行 = 头注释 —— 其中 `项目根: <path>` 带出项目根（用于定位 `agent-out/<run>/<file>`）；
+      · 数据行 = `<64hex>␠␠agent-out/<run>/<file>`（**两个空格**分隔）。
+    """
+    root, entries = None, []
+    for ln in text.splitlines():
+        s = ln.strip()
+        if not s:
+            continue
+        if s.startswith("#"):
+            m = re.search(r"项目根:\s*(\S+)", s)
+            if m:
+                root = m.group(1)
+            continue
+        m = _MANIFEST_LINE_RE.match(s)
+        if m:
+            entries.append((m.group(1), m.group(2).strip()))
+    return root, entries
+
+
+def verify_manifest(text, read_bytes=None):
+    """**纯函数**（注入 `read_bytes` ⇒ 离线可测）: 重算每条 sha256 与记录比对。
+
+    D6-P1-1 §11.1-C 纪律 2「**`--check` 等价物（重算 → 比对）**」的唯一落点 ——
+    供 `inbox seal --check`（生产者侧）与门禁 `inbox` 断言（**禁手改**机判）**共用**（避免两份实现）。
+    返回 `(root, ok, missing, bad)`：`bad` = 逐条不符 / 读不到的明细（**含相对路径**）。
+    """
+    read_bytes = read_bytes or (lambda p: Path(p).read_bytes())
+    root, entries = parse_manifest(text)
+    base = Path(root) if root else None
+    ok, missing, bad = 0, 0, []
+    for want, rel in entries:
+        got = None
+        if base is not None:
+            try:
+                got = hashlib.sha256(read_bytes(base / rel)).hexdigest()
+            except Exception:
+                got = None
+        if got is None:
+            missing += 1
+            bad.append(f"{rel}: 读不到（项目根 {root} 下该件缺失）")
+        elif got != want:
+            bad.append(f"{rel}: **哈希不符**（记录 {want[:12]}… 实算 {got[:12]}…）⇒ 被手改或源被改动")
+        else:
+            ok += 1
+    return root, ok, missing, bad
+
+
 def _inbox_seal(argv) -> int:
-    """cluster.py inbox seal <proj-dir> [--run <ts>|--all-runs] [--grade Reproduced|Replicated] [--go]
+    """cluster.py inbox seal <proj-dir> [--run <ts>|--all-runs] [--grade Reproduced|Replicated] [--go|--check]
 
     交付证据束钉死 (ADR-0008 §5.1): 把项目根 `agent-out/<ts>/` 的**实际存在的**证据件逐个 sha256,
     写入 `inbox/<proj-dir>/30_evidence/MANIFEST.sha256`（与 00_handoff 同格式，`sha256sum -c` 可校验）。
@@ -4537,10 +4591,10 @@ def _inbox_seal(argv) -> int:
     """
     if not argv:
         print("用法: cluster.py inbox seal <proj-dir> [--run <ts>|--all-runs] "
-              "[--grade Reproduced|Replicated] [--go]")
+              "[--grade Reproduced|Replicated] [--go|--check]")
         return 1
     name = argv[0]
-    only_ts, all_runs, grade, go = None, False, "Reproduced", False
+    only_ts, all_runs, grade, go, check = None, False, "Reproduced", False, False
     i = 1
     while i < len(argv):
         a = argv[i]
@@ -4552,6 +4606,8 @@ def _inbox_seal(argv) -> int:
             grade = argv[i + 1]; i += 2; continue
         if a == "--go":
             go = True; i += 1; continue
+        if a == "--check":
+            check = True; i += 1; continue
         print(f"[seal] 未知参数: {a}")
         return 1
     if grade not in ("Reproduced", "Replicated"):
@@ -4570,6 +4626,24 @@ def _inbox_seal(argv) -> int:
     if not root:
         print(f"[seal] 项目根未知: proj={proj!r}; 已知 {sorted(roots) or note}")
         return 1
+    if check:
+        # D6-P1-1 §11.1-C 纪律 2: **`--check` 等价物（重算 → 比对）** —— 只读, 不写。
+        #   与门禁 `inbox` 断言共用 `verify_manifest`（**唯一实现**）; 项目根取自 **MANIFEST 头注释**
+        #   （自包含: 换机器/换 clone 也能判，只要那个根在本机）。
+        dst = entry / "30_evidence" / "MANIFEST.sha256"
+        if not dst.is_file():
+            print(f"[seal-check] 无 MANIFEST（尚未 `--go` 落盘）: {dst}")
+            return 1
+        mroot, mok, mmiss, mbad = verify_manifest(dst.read_text(encoding="utf-8"))
+        print(f"[seal-check] {dst}")
+        print(f"[seal-check] 项目根(取自清单头)={mroot}  ok={mok}  读不到={mmiss}  不符={len(mbad)}")
+        for b in mbad[:10]:
+            print(f"  ✗ {b}")
+        if len(mbad) > 10:
+            print(f"  …另 {len(mbad) - 10} 条")
+        if not mbad:
+            print("[seal-check] ✅ 逐条一致 ⇒ 证据束未被改动（可结案）。")
+        return 1 if mbad else 0
     ao = root / "agent-out"
     if not ao.is_dir():
         print(f"[seal] 项目根下无 agent-out: {ao}")
