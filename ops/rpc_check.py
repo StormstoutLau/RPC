@@ -1066,6 +1066,46 @@ def validate_readme_requires(states, readme_text):
     return []
 
 
+# 手册 §2.4 的断言计数声明行（形如 `# 21 项断言 (quick 15 + 三站 6):`）
+MANUAL_COUNT_RE = re.compile(r"#\s*(\d+)\s*项断言\s*\(quick\s*(\d+)\s*\+\s*三站\s*(\d+)\)")
+# O-50：手册**不得**再长出"第二份枚举 / 写死计数" —— 这两类句式 = 同一事实两处定义
+_MANUAL_BANNED = (
+    (re.compile(r"真实剩余\s*open[^\n]{0,24}?=\s*[0-9]+\s*项"),
+     "手册又出现『真实剩余 open = N 项』的**枚举式声明**（应指向 OPEN-ISSUES §1，别再抄一份）"),
+    (re.compile(r"门禁\s*[0-9]+\s*绿"),
+     "手册又**写死了门禁计数**（应指向 `rpc.ps1 check` 的当场自报）"),
+)
+
+
+def validate_manual_counts(manual_text, checks):
+    """**纯函数**（O-50）：手册声明的断言计数 == 真实 `CHECKS`；并禁止第二份枚举/写死计数。
+
+    为什么这样做（而不是像 M-2 那样对账"台账剩余项数"）：
+      · **台账条数**每批都变 ⇒ 对账它只会造一条**恒 WARN 的噪音**（O-50 已判：手册**不再维护第二份枚举**）；
+      · **断言项数**只在"加/删断言"时变，且**那时就该改手册** ⇒ 对账它是**精确、非噪音**的。
+    ⇒ 把"手册计数会漂移"从空头承诺变成**机判**，同时用反向护栏堵住"再抄一份枚举"。
+    """
+    bad = []
+    m = MANUAL_COUNT_RE.search(manual_text)
+    if not m:
+        bad.append("手册 §2.4 找不到『# N 项断言 (quick Q + 三站 S)』声明行（结构改了？）")
+    else:
+        n, q, s = (int(x) for x in m.groups())
+        real = len(checks)
+        rq = sum(1 for c in checks if c.get("quick"))
+        rs = real - rq
+        if (n, q, s) != (real, rq, rs):
+            bad.append(f"手册声明的断言计数 ({n} = quick {q} + 三站 {s}) 与真实不符 "
+                       f"(真实 {real} = quick {rq} + 三站 {rs}) ⇒ **加/删断言后忘了改手册 §2.4**")
+        elif n != q + s:
+            bad.append(f"手册计数**自相矛盾**: {n} ≠ quick {q} + 三站 {s}")
+    for rx, why in _MANUAL_BANNED:
+        mm = rx.search(manual_text)
+        if mm:
+            bad.append(f"{why}（命中 {mm.group(0)[:40]!r}）")
+    return bad
+
+
 def check_mirror(ctx):
     """P1-2: 事实源 ↔ 镜像 一致性 —— 2 处合格镜像(判官行 M-1 / 受理状态机 M-5+M-6+#7#9)。"""
     if not AGENT_CLI.exists() or not MANUAL.exists():
@@ -1079,6 +1119,8 @@ def check_mirror(ctx):
         bad.append("手册 §1.3 里找不到判官行（`JUDGE_TABLE['main']` 那行）")
     else:
         bad += validate_mirror(judge, row)[0]
+    # ── O-50: 手册的断言计数 == CHECKS（+ 禁"第二份枚举/写死计数"）─────────
+    bad += validate_manual_counts(manual_text, CHECKS)
     # ── M-5/M-6 + #7/#9: 受理状态机真值 ↔ README §3 / 手册 §1.3 + 两处代码同源 ──
     n_state = 0
     if not INBOX_TRUTH_YAML.exists() or not INBOX_README.exists():
@@ -1106,8 +1148,9 @@ def check_mirror(ctx):
             except Exception as e:
                 bad.append(f"导入 cluster_web 失败, 无法核对状态机消费面: {e}")
     j = judge or {}
-    note = (f"合格镜像 2 处（判官行 3 字段 + 受理状态机 {n_state} 态 ↔ README §3/手册 §1.3/两处代码）"
-            f"· 事实源 id={j.get('id')} egress={j.get('egress')} compliance={j.get('compliance')}")
+    note = (f"合格镜像 2 处（判官行 3 字段 + 受理状态机 {n_state} 态 ↔ README §3/手册 §1.3/两处代码"
+            f"+ 手册断言计数 ↔ CHECKS）· 事实源 id={j.get('id')} "
+            f"egress={j.get('egress')} compliance={j.get('compliance')}")
     return ("FAIL" if bad else "PASS"), note, bad
 
 
@@ -3022,6 +3065,8 @@ CHECKS = [
             "③ #7/#9 真值的 `requires`(必需件)须齐全, 手册 §1.3 状态机段须逐个提到真值状态, "
             "README §5.3『交付态强判据』行须 == 真值 `manifest` 集 —— "
             "**改状态/必需件只改 `inventory/inbox.yaml` 一处**, 文档跟着改; "
+            "④ O-50 手册声明的断言计数须 == 真实 `CHECKS`（**加/删断言后同步手册 §2.4 的 "
+            "`# N 项断言 (quick Q + 三站 S)`**）; 手册**禁**再写『真实剩余 open = N 项』枚举或写死『门禁 N 绿』; "
             "⚠ M-2 已被 O-50 判为『不再维护第二份枚举』故不并入"},
     {"id": "ports", "title": "端口分配表自洽", "fn": check_ports, "quick": True,
      "fix": "按明细修 inventory/ports.yaml (缺字段/同组重复/跨组重叠/枚举拼错)"},
