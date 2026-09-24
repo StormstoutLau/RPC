@@ -2283,27 +2283,43 @@ exit `$FINAL_RC
                     Write-Host "EVM_STATE_REJECT: subject '$($evmSub['name'])' state=[$st] path=[$rp] 原因=$($evmT.reason)"; $evmStateRejected++; continue
                 }
                 if ($evmT.glob) {
-                    # O-52 (2026-09-24): 产物名**事先不可知** ⇒ **远端固定枚举**（ls），要求**恰好 1 个**匹配。
-                    #   pattern 已过 `Test-EvmStatePull` 的**字符集白名单**（无引号/无元字符），且此处**单引号包裹**
-                    #   ⇒ 它只作 `ls` 的**参数**，**不构成拼接执行**（这是"仍不执行用户命令"的落点）。
-                    #   **恰好 1 个才继续；0 或 >1 一律拒（不猜）** —— "猜一个"会在证据链上留下错件。
+                    # O-52 (2026-09-24): 产物名**事先不可知** ⇒ **远端枚举**后**唯一确定**才收（**不猜**）。
+                    #   pattern 已过 `Test-EvmStatePull` 的**字符集白名单**（无引号/无元字符）⇒ 它只作 `for` 的
+                    #   **通配词**，**不构成拼接执行**（这是"仍不执行用户命令"的落点）。
                     #   ★ **防注入靠字符集白名单，不靠引号** —— pattern 已过 `^out/[A-Za-z0-9._*?-]+$`
                     #     （空格/`;`/`$`/反引号/引号/`&`/`|`/重定向/换行 **全部被排除**），
                     #     且以 `out/` 开头 ⇒ 不会被当成选项、也无需引号。
-                    #   ⚠⚠ **不能加引号**：`ls -1 -d -- 'out/*.txt'` 里引号会把 `*` 变成**字面量**
-                    #     ⇒ 永远 0 匹配（O-52 复跑实测：`ls: 无法访问 'out/*.txt': 没有那个文件或目录`）。
+                    #   ⚠⚠ **不能加引号**：引号会把 `*` 变成**字面量** ⇒ 永远 0 匹配
+                    #     （O-52 复跑实测：`ls: 无法访问 'out/*.txt': 没有那个文件或目录`）。
                     #     "为了安全的引号"与"通配展开"在此**互相排斥** ⇒ 安全必须由白名单承担。
                     #   ★ 另：必须在工作区里跑 —— `scp` 用**绝对**路径（`$W/$st`）故 CWD 无所谓，
                     #     但这里是**相对** pattern（`out/*.txt`）⇒ **不 cd 就会在 $HOME 里找**。
-                    $lst = @(ssh -o BatchMode=yes -o ConnectTimeout=10 $hostName "cd $W && ls -1 -d -- $st 2>/dev/null" 2>$null |
-                             Where-Object { "$_".Trim() })
-                    if ($lst.Count -ne 1) {
-                        Write-Host "EVM_STATE_REJECT: subject '$($evmSub['name'])' state=[$st] glob 匹配 $($lst.Count) 个（要求恰好 1）"
+                    # ★ O-52② **运行窗口隔离**（2026-09-24 补）：`out/` 是**累积**的（实测 dogfood 工作区有 4 个
+                    #   `.txt`）⇒ 只看"候选恰好 1"在真实工作区**几乎必然拒绝**。故引入 `.run-marker` 窗口
+                    #   （body 在 agent 前 `: > $W/.run-marker`）。规则三态、**不猜**：
+                    #     · 窗口内恰好 1 → 取它（脏工作区的正解）；
+                    #     · 窗口内 0 **且**候选恰好 1 → 取它（产物由 `mv`/`cp -p` 而来、mtime 早于 marker
+                    #       ⇒ 实测落在窗口外；此时**无歧义** ⇒ 退回旧语义，**不制造回归**）；
+                    #     · 其余 → 拒。⚠ marker 缺失时 `-nt` 恒真 ⇒ 窗口==候选 ⇒ **退化为旧行为**（不更宽）。
+                    #   ⚠ 仍**不给 pattern 加引号**（`for f in $st` 必须由 shell 展开通配；安全由字符集白名单承担）。
+                    $gcmd = 'cd {0} && echo ==CAND==; for f in {1}; do [ -f $f ] && echo $f; done; echo ==WIN==; for f in {1}; do [ -f $f ] && [ $f -nt .run-marker ] && echo $f; done' -f $W, $st
+                    $gout = @(ssh -o BatchMode=yes -o ConnectTimeout=10 $hostName $gcmd 2>$null |
+                              ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+                    $gCand = @(); $gWin = @(); $gSect = ''
+                    foreach ($gl in $gout) {
+                        if ($gl -eq '==CAND==') { $gSect = 'cand'; continue }
+                        if ($gl -eq '==WIN==') { $gSect = 'win'; continue }
+                        if ($gSect -eq 'cand') { $gCand += $gl } elseif ($gSect -eq 'win') { $gWin += $gl }
+                    }
+                    if ($gWin.Count -eq 1) { $resolved = $gWin[0] }
+                    elseif ($gWin.Count -eq 0 -and $gCand.Count -eq 1) { $resolved = $gCand[0] }
+                    else {
+                        Write-Host "EVM_STATE_REJECT: subject '$($evmSub['name'])' state=[$st] 产物非唯一（窗口内 $($gWin.Count) 个 / 候选 $($gCand.Count) 个，要求恰 1）"
                         $evmStateRejected++; continue
                     }
                     # ★ **解析出的名字来自站上文件系统 ⇒ 按不可信输入重新校验一遍**
                     #   （防站上放了带 shell 元字符的文件名 —— 它随后要进 scp 的命令行）
-                    $resolved = "$($lst[0])".Trim()
+                    $resolved = "$resolved".Trim()
                     $evmT2 = Test-EvmStatePull -state $resolved -path $rp
                     if (-not $evmT2.ok -or $evmT2.glob) {
                         Write-Host "EVM_STATE_REJECT: subject '$($evmSub['name'])' 解析名=[$resolved] 复校验不过 原因=$($evmT2.reason)"
