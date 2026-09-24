@@ -1772,8 +1772,16 @@ RC=`$?
 # per workspace path -> in $W it resumes THIS run's session, verified 2026-09-09 on A station;
 # no session-id parsing needed; base64 prompt keeps ASCII discipline)
 CONT_ATTEMPT=0
-while [ `$RC -ne 0 ] && [ `$CONT_ATTEMPT -lt 2 ]; do
+# O-46 (2026-09-24): resume cap 2→3 + 前置 provider 冷却退避. B2 实测 5/7 中断于上游
+#   503/504 (provider_overloaded / idle timeout), "连续双重试" 全落空 —— 须等冷却窗再续接.
+while [ `$RC -ne 0 ] && [ `$CONT_ATTEMPT -lt 3 ]; do
   CONT_ATTEMPT=`$((CONT_ATTEMPT+1))
+  # O-46 退避: 上次输出命中上游过载/超时 → 长退避(30s)尊重 provider 冷却; 否则短退避(5s)
+  if grep -qE '503|504|provider_overloaded|Service temporarily overloaded|idle timeout' "`$W/out/.agent-output.txt" 2>/dev/null; then
+    sleep 30
+  else
+    sleep 5
+  fi
   echo "=== RESUME[`$CONT_ATTEMPT] prev_rc=`$RC ===" >> "`$W/out/.agent-output.txt"
   # O-24 P0-①: resume runs under its OWN timeout budget (continue-timeout-s), not the first budget
   echo "`$CONT_B64" | base64 -d \
@@ -2245,6 +2253,23 @@ exit `$FINAL_RC
             }
             # D4a: 合批暂存目录(5 个小件已 Move 走)一并清掉, 不留 TEMP 残留
             if (Test-Path $evDir) { Remove-Item $evDir -Recurse -Force -ErrorAction SilentlyContinue | Out-Null }
+            # O-46 缓解② (2026-09-24, **核心防御**): 失败 run 归档成功 → 主动清理远端残留状态件与声明产物。
+            #   B2 实测失败 run 残留 `out/.meta` / `out/.progress` / `out/<subject state>` / `.agent-lock` /
+            #   `.agent-state.json` 是下一轮 `LOCK_HELD` / `META_STALE` 与 accept&EVM 命中旧产物的假绿外因。
+            #   此处证该件已入库到 runDir 之后清理远端工作副本 ⇒ 消除源头且不触"collect 失败不得清理"约定。
+            #   待删路径全部单引号包裹(bash 内 `''` 转义单引号) + `rm -f -- "$f"` ⇒ 注入面收敛, 非拼接执行。
+            if ($code -ne 0) {
+                $del = @('out/.meta','out/.progress','.agent-lock','.agent-state.json')
+                foreach ($evmSub in @($fm['evidence-manifest']['subjects'])) {
+                    $st = ([string]$evmSub['state']).Trim()
+                    if ($st -and $st -like 'out/*') { $del += $st }
+                }
+                $safef = $del | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }
+                $body = "cd `"$W`"`nfor f in $($safef -join ' '); do [ -e `"`$f`" ] && rm -f -- `"`$f`"; done"
+                try { Invoke-RemoteScript -HostName $hostName -ScriptBody $body | Out-Null }
+                catch { Write-Host "O46_CLEAN_WARN: 远端清理失败(非阻断): $($_.Exception.Message)" }
+                Write-Host "O46_CLEAN: 失败 run 已清理远端 $($del.Count) 项"
+            }
             # 2026-09-23 (F-2) **已删除**此处原有的一行:
             #   Remove-Item (Join-Path $projRoot 'agent-out\.agent-run.json') -ErrorAction SilentlyContinue
             # 取证(全文件仅此一处引用该**共享固定名**路径, 且**无任何写入方** —— 本函数写的是 per-`<ts>` 的
@@ -2798,11 +2823,14 @@ mkdir -p "$stWorkDir/.attach/$nm2"
     $rc = $rcov['code']; $rcMsg = $rcov['msg']; if ($rcMsg) { Write-Host "CLAUDE_RUN_WARN: $rcMsg" }
     Write-Host "claude first rc=$rc"
 
-    # O-24 P0-① resume loop (本地等价): 失败 <=2 次续接, 每次独立预算 continueTimeout
+    # O-24 P0-① resume loop (本地等价): 失败 <=3 次续接, 每次独立预算 continueTimeout; O-46 加退避
     $contAttempt = 0
     $contB64 = "Q29udGludWUgdGhlIHVuZmluaXNoZWQgdGFzayBmcm9tIHdoZXJlIGl0IHN0b3BwZWQuIFJlLXJlYWQgbmVlZGVkIGZpbGVzLCBjb21wbGV0ZSB3aGF0IHdhcyBsZWZ0LCB0aGVuIHZlcmlmeSBwZXIgb3JpZ2luYWwgY3JpdGVyaWEu"
-    while ($rc -ne 0 -and $contAttempt -lt 2) {
+    while ($rc -ne 0 -and $contAttempt -lt 3) {
         $contAttempt++
+        # O-46 退避: stderr 命中上游 503/504/过载 → 长退避(30s)尊重 provider 冷却; 否则短退避(5s)
+        $errText = if (Test-Path $errTxt) { Get-Content $errTxt -Raw -ErrorAction SilentlyContinue } else { '' }
+        if ($errText -match '503|504|provider_overloaded|Service temporarily overloaded|idle timeout') { Start-Sleep -Seconds 30 } else { Start-Sleep -Seconds 5 }
         Add-Content $outTxt "`n=== RESUME[$contAttempt] prev_rc=$rc ==="
         [IO.File]::WriteAllText($contIn, ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($contB64))), $utf8NoBom)
         if ($useStation) {
