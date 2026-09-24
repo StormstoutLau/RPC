@@ -3186,6 +3186,35 @@ def _validate_graph(checks):
     return errs
 
 
+def run_checks(selected):
+    """**可注入的执行缝**：跑 `selected`，返回 `(results, failures)`。
+
+    D6-P0-1「**非执行三分**」的**唯一落点**（`tests/test_rpc_check_three_classes.py` 三类各一注入）：
+      · **MODE_SKIP**   = 调用方**不给**它（`--quick`/`--only` 未选中）⇒ **不进 results ⇒ 不计失败**
+        （呈现 = `main()` 里那行"已跳过 (模式=…)"）；
+      · **SKIP_FAILED** = `needs` 里有 FAIL/SKIP_FAILED ⇒ **算失败**（不许静默降级成 skip）；
+      · **WARN**        = **环境降级**（缺 paramiko/pyyaml 等 ⇒ 断言自报 WARN）⇒ **不进 FAIL 集，但必须可见**。
+    ⇒ 三者**互不相同**：**只有 SKIP_FAILED / FAIL 计失败**。
+
+    抽成独立函数是为了能**注入假断言**（不跑真 I/O）做上述三类的注入用例；行为与旧的内联循环逐字等价。
+    """
+    results, failures, status_of = [], 0, {}
+    for c in selected:
+        unmet = [n for n in c.get("needs", []) if status_of.get(n) in ("FAIL", "SKIP_FAILED")]
+        if unmet:
+            status, note, detail = "SKIP_FAILED", f"依赖未满足: {', '.join(unmet)} ⇒ 本项未执行(算失败)", []
+        else:
+            try:
+                status, note, detail = c["fn"]({})
+            except Exception as e:
+                status, note, detail = "FAIL", f"{type(e).__name__}: {e}", []
+        status_of[c["id"]] = status
+        results.append((c["id"], c["title"], status, note, detail))
+        if status in ("FAIL", "SKIP_FAILED"):
+            failures += 1
+    return results, failures
+
+
 def main():
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("--quick", action="store_true", help="仅本地快检 (pre-commit)")
@@ -3217,23 +3246,7 @@ def main():
         print("\n  结论: FAIL (断言依赖图配置错误) → 阻断\n")
         return 1
 
-    results, failures = [], 0
-    status_of = {}
-    for c in selected:
-        # D6-P0-1: **级联** —— needs 里有 FAIL/SKIP_FAILED ⇒ 本项 **SKIP_FAILED(算失败)**,
-        #   与"模式性省略"严格区分(MODE_SKIP 不计失败)。依据 §11.1-A 的"非执行三分"。
-        unmet = [n for n in c.get("needs", []) if status_of.get(n) in ("FAIL", "SKIP_FAILED")]
-        if unmet:
-            status, note, detail = "SKIP_FAILED", f"依赖未满足: {', '.join(unmet)} ⇒ 本项未执行(算失败)", []
-        else:
-            try:
-                status, note, detail = c["fn"]({})
-            except Exception as e:
-                status, note, detail = "FAIL", f"{type(e).__name__}: {e}", []
-        status_of[c["id"]] = status
-        results.append((c["id"], c["title"], status, note, detail))
-        if status in ("FAIL", "SKIP_FAILED"):
-            failures += 1
+    results, failures = run_checks(selected)
 
     for cid, title, status, note, _ in results:
         print(f"  [{status:4s}] {MARKS[status]} {cid:10s} {title:16s} {note}")
