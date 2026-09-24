@@ -506,7 +506,11 @@ DONE_Z
   - **放大假绿风险**：失败 run 残留 `.meta`/`.progress`/`out/falsegreen.md` 不清理，后续派发要么 `LOCK_HELD`/`META_STALE` 拒发，要么 accept/EVM 回收**命中旧产物**恒真（B2 run-1）——是"门禁假绿"的外因之一。
 - **为何不是本地问题**：`STATION_READY_SKIPPED`（egress 后端不适用引擎面探针）+ `SLOT-GATE: skip` ⇒ 与三站本地推理无关，纯上游 provider 过载/空闲超时。
 - **候选缓解（未实施，仅登记）**：① `resume` 次数从 2 提到 3-4 且**每次等待退避**（现 idle timeout 即连续双重试）；② 失败 run 结束后**主动清理**远端 `.meta`/`.progress`/`out/` 声明产物，避免残留触发 `LOCK_HELD`/`META_STALE`/假绿；③ 出网档换更稳的 provider 档位（如私有 key 的非 free 档）；④ 上限重试仍失败则**整单标记 EGRESS_UNSTABLE** 而非仅 rc=1。
-- **状态**：⏳ 待裁（本轮 B2 吃狗粮首度一手采样；不阻断门禁绿灯）。
+- **✅ 已裁（2026-09-24，社区反馈定案）**：**上游 provider 容量/冷却问题，非本地配置**。闭环依据：
+  - **OpenRouter 官方错误文档**：`503 = "There is no available model provider that meets your routing requirements"`（provider 过载/不可用）；429 与 503 响应均带 `Retry-After` header；官方建议"实现简单 retry 机制或换 provider/model"。
+  - **NVIDIA 官方开发者论坛一手实例**（nemotron 系同源复现）：反复 503/504，报 `providers_cooling_down`、`primary:{state:open, consecutive_failures:4, tier:2, retry_after_seconds:56.3, successes:95, failed_requests:79}`；用户实测"约 8 问 5-6 问能过"——与本站 B2 7 次派发 5 次中断逐字吻合。
+  - **缓解优先级定案**：**先落地 ① `resume` 提至 3-4 + 每次等待退避（尊重 `Retry-After`）、② 失败 run 结束主动清理远端 `.meta`/`.progress`/`out/` 声明产物**（② 同时堵住假绿与 `LOCK_HELD`/`META_STALE` 双外因，为**核心防御**）；③ 换非 free 档、④ `EGRESS_UNSTABLE` 整单标记 为后置升级选项，暂缓。
+  - **状态**：✅ 已裁（P1，缓解 ①② 待实施；不阻断门禁绿灯）。
 
 ### O-01：--attach 传输未实现
 
