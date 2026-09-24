@@ -32,6 +32,12 @@ items:
     authority: "ops/** 目录实况（frozen_ops_scripts 必须与扫描集一致；只允许'只减不增'）"
     check: scripts
 
+  # ── 运行时生成物（**不入仓**，见 .gitignore；故 check 无对象，显式豁免）────────
+  - path: ops/agent-dashboard.html
+    exempt: "由 `cluster.py agent dashboard` 生成的自包含快照；**机器产物不入仓**（.gitignore，同 ops/cluster_status.html 先例）"
+  - path: ops/cluster_status.html
+    exempt: "同上（运行时生成的状态页，.gitignore 覆盖）"
+
   # ── 显式豁免（有据，不是漏判）────────────────────────────────────────────
   - path: .git/hooks/pre-commit
     exempt: "由 ops/rpc.ps1 install-hooks 生成；位于 .git/ 内，不在门禁扫描射程（且手改会被下次 install 覆盖）"

@@ -48,7 +48,7 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | O-22 | 运维缺陷 | P1   | `.meta` 残留误导：只在 run 结束写、无 task_id → 二次 run 时读到上次终态（RUN_S=900/RC=124 误判"又超时"，实为残留） | ✅ 已收口（2026-09-12） | 契约修复 + 观测判据订正 | 2026-09-07 | <br /> |
 | O-23 | 架构/超时 | P1   | **复杂度路由 ctx 解耦**：profile.context(code=8192/reason=32768/long=262144) 只是元数据、从未传给引擎；opencoe 用 opencode.jsonc 固定 limit.context=131072，引擎 ctx 由手动 flavor 预设决定 → 三者解耦。**凌晨 refdedupe timeout 真根因**=`request exceeds available context size (8192)`：nothink 档引擎 `-c 8192` < refdedupe 请求 12536 tokens → 服务端 400 → agent 永久挂死 → 900s timeout | ✅ 已修复+实机验证（引擎 ctx=唯一真相） | 2026-09-07 radical fix B | <br /> | <br /> |
 | O-24 | 架构/闭环 | P1   | **单机 agent CLI 工作流闭环断点（分析定案）**：单机形态（无第二站分摊/换站/互审）存在 4 类断点——①review --peer 缺（产出→ledger 后无机器复核门）②超时续接 --continue 缺（长卡单机唯一韧性出路）③claude 备通道缺（单引擎死锁=停摆）④单机排队/上下文治理缺。P0=review 单机版 + continue 续接 | ⏳ **P0-① 已落地实证**（续跑循环入 $body，RESUME 出线+超时卡全链+零回归）；P0-② ✅（被 O-16 覆盖闭环） | O-24 实施记录 | <br /> | <br /> |
-| O-25 | 演进/可观测 | P2   | **agent 任务执行进度可观测性（派发前预估 + 派发中节拍）**：派发后黑盒——ledger/.meta/.agent-run 均为 run-end 快照，无运行中采样 → 长卡状态不可观测、无吞吐、无 ETA；预算估算用单一 wall-clock 而非分相 | 🔵 P0 完成 + 判据③已落地：①吞吐基准表✓（THROUGHPUT-BASELINE.md+metrics-log Phase 6.2）；②`.progress` 打点✓（远端5s采样+teardown终值+collect拉取+parse回填）；③派发前预估✓（Get-ThroughputEstimate 分相估算，HIT才给/MISS不打荒，TIMEOUT-WARN预警；实证 gpt-oss 682s、回归9/9）；**P1槽位门✓（并入O-08/F1：`_slot_gate.sh`+`Invoke-SlotGate`+task接入，busy默认reject exit 24，`--slot-allow-busy`放行，slot记入run.json）**；**P2看板✓（2026-09-12 落地，L3 单文件 HTML：`make-dashboard.ps1` 生成器→内联 ledger+run.json→self-contained `dashboard.html`，**📌 2026-09-24 注：该生成器与产物已按 ADR-0004 D5 脚本清减移除（`3712f06`），能力由 [`ops/cluster_web.py`](../../ops/cluster_web.py) 统一管理页承接 —— 见 O-38**，file:// 直开零网络请求；已完成总览 22 行+run 详情展开；正在跑/Live tab 由 `-Live` 拉远端 .progress，无则 no-live-data；见 O-25 详情节）** | 🔵 **O-25 已全收口（①-④+P1/P2 全落地 + 2026-09-12 实机在线实测全通，见详情节）** | 一期 | <br /> |
+| O-25 | 演进/可观测 | P2   | **agent 任务执行进度可观测性（派发前预估 + 派发中节拍）**：派发后黑盒——ledger/.meta/.agent-run 均为 run-end 快照，无运行中采样 → 长卡状态不可观测、无吞吐、无 ETA；预算估算用单一 wall-clock 而非分相 | 🔵 P0 完成 + 判据③已落地：①吞吐基准表✓（THROUGHPUT-BASELINE.md+metrics-log Phase 6.2）；②`.progress` 打点✓（远端5s采样+teardown终值+collect拉取+parse回填）；③派发前预估✓（Get-ThroughputEstimate 分相估算，HIT才给/MISS不打荒，TIMEOUT-WARN预警；实证 gpt-oss 682s、回归9/9）；**P1槽位门✓（并入O-08/F1：`_slot_gate.sh`+`Invoke-SlotGate`+task接入，busy默认reject exit 24，`--slot-allow-busy`放行，slot记入run.json）**；**P2看板✓（2026-09-12 落地，L3 单文件 HTML：`make-dashboard.ps1` 生成器→内联 ledger+run.json→self-contained `dashboard.html`，**📌 2026-09-24 注：该生成器与产物已按 ADR-0004 D5 脚本清减移除（`3712f06`），能力由 [`ops/cluster_web.py`](../../ops/cluster_web.py) 统一管理页承接（在线）；同日"补做"落为 [`cluster.py agent dashboard`](../../ops/cluster.py) 的**自包含离线快照** —— 见 O-38**，file:// 直开零网络请求；已完成总览 22 行+run 详情展开；正在跑/Live tab 由 `-Live` 拉远端 .progress，无则 no-live-data；见 O-25 详情节）** | 🔵 **O-25 已全收口（①-④+P1/P2 全落地 + 2026-09-12 实机在线实测全通，见详情节）** | 一期 | <br /> |
 | O-26 | 演进/编排 | P2   | **单任务分解派发并行（Split-Dispatcher）**：现派发=单卡→单站；一张可切分 readonly 大任务卡在单节点（物理上界 3：A/B/C 各1 并发，O-18）无法利用多站。缺口=任务卡无 `decompose` 声明、编排层无拆/并、无 Merge | ✅ **已闭环（2026-09-12）**：decompose 拆 2 分片 A/B 双站并行，全子卡 accept，Merge 正确，并行 465.1s ≪ 串行 720.8s（ratio 0.645）；落地修复 2 bug | V2 fan-out L2.5（schema 冻结前加 decompose 键） | <br /> | <br /> |
 
 | O-27 | 验证/判据 | P1 | 证据链 `_VERDICT_RC_MAP` 未覆盖"远端 0 ⇄ 整体 1"（验收失败路径）⇒ **任何 accept 失败的 run 都阻断提交** | ✅ 已闭环（裁定 b **治同源** + 12 条正反注入） | ✅ 已修 |
@@ -61,7 +61,7 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | O-34 | 门禁/一致性 | P2 | **迁移/重命名后「首次」门禁为 FAIL(1 项失败 / 绿灯 9)，而提交时同一命令为 PASS(绿灯 10)** —— **已定位**：`_iter_source_files()` 以 `git ls-files` 取范围，其假设"**pre-commit 阶段新文件已 `git add`**"**只在钩子里成立**；手动直跑 + 未暂存 ⇒ 范围不同 | ✅ **已修（2026-09-23）**：新增 `_untracked_count()`，`secrets` 报数行在未跟踪数 >0 时显式追加提示 ⇒ **让"范围已收窄"可见** | ✅ 已修 |
 | O-35 | 并发/引擎 | P1 | **站上本地引擎是否支持并发请求 —— 未验证**（与 O-31 **不是同一问题**：O-31 修的是**文件名冲突**［文件层］，本条是**引擎并发行服务**［引擎层］） | ⏳ **待立项验证**（含"输出错配"这一最危险形态） | D6-P2 · D7 |
 | O-37 | 工具/信号 | **P1** | **`.progress` 采样器 `t=0` 读上一轮残留**：启动时只 `: > .progress`、**不清 `out/.agent-output.txt`** ⇒ 首样本 `bytes_s` 假高（1.4e6+ B/s），**且 `bytes>0` 在 t=0 即成立** = **假进度/假完成信号**（与 T-1、O-22 同病族） | ✅ **已修 + 正反均已实测**（反例 = A1/B2 两条铁证；正例 = A2 复跑 `t=0 bytes=0`） | ✅ |
-| O-38 | 文档/一致性 | P2 | **O-25 P2 看板缺磁盘证据**：其计划件写的 `ops/station-bin/make-dashboard.ps1` 与产物 `dashboard.html` **全仓 + 归档区均无**，`inventory/ops.yaml` 也未登记 ⇒ 台账"P2 看板 ✓ 已落地"**存疑** | **✅ 已复核（2026-09-24）**：**非虚报** —— 看板曾落地（`5f2b395`），后按 **ADR-0004 D5 脚本清减**删除（`3712f06`, 2026-09-15），**能力由 `ops/cluster_web.py` 统一管理页承接** ⇒ 仅**落点表述过时**（同 O-33 族） | O-25 · D6-P1-1 |
+| O-38 | 文档/一致性 | P2 | **O-25 P2 看板缺磁盘证据**：其计划件写的 `ops/station-bin/make-dashboard.ps1` 与产物 `dashboard.html` **全仓 + 归档区均无**，`inventory/ops.yaml` 也未登记 ⇒ 台账"P2 看板 ✓ 已落地"**存疑** | **✅ 已复核（2026-09-24）**：**非虚报** —— 看板曾落地（`5f2b395`），后按 **ADR-0004 D5 脚本清减**删除（`3712f06`, 2026-09-15），**能力由 `ops/cluster_web.py` 统一管理页承接** ⇒ 仅**落点表述过时**（同 O-33 族）<br>**✅ 补做完成（2026-09-24 裁定"补做"）**：★ **不复活独立脚本**（否则撤销 ADR-0004 D5）⇒ 改为**能力并入统一入口**：`cluster.py agent dashboard` 产出**自包含单文件 HTML**（零网络）+ 沿用 `cluster_web.py` 在线卡片 | O-25 · D6-P1-1 |
 | O-39 | 可观测/基准 | P2 | **派发前预估对出网档恒 MISS**：`ESTIMATE: … no-bench (MISS) - skip dispatch estimate`（基准表只覆盖 `local/*`）⇒ **吃狗粮全链路无预估** | ⏳ 待决定（补 bench 行 or 显式声明"不估算"） | O-25 |
 | O-40 | 证据/回收 | **P1** | **卡的产物不进 run 目录**（`WORKSPACE_DIFF_LINES=0`）：产物只留站上工作区 ⇒ 目前**只能手动 `scp`** 取回（非持久位置） | **✅ 已实现（2026-09-24 复核）**：卡声明 `evidence-manifest.subjects[].state` + collect 段白名单 scp 回收 ⇒ 实测 `EVM_STATE: pulled=1`（B2 / 受控夹具 two runs）| D6-P1-1 · ADR-0007 |
 | O-41 | 门禁自审 | P2 | **B2 审计报出的两条"疑似未登记假绿"**：① `doclinks` 对**绝对路径/盘符/URL 一律"不可判"跳过**（可写不存在路径而不报错）② `engine` 的**残留阈值 2048MB 硬编码**（1.5GB 且不监听端口的残留进程会被判正常） | **✅ 已复核（2026-09-24）**：**① 非缺陷**（= 射程声明"只判仓库内相对链接"，且不可判数已报数 ⇒ 留痕即关闭）· **② 真缺口**（字面成立）⇒ **✅ 已加固**（`RESIDUAL_WARN_MB=1024` 预警带 + 单测 `test_rpc_check_engine_bands.py` 7/7） | D6-P0-1（门禁自审，仅 ② ） |
@@ -325,6 +325,17 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
   ⇒ **处置 = 修正落点表述并关闭本项**（同 **O-33** 族：「实体搬家后文档未跟随」，非缺陷、非虚报）。
 - ⚠ **方法论留痕**：本条一度被定性为"**台账凭空虚报**"——**是错的**。`git log --all -- <path>` 一步即可分辨
   "从未入库 / 曾入库后被删"；**仅凭工作区 `Glob` 就下"虚报"结论，等于用"现在的快照"推断"历史"**（与"凭推断下结论"同病）。
+- **✅ 补做完成（2026-09-24，Scott 裁定"补做"）** —— ★ **不是恢复独立脚本，而是"能力并入统一入口"**：
+  - **合规判据**：**ADR-0004 D5**「统一管理入口为唯一管理面」—— 原 `make-dashboard.ps1` 正是据此清减的
+    ⇒ 若"复活"它，等于**撤销 D5**。故补做的正确形态 = **在 `cluster.py` 加子命令**。
+  - **落地**：**`cluster.py agent dashboard [--limit N] [--out <文件>]`** ⇒ 产出**自包含单文件 HTML**
+    （**数据内联 + 零网络请求**，`file://` 直开）—— 恢复了原件的**独有价值**（离线快照 / 可作附件）。
+  - **同源不漂移**：复用 `agent_runs` / `agent_live` / `agent_ledger_freshness` —— 与在线视图
+    `cluster_web.py` 的「Agent 任务」卡片**同一份数据函数**（该卡片本就在承接看板能力，只是**在线**形态）。
+  - **产物合规**：默认落 `ops/agent-dashboard.html`，**已入 `.gitignore`**（同 `ops/cluster_status.html` 先例），
+    并在 [`inventory/artifacts.yaml`](../../inventory/artifacts.yaml) **登记为 exempt 生成物**（走本批刚落地的 D6-P1-1 纪律）。
+  - **自包含自证**：生成 6890 字节，实测 **`https?://` 0 处 · `<script src=` 0 处 · `<link ` 0 处** ⇒ 打开零网络请求。
+- **⇒ 分工**：**实时**用 `cluster_web.py`；**离线快照/归档/附件**用 `cluster.py agent dashboard`。
 
 #### O-39：**派发前预估对出网档恒 MISS**（待决定）
 

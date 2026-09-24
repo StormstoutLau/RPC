@@ -27,6 +27,7 @@ Desktop.ini
 
 # D2 运行时生成物
 ops/cluster_status.html
+ops/agent-dashboard.html
 ops/.egress_daily.json
 # 2026-09-21: OpenRouter 额度借用台账 —— 运行时状态(谁在借、借自谁、起于何日), 由
 # `cluster.py egress borrow --go/--restore --go` 读写; 无密钥内容, 但属环境态 ⇒ 同 .egress_daily.json 不入库。
