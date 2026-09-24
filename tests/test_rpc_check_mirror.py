@@ -59,7 +59,38 @@ def main() -> int:
     else:
         print("  ok   事实源不可读 ⇒ 明确报错（不静默通过）")
 
-    # ⑤ 结构护栏
+    # ⑤ O-50：手册 §2.4 的断言计数声明 == 真实 CHECKS（把"手册计数会漂移"变成机判）
+    manual = R.MANUAL.read_text(encoding="utf-8", errors="replace")
+    badc = R.validate_manual_counts(manual, R.CHECKS)
+    if badc:
+        fails.append(f"手册计数基线不干净: {badc}")
+    else:
+        print(f"  ok   手册断言计数 == CHECKS（{len(R.CHECKS)} 项）")
+
+    # ⑥ ★ 篡改手册计数 ⇒ 必须点名
+    m0 = R.MANUAL_COUNT_RE.search(manual)
+    n0 = m0.group(1) if m0 else "21"
+    badc2 = R.validate_manual_counts(manual.replace(f"# {n0} 项断言", "# 99 项断言"), R.CHECKS)
+    okc2 = any("99" in b for b in badc2)
+    print(f"  {'ok  ' if okc2 else 'FAIL'} [真实负例3] 手册计数改成 99 ⇒ 点名：{'在' if okc2 else '缺'}")
+    if not okc2:
+        fails.append(f"负例3 未点名: {badc2}")
+
+    # ⑦ ★ 手册塞回"真实剩余 open = N 项"枚举 ⇒ 必须点名（O-50 反向护栏）
+    badc3 = R.validate_manual_counts(manual + "\n当前真实剩余 open issue = 4 项。\n", R.CHECKS)
+    okc3 = any("枚举式声明" in b for b in badc3)
+    print(f"  {'ok  ' if okc3 else 'FAIL'} [真实负例4] 手册塞回 open 枚举 ⇒ 点名：{'在' if okc3 else '缺'}")
+    if not okc3:
+        fails.append(f"负例4 未点名: {badc3}")
+
+    # ⑧ ★ 手册塞回写死门禁计数 ⇒ 必须点名
+    badc4 = R.validate_manual_counts(manual + "\n质量门：门禁 15 绿。\n", R.CHECKS)
+    okc4 = any("写死了门禁计数" in b for b in badc4)
+    print(f"  {'ok  ' if okc4 else 'FAIL'} [真实负例5] 手册写死门禁计数 ⇒ 点名：{'在' if okc4 else '缺'}")
+    if not okc4:
+        fails.append(f"负例5 未点名: {badc4}")
+
+    # ⑨ 结构护栏
     if "mirror" not in {c["id"] for c in R.CHECKS}:
         fails.append("CHECKS 里没有 id='mirror' ⇒ 断言写了但没人跑（挂名假判）")
     else:
