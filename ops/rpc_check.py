@@ -801,6 +801,106 @@ def check_sensitivity(ctx):
     return ("FAIL" if bad else "PASS"), note, bad
 
 
+# ── P1-3 `facade`：`cluster.py` 必须**可达**其消费者引用的每一个 `cluster.<符号>` ──────────
+FACADE = ROOT / "ops" / "cluster.py"
+# 消费形态两种：`import cluster`（用 `cluster.<x>`）与 `import cluster as C`（用 `C.<x>`）
+_FACADE_CONSUMER_RE = re.compile(r"^\s*import\s+cluster(?:\s+as\s+([A-Za-z_]\w*))?\s*$", re.M)
+_FACADE_DIRS = ("ops", "tests")     # ★ tests 也是契约消费者（实测: test_inbox_seal 用 cluster.INBOX_ROOT 等）
+
+
+def _strip_py_prose(text):
+    """剥掉 `#` 注释与字符串字面量（含 docstring）—— **本仓纪律**：扫代码文本的断言必须区分"代码"与"注释"。
+
+    ⚠ 为什么必须：首版只用正则扫原文 ⇒ 把**文档/注释里出现的 `cluster.py`** 当成引用（抽出符号 `py`）
+    ⇒ **假红**。这与 D7-P1-1 那次（"已移除此项"的留档注释让断言假红）是**同一型**的坑。
+    strings 用空格占位（避免把两侧代码粘成一个 token）；不做完整词法，够用即可。
+    """
+    out, i, n = [], 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "#":
+            while i < n and text[i] != "\n":
+                i += 1
+        elif c in "\"'":
+            q, triple = c, text[i:i + 3] in ('"""', "'''")
+            if triple:
+                i += 3
+                while i < n and text[i:i + 3] != q * 3:
+                    i += 1
+                i += 3
+            else:
+                i += 1
+                while i < n and text[i] != q:
+                    i += 2 if text[i] == "\\" else 1
+                i += 1
+            out.append(" ")
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def facade_names(text):
+    """静态提取 `cluster.py` 对外的**可达名**（三种来源：定义 / 顶层赋值 / 导入重导出）。"""
+    names = set(re.findall(r"^def\s+([A-Za-z_]\w*)", text, re.M))
+    names |= set(re.findall(r"^class\s+([A-Za-z_]\w*)", text, re.M))
+    names |= set(re.findall(r"^([A-Za-z_]\w*)\s*(?::[^=\n]+)?=", text, re.M))
+    for braced, plain in re.findall(r"^from\s+[\w.]+\s+import\s+(?:\(([^)]*)\)|([^\n#]+))", text, re.M):
+        for seg in (braced or plain or "").split(","):
+            n = seg.strip().split(" as ")[-1].strip()
+            if re.fullmatch(r"[A-Za-z_]\w*", n or ""):
+                names.add(n)
+    return names
+
+
+def validate_facade(consumer_refs, names):
+    """**纯函数**：`consumer_refs = {消费者文件名: {符号,...}}`、`names = 门面可达名集` ⇒ 离线可正反夹测。
+
+    P1-3 的定性：本仓已拆出 5 个模块，`cluster_web.py` 用 `import cluster` 复用其符号
+    ⇒ **这是一个跨文件的隐式契约**（门面重导出），而**此前门禁 19 项无一检查它**
+    ⇒ 谁把符号搬走/改名，`cluster_web.py` 只在**运行到那条路径时**才炸。
+
+    返回 `(bad, stats)`；`stats` 报**覆盖率**（消费者数 / 引用的不同符号数）。
+    """
+    bad = []
+    all_syms = set()
+    for consumer, refs in sorted(consumer_refs.items()):
+        all_syms |= refs
+        for s in sorted(refs):
+            if s not in names:
+                # 点名：**哪个符号 · 被谁引用**（照 `scripts` 断言"改了没登记就 FAIL 并点名"的成功范式）
+                bad.append(f"{consumer} 引用的 cluster.{s} **在门面不可达**（搬走/改名/漏重导出？）")
+    # 反向信息（不判死）：门面里"没有任何消费者引用"的名字 —— 只报数，便于日后清理
+    orphan = sorted(n for n in names if n not in all_syms and not n.startswith("_"))
+    return bad, {"consumers": len(consumer_refs), "syms": len(all_syms), "orphan": len(orphan)}
+
+
+def check_facade(ctx):
+    """P1-3：`cluster.py` 门面符号**可达性**（跨文件隐式契约的唯一机器约束）。"""
+    if not FACADE.exists():
+        return "FAIL", "ops/cluster.py 缺失（门面本体）", []
+    consumer_refs = {}
+    for d in _FACADE_DIRS:
+        for p in sorted((ROOT / d).glob("*.py")):
+            if p.name == FACADE.name or p.name.startswith("cluster_"):
+                continue      # 门面自身 / 已拆出的子模块（后者用 `from cluster_xxx import`，不走门面）
+            txt = _strip_py_prose(p.read_text(encoding="utf-8", errors="replace"))
+            m = _FACADE_CONSUMER_RE.search(txt)
+            if not m:
+                continue      # 不 import cluster 的文件不构成门面契约（如 rpc_check.py 走子进程）
+            alias = m.group(1) or "cluster"
+            refs = {x for x in re.findall(rf"\b{re.escape(alias)}\.([A-Za-z_]\w*)", txt)
+                    if not x.startswith("__")}
+            if refs:
+                consumer_refs[f"{d}/{p.name}"] = refs
+
+    names = facade_names(_strip_py_prose(FACADE.read_text(encoding="utf-8", errors="replace")))
+    bad, st = validate_facade(consumer_refs, names)
+    note = (f"消费者 {st['consumers']} 个 · 引用不同符号 {st['syms']} 个 · 门面可达名 {len(names)} 个 "
+            f"· 无消费者引用(仅报数) {st['orphan']} 个")
+    return ("FAIL" if bad else "PASS"), note, bad
+
+
 # ── 断言: 文档内链接可达 (文档漂移的机械防线) ─────────────────────────
 # 触发背景 (2026-09-15, ADR-0004 第四批"文档漂移审计"): 用户提出"三站配置实况与手册/派发表
 # 存在漂移", 机械扫描全部 144 个 md 后查出 **65 条失效的仓库内相对链接** —— 典型两类:
@@ -2696,6 +2796,9 @@ CHECKS = [
      "fix": "O-51: sensitivity.yaml 是「内容→档位」的真值(权威源在自身) —— 断言其自洽: "
             "① path 必须真实存在 ② tier 必须 ∈ 封闭枚举 ③ **同一 path 不得两处不同 tier** "
             "④ default_tier 必须为 local-only (fail-closed)"},
+    {"id": "facade", "title": "门面符号可达性", "fn": check_facade, "quick": True,
+     "fix": "P1-3: `cluster.py` 是统一门面, `cluster_web.py` 以 `import cluster` 复用其符号 —— "
+            "缺符号即 FAIL 并点名『哪个符号·被谁引用』; 修法: 在 cluster.py 重导出(或改回引用处)"},
     {"id": "ports", "title": "端口分配表自洽", "fn": check_ports, "quick": True,
      "fix": "按明细修 inventory/ports.yaml (缺字段/同组重复/跨组重叠/枚举拼错)"},
     {"id": "plugins", "title": "插件同构基线", "fn": check_plugins, "quick": True,
