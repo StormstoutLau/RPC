@@ -64,6 +64,10 @@ rejected（可从 triage / accepted / plan-review / plan-revise 任一进入）
 
 **合法取值白名单**：`open` `triage` `waiting` `accepted` `plan-review` `plan-revise` `running` `release` `done` `accepted-by-requester` `rejected-by-requester` `rejected`
 
+> **真值源**：[`inventory/inbox.yaml`](../inventory/inbox.yaml) 的 `states:` 段 —— 白名单 / 下一动作 / 待办分组都出自那里，
+> `rpc_check.py` 与 `cluster_web.py` 消费同一份。**本行的白名单与上表由门禁 `mirror` 断言对账**：
+> 改状态**只改 yaml 一处**，本行与状态表跟着改（改一处忘改另一处会被门禁点名）。
+
 **变更纪律**：状态只由管理员改 —— 覆盖写 `40_state/STATE.json`（`state`/`updated_at`/`by`），
 并在 `40_state/LOG.md` **追加**一条变更记录；需求方不改。
 每笔目录的 `10_admin/受理决定.md`（及其后的 `10_admin/复核意见-N.md`）是**状态变更的理由真值源**。

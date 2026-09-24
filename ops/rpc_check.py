@@ -904,6 +904,23 @@ def check_facade(ctx):
 # ── D6-P1-2 M-1：`事实源 ↔ 镜像` 一致性（当前 1 处合格镜像：判官行）─────────────────────
 MANUAL = ROOT / "docs" / "三机推理集群使用手册.md"
 AGENT_CLI = ROOT / "ops" / "station-bin" / "agent-cli.ps1"
+# M-5/M-6: 受理状态机「单一真值」及其文档镜像
+INBOX_TRUTH_YAML = ROOT / "inventory" / "inbox.yaml"
+INBOX_README = ROOT / "inbox" / "README.md"
+
+
+def read_inbox_truth(path):
+    """读受理状态机「单一真值」(`inventory/inbox.yaml` 的 `states:` 段) -> {state: {group, next}}。
+
+    **纯函数**(只依赖传入路径): 便于单测与注入(正反用例)。
+    失败**不静默兜底**(抛出) —— 由调用方报 FAIL / 由 check_inbox 落到空白名单(fail-closed)。
+    """
+    import yaml
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    states = data.get("states") if isinstance(data, dict) else None
+    if not isinstance(states, dict):
+        raise ValueError(f"{path} 缺 `states:` 映射段")
+    return states
 
 
 def read_judge_main(text):
@@ -948,10 +965,52 @@ def validate_mirror(judge, row):
     return bad, {"n": 3}
 
 
+def validate_inbox_mirror(states, readme_text):
+    """**纯函数**: 受理状态机真值 ↔ README §3 白名单/状态表 + 真值自洽 (M-5/M-6)。
+
+    收敛后(D6-P1-2)白名单/下一动作/分组都来自 `inventory/inbox.yaml` —— 两处代码**同源**,
+    于是"两端白名单相等"退化为**恒真**(这就是假绿); **真正的漂移点是文档**:
+    README §3 不能自动消费, 改了真值忘改文档不会报错。故此处补三道:
+      · 真值自洽: 每态有 group ∈ {action,active,closed} + 非空 next
+        (缺 group ⇒ 分组静默落进 closed = 真静默缺口; 缺 next ⇒ M-6 的键集缺口)
+      · README §3「合法取值白名单」 == 真值键集 (= M-5 本体)
+      · README §3 状态表首列 == 真值键集
+    """
+    bad = []
+    for name, spec in sorted(states.items()):
+        spec = spec or {}
+        if spec.get("group") not in ("action", "active", "closed"):
+            bad.append(f"inbox.yaml: 状态 {name!r} 的 group={spec.get('group')!r} 不合法 "
+                       f"(须 ∈ action/active/closed; 缺省会静默落进 closed)")
+        if not spec.get("next"):
+            bad.append(f"inbox.yaml: 状态 {name!r} 缺 next (加了状态忘加下一动作 = M-6)")
+    keys = set(states)
+    # 只在 §3 段落内找白名单行/状态表(避免误抓别节里同形的表)
+    sec = re.search(r"##\s*3\..*?(?=\n##\s)", readme_text, re.S)
+    if not sec:
+        bad.append("README 定位不到 §3 段落(标题结构改了?)")
+    text = sec.group(0) if sec else readme_text
+    m = re.search(r"合法取值白名单\*\*[:：]\s*(.+)", text)
+    if not m:
+        bad.append("README §3 找不到『合法取值白名单』行(文档结构改了?)")
+    else:
+        doc = set(re.findall(r"`([^`]+)`", m.group(1)))
+        if doc != keys:
+            bad.append(f"README §3 白名单与真值不一致: 文档多 {sorted(doc - keys)} / "
+                       f"少 {sorted(keys - doc)} (改一处忘改另一处?)")
+    tbl = set(re.findall(r"^\|\s*`([^`]+)`\s*\|", text, re.M))
+    if tbl and tbl != keys:
+        bad.append(f"README §3 状态表与真值不一致: 表多 {sorted(tbl - keys)} / "
+                   f"少 {sorted(keys - tbl)}")
+    return bad
+
+
 def check_mirror(ctx):
-    """P1-2 M-1：事实源 ↔ 镜像 一致性（当前仅判官行一处合格镜像）。"""
+    """P1-2: 事实源 ↔ 镜像 一致性 —— 2 处合格镜像(判官行 M-1 / 受理状态机 M-5+M-6)。"""
     if not AGENT_CLI.exists() or not MANUAL.exists():
         return "WARN", "缺 agent-cli.ps1 或手册，跳过镜像断言", []
+    bad = []
+    # ── M-1: 手册 §1.3 判官行 ↔ `JUDGE_TABLE['main']` ─────────────────
     judge = read_judge_main(AGENT_CLI.read_text(encoding="utf-8", errors="replace"))
     row = ""
     for line in MANUAL.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -959,10 +1018,36 @@ def check_mirror(ctx):
             row = line
             break
     if not row:
-        return "FAIL", "手册 §1.3 里找不到判官行（`JUDGE_TABLE['main']` 那行）", []
-    bad, st = validate_mirror(judge, row)
-    note = (f"合格镜像 1 处（判官行）· 校验 {st['n']} 字段 · 事实源 id={judge.get('id')} "
-            f"egress={judge.get('egress')} compliance={judge.get('compliance')}")
+        bad.append("手册 §1.3 里找不到判官行（`JUDGE_TABLE['main']` 那行）")
+    else:
+        bad += validate_mirror(judge, row)[0]
+    # ── M-5/M-6: 受理状态机真值 ↔ README §3 + 两处代码同源 ─────────────
+    n_state = 0
+    if not INBOX_TRUTH_YAML.exists() or not INBOX_README.exists():
+        bad.append("缺 inventory/inbox.yaml 或 inbox/README.md（状态机真值 / 文档镜像不在）")
+    else:
+        try:
+            states = read_inbox_truth(INBOX_TRUTH_YAML)
+        except Exception as e:
+            bad.append(f"inventory/inbox.yaml 读不出（真值源坏了）: {e}")
+        else:
+            n_state = len(states)
+            bad += validate_inbox_mirror(states, INBOX_README.read_text(encoding="utf-8",
+                                                                        errors="replace"))
+            # 两处代码**消费同一真值**(防"回归硬编码"): 直接核对运行时集合
+            sys.path.insert(0, str(ROOT / "ops"))
+            try:
+                import cluster_web
+                for nm, got in (("cluster_web.INBOX_STATES", set(cluster_web.INBOX_STATES)),
+                                ("cluster_web._INBOX_NEXT", set(cluster_web._INBOX_NEXT))):
+                    if got != set(states):
+                        bad.append(f"{nm} 与真值不一致: 多 {sorted(got - set(states))} / "
+                                   f"少 {sorted(set(states) - got)}（回归硬编码?）")
+            except Exception as e:
+                bad.append(f"导入 cluster_web 失败, 无法核对状态机消费面: {e}")
+    j = judge or {}
+    note = (f"合格镜像 2 处（判官行 3 字段 + 受理状态机 {n_state} 态）· 事实源 id={j.get('id')} "
+            f"egress={j.get('egress')} compliance={j.get('compliance')}")
     return ("FAIL" if bad else "PASS"), note, bad
 
 
@@ -2764,10 +2849,14 @@ def check_models(ctx):
 #   ③ 状态内容自洽 (accepted+ 须有 受理决定.md; plan-review/plan-revise 须有 20_plan;
 #      release+ 须有 30_evidence 记录)
 # 依据: ADR-0008 + inbox/README §3 状态机 (2026-09-23 扩展: waiting/协商回环/验收签收)
+# D6-P1-2 M-5/M-6: 白名单**已收敛**到 inventory/inbox.yaml —— 由 check_mirror 对账(README §3 + 两处代码)
 INBOX_DIR = ROOT / "inbox"
-INBOX_STATES = {"open", "triage", "waiting", "accepted", "plan-review", "plan-revise",
-                "running", "release", "done", "accepted-by-requester",
-                "rejected-by-requester", "rejected"}
+try:
+    INBOX_STATES = set(read_inbox_truth(INBOX_TRUTH_YAML))
+except Exception:
+    # fail-closed: 真值不可读 => 白名单为空 => 任何 STATE 都 FAIL;
+    # 真正的报错点见 check_mirror(它会点名「inbox.yaml 读不出」)
+    INBOX_STATES = set()
 INBOX_PROJ_RE = re.compile(r"^[^_].+-\d{4}-\d{2}-\d{2}$")   # <proj>-<yyyy-mm-dd>, 排除 _template
 
 
@@ -2865,8 +2954,11 @@ CHECKS = [
      "fix": "P1-3: `cluster.py` 是统一门面, `cluster_web.py` 以 `import cluster` 复用其符号 —— "
             "缺符号即 FAIL 并点名『哪个符号·被谁引用』; 修法: 在 cluster.py 重导出(或改回引用处)"},
     {"id": "mirror", "title": "事实源↔镜像一致", "fn": check_mirror, "quick": True,
-     "fix": "P1-2 M-1: 手册 §1.3 判官行必须与 `JUDGE_TABLE['main']` 的 id/egress/compliance **三项一致** "
-            "(改一处忘改另一处 ⇒ 文档与运行时行为不符); ⚠ M-2 已被 O-50 判为『不再维护第二份枚举』故不并入"},
+     "fix": "P1-2: ① M-1 手册 §1.3 判官行须与 `JUDGE_TABLE['main']` 的 id/egress/compliance 三项一致; "
+            "② M-5/M-6 受理状态机真值(`inventory/inbox.yaml`)须与 inbox/README §3 白名单/状态表一致, "
+            "且 `cluster_web.py`/`rpc_check.py` 消费同一真值(不得回归硬编码) —— "
+            "**改状态只改 `inventory/inbox.yaml` 一处**, 文档 §3 跟着改; "
+            "⚠ M-2 已被 O-50 判为『不再维护第二份枚举』故不并入"},
     {"id": "ports", "title": "端口分配表自洽", "fn": check_ports, "quick": True,
      "fix": "按明细修 inventory/ports.yaml (缺字段/同组重复/跨组重叠/枚举拼错)"},
     {"id": "plugins", "title": "插件同构基线", "fn": check_plugins, "quick": True,
