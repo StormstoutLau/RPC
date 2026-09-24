@@ -14,6 +14,10 @@ accept:
   - grep -q 'L1' out/dialect-map.md
   - grep -qE 'Textbook|Open_Data' out/dialect-map.md
 ---
+> **本卡 = U-2 双卡的「分析提案」层**（`b1b`）：出网档（`public` + 人工脱敏摘要），产出含**统一字典候选轴**。
+> 与之配对的「转录底稿」层 = [b1a-u2-dialect-map-transcribe.md](b1a-u2-dialect-map-transcribe.md)（`local-only` + 全文，**只转录原文**）。
+> ⇒ U-2 目标「建映射、不迁移权威源」**两层都要**：底稿求真、分析求用。裁定见 [DEV-LOG-014](../../../docs/DEV-LOG-014-decision-refinement.md) D1。
+
 ## 任务描述
 
 **输入 = 随本卡提供的附件**（主控以 `--attach` 传入的 `d7-dialect-excerpt.md`）。
