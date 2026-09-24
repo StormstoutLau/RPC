@@ -3993,8 +3993,9 @@ def cmd_agent(argv) -> int:
     输出**机器可判 gap 表**(advisory, **不进 FAIL 集**); 与 verify 分工: verify 管"是否被改",
     audit 管"是否可重放"。只读, 不触站。`--save` 落**项目侧** `<proj>/agent-out/_audits/<ts>.json`
     (与 runDir 同级、**不碰链**; 红线: 机器产物**不入仓**)。
-    **`--accept`**(路A, 2026-09-18): 把当前 gap 集合**并入水印**(`ops/.audit-baseline.json`, 本地
-    不入仓) ⇒ 门禁只报此后**新增**的 gap。见下"增量水印"一段。需人先看到清单, 故不可与 `--json` 同用。
+    **`--accept`**(路A, 2026-09-18): 把当前 gap 集合**并入水印**(`inventory/audit-baseline/<host>.json`,
+    **入仓**；2026-09-23 由 `ops/.audit-baseline.json` **移入**，见台账 O-33) ⇒ 门禁只报此后**新增**的 gap。
+    见下"增量水印"一段。需人先看到清单, 故不可与 `--json` 同用。
     `audit-judge`=**阶段 3-b 校准**(advisory): 用**在服务引擎**(宜为**跨家族**模型, 如 qwen3.8-27b-mtp)
     对 3-a 的条目判两次(A/A 噪声底) + 倒序再判一次(position bias) + 判据改写版一次(稳健性) ⇒
     只**测量** judge 可靠性, 不改门禁、不写 run 目录。`--save` 把**校准报告**入仓
