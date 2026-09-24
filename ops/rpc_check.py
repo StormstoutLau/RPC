@@ -901,6 +901,71 @@ def check_facade(ctx):
     return ("FAIL" if bad else "PASS"), note, bad
 
 
+# ── D6-P1-2 M-1：`事实源 ↔ 镜像` 一致性（当前 1 处合格镜像：判官行）─────────────────────
+MANUAL = ROOT / "docs" / "三机推理集群使用手册.md"
+AGENT_CLI = ROOT / "ops" / "station-bin" / "agent-cli.ps1"
+
+
+def read_judge_main(text):
+    """从 `agent-cli.ps1` 读 `JUDGE_TABLE['main']` 的三个契约字段（id / egress / compliance）。"""
+    m = re.search(r"'main'\s*=\s*@\{([^}]*)\}", text)
+    if not m:
+        return None
+    blob = m.group(1)
+
+    def kv(key):
+        mm = re.search(rf"{key}\s*=\s*([^;]+?)(?:\s*;|$)", blob)
+        # `$false` ⇒ `false`：PS 的 `$` 前缀在手册里写作裸值，规范化后再比
+        return mm.group(1).strip().strip("'\"") if mm else None
+    return {k: (kv(k) or "").replace("$", "") for k in ("id", "egress", "compliance")}
+
+
+def validate_mirror(judge, row):
+    """**纯函数**：手册判官行 vs `JUDGE_TABLE['main']` —— 离线可正反夹测。
+
+    P1-2 的定性（取证后大幅收窄）：原以为是"多组镜像"，实测**合格的只有 1 处** ——
+    手册 §1.3 的判官行 vs `JUDGE_TABLE['main']`（**指向未来**：改一处而另一处不跟 ⇒ 运行时行为与文档不符）。
+    其余（`ROUTE_TABLE`→手册 §2.2 / `ports.yaml`→手册 §1.2）已**显式豁免**（历史记档 / 精选视图）。
+    ⚠ M-2（台账"剩余 open"↔手册"= 4 项"）**不在此断言内** —— 已由 **O-50** 裁定为"手册不再维护第二份枚举"
+    ⇒ 加断言只会造一条**恒 WARN 的噪音**（对一个已决定不同步的数）。**这是分析结论，不是遗漏。**
+    """
+    bad = []
+    if not judge:
+        return ["agent-cli.ps1 里读不出 JUDGE_TABLE['main']（表结构变了？）"], {"n": 0}
+    # ⚠ **每键的比对形态不同**（首版统一用 `k=v` ⇒ 对 `id` 造成**假红**：手册写的是
+    #   `` `main-opencode-cli` ``（裸 id，无 `id=` 前缀）⇒ 判据必须尊重**各自自然的书写形态**，
+    #   否则"判据本身在制造不一致"。egress/compliance 在手册里确实写作 `key=value`，故按该形态查。
+    forms = (("id", lambda k, v: v in row),
+             ("egress", lambda k, v: f"egress={v}" in row),
+             ("compliance", lambda k, v: f"compliance={v}" in row))
+    for k, hit in forms:
+        v = judge.get(k)
+        if not v:
+            bad.append(f"JUDGE_TABLE['main'].{k} 读不出（值={v!r}）—— 事实源本身不可读")
+        elif not hit(k, v):
+            bad.append(f"手册 §1.3 判官行与事实源不一致：事实源 `{k}={v}`，"
+                       f"但该串**未出现在**手册判官行里（改一处忘改另一处？）")
+    return bad, {"n": 3}
+
+
+def check_mirror(ctx):
+    """P1-2 M-1：事实源 ↔ 镜像 一致性（当前仅判官行一处合格镜像）。"""
+    if not AGENT_CLI.exists() or not MANUAL.exists():
+        return "WARN", "缺 agent-cli.ps1 或手册，跳过镜像断言", []
+    judge = read_judge_main(AGENT_CLI.read_text(encoding="utf-8", errors="replace"))
+    row = ""
+    for line in MANUAL.read_text(encoding="utf-8", errors="replace").splitlines():
+        if "JUDGE_TABLE['main']" in line:
+            row = line
+            break
+    if not row:
+        return "FAIL", "手册 §1.3 里找不到判官行（`JUDGE_TABLE['main']` 那行）", []
+    bad, st = validate_mirror(judge, row)
+    note = (f"合格镜像 1 处（判官行）· 校验 {st['n']} 字段 · 事实源 id={judge.get('id')} "
+            f"egress={judge.get('egress')} compliance={judge.get('compliance')}")
+    return ("FAIL" if bad else "PASS"), note, bad
+
+
 # ── 断言: 文档内链接可达 (文档漂移的机械防线) ─────────────────────────
 # 触发背景 (2026-09-15, ADR-0004 第四批"文档漂移审计"): 用户提出"三站配置实况与手册/派发表
 # 存在漂移", 机械扫描全部 144 个 md 后查出 **65 条失效的仓库内相对链接** —— 典型两类:
@@ -2799,6 +2864,9 @@ CHECKS = [
     {"id": "facade", "title": "门面符号可达性", "fn": check_facade, "quick": True,
      "fix": "P1-3: `cluster.py` 是统一门面, `cluster_web.py` 以 `import cluster` 复用其符号 —— "
             "缺符号即 FAIL 并点名『哪个符号·被谁引用』; 修法: 在 cluster.py 重导出(或改回引用处)"},
+    {"id": "mirror", "title": "事实源↔镜像一致", "fn": check_mirror, "quick": True,
+     "fix": "P1-2 M-1: 手册 §1.3 判官行必须与 `JUDGE_TABLE['main']` 的 id/egress/compliance **三项一致** "
+            "(改一处忘改另一处 ⇒ 文档与运行时行为不符); ⚠ M-2 已被 O-50 判为『不再维护第二份枚举』故不并入"},
     {"id": "ports", "title": "端口分配表自洽", "fn": check_ports, "quick": True,
      "fix": "按明细修 inventory/ports.yaml (缺字段/同组重复/跨组重叠/枚举拼错)"},
     {"id": "plugins", "title": "插件同构基线", "fn": check_plugins, "quick": True,

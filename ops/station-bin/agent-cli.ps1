@@ -2280,7 +2280,10 @@ exit `$FINAL_RC
                     #   pattern 已过 `Test-EvmStatePull` 的**字符集白名单**（无引号/无元字符），且此处**单引号包裹**
                     #   ⇒ 它只作 `ls` 的**参数**，**不构成拼接执行**（这是"仍不执行用户命令"的落点）。
                     #   **恰好 1 个才继续；0 或 >1 一律拒（不猜）** —— "猜一个"会在证据链上留下错件。
-                    $lst = @(ssh -o BatchMode=yes -o ConnectTimeout=10 $hostName "ls -1 -d -- '$st' 2>/dev/null" 2>$null |
+                    #   ★ **必须在工作区里跑**：`scp` 用的是**绝对**路径（`$W/$st`）⇒ CWD 无所谓；
+                    #     但 `ls` 收到的是**相对** pattern（`out/*.txt`）⇒ **不 cd 就会在 $HOME 里找**，
+                    #     静默匹配 0 个。⚠ 这个 bug **静态护栏抓不到** —— 端到端复跑才暴露（O-52 实证）。
+                    $lst = @(ssh -o BatchMode=yes -o ConnectTimeout=10 $hostName "cd $W && ls -1 -d -- '$st' 2>/dev/null" 2>$null |
                              Where-Object { "$_".Trim() })
                     if ($lst.Count -ne 1) {
                         Write-Host "EVM_STATE_REJECT: subject '$($evmSub['name'])' state=[$st] glob 匹配 $($lst.Count) 个（要求恰好 1）"
