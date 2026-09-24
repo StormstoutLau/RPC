@@ -3911,6 +3911,76 @@ def _p4_run_mirror(st: str) -> dict:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
+def _dashboard_html(payload: dict) -> str:
+    """自包含 HTML：**数据内联成 JSON**，渲染全在本地 JS ⇒ 打开时**零网络请求**（`file://` 直开）。"""
+    data = json.dumps(payload, ensure_ascii=False)
+    # 数据里若出现 `</` 会提前闭合 <script> ⇒ 转义成 `<\/`（JSON 里合法，解析回 `</`）
+    data = data.replace("</", "<\\/")
+    return """<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8">
+<title>agent 派发看板 (快照)</title>
+<style>
+ body{font:13px/1.5 ui-monospace,Consolas,monospace;margin:16px;background:#fafafa;color:#222}
+ h1{font-size:16px;margin:0 0 4px} h2{font-size:14px} .mut{color:#777}
+ table{border-collapse:collapse;width:100%;margin:8px 0 18px;background:#fff}
+ th,td{border:1px solid #ddd;padding:3px 6px;text-align:left;white-space:nowrap}
+ th{background:#f0f0f0} tr:nth-child(even) td{background:#fbfbfb}
+ .ok{color:#1a7f37} .bad{color:#c0392b} .warn{color:#b7791f}
+ pre{background:#f5f5f5;padding:6px;overflow:auto;max-height:320px;border:1px solid #e5e5e5}
+</style></head><body>
+<h1>agent 派发看板 · <span class="mut">快照</span></h1>
+<div class="mut" id="head"></div>
+<h2>运行中节拍 (站上 .progress, 只读)</h2><div id="live"></div>
+<h2>派发台账 (尾 N 条 + run 详情)</h2><div id="runs"></div>
+<div class="mut">⚠ 本文件是 <b>快照</b>（数据已内联 ⇒ 打开时零网络）；<b>实时</b>视图见 cluster_web.py「Agent 任务」卡片。</div>
+<script>
+ const D=__DATA__;
+ const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+ const cls=v=>v==="completed"?"ok":(v==="failed"?"bad":"warn");
+ document.getElementById("head").textContent =
+   "生成于 "+D.generated+" · ledger="+D.ledger+" · 新鲜度: 最新 "
+   +(D.freshness&&D.freshness.label?D.freshness.label+" ("+D.freshness.age_s+"s 前)":"—");
+ let h='<table><tr><th>ts</th><th>proj</th><th>model</th><th>sens</th><th>status</th>'
+   +'<th>code</th><th>queue_s</th><th>run_s</th></tr>';
+ for(const r of D.runs){
+   h+="<tr><td>"+esc(r.ts)+"</td><td>"+esc(r.proj)+"</td><td>"+esc(r.model)+"</td><td>"+esc(r.sens)
+     +'</td><td class="'+cls(r.status)+'">'+esc(r.status)+"</td><td>"+esc(r.code)+"</td><td>"+esc(r.queue_s)
+     +"</td><td>"+esc(r.run_s)+"</td></tr>";
+ }
+ h+="</table>";
+ document.getElementById("runs").innerHTML=h;
+ document.getElementById("live").innerHTML = D.live.length
+   ? "<pre>"+esc(JSON.stringify(D.live,null,1))+"</pre>" : '<div class="mut">(无运行中任务)</div>';
+</script>
+</body></html>
+""".replace("__DATA__", data)
+
+
+def cmd_agent_dashboard(limit: int, out_path: str) -> int:
+    """`cluster.py agent dashboard [--limit N] [--out <file>]`
+
+    产出**自包含单文件 HTML**（内联数据 + 内联样式/脚本 ⇒ **零网络请求**）：`file://` 直开、可离线留存/可作附件。
+    ★ **为什么放统一入口而不是独立脚本**（O-38 的处置）：ADR-0004 D5 定了「**统一管理入口为唯一管理面**」，
+      原 `make-dashboard.ps1` + `dashboard.html` 正是据此在 `3712f06` 被清减的
+      ⇒ **能力在此承接，不复活独立脚本**（否则等于撤销 D5）。
+    ⚠ 本命令产出的是**快照**（非实时）；**实时**视图见 `cluster_web.py` 的「Agent 任务」卡片 —— 两者**同源**
+      （都走 `agent_runs` / `agent_live`），故不会漂移。
+    """
+    rows, note = agent_runs(limit)
+    beats = agent_live(("A", "B", "C"))
+    payload = {"generated": time.strftime("%Y-%m-%d %H:%M:%S"), "ledger": note, "limit": limit,
+               "freshness": agent_ledger_freshness(rows), "runs": rows, "live": beats}
+    html = _dashboard_html(payload)
+    p = Path(out_path)
+    if p.parent and not p.parent.exists():
+        p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(html, encoding="utf-8", newline="")
+    print(f"DASHBOARD: {p.resolve()}")
+    print(f"  {len(html)} 字节 · 自包含零网络 · {len(rows)} run / {len(beats)} 节拍 · 数据内联时间 {payload['generated']}")
+    print("  ⚠ 快照非实时；实时视图: cluster_web.py「Agent 任务」卡片（同源数据）。")
+    return 0
+
+
 def cmd_agent(argv) -> int:
     """cluster.py agent {runs|live|tail|chain|verify|audit} [--limit N] [--station A|B|C] [--json] [--reanchor]
 
@@ -3931,12 +4001,12 @@ def cmd_agent(argv) -> int:
     `spec/d6-agent-standard/evidence-chain/audits/`(第二层: 只有里程碑结论入仓)。
     """
     act = (argv[0] if argv else "runs").lower()
-    if act not in ("runs", "live", "tail", "chain", "verify", "audit", "audit-judge"):
-        print("用法: cluster.py agent {runs|live|tail|chain|verify|audit|audit-judge} [--limit N] "
+    if act not in ("runs", "live", "tail", "chain", "verify", "audit", "audit-judge", "dashboard"):
+        print("用法: cluster.py agent {runs|live|tail|chain|verify|audit|audit-judge|dashboard} [--limit N] "
               "[--station A|B|C] [--json] [--save] [chain 可加 --reanchor/--pin-notes/--mirror <站>; "
-              "audit 可加 --accept]")
+              "audit 可加 --accept; dashboard 可加 --out <文件>]")
         return 1
-    limit, only, as_json, mirror_st = 20, None, ("--json" in argv), None
+    limit, only, as_json, mirror_st, out_path = 20, None, ("--json" in argv), None, "ops/agent-dashboard.html"
     i = 1
     while i < len(argv):
         if argv[i] == "--limit" and i + 1 < len(argv):
@@ -3955,6 +4025,10 @@ def cmd_agent(argv) -> int:
             mirror_st = argv[i + 1].upper()
             i += 2
             continue
+        if argv[i] == "--out" and i + 1 < len(argv):
+            out_path = argv[i + 1]
+            i += 2
+            continue
         i += 1
     if only and only not in STATIONS:
         print(f"未知站 '{only}' (可选: {', '.join(STATIONS)})")
@@ -3963,6 +4037,9 @@ def cmd_agent(argv) -> int:
         print(f"未知镜像站 '{mirror_st}' (可选: {', '.join(STATIONS)})")
         return 1
     stations = [only] if only else ["A", "B", "C"]
+
+    if act == "dashboard":
+        return cmd_agent_dashboard(limit, out_path)
 
     if act == "chain":
         r = agent_chain_append(reanchor=("--reanchor" in argv))
