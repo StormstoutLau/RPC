@@ -1,12 +1,17 @@
 {
  "version": 1,
+ "host": "desktop-br5r8ev",
  "keys": [
+  "2|missing-artifact|dogfood/202609241010175567|station-reality",
   "collect-not-executed|paper/202609181118164876|workspace-diff",
   "collect-not-executed|paper/202609181119254134|workspace-diff",
   "collect-not-executed|paper/202609181200256681|workspace-diff",
   "collect-not-executed|paper/202609181204076459|workspace-diff",
   "missing-artifact|dogfood/202609232240596105|golden-cmd",
+  "missing-artifact|dogfood/202609232242535374|golden-cmd",
   "missing-artifact|dogfood/202609232242536720|golden-cmd",
+  "missing-artifact|dogfood/202609232258589573|golden-cmd",
+  "missing-artifact|dogfood/202609232313518595|golden-cmd",
   "missing-artifact|paper/202609181232158097|session-meta",
   "undeclared|paper/202609181038486558|accept-cmds.txt,accept-golden-output.txt,accept-output.txt,golden-cmd.txt,progress-trace.txt,prompt.txt",
   "undeclared|paper/202609181053055631|accept-cmds.txt,golden-cmd.txt,progress-trace.txt",
@@ -21,5 +26,5 @@
   "undeclared|paper/202609221131192690|review.json"
  ],
  "created": "2026-09-19 00:23:13",
- "updated": "2026-09-23 22:44:26"
+ "updated": "2026-09-24 10:38:09"
 }
