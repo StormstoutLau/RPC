@@ -840,6 +840,14 @@ try { $pyRes = (@($pyProbe | python - $clusterPy 2>&1) | Select-Object -Last 1) 
 Assert-True "ssh: cluster.py 建连只有唯一入口（AST: SSHClient 调用=1, connect 调用=1）—— 实测 $pyRes" ($pyRes -match '^SSHClient=1 connect=1 ')
 Assert-True "ssh: cluster.py 的 connect 三超时全显式（否则 auth 默认 30s）—— 实测 $pyRes" ($pyRes -match 'kwargs=auth_timeout,banner_timeout,timeout')
 
+# O-42 (2026-09-24): claude 通道 `-p` 的权限开关 —— 正反注入(AST/文本级, 不真派发)。
+#   反(必拒形态): `readonly: true` 的卡若竟带 acceptEdits ⇒ 破卡面契约(= D-06/D-07 级安全面)。
+#   $pmDef 逐字匹配「if(readonly)空串 else acceptEdits」的定义行, 正反两端同时钉死。
+$o42J = ([regex]::Matches($content, '\+ \$pmArg\)')).Count
+Assert-True 'o42: 四处 claude argStr 拼接均带 $pmArg(站上/本地 × 首跑/resume=4)' ($o42J -eq 4)
+$o42Def = "    `$pmArg = if (`$readonly) { '' } else { ' --permission-mode acceptEdits' }"
+Assert-True 'o42: $pmArg 定义受 readonly 分支控制(readonly=false 才 acceptEdits, true 空串保只读)' ($content.Contains($o42Def))
+
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
 exit $(if ($fail -eq 0) { 0 } else { 1 })
