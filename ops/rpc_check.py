@@ -103,6 +103,16 @@ def _mask(s):
     return s[:8] + "…" if len(s) > 9 else s
 
 
+def allow_unhit(allow_keys, hit_keys):
+    """**纯函数**（D6-P0-2）：豁免白名单里**未被命中**的项 ⇒ 应提示"该豁免已可移除"。
+
+    为什么需要（**防腐化**）：豁免**失效后不会被告知** ⇒ 清单长期腐化（豁免留着、实际已不需要），
+    而"**登记这个动作本身要在 review 里可见**"（ADR-0004 D2 纪律）⇒ 未命中必须**自报** ——
+    **WARN（不阻断）**，因为"豁免多留一条"不是缺陷，但**必须被看见**（否则没人删）。
+    """
+    return sorted(set(allow_keys) - set(hit_keys))
+
+
 def check_secrets(ctx):
     """扫描跟踪文件中的明文密钥形态。"""
     hits, allowed, scanned, skipped_bin = [], [], 0, 0
@@ -122,15 +132,22 @@ def check_secrets(ctx):
     detail = [f"{r}:{n}  {s}" for r, n, s in hits]
     for r, n, s in allowed:
         detail.append(f"(白名单) {r}:{n}  {s} —— {SECRET_ALLOW[r]}")
+    # D6-P0-2: 豁免**未命中**（该文件里已无样串）⇒ **自报**，否则清单腐化无人知（可移除但没人删）
+    _unhit = allow_unhit(list(SECRET_ALLOW), {r for r, _n, _s in allowed})
+    for r in _unhit:
+        detail.append(f"(豁免**未命中**) {r} —— {SECRET_ALLOW[r]} ⇒ "
+                      f"该文件已无样串命中 ⇒ **该豁免已可移除**")
     note = f"扫描 {scanned} 个文本文件 (跳过 {skipped_bin} 个二进制), 命中 {len(hits)} 处"
     if allowed:
         note += f", 白名单 {len(allowed)} 处"
+    if _unhit:
+        note += f" · ⚠ 豁免未命中 {len(_unhit)} 条（已可移除，见明细）"
     # O-34: 范围 = git 跟踪文件；若此刻有未跟踪文件 ⇒ 本结论**可能**与 pre-commit 时不同，必须报出来。
     _un = _untracked_count()
     if _un:
         note += (f" · ⚠ 另有 {_un} 个**未跟踪**文件未计入（范围=git 跟踪文件；"
                  f"pre-commit 时新文件已暂存 ⇒ 手动跑与提交跑结论可能不同，见台账 O-34）")
-    return ("FAIL" if hits else "PASS"), note, detail
+    return ("FAIL" if hits else ("WARN" if _unhit else "PASS")), note, detail
 
 
 # ── 断言 A2: 语法检查 ─────────────────────────────────────────────
@@ -1205,6 +1222,7 @@ def check_doclinks(ctx):
     """文档链接可达: md 里的仓库内相对链接不得指向不存在的路径。"""
     n_md = n_link = n_bad = n_allow = n_skip = 0
     bad = []
+    allow_hit = set()          # D6-P0-2: 记录**实际命中**的豁免键（未命中的要自报）
     for p in sorted(ROOT.rglob("*.md")):
         rel = p.relative_to(ROOT)
         if any(s in rel.parts for s in DOCLINK_SKIP_PARTS):
@@ -1222,6 +1240,7 @@ def check_doclinks(ctx):
                     continue
                 if (rel.as_posix(), base) in DOCLINK_ALLOW:
                     n_allow += 1
+                    allow_hit.add((rel.as_posix(), base))
                     continue
                 n_bad += 1
                 bad.append((f"{rel.as_posix()}:{i}", base, reason))
@@ -1229,9 +1248,16 @@ def check_doclinks(ctx):
     detail = []
     for loc, base, why in bad:
         detail.append(f"{loc}  ->  {base}" + (f"   【{why}】" if why else ""))
+    # D6-P0-2: 豁免**未命中**（该处已不再失效）⇒ **自报**，否则清单腐化无人知
+    _unhit = allow_unhit(list(DOCLINK_ALLOW), allow_hit)
+    for key in _unhit:
+        detail.append(f"(豁免**未命中**) {key[0]}  ->  {key[1]} —— {DOCLINK_ALLOW[key]} ⇒ "
+                      f"该链接已不再失效 ⇒ **该豁免已可移除**")
     note = (f"扫描 {n_md} 个 md · 链接 {n_link} 条 (其中非仓库内相对链接/占位词 {n_skip} 条不判) "
             f"· 已登记例外 {n_allow} · 失效 {n_bad}")
-    return ("FAIL" if n_bad else "PASS"), note, detail
+    if _unhit:
+        note += f" · ⚠ 豁免未命中 {len(_unhit)} 条（已可移除，见明细）"
+    return ("FAIL" if n_bad else ("WARN" if _unhit else "PASS")), note, detail
 
 
 # ── 断言 A3: inventory 单点真值 (P1) ──────────────────────────────
@@ -3060,7 +3086,8 @@ def check_inbox(ctx):
 CHECKS = [
     {"id": "secrets", "title": "明文扫描", "fn": check_secrets, "quick": True,
      "fix": "删除明文密钥, 或加入 SECRET_ALLOW 并写明原因(不允许静默放行); "
-            "文档里引用样串/占位串时**掩码为 sk-xxx-****** (2026-09-16 增: 未掩码的样串会命中本判据)"},
+            "文档里引用样串/占位串时**掩码为 sk-xxx-****** (2026-09-16 增: 未掩码的样串会命中本判据); "
+            "⚠ 报『豁免未命中 N』= 那条白名单**已不再需要** ⇒ **把它从 SECRET_ALLOW 删掉**（D6-P0-2 防腐化）"},
     {"id": "syntax", "title": "语法检查", "fn": check_syntax, "quick": True,
      "fix": "按明细里的行号修语法; 扩展名与内容不符的应解包或改名"},
     {"id": "scripts", "title": "脚本治理", "fn": check_scripts, "quick": True,
@@ -3068,7 +3095,8 @@ CHECKS = [
             "确需独立脚本则在 inventory/ops.yaml 登记并在提交信息里说明理由 (ADR-0004)"},
     {"id": "doclinks", "title": "文档链接可达", "fn": check_doclinks, "quick": True,
      "fix": "资源移动/改名后, 文档里的相对链接要跟着改 (注意别写重前缀: spec/<x>/ 里是 "
-            "`../y` 不是 `../spec/y`, 引 docs/ 是 `../../docs/z`); 确有不可修的登记 DOCLINK_ALLOW"},
+            "`../y` 不是 `../spec/y`, 引 docs/ 是 `../../docs/z`); 确有不可修的登记 DOCLINK_ALLOW; "
+            "⚠ 报『豁免未命中 N』= 那条例外**已不再需要** ⇒ **把它从 DOCLINK_ALLOW 删掉**（D6-P0-2 防腐化）"},
     {"id": "inventory", "title": "真值登记", "fn": check_inventory, "quick": True,
      "fix": "端口/模型标识有变更时同步 inventory/*.yaml 真值表"},
     {"id": "artifacts", "title": "生成物清单", "fn": check_artifacts, "quick": True,
