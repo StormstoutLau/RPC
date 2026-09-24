@@ -42,6 +42,7 @@
 | B | [b1a-u2-dialect-map-transcribe.md](b1a-u2-dialect-map-transcribe.md) | 全文 §11.1（附件） | `local-only`（站内） | ✓（站上 `m27-q4ks`） |
 | B | [b2-gate-falsegreen-audit.md](b2-gate-falsegreen-audit.md) | `ops/rpc_check.py`（附件，已登记 `public`） | `public` + **`attach-egress: ok`** | ✗ |
 | （烟测） | [smoke-claude-channel.md](smoke-claude-channel.md) | 无 | `public`（`cli: claude` 主控本地） | ✗ |
+| （负向夹具） | [neg-o46-cleanup.md](neg-o46-cleanup.md) | 无 | `public`（**accept 故意必红** ⇒ 验 O-46② 清理） | ✗ |
 
 ⇒ **除 B1a 外都不需要站上引擎**（`opencode` 卡走 `model: ultra` = `openrouter/*` 出网档；烟测卡走 `cli: claude` 主控本地）。
 > ✅ **B1 = 双卡两层，已裁**（[DEV-LOG-014](../../../docs/DEV-LOG-014-decision-refinement.md) D1）：**`b1a` = 转录底稿层**（只转录原文、站内、求真）· **`b1b` = 分析提案层**（含"统一字典候选轴"、出网、求用）。

@@ -140,6 +140,26 @@
 > ③ **判据** = `O46_CLEAN:` 打印 **且** 远端声明产物**确实不存在**（双向自证）。
 > ⚠ 清理**只在归档成功块内**触发（ADR-0005 D4c）⇒ 验证须走"**归档成功但 rc≠0**"这条路径。
 
+### 5.4 ★ 实测结果（2026-09-24）—— **通过（双向自证）**
+
+夹具卡 [`neg-o46-cleanup.md`](../spec/d6-agent-standard/dogfood-cards/neg-o46-cleanup.md)（`accept` 故意 grep 一个不存在的串 ⇒ 必红）。
+
+| 项 | 观察 | 判读 |
+|---|---|---|
+| **派发前预置** | 远端 `out/.meta`（残留 `TASK_ID=202609241637424055`，**修复前** run-7 遗留）+ 埋哨兵 `out/o46-probe.txt`=`PRE_EXISTING_RESIDUE` | 有**对照** |
+| `TASK_RC` | **9**（agent 成功、accept 判红） | ✅ 命中"**归档成功但 rc≠0**"目标路径 |
+| `EVM_STATE` | **`pulled=1 rejected=0`** | ✅ **拉取发生**（先于清理） |
+| **`O46_CLEAN`** | **`失败 run 已清理远端 5 项`** | ✅ 清理触发 |
+| **远端 5 项** | `out/.meta` · `out/.progress` · `out/o46-probe.txt` · `.agent-lock` · `.agent-state.json` **全部 GONE** | ✅ **真删掉** |
+| **runDir 留存** | `o46-probe.txt`（内容 `HELLO_O46`，**已被本次 agent 覆写**）· `.meta` · `card.md` 等在案 | ✅ **拉取先于清理**得证（否则 runDir 不会有件） |
+
+⇒ **O-46② 由"静态验证"升为"端到端实证"**；且这条 run 本身成了**可复用的受控失败夹具**（`neg-o46-cleanup.md`），后期改清理逻辑可直接回归。
+
+> ⚠ **实测暴露的边界（如实登记）**：清理只覆盖「**本次声明的产物 + 4 个固定状态件**」——
+> 站上 `out/` 里仍有**历史未声明残留**（`.pO.*` / `.pZ.*` / `falsegreen.md` / `station-reality.json` / `station-scripts.tsv` 等，来自更早 run）。
+> ⇒ **清理的射程 = 本次 run 的足迹**，**不是**"把工作区清干净"（后者需"工作区级 GC"，另案；且**不可**用通配清理——会误删他卡产物）。
+> ❌ 另注：**`readonly` 卡不适用**（其设计上不产 `out/` 件）。
+
 ---
 
 ## 6. 综合排序（推荐执行序）
