@@ -83,6 +83,15 @@ $Script:ROUTE_TABLE = @{
     'lightning'  = @{ id = 'openrouter/thinkingmachines/inkling:free';            station = 'B' }   # 快档 (原 zen: opencode/nemotron-3.5-lightning-free)
     'ultra'      = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';   station = 'B' }   # 高保真档 (原 zen: opencode/nemotron-3-ultra-free)
     'free-1m'    = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';   station = 'B' }  # alias of ultra
+    # 2026-09-24 (D3 / P2-3): per-station 出网档别名 —— 解锁**跨站并行**（O-18 安全区：跨站各 1 并发）。
+    #   与既有 `m27-q4ks-a/-b` **同构**（**同一 id**、不同 station）⇒ 不违"本表只镜像、不新立模型清单"
+    #   （该纪律禁的是新立**模型**；此处未引入新模型 id）。
+    #   用途：**O-20 / O-28 RC① 的正解** —— task 的目标站只能由本表决定（`-HostName` 对 task 无效），
+    #   故"要指定站"唯一通道就是 per-station 别名。
+    #   前提核查（2026-09-24 实测，已过）：三站 `opencode` 1.18.25 一致 · `~/.config/opencode/opencode.jsonc`
+    #   **md5 全一致**(755975db…) · `~/.config/rpc/openrouter.key` **三站各异**（独立账户 ⇒ 限流互不干扰）。
+    'ultra-a'    = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';   station = 'A' }
+    'ultra-c'    = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';   station = 'C' }
     # C 站 (seaviv) 2026-09-09: gpt-oss 本地引擎已注入 8080; nemotron 模型已传待启
     'gpt-oss-c'  = @{ id = 'local/gpt-oss';                           station = 'C' }
     'nemotron-c' = @{ id = 'local/nemotron';                          station = 'C' }

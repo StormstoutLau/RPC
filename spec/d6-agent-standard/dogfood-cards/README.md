@@ -63,14 +63,20 @@
 - **B2**：唯一真实成功是**第 6 次**（前 5 次被上游 503/504 打断，见 O-46）；且**用 D6 派发链抓到了门禁自己的假绿**（O-41）。
 - **smoke-claude**：首跑 ❌（`-p` 无写权限 ⇒ O-42）；加 `--permission-mode acceptEdits`（按卡 `readonly` 动态）后 ✅。
 
-### ⚠ 派发前必读：出网档的**落站事实**（2026-09-24 一手读 `ROUTE_TABLE`）
+### ⚠ 派发前必读：出网档的**落站事实**（2026-09-24 一手读 `ROUTE_TABLE`；**09-24 晚 P2-3 已扩**）
 
-- `opencode` 通道的出网档 **`lightning` / `ultra` / `free-1m` 全部 `station = 'B'`**（`agent-cli.ps1` ROUTE_TABLE）
-  ⇒ **四张卡并行 = 全部落在 B 站同站**（无法靠"换站"错开；要跨站需先给 A/C 增出网档别名 = 改运行时脚本）。
+- `opencode` 通道的出网档 **`lightning` / `ultra` / `free-1m` 默认 `station = 'B'`**；
+- ★ **`ultra-a`（A 站）· `ultra-c`（C 站）已加**（[DEV-LOG-014](../../../docs/DEV-LOG-014-decision-refinement.md) D3 / P2-3）——
+  与 `m27-q4ks-a/-b` **同构**（同一 id、不同 station）⇒ **可跨站错开**，不再"只能串行"。
+  **前提核查（实测已过）**：三站 `opencode` 1.18.25 一致 · `opencode.jsonc` **md5 全一致** · `openrouter.key` **三站各异**（独立账户 ⇒ **限流互不干扰**）。
+  ```powershell
+  & ops/station-bin/agent-cli.ps1 task dogfood -Card "<卡>.md" -Model ultra-a   # 钉 A 站
+  & ops/station-bin/agent-cli.ps1 task dogfood -Card "<卡>.md" -Model ultra-c   # 钉 C 站
+  ```
 - **同站叠并发对"出网卡"是否适用 O-18（~2.8×）—— 未实测**：O-18 是**本地引擎推理**的带宽现象；出网卡**无本地推理**，
   且实测 run 里 `slot.gated = false`（slot gate 只对本地引擎通道生效）。⇒ **技术上无闸拦**，但**属未验证假设** ⇒ 首轮建议先 **2 张并行**取证。
 - 另一条**不改代码**就能错开的路：`cli: claude` 的备路在**主控本地**执行（`station = ''`），走同一 openrouter ⇒ 可与 B 站卡真并行（代价：执行器不同）。
-- openrouter 侧上限 = **20 请求/分/账户**（B 站独立账户）⇒ 4 张卡远低于上限 ✓（实测见 `cluster.py egress`）。
+- openrouter 侧上限 = **20 请求/分/账户**；三站密钥文件**各异**（实测 md5 三个值）⇒ **视为三账户独立配额**，跨站并行不互相挤占 ✓。
 
 ### 派发形态
 
@@ -86,11 +92,18 @@
 
 | 约束 | 事实 | 后果 |
 |---|---|---|
-| **同站同 proj 有互斥锁** | `LOCK_ACQUIRED … mode=exclusive`（per-`(proj,站)`；O-28 RC① 记录过 `LOCK_HELD` 同一 owner） | **同 proj 的两张卡不能并行** ⇒ 第二张会撞锁 |
-| **出网档只落 B 站** | `ROUTE_TABLE`：`lightning`/`ultra`/`free-1m` 全 `station='B'` | 于是"换站错开"也做不到 ⇒ **本目录四张卡只能串行** |
+| **同站同 proj 有互斥锁** | `LOCK_ACQUIRED … mode=exclusive`（per-`(proj,站)`） | **同站**两张卡不能并行 ⇒ 第二张撞 `LOCK_HELD`（2026-09-24 **实测复现**，见下） |
+| **出网档默认落 B 站** | `lightning`/`ultra`/`free-1m` 全 `station='B'`；**已加 `ultra-a`/`ultra-c`** | **可跨站错开** ⇒ 不再"只能串行"（P2-3 已落地） |
 
-⇒ 要真正并行，两条**需要额外动作**的路：① 给 `A`/`C` 增出网档别名（改 `ROUTE_TABLE` = 改运行时脚本，另案）；
-② 一张走 B 站 opencode、另一张走**主控本地** `cli: claude` 备路（`station=''`，同走 openrouter，代价是执行器不同）。
+**★ 并发正反注入（2026-09-24 实测，D3/P2-3）**：
+
+| 用例 | 配置 | 实测 |
+|---|---|---|
+| **正**（跨站并行） | 同刻派 `ultra-a`(A) + `ultra`(B) | ✅ **双 `LOCK_ACQUIRED`**（pid `2772113` / `3105818`）⇒ **无互撞** |
+| **反**（同站仍串行） | 同刻派两张 `ultra`(同 B) | ✅ 第二张 **`LOCK_HELD owner_pid=3107489`** + `excode=3` ⇒ **锁未被削弱** |
+
+⇒ 现在三条路都可用：① **跨站错开**（`ultra-a`/`ultra-c`，**首选**，同执行器同模型）；
+② 同站串行（默认，无需动作）；③ 主控本地 `cli: claude` 备路并行（**代价：执行器不同**，结论可比性下降）。
 
 ### ★ 首轮派发已实测的两点（2026-09-24）
 
