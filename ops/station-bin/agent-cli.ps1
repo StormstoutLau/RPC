@@ -92,15 +92,11 @@ $Script:ROUTE_TABLE = @{
     #   **md5 全一致**(755975db…) · `~/.config/rpc/openrouter.key` **三站各异**（独立账户 ⇒ 限流互不干扰）。
     'ultra-a'    = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';   station = 'A' }
     'ultra-c'    = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';   station = 'C' }
-    # ── 2026-09-24 (O-47 采样): `harness_priority` **档 1/3/4/5** 的可用性采样别名 ──────────────
-    #   纪律核对: 本组**镜像** `secrets/openrouter.conf` 的 `harness_priority`（权威真值）⇒ **未新立模型**。
-    #   ⚠ 与 `lightning`/`ultra` 的区别: 那三个是**已定稳定档**；本组**仅供采样**，结论出来后再定"升格 or 撤除"。
-    #   ⚠ 只加"本次采样要用到的站"（要同模型三站齐备时再补，避免表膨胀）。
-    #   采样目标: ① inkling 复测（O-47，B 站此前卡死）② 档 3/4/5 从未在本链路测过。
-    'super-120b-a'    = @{ id = 'openrouter/nvidia/nemotron-3-super-120b-a12b:free';   station = 'A' }
-    'inkling-small-b' = @{ id = 'openrouter/thinkingmachines/inkling-small:free';      station = 'B' }
-    'inkling-c'       = @{ id = 'openrouter/thinkingmachines/inkling:free';            station = 'C' }
-    'laguna-b'        = @{ id = 'openrouter/poolside/laguna-s-2.1:free';               station = 'B' }
+    # ── 2026-09-24 采样用别名（`harness_priority` 档 1/3/4/5）**已撤除**（Scott 裁定）──────────
+    #   采样结论**已入台账 O-49**：5 档在 opencode harness 路径下**全部可用**（档4 `super-120b` 最快 23s）——
+    #   且 conf 注记的"harness-only(403) / laguna 限流(429)"**两条在 harness 路径均不适用**。
+    #   故**不需要**常驻别名：要用时按 O-49 的 id 临时加回（或直接 `-Model` 走已定稳定档 `ultra`）。
+    #   ⚠ 撤除的是**本表条目**，**不是模型清单**（`harness_priority` 是权威真值，未动）。
     # C 站 (seaviv) 2026-09-09: gpt-oss 本地引擎已注入 8080; nemotron 模型已传待启
     'gpt-oss-c'  = @{ id = 'local/gpt-oss';                           station = 'C' }
     'nemotron-c' = @{ id = 'local/nemotron';                          station = 'C' }
