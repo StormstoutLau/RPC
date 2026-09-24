@@ -204,6 +204,7 @@ frozen_ops_scripts:
   - ops/station-bin/_probe_glm_relocate.sh
   - ops/station-bin/_probe_opencode_provider.sh
   - ops/station-bin/_zen_pty_pilot.sh
+  - ops/station-bin/_zen_stability_sample.sh
   - ops/station-bin/_qwen27_build.sh
   - ops/station-bin/_qwen27_download.sh
   - ops/station-bin/_qwen27_enginecheck.sh
