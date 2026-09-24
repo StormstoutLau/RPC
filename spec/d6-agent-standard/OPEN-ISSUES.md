@@ -62,7 +62,7 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | O-35 | 并发/引擎 | P1 | **站上本地引擎是否支持并发请求 —— 未验证**（与 O-31 **不是同一问题**：O-31 修的是**文件名冲突**［文件层］，本条是**引擎并发行服务**［引擎层］） | **✅ 已闭环验证（2026-09-24）**：加载 `gpt-oss-20b`@B 实测（引擎 `--parallel 4`）—— **2 路 & 4 路并发均 报错 0 · ★输出错配 0**，每条仅含自己哨兵 ⇒ **引擎层并发安全，不受"错配"威胁**；★ 副产品：4 路墙钟 **2.64×** ≈ **O-18 的 ~2.8×（引擎层独立复现）** ⇒ 无需为错配加锁，但**叠并发必须算吞吐代价** | D6-P2 · D7 |
 | O-37 | 工具/信号 | **P1** | **`.progress` 采样器 `t=0` 读上一轮残留**：启动时只 `: > .progress`、**不清 `out/.agent-output.txt`** ⇒ 首样本 `bytes_s` 假高（1.4e6+ B/s），**且 `bytes>0` 在 t=0 即成立** = **假进度/假完成信号**（与 T-1、O-22 同病族） | ✅ **已修 + 正反均已实测**（反例 = A1/B2 两条铁证；正例 = A2 复跑 `t=0 bytes=0`） | ✅ |
 | O-38 | 文档/一致性 | P2 | **O-25 P2 看板缺磁盘证据**：其计划件写的 `ops/station-bin/make-dashboard.ps1` 与产物 `dashboard.html` **全仓 + 归档区均无**，`inventory/ops.yaml` 也未登记 ⇒ 台账"P2 看板 ✓ 已落地"**存疑** | **✅ 已复核（2026-09-24）**：**非虚报** —— 看板曾落地（`5f2b395`），后按 **ADR-0004 D5 脚本清减**删除（`3712f06`, 2026-09-15），**能力由 `ops/cluster_web.py` 统一管理页承接** ⇒ 仅**落点表述过时**（同 O-33 族）<br>**✅ 补做完成（2026-09-24 裁定"补做"）**：★ **不复活独立脚本**（否则撤销 ADR-0004 D5）⇒ 改为**能力并入统一入口**：`cluster.py agent dashboard` 产出**自包含单文件 HTML**（零网络）+ 沿用 `cluster_web.py` 在线卡片 | O-25 · D6-P1-1 |
-| O-39 | 可观测/基准 | P2 | **派发前预估对出网档恒 MISS**：`ESTIMATE: … no-bench (MISS) - skip dispatch estimate`（基准表只覆盖 `local/*`）⇒ **吃狗粮全链路无预估** | ⏳ 待决定（补 bench 行 or 显式声明"不估算"） | O-25 |
+| O-39 | 可观测/基准 | P2 | **派发前预估对出网档恒 MISS**：`ESTIMATE: … no-bench (MISS) - skip dispatch estimate`（基准表只覆盖 `local/*`）⇒ **吃狗粮全链路无预估** | **✅ 已裁并实施（2026-09-24）**：走 **②「显式声明」** —— 出网档**无本地 prefill/decode**，硬填 `$TpBench` 只会编造（违反"不打荒"纪律）⇒ **不补**。★ 顺带修掉**更值钱**的问题：原实现把 **(a) 出网档"按设计不适用"** 与 **(b) 本地档"真缺基准"** **混成同一句 MISS** ⇒ **(b) 隐身**（"把两件事说成一件"）⇒ 现改**三态分报**（`hit`/`na`/`miss`），`miss` 明确要求补 `$TpBench`；静态护栏 13→**14 条** + 判据双向自证 | O-25 |
 | O-40 | 证据/回收 | **P1** | **卡的产物不进 run 目录**（`WORKSPACE_DIFF_LINES=0`）：产物只留站上工作区 ⇒ 目前**只能手动 `scp`** 取回（非持久位置） | **✅ 已实现（2026-09-24 复核）**：卡声明 `evidence-manifest.subjects[].state` + collect 段白名单 scp 回收 ⇒ 实测 `EVM_STATE: pulled=1`（B2 / 受控夹具 two runs）| D6-P1-1 · ADR-0007 |
 | O-41 | 门禁自审 | P2 | **B2 审计报出的两条"疑似未登记假绿"**：① `doclinks` 对**绝对路径/盘符/URL 一律"不可判"跳过**（可写不存在路径而不报错）② `engine` 的**残留阈值 2048MB 硬编码**（1.5GB 且不监听端口的残留进程会被判正常） | **✅ 已复核（2026-09-24）**：**① 非缺陷**（= 射程声明"只判仓库内相对链接"，且不可判数已报数 ⇒ 留痕即关闭）· **② 真缺口**（字面成立）⇒ **✅ 已加固**（`RESIDUAL_WARN_MB=1024` 预警带 + 单测 `test_rpc_check_engine_bands.py` 7/7） | D6-P0-1（门禁自审，仅 ② ） |
 | O-42 | 权限/通道 | **P1** | **`claude` 通道 `-p` 无写权限 ⇒ 产物型任务不可用**：烟测中模型自报"文件写入被拒"，`ACCEPT_OK=0`；调用形式 `'-p "" --model "<id>"'`（[agent-cli.ps1:2729](../../ops/station-bin/agent-cli.ps1)）**不带任何权限开关**，`settings.json` 的 `defaultMode: acceptEdits` 在 `-p` 下不生效 | **✅ 已修**（2026-09-24）：`-p` 按卡 `readonly` 动态加 `--permission-mode acceptEdits`（false 才可写；true 空串保只读）；claude 烟测端到端 `ACCEPT_OK=1` + `out/smoke.txt`=`SMOKE_OK`（run `202609241047036207`） | D6-P2 · claude 通道 |
@@ -342,7 +342,31 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 - 本轮两卡日志均为：`ESTIMATE: model=openrouter/nvidia/nemotron-3-ultra-550b-a55b:free **no-bench (MISS)** - skip dispatch estimate`。
 - 机制本身**按设计工作**（O-25 原文："**HIT 才给 / MISS 不打荒**"）—— 问题是**基准表只覆盖 `local/*`**，
   而吃狗粮**全走出网档** ⇒ 该机制对吃狗粮链路**零贡献**（且易被误读成"坏了"）。
-- **待决定**：① 为 openrouter 档补 bench 行（需实测吞吐）；② 或**显式声明"出网档不提供预估"**（写进手册/卡区 README，避免误判）。
+- **✅ 已裁并实施（2026-09-24）—— 裁定：走 ②「显式声明」+ ★ 修掉一个更值钱的问题**
+
+  **为什么不是 ①（补 bench 行）**：`$TpBench` 的口径是 **tok/s（prefill/decode）**，
+  而**出网档没有本地 prefill/decode**（延迟在 provider 侧）⇒ 硬填一行只会产出**编造数字**，
+  直接违反该表自设的「**no-bench 不打荒**」纪律。**不补**才是自洽的。
+
+  ★ **执行中发现并修掉的真问题（比 O-39 本身更值钱）**：原实现把**两种截然不同的 MISS 混成同一句**
+  `no-bench (MISS)` ——
+  · **(a) 出网档**：**按设计不适用**（本该 MISS，非缺陷）
+  · **(b) 本地档但缺 `$TpBench` 行**：**真缺口**（该补基准）
+  ⇒ 混报的后果是 **(b) 会隐身**：「出网档本该 MISS」成了遮住「某本地档一直没测」的**挡箭牌**
+  —— 正是本仓头号失败形态「**把两件事说成一件**」。
+
+  **实施**（[`agent-cli.ps1`](../../ops/station-bin/agent-cli.ps1)）：`Get-ThroughputEstimate` 增**第三态 `na`**
+  （`$modelId -like 'openrouter/*'` ⇒ `na=$true`），预报改为**三态分报**：
+  · `hit` → 原样给 prefill/decode/est_total + TIMEOUT-WARN
+  · `na` → `egress - N/A by design (provider-side latency; no local prefill/decode) [O-39]`
+  · `miss` → `no-bench (MISS) - local model missing bench row => should add $TpBench entry [O-39]`（**真缺口显形**）
+
+  **双向自证**：新增静态护栏（`tests/test_cli_concurrency_guards.py`，**14 条**）断言"两态**分开**报"；
+  并以内存抽特征复算证明三条子串判据**具辨别力**（`N/A by design` / `missing bench row` / `na = $true`
+  各自被抽掉时对应谓词转 False）⇒ 非恒真。
+
+- **⇒ 副产物（可执行）**：今后派发日志里**只剩一种 MISS**（本地档缺基准）⇒ 它一旦出现就是**真待补**，
+  不再与"出网档正常现象"混淆。
 
 #### O-40：**卡的产物不进 run 目录**（P1，后续所有卡的公共前置）
 
