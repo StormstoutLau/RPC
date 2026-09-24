@@ -24,6 +24,16 @@
 | 6 | 声明 `public`/`sanitized` **且带输入**时，**逐项写 `input-provenance`**，每项须在 `sensitivity.yaml` 有 `tier`，且**卡档位不得宽于该项** | `CROSS-PROJECT-WORK-STANDARD §4`；⚠ **该义务目前未被机判**（2026-09-24 全仓核对：`input-provenance` 在 `ops/` 下**零命中**） |
 | 7 | ★ **卡的射程 = 平台注册的工作区根**（实测 `~/agent-workspaces` **可读**）—— 该根**之外**的站上路径（`~/scripts`、`/proc`、系统目录）**不要指示模型去读** | **一手实测（2026-09-24）+ 一次自我修正**：A2 首跑的 `cd ~/scripts …` 被 `permission requested: external_directory (/home/scott-lau/scripts/*); auto-rejecting` 拒（= O-30 第一条第二实例，`TASK_RC=9`）；**但同一批 A1 的 `ls -1 ~/agent-workspaces` 成功**（工作区**根**可读）⇒ 边界**不是**"工作区内/外"，而是**白名单**（含工作区根；`~/scripts`、`/proc` 均不在）。⇒ 工作区根之外的取证**由主控 ssh 直接做**；agent 可安全依赖的是**可执行命令**（`infer-list`/`free -m`/`ss -ltn`/`hostname` —— A1 正是靠这些成功）。⚠ **白名单的确切边界未定**（`~/.config/opencode/` 下**无显式 `permission` 配置** ⇒ 走默认；待查 opencode 默认规则） |
 
+### ★ 站上环境的三条硬约束（2026-09-24 入册，O-30；均**实测**得出）
+
+| # | 约束 | 依据（一手） | 写卡时怎么用 |
+|---|---|---|---|
+| **8** | **站上 agent 对 `/proc/*` 无读权限**（`permission requested: external_directory (/proc/*); auto-rejecting`） | A1 首跑实测：读 `/proc/meminfo` 的采集**全部不可行**；改 `free -m` 即成功 | 内存类采集**一律用 `free -m`**，**不要**指示模型读 `/proc/*` |
+| **9** | **站上无 `nvidia-smi`**（三站是 **AMD UMA** 机型） | A1 首跑实测 `nvidia-smi: command not found`（rc=127） | GPU 采集走**回退链**：`rocm-smi` → `/sys/class/drm`；**不要**把 `nvidia-smi` 当硬依赖 |
+| **10** | **`readonly: true` 与"必须落文件"互斥** | A1 首次实测：模型跑了 6 条命令、数据齐全，**但始终没写文件** ⇒ 只读卡的产物**永不落盘** | **要产物就必须 `readonly: false`**；只读只用于"纯输出型"卡 |
+
+⇒ 这三条与纪律 7（**卡的射程 = 平台注册的工作区根**）是**同一族**：**站上沙箱的边界不靠读卡面猜，靠实测登记**。
+
 ## 档位选择的正确顺序（`sensitivity.yaml` 的用法）
 
 1. **先查输入**在真值表里的 `tier`（**未登记 = `local-only`**，fail-closed）；

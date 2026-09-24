@@ -54,7 +54,7 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | O-27 | 验证/判据 | P1 | 证据链 `_VERDICT_RC_MAP` 未覆盖"远端 0 ⇄ 整体 1"（验收失败路径）⇒ **任何 accept 失败的 run 都阻断提交** | ✅ 已闭环（裁定 b **治同源** + 12 条正反注入） | ✅ 已修 |
 | O-28 | 并发/编排 | P1 | **并发脆弱面**（一处列全）：站覆盖**半覆盖** · `$ts` 撞车 · 探针固定名 · sync tar 固定名 · create tar + staging 固定名 | ◐ 已修 5 处（RC①② + F-1/F-14/create）；**O-31 已于 2026-09-23 修复**（见下行） | D6-P2 |
 | O-29 | 框架/卡面 | **P1（升）** | **"期望件集"有两处定义**（`agent-cli.ps1` 的 `Get-FrameworkSubjects` + `cluster.py` 侧消费方）⇒ 改一处**等于没改**（实测：改完重算仍报 3 条）；表现 = 无 golden 卡每 run 记 1 条 gap | ◐ **已改一处但未生效** ⇒ **并入 `D6-P1-1`**（抽成**单一数据源**，见路线总表 P1-1 方案） | **D6-P1-1** |
-| O-30 | 环境/卡面 | P2 | 站上 **`/proc/*` 不可读** · **B 站无 `nvidia-smi`** · **`readonly:true` 与"必须落文件"互斥** | ⏳ 待办（卡已修，**纪律未入册**） | D6-P1 / D7-P1 |
+| O-30 | 环境/卡面 | P2 | 站上 **`/proc/*` 不可读** · **B 站无 `nvidia-smi`** · **`readonly:true` 与"必须落文件"互斥** | **✅ 纪律已入册（2026-09-24）**：三条（`/proc/*` 不可读 → 用 `free -m` · 无 `nvidia-smi` → `rocm-smi`/`/sys/class/drm` 回退链 · `readonly:true` 与"必须落文件"互斥）已写入 [dogfood-cards/README「站上环境的三条硬约束」](dogfood-cards/README.md)（纪律 8/9/10） | D6-P1 / D7-P1 |
 | O-31 | 并发/防污染 | P1 | **claude 备路**站上固定名 `_p3_claude_*` + 备路**无 flock** ⇒ 同站并发互踩（**第四例同类**，与 F-1/F-2/F-14 同因：漏照抄"RUN_TOKEN / flock"两个样板） | ✅ **已修（2026-09-23）**：站上临时名改带 GUID 唯一前缀 `$p3id`（经 `$4` 参数传入站上脚本）；并加静态护栏（`tests/test_cli_concurrency_guards.py` O-31 断言） | ✅ 已修 |
 | O-32 | 工具/噪音 | P2 | **进度采样器读尚未创建的输出文件** ⇒ 每 5s 噪音 + run 中断（**连续误判三次**的坑） | ✅ 已定性 + 已修（待站上复跑验证） | ✅ |
 | O-33 | 文档/一致性 | P2 | **水印入仓化后，引用旧路径 `ops/.audit-baseline.json` 的文档未跟随**（ADR-0007×2 · 调研稿×4 · ARCHITECTURE · REMEDIATION-PLAN · 本文 §1 · 路线总表 §10 A8） | ⏳ 待办（**处置分两类：历史记录不改正文 / 现状陈述就地更新**） | D7-P1-1 |
