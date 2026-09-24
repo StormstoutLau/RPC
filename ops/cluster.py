@@ -1237,10 +1237,10 @@ _STUDIO_SCAN = (
     "printf 'engine_bak=%s\\n' \"$(ls -d \"$HOME/.unsloth/llama.cpp.\"* 2>/dev/null | xargs -r -n1 basename 2>/dev/null | tr '\\n' ',')\"; "
     "printf 'marker_tag=%s\\n' \"$(grep -oE 'b[0-9]{5}' \"$M\" 2>/dev/null | head -1)\"; "
     "printf 'marker_asset=%s\\n' \"$(grep -oE 'app-b[0-9]+-[a-z0-9-]+-linux-x64-[a-z0-9-]+[.]tar[.]gz' \"$M\" 2>/dev/null | head -1)\"; "
-    "printf 'marker_compiled=%s\\n' \"$(timeout 20 \"$E\" --version 2>&1 | grep -oE 'Clang [0-9.]+|GNU [0-9.]+' | head -1)\"; "
+    "printf 'marker_compiled=%s\\n' \"$(timeout -k 5 20 \"$E\" --version 2>&1 | grep -oE 'Clang [0-9.]+|GNU [0-9.]+' | head -1)\"; "
     # ⚠ 反斜杠一律写 `\\`：`\1` 在 Python 里是**八进制转义**(→ \x01)会把 sed 替换串毁掉,
     #   而 `\(` 只触发 SyntaxWarning(值仍对) —— 两者表现不同, 但都别写单个反斜杠。
-    "printf 'devices=%s\\n' \"$(timeout 20 \"$E\" --list-devices 2>&1 | sed -n 's/^[[:space:]]*\\([A-Za-z][A-Za-z0-9]*[0-9]\\):.*/\\1/p' | tr '\\n' ',')\""
+    "printf 'devices=%s\\n' \"$(timeout -k 5 20 \"$E\" --list-devices 2>&1 | sed -n 's/^[[:space:]]*\\([A-Za-z][A-Za-z0-9]*[0-9]\\):.*/\\1/p' | tr '\\n' ',')\""
 )
 
 
