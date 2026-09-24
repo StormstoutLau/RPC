@@ -11,6 +11,13 @@ accept:
   - grep -q '"station"' out/station-reality.json
   - grep -q '"loaded_models"' out/station-reality.json
   - grep -q '"as_of"' out/station-reality.json
+evidence-manifest:
+  version: 1
+  subjects:
+    - name: station-reality
+      path: station-reality.json
+      state: out/station-reality.json
+      digest: sha256
 ---
 ## 任务描述
 

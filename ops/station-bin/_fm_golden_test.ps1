@@ -27,7 +27,7 @@ Invoke-Expression $fn.Extent.Text   # 定义函数到当前会话
 # 它们是**纯函数**(只吃 $accept/$goldenActive/卡 subjects, 不碰站、不碰文件系统)
 # ⇒ 可离线单测; 这正是"派发路径改动"能被验证而不用每次都真派发的关键。
 # O-15/AUDIT (2026-09-21): 追加提取 claude 按路基线(Get-ClaudeFrameworkSubjects) 与 fallback 判定 (Test-FallbackEligible)。
-foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-FallbackEligible', 'Test-CtxOverflowError', 'Resolve-CtxOverflowCode', 'Resolve-ClaudeStationCandidates', 'Get-SensitivityBackendReject', 'Get-BackendEgress', 'Get-JudgeEgress', 'Get-JudgeComplianceReject', 'Get-AttachEgressReject', 'Get-ScrubRules', 'Invoke-Scrubber', 'Get-ScrubBlockReason', 'Resolve-ReviewPrompt', 'Resolve-ClaudeBudget', 'Resolve-LocalBash', 'Invoke-LocalBashCmd', 'Resolve-ExitCode')) {
+foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-EvmStatePull', 'Test-FallbackEligible', 'Test-CtxOverflowError', 'Resolve-CtxOverflowCode', 'Resolve-ClaudeStationCandidates', 'Get-SensitivityBackendReject', 'Get-BackendEgress', 'Get-JudgeEgress', 'Get-JudgeComplianceReject', 'Get-AttachEgressReject', 'Get-ScrubRules', 'Invoke-Scrubber', 'Get-ScrubBlockReason', 'Resolve-ReviewPrompt', 'Resolve-ClaudeBudget', 'Resolve-LocalBash', 'Invoke-LocalBashCmd', 'Resolve-ExitCode')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -148,6 +148,10 @@ evidence-manifest:
     - name: station-tmp-log
       collect: "tail -5 /tmp/x.log"
       ephemeral: true
+    - name: station-reality
+      path: station-reality.json
+      state: out/station-reality.json
+      digest: sha256
 # 3-b-2: manifest 块内的注释行(以 # 开头)必须被**忽略** —— 卡作者要能就地写说明,
 #   而不会被当成键(已实测: `#` 不在通用键正则的字符类内 ⇒ 落到无匹配分支 ⇒ 忽略)。
     - name: after-comment
@@ -183,7 +187,7 @@ Assert-True "fence: body keeps the quoted lines verbatim" ($h4['body'] -match 'E
 $h5 = Get-FrontMatter $evmCard
 $ev = $h5['evidence-manifest']
 Assert-True "evm: version parsed" ($ev['version'] -eq '1')
-Assert-True "evm: two subjects" (@($ev['subjects']).Count -eq 4)
+Assert-True "evm: five subjects" (@($ev['subjects']).Count -eq 5)
 Assert-True "evm: subject[0] name/path/digest" ($ev['subjects'][0]['name'] -eq 'agent-output' -and $ev['subjects'][0]['path'] -eq 'agent-output.txt' -and $ev['subjects'][0]['digest'] -eq 'sha256')
 Assert-True "evm: subject[1] collect parsed, path empty" ($ev['subjects'][1]['name'] -eq 'workspace-diff' -and $ev['subjects'][1]['collect'] -match 'find \. -newer' -and $ev['subjects'][1]['path'] -eq '')
 Assert-True "evm: top-level keys NOT clobbered" ($h5['task'] -eq 'evm parse test' -and $h5['model'] -eq 'gpt-oss')
@@ -192,7 +196,20 @@ Assert-True "evm: body intact" ($h5['body'] -match 'evm body')
 Assert-True "evm: ephemeral true on subject[2]" ($ev['subjects'][2]['ephemeral'] -eq $true)
 Assert-True "evm: ephemeral default false on subject[0]/[1]" ($ev['subjects'][0]['ephemeral'] -eq $false -and $ev['subjects'][1]['ephemeral'] -eq $false)
 # 3-b-2: manifest 块内注释行被忽略(不影响其后的 subject 解析)
-Assert-True "evm: subject after in-block comment parsed" ($ev['subjects'][3]['name'] -eq 'after-comment' -and $ev['subjects'][3]['path'] -eq 'after-comment.txt')
+Assert-True "evm: subject after in-block comment parsed" ($ev['subjects'][4]['name'] -eq 'after-comment' -and $ev['subjects'][4]['path'] -eq 'after-comment.txt')
+# O-40/A-1 (2026-09-24): subject 级 `state`(站上源路径) —— 解析出值; 未声明者缺省空串
+Assert-True "evm: state 解析(有声明者取到站上路径)" ($ev['subjects'][3]['state'] -eq 'out/station-reality.json')
+Assert-True "evm: state 缺省为空串(未声明者不泄漏/不为 null)" ($ev['subjects'][0]['state'] -eq '' -and $ev['subjects'][2]['state'] -eq '')
+# O-40/A-1 (2026-09-24): 产物拉回的白名单判定 —— 正反用例(防恒真/恒假)
+Assert-True "evm-state: 正例 out/* 扁平 → ok" ((Test-EvmStatePull -state 'out/station-reality.json' -path 'station-reality.json').ok -eq $true)
+Assert-True "evm-state: 反例 非 out/ 前缀 → 拒" ((Test-EvmStatePull -state 'tmp/station-reality.json' -path 'station-reality.json').ok -eq $false)
+Assert-True "evm-state: 反例 绝对路径 / 根(Linux) → 拒" ((Test-EvmStatePull -state '/etc/passwd' -path 'passwd.json').ok -eq $false)
+Assert-True "evm-state: 反例 绝对路径(C:) → 拒" ((Test-EvmStatePull -state 'C:\x\y.json' -path 'y.json').ok -eq $false)
+Assert-True "evm-state: 反例 state 含 .. → 拒" ((Test-EvmStatePull -state 'out/../secrets/x' -path 'x.txt').ok -eq $false)
+Assert-True "evm-state: 反例 path(落盘名)含 .. → 拒" ((Test-EvmStatePull -state 'out/x.json' -path '../x.json').ok -eq $false)
+Assert-True "evm-state: 反例 path 非扁平(含 /) → 拒(防目录穿越)" ((Test-EvmStatePull -state 'out/x.json' -path 'sub/x.json').ok -eq $false)
+Assert-True "evm-state: 反例 state 为空 → 拒" ((Test-EvmStatePull -state '' -path 'x.json').ok -eq $false)
+Assert-True "evm-state: 反例 path 为空 → 拒" ((Test-EvmStatePull -state 'out/x.json' -path '').ok -eq $false)
 
 # --- ADR-0007 路B: 框架固定件基线 + 合并 (纯函数, 无需真派发即可验证) ---
 $b0 = @(Get-FrameworkSubjects @() $false)
@@ -242,6 +259,15 @@ Assert-True "merge: 五键齐备(免得下游取键得 null 静默传播)" (
 #   就只是"函数返回值好看", 发射到 run.json 的形状仍是 false ⇒ 缺口照旧。断言合并**结果**而非仅基线。
 Assert-True "merge: review 件经合并后仍 ephemeral=true(透传, 非仅基线好看)" (
     (@($mg | Where-Object { $_.name -eq 'review' -and $_.ephemeral -eq $true })).Count -eq 1)
+
+# O-37 补足 (2026-09-24): run.json 的 subjects 也要带 `state` 足迹 —— merge 结果**透传**卡声明
+#   与基线的 state, 使"collect 用 state 拉了文件"这件事**在元数据里有痕**(而非 collect 侧二次取卡对账)。
+#   两个方向都证: ①有声明者透传到合并结果; ②无声明者缺省空串(保六键纯净, 不插 null)。
+$cardSubsSt = @(@{ name = 'station-reality'; path = 'station-reality.json'; collect = ''; digest = 'sha256'; ephemeral = $false; state = 'out/station-reality.json' })
+$mgSt = @(Merge-EvidenceSubjects $cardSubsSt @() $false)
+$srSt = @($mgSt | Where-Object { $_.name -eq 'station-reality' })
+Assert-True "merge: 卡声明 state 透传到合并结果(run.json 留痕)" ($srSt.Count -eq 1 -and $srSt[0]['state'] -eq 'out/station-reality.json')
+Assert-True "merge: 未声明 state 的件缺省空串(保六键纯净, 不插 null)" ((@($mgSt | Where-Object { $_.state -eq '' })).Count -ge 10)
 
 # 路B 的核心目的: **无 manifest 的卡**(= 71 个真实 run 的来源)也能拿到非空声明 ⇒ 不再是 recipe v1
 $m0 = @(Merge-EvidenceSubjects @() @() $false)
