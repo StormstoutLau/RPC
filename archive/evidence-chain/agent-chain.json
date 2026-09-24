@@ -2330,11 +2330,57 @@
    },
    "recipe": "v2",
    "chained_at": "2026-09-24 11:03:41"
+  },
+  {
+   "proj": "dogfood",
+   "run_id": "202609241106474522",
+   "digest": "038731aa9b7b389cacc5b6af8195261120b1b56253bebe4e3bca01a5c4536f02",
+   "prev": "f2fef0c9a20ecc4ec8aff149fc13ada836162cf5e526d32e94cd2efb908507cc",
+   "files": {
+    ".agent-run.json": "c0d109aef1ff8ce38bcae76c810c88f0e6baf3f542cef627c44f52384ad5775a",
+    "agent-output": "7ba5c0509286b157131524a5541ac65f2fdb31d332f2d169a28f208b17cdbca6",
+    "judgment-record": "c6b5528147fce3b07deff0bdd0f2560cf716b86cedfe8ed9e7b5a76116bb7d58",
+    "prompt": "47c3f4aed01309fa3e1de236d7b0304305e49d1f1f21d7e22f15047ecfa0e7d7",
+    "accept-cmds": "8b0d8d17bb336c9ca2dd144f0ea1a29619d463535c59948a1288272242b41dcf",
+    "progress-trace": "f7198ba6f499f74378f70b0e46ebcff23c49b45006b1d7237c2fc54a500d8f7a",
+    "session-meta": "6d77c7a8863137c0976e4fb2a41120bebdbf870ff6622d33b0df2e2c87e48f64",
+    "attach-manifest": "a2bc34041c1f4f57fc5f5e379a2e7d465b6cfa9814c555af898235f1968b893b",
+    "workspace-diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "card": "37b60c05a499e45719c8d8f53d9350d61bb332519d00ef84f32c64bcf80b36c3",
+    "review": "-",
+    "accept-output": "f482fabf12a147f772a9b9fee8c5a0e04f175d22343be8d7832b170b362ac6fb",
+    "dialect-map": "-"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-24 11:16:44"
+  },
+  {
+   "proj": "dogfood",
+   "run_id": "202609241113114359",
+   "digest": "47c98cc96705658be869da919d97dd4ad308c5de0762c584799b115a3e2523fa",
+   "prev": "038731aa9b7b389cacc5b6af8195261120b1b56253bebe4e3bca01a5c4536f02",
+   "files": {
+    ".agent-run.json": "3c41c92340f0442a4a447eb688d1ce222850681e488b427e8197c8ea4d3eb1aa",
+    "agent-output": "5f6eb9bf089155bcd8bc2ecd895817d2a3b56e49353bf36003723e96cb1afb79",
+    "judgment-record": "c1bedb91bc0ba7eaca473ca1f36912c3fd02d19a31a87b8ee34fff9ef507d220",
+    "prompt": "35f5d6ffac346245e90a29b1ffb0be820bdcd1e7ed900d202fc3f30f80cfe831",
+    "accept-cmds": "8b0d8d17bb336c9ca2dd144f0ea1a29619d463535c59948a1288272242b41dcf",
+    "progress-trace": "79b1abc80864e4cb85560fc015e219e306101f13ec0c24a36740087d6c632927",
+    "session-meta": "615b9f6856c35f6e51555d073a6febe67e64577526669ca6490e178951bb220c",
+    "attach-manifest": "a2bc34041c1f4f57fc5f5e379a2e7d465b6cfa9814c555af898235f1968b893b",
+    "workspace-diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "card": "f637e0bbca381060699ed5e27dce92270bfbe643f6e3d67abb8836a95d5a9dc1",
+    "review": "-",
+    "accept-output": "8af4548ad99b453ec4ab1e34f7723da222558c498fdeafb208480c110d92e4cb",
+    "dialect-map": "0604cd21dd5536d7450e9de2fb8d5a39acc6ebbcbbc51da95451b914aa285da2"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-09-24 11:16:45"
   }
  ],
  "head": {
   "proj": "dogfood",
-  "run_id": "202609241101555466",
-  "digest": "f2fef0c9a20ecc4ec8aff149fc13ada836162cf5e526d32e94cd2efb908507cc"
+  "run_id": "202609241113114359",
+  "digest": "47c98cc96705658be869da919d97dd4ad308c5de0762c584799b115a3e2523fa"
  }
 }
