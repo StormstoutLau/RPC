@@ -235,10 +235,14 @@ def main() -> int:
     o52_reglob = "$evmT.glob" in src and "$evmT2.glob" in src
     o52_exactly1 = "glob 匹配" in src and ".Count -ne 1" in src
     o52_fixed = "ls -1 -d -- '" in src
-    need("O-52 glob 采集面（字符集白名单 + 解析名复校验 + 恰好 1 匹配 + 固定枚举不拼接）",
-         o52_charset and o52_reglob and o52_exactly1 and o52_fixed,
-         f"字符集={o52_charset} 复校验={o52_reglob} 恰1={o52_exactly1} 固定枚举={o52_fixed} ⇒ "
-         "缺任一即等于在采集面开了注入面或留下猜件")
+    # ★ **必须在工作区里跑**：`scp` 用绝对路径所以 CWD 无所谓，但 `ls` 收的是**相对** pattern
+    #   ⇒ 不 `cd $W` 就会在 `$HOME` 里找、**静默匹配 0 个**。该 bug 由**端到端复跑**抓出
+    #   （静态护栏抓不到），故此处把它钉住防回归。
+    o52_cwd = "cd $W && ls -1 -d -- '" in src
+    need("O-52 glob 采集面（字符集白名单 + 解析名复校验 + 恰好 1 匹配 + 固定枚举不拼接 + 在工作区里枚举）",
+         o52_charset and o52_reglob and o52_exactly1 and o52_fixed and o52_cwd,
+         f"字符集={o52_charset} 复校验={o52_reglob} 恰1={o52_exactly1} 固定枚举={o52_fixed} "
+         f"cd工作区={o52_cwd} ⇒ 缺任一即等于在采集面开了注入面/留猜件/在错目录找件")
 
     print(f"\n静态护栏 {15} 条")
     if fails:
