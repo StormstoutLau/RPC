@@ -729,6 +729,19 @@
 O-52 不变量从"恰好 1 匹配 + 不加引号"改为 **"运行窗口唯一确定 + 三态规则 + 不加引号"**。
 **先验红**：把 `.run-marker` 改成 `.nomarker` ⇒ 护栏 FAIL 并点名 `窗口=False`；还原 ⇒ PASS。
 
+### 16.3b ★ 端到端真派发（**真实脏工作区**，2026-09-25）
+
+`task dogfood -Card glob-probe.md`（该卡声明 `state: out/*.txt`，产物名由 agent 自定）——
+**派发时工作区 `out/` 已累积 4 个 `.txt`**（旧实现必 `EVM_STATE_REJECT`）。实测：
+
+```
+EVM_STATE_GLOB: subject 'glob-probe' out/*.txt -> out/glob-probe.txt
+EVM_STATE: pulled=1 rejected=0
+TASK_DONE … exit=0        (run 202609250018594080 · RUN_S=24 · 链 154→155)
+```
+
+runDir 内含 `glob-probe.txt`（内容 `GLOB_PROBE_OK`）⇒ **修复在真实场景生效**，不是仅离线推演。
+
 ### 16.4 净方法论收益
 
 - **★ "边界用例"必须自己设计并实测**：只做 B（脏目录）时，窗口过滤看似完美；**C 是为找反例而设计的**，
