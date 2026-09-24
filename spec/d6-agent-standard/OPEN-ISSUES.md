@@ -510,7 +510,11 @@ DONE_Z
   - **OpenRouter 官方错误文档**：`503 = "There is no available model provider that meets your routing requirements"`（provider 过载/不可用）；429 与 503 响应均带 `Retry-After` header；官方建议"实现简单 retry 机制或换 provider/model"。
   - **NVIDIA 官方开发者论坛一手实例**（nemotron 系同源复现）：反复 503/504，报 `providers_cooling_down`、`primary:{state:open, consecutive_failures:4, tier:2, retry_after_seconds:56.3, successes:95, failed_requests:79}`；用户实测"约 8 问 5-6 问能过"——与本站 B2 7 次派发 5 次中断逐字吻合。
   - **缓解优先级定案**：**先落地 ① `resume` 提至 3-4 + 每次等待退避（尊重 `Retry-After`）、② 失败 run 结束主动清理远端 `.meta`/`.progress`/`out/` 声明产物**（② 同时堵住假绿与 `LOCK_HELD`/`META_STALE` 双外因，为**核心防御**）；③ 换非 free 档、④ `EGRESS_UNSTABLE` 整单标记 为后置升级选项，暂缓。
-  - **状态**：✅ 已裁（P1，缓解 ①② 待实施；不阻断门禁绿灯）。
+- **✅ 缓解 ①② 已实施（2026-09-24，`a5c8b6e`）**：
+  - **①**（[`agent-cli.ps1`](../../ops/station-bin/agent-cli.ps1)）：opencode 通道 resume cap `2→3`，每次续接前 `grep` 上次输出命中 `503|504|provider_overloaded|Service temporarily overloaded|idle timeout` ⇒ 退避 **30s**（尊重 provider 冷却），否则 5s；claude 通道同步（cap 2→3 + 读 stderr 同类退避）。
+  - **②**（同文件 collect 段）：**仅在归档成功块内**（遵守 ADR-0005 D4c「collect 失败不得清理」）且 `$code≠0` 时触发，清理远端 `out/.meta`/`out/.progress`/`.agent-lock`/`.agent-state.json` + 动态收集卡声明的 `out/*` 产物；待删路径单引号包裹 + `rm -f -- "$f"`（注入面收敛，非拼接执行）；失败仅 `O46_CLEAN_WARN` 不阻断。
+  - **验证**：PS 解析全绿 + 注入 bash `bash -n` 通过 + 门禁 quick 全绿（绿灯 10 / 红灯 0）。⚠ **深度端到端负向验证**（真触发一次失败 run 观察 `O46_CLEAN:` + 确认下次 accept 不再命中残留）留待后续吃狗粮派发复测。
+  - **状态**：✅ 已裁 + 缓解 ①② 已实施（P1；③④ 后置暂缓；不阻断门禁绿灯）。
 
 ### O-01：--attach 传输未实现
 
