@@ -233,17 +233,19 @@ def main() -> int:
     #   ③ 恰好 1 匹配才收（0/>1 拒，**不猜**）④ 枚举命令**固定**（`ls`）+ pattern 单引号包裹 ⇒ 只作参数、不拼接。
     o52_charset = "state-charset" in src and "'^out/[A-Za-z0-9._*?-]+$'" in src
     o52_reglob = "$evmT.glob" in src and "$evmT2.glob" in src
-    o52_exactly1 = "glob 匹配" in src and ".Count -ne 1" in src
-    # ★ 枚举命令**固定**且**必须在工作区里跑**（scp 用绝对路径故 CWD 无所谓，但这里是相对 pattern）。
-    o52_fixed = "cd $W && ls -1 -d -- $st" in src
-    # ★★ **不能加引号**：引号会把 `*` 变成字面量 ⇒ **永远 0 匹配**（O-52 端到端实测）。
-    #    安全由**字符集白名单**承担（空格/`;`/`$`/反引号/引号/`&`/`|`/重定向 已被排除）。
-    #    这条护栏把该不变量钉死：既防"忘加引号=不安全"的错觉式修复，也防"加了引号=静默失效"。
-    o52_noquote = "ls -1 -d -- '$st'" not in src
-    need("O-52 glob 采集面（字符集白名单 + 解析名复校验 + 恰好 1 匹配 + 固定枚举 + 工作区内 + 不得加引号）",
-         o52_charset and o52_reglob and o52_exactly1 and o52_fixed and o52_noquote,
-         f"字符集={o52_charset} 复校验={o52_reglob} 恰1={o52_exactly1} "
-         f"固定枚举+工作区内={o52_fixed} 未加引号={o52_noquote} ⇒ 加引号会让通配**静默失效**")
+    # ③ O-52② **运行窗口隔离**（2026-09-24 补）：枚举须同时给出"候选"与"本轮窗口(`-nt .run-marker`)"两段。
+    #    缺窗口 ⇒ 真实工作区（实测 dogfood `out/` 有 4 个 `.txt`）**必然拒** ⇒ 该能力形同虚设。
+    o52_window = "-nt .run-marker" in src and "==CAND==" in src and "==WIN==" in src
+    # 决策三态**不猜**：窗口恰 1 → 取；窗口 0 且候选恰 1 → 取（产物由 mv/cp -p 而来、mtime 在窗口外
+    #   —— 实测确认过 ⇒ 不能只认窗口，否则**制造回归**）；其余 → 拒。
+    o52_rule = ("$gWin.Count -eq 1" in src) and ("$gWin.Count -eq 0 -and $gCand.Count -eq 1" in src)
+    # ★ pattern 必须**不加引号**地交给 shell 通配（引号会把 `*` 变字面量 ⇒ 永远 0 匹配，O-52 端到端实测）；
+    #   安全由**字符集白名单**承担。此处钉住"以 {1} 注入且未被引号包裹"。
+    o52_unquoted = ("for f in {1};" in src) and ("for f in '{1}'" not in src) and ('for f in "{1}"' not in src)
+    need("O-52 glob 采集面（字符集白名单 + 解析名复校验 + 运行窗口唯一确定 + 不得加引号）",
+         o52_charset and o52_reglob and o52_window and o52_rule and o52_unquoted,
+         f"字符集={o52_charset} 复校验={o52_reglob} 窗口={o52_window} 三态规则={o52_rule} "
+         f"未加引号={o52_unquoted} ⇒ 缺窗口=脏工作区必拒; 加引号=通配静默失效")
 
     # O-48（2026-09-24）：**命令位**的 `timeout` 一律带 `-k`。
     #   根因（受控复现）：裸 `timeout` 对**忽略 SIGTERM** 的子进程会**一直等**，不是"到点即杀" ——
