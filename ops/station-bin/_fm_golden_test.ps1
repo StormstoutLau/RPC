@@ -1045,6 +1045,27 @@ Assert-True "o73②: 声明产物(subject state)仍被清 —— 收窄没有把
 Assert-True "o73③: 射程打成**可观测行**(`O46_CLEAN_SCOPE:`) —— 否则『刻意不清』与『没清』长得一样" (
     $content.Contains('O46_CLEAN_SCOPE: 按 O-73 刻意**不删**'))
 
+# --- O-75 (2026-09-25): 探针 ssh 必须有**整体墙钟**（`ConnectTimeout` 只管 TCP connect, 不管名字解析） ---
+# 一手实测: 六并发时 A/B 两站(`.local` ⇒ mDNS)的 `ssh … 'echo alive'` 各**挂约 10 分钟**;
+#   杀掉那两条探头 ⇒ 两条 run 立刻继续并 `exit=0` ⇒ 卡点只在探头。正反两侧已在本机验过
+#   (远端 `sleep 60` + 3s 上限 ⇒ `code=124 / 耗时 3s`; `echo alive` ⇒ `ok=True`)。
+Assert-True "o75①: 有**有墙钟的探针执行器**(常量 + WaitForExit(ms) + 超时 Kill + 124 码)" (
+    $content.Contains('$Script:SSH_PROBE_CAP_S = 45') -and
+    $content.Contains('if (-not $p.WaitForExit($TimeoutS * 1000))') -and
+    $content.Contains('try { $p.Kill() } catch { }') -and
+    $content.Contains('return @{ ok = $false; code = 124;'))
+# ⚠ 结构性保证: BatchMode 由 helper **强制**加 —— 那条"全部 ssh 调用点必带 BatchMode"的夹具是 **AST 级**
+#   的, 扫不到 `$psi.Arguments` 这个字符串 ⇒ 靠调用方自觉就会**静默**跳出护栏。
+Assert-True "o75②: `-o BatchMode=yes` 由该 helper **强制**加(不靠调用方自觉, 见 o75 注释)" (
+    $content.Contains('-o BatchMode=yes " + $Arguments'))
+Assert-True "o75③: `Test-RemoteReach` 改走该 helper(它是四条主路 ssh 入口的共同前置闸)" (
+    $content.Contains('$r = Invoke-CappedSsh -Arguments "-o ConnectTimeout=8 $hostName') -and
+    -not $content.Contains('ssh -o ConnectTimeout=8 -o BatchMode=yes $hostName'))
+# ⚠ **诚实边界**: 派发主体**刻意不加**主控侧墙钟(强杀 ssh 会让远端任务继续跑而证据全丢) ⇒ 源码必须写明,
+#   否则后来者会"顺手全加"并把那条纪律变成假全覆盖。
+Assert-True "o75④: 源码写明『派发主体刻意不加墙钟』及其理由(防顺手全加 ⇒ 假全覆盖)" (
+    $content.Contains('刻意不加') -and $content.Contains('远端任务还在跑 + 本地证据全丢'))
+
 # --- O-56 (2026-09-25): 基线"**声明无条件 / 产出有条件**"(两处) ---
 # ① 主路: `accept-cmds` 原为**裸列**, 而站上只在 `[ -n "$ACCEPT_B64" ]` 时才写 ⇒ 无 accept 的卡
 #    每个 run 假报一条 missing-artifact gap。⇒ 与 `accept-output` **同条件列**(= O-29 对 golden-cmd 的同法)。

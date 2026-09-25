@@ -212,14 +212,63 @@ function Get-TargetHost([string]$station) {
 #   而不是"失败"。`BatchMode=yes` 让它立刻失败 ⇒ 把"卡住"变成"快速失败"。
 # 守卫: `_fm_golden_test.ps1` 有 AST 断言（本文件全部 ssh/scp 调用点必须含 BatchMode=yes）
 #   —— 新增调用点漏加会当场红，不必靠人记。
+# ── O-75 (2026-09-25): **有整体墙钟**的 ssh 执行器 ───────────────────────────────────────────
+# 为什么非有不可（一手实测）: `-o ConnectTimeout=N` 只覆盖 **TCP connect**, **不覆盖名字解析**。
+#   六并发那次, A/B 两站(主机名是 `.local` ⇒ mDNS)的 `ssh … 'echo alive'` 各**挂住约 10 分钟**
+#   (`Get-CimInstance` 抓到两条 ssh 的命令行就是这句探头; 站上同期**没有** sshd 子进程 ⇒ 卡在本地解析/建连)。
+#   ⇒ **杀掉那两条探头, 两条 run 立刻继续并最终 `exit=0`** —— 卡点只在探头, 后续链路是好的。
+# ⚠ **只给"探针类"用**: 派发主体(`Invoke-RemoteScript` / `Invoke-RemoteCapture` / 站上 claude 的
+#   `_p3_run.sh`) **刻意不加**主控侧墙钟 —— 它们的合法时长以**远端** `timeout -k <budget>` 为界;
+#   在主控侧强杀 ssh 会把"慢"变成"远端任务还在跑 + 本地证据全丢"(比挂住更糟)。
+#   ⇒ 那条残面**已如实登记**(台账 O-75), **不要**为了"看起来全覆盖"就给它们套墙钟。
+# ⚠ 超时一律**快速失败**(返回 ok=$false) —— 绝不静默当作成功(本仓头号形态)。
+$Script:SSH_PROBE_CAP_S = 45
+function Invoke-CappedSsh {
+    # 跑一条 ssh, 给**整体墙钟**上限; 超时 ⇒ `Kill()` + 返回 @{ok=$false; code=124}(= 超时码, 与纪律 11 同码)。
+    # ⚠ `$Arguments` 是**原始参数字符串**(交给 CreateProcess) ⇒ 调用方**自己**负责引号; 本函数只做时限。
+    #   为何不用 `Start-Process -ArgumentList`(数组): PS5.1 的 `Start-Process` 拿到的 `ExitCode` 在
+    #   `-Wait` 之外**不可靠**(本文件既有实测记录) —— 而这里**必须**能带时限地拿 rc。
+    param([string]$Arguments, [int]$TimeoutS = 0)
+    if ($TimeoutS -le 0) { $TimeoutS = $Script:SSH_PROBE_CAP_S }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = 'ssh'
+    # ★ `-o BatchMode=yes` 由**本函数强制**加上（调用方不必再写，重复也无害）。
+    #   为什么放在这里而不是靠调用方: 本文件那条"全部 ssh 调用点必须带 BatchMode"的夹具**是 AST 级**的
+    #   （按命令名扫调用点）⇒ `$psi.Arguments` 这个**字符串**不在它的射程内 ⇒ 若靠调用方自觉,
+    #   未来新增的 `Invoke-CappedSsh` 调用点一旦漏写就**静默**跳出那条护栏。⇒ 改成**结构上不可能漏**。
+    $psi.Arguments = "-o BatchMode=yes " + $Arguments
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $p = $null
+    try {
+        $p = [System.Diagnostics.Process]::Start($psi)
+        if (-not $p.WaitForExit($TimeoutS * 1000)) {
+            try { $p.Kill() } catch { }
+            Write-Host "SSH_PROBE_TIMEOUT: ${TimeoutS}s 未返回 ⇒ 已杀该 ssh(见台账 O-75)"
+            return @{ ok = $false; code = 124; out = "TIMEOUT(${TimeoutS}s)" }
+        }
+        # ⚠ 只在**探针**上用 ⇒ 输出极小(`echo alive` / 一行 READY), 不会撑爆管道缓冲;
+        #   若将来要在"大输出"上复用它, 必须先改成异步读(否则 WaitForExit 会死锁)。
+        $o = $p.StandardOutput.ReadToEnd()
+        $e = $p.StandardError.ReadToEnd()
+        return @{ ok = ($p.ExitCode -eq 0); code = $p.ExitCode; out = $o; err = $e }
+    }
+    catch { return @{ ok = $false; code = 255; out = ''; err = "$($_.Exception.Message)" } }
+    finally { if ($p) { try { $p.Dispose() } catch { } } }
+}
+
 function Test-RemoteReach([string]$hostName) {
     # PS5.1 landmine (confirmed 2026-09-03): native stderr redirect (2>$null) under EAP=Stop
     # throws NativeCommandError (e.g. DNS failure text) instead of returning - treat any throw as unreachable.
-    try {
-        $r = ssh -o ConnectTimeout=8 -o BatchMode=yes $hostName 'echo alive' 2>$null
-        return ($LASTEXITCODE -eq 0 -and "$r" -match 'alive')
-    }
-    catch { return $false }
+    # ★ O-75 (2026-09-25): 改走 `Invoke-CappedSsh` ⇒ 除"失败即返回 false"外, 还多了**整体墙钟**。
+    #   这是**唯一**改动点里覆盖面最大的一个: 它是四条主路 ssh 入口(`Invoke-RemoteScript` 首跑/重试 ·
+    #   `Invoke-StationReady` · `Invoke-SlotGate` · `Invoke-RemoteCapture`)的**共同前置闸**。
+    #   判据仍只看 **stdout** 含 `alive`(与改动前同口径: 原实现把 stderr 丢掉了)。
+    #   ⚠ 参数里**不再写** `-o BatchMode=yes`: 它由 `Invoke-CappedSsh` **强制**加上(见该函数注释)。
+    $r = Invoke-CappedSsh -Arguments "-o ConnectTimeout=8 $hostName `"echo alive`""
+    return ($r.ok -and ("$($r.out)" -match 'alive'))
 }
 
 function Invoke-RemoteScript {
