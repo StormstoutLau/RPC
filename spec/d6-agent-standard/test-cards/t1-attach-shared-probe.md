@@ -5,6 +5,7 @@ model: ultra
 cli: opencode
 sensitivity: public
 attach-egress: ok
+input-provenance: none
 readonly: true
 timeout_s: 300
 ---

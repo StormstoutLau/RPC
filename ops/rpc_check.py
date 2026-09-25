@@ -819,6 +819,171 @@ def check_sensitivity(ctx):
     return ("FAIL" if bad else "PASS"), note, bad
 
 
+# ── O-66 (2026-09-25)：卡面 `input-provenance` 义务（`CROSS-PROJECT-WORK-STANDARD §4` 的**机判**）──
+# 义务原文：卡声明 `public`/`sanitized` **且带输入** ⇒ ① `input-provenance` 必填（逐项本仓相对路径）
+#   ② 每项须在 `sensitivity.yaml` 有 `tier` ③ 卡的 `sensitivity` **不得宽于**该项的 `tier`。
+#
+# ★ 触发条件为什么用 `attach-egress` 而不是"实际附件数"（**覆盖等价，非权宜**）：
+#   运行时 `Get-AttachEgressReject` 已强制"**有附件 ∧ 后端出网 ⇒ 必须声明 `attach-egress: ok`**"
+#   ⇒ "出网带附件"这一 population 恰好是"声明了 `attach-egress`"的**子集**
+#   ⇒ 以**声明**为条件做**静态**判 = 覆盖同一人群（且是**超集** ⇒ 保守 ⇒ sound），并**在提交时就拦**。
+#   ⚠ 另一条路（派发时按真实 `$attach.Count` 判）需要 PowerShell 读 `sensitivity.yaml` ——
+#     **PS 5.1 无 YAML 解析**（实测 `agent-cli.ps1` 全域零 YAML 用法）⇒ 得额外建"生成物 + 查表"链路。
+#     静态侧**更简单且更早**，故选定。（决策与实测见 DEV-LOG-014 §32.6 的"就地更正"）
+CARD_GLOB = "spec/**/*cards*/**/*.md"      # 卡区目录名含 `cards`（`dogfood-cards/` · `test-cards/`）
+# tier 序（**不得宽于** = 卡 rank 必须 ≤ 输入 rank）；`unverified` 按 `local-only` 处置（表头 fail-closed）
+TIER_RANK = {"local-only": 0, "unverified": 0, "sanitized": 1, "public": 2}
+PROVENANCE_NONE = "none"                   # 显式"输入不来自本仓"（唯一认可的 token，刻意不收 n/a·null）
+
+
+_FM_KEY_RE = re.compile(r"^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$")
+
+
+def _card_frontmatter(path):
+    """提取卡面 front-matter（首个 `---` 包夹块）⇒ dict；**首行不是 `---` ⇒ None（不是卡）**。
+
+    ★ 用**行式提取**而不是 `yaml.safe_load` —— 两条理由**都是本轮实测出来的**：
+      · **严格 YAML 会炸**：实测 2 张卡（`t1-attach-shared-probe` · `cpphub-001`）的 `task:`/`note:` 值里含
+        `": "` ⇒ `yaml.safe_load` 抛 `ScannerError`（与 2026-09-24 `sensitivity.yaml` 那次**同一个坑**）。
+        第一版据此**静默 `return None`（= 跳过该卡）** ⇒ 把本该触发的 `t1` 漏过去了 = **我判据自己的假绿**
+        （"什么都没判所以通过"—— 本仓头号形态，这次长在我当天新写的判据里）。
+      · **权威读取器（PS 侧 `Get-FrontMatter`）本来就是行式的** ⇒ 行式提取与运行时**同口径**，
+        避免"Python 说这卡坏、PS 却读得动"的**双标**（双标会把可派的卡判红）。
+    ⇒ 同时支持**块式列表**（键后跟缩进 `- `）：否则 `input-provenance:` 写成列表会被读成空串 ⇒ **假红**。
+    """
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    if not lines or lines[0].strip() != "---":
+        return None
+    out, key = {}, None
+    for ln in lines[1:]:
+        if ln.strip() == "---":
+            return out
+        if not ln.strip():
+            continue
+        if key and re.match(r"^\s+-\s+", ln):               # 块式列表项
+            cur = out.get(key)
+            if not isinstance(cur, list):
+                cur = [] if not cur else [cur]
+                out[key] = cur
+            cur.append(ln.split("-", 1)[1].strip().strip('"').strip("'"))
+            continue
+        m = _FM_KEY_RE.match(ln)
+        if m:
+            key = m.group(1)
+            out[key] = m.group(2).strip().strip('"').strip("'")
+        else:
+            key = None                                       # 非键非列表行 ⇒ 当前键结束
+    return out                                               # 无闭合 `---`：PS 侧同样宽容 ⇒ 按已读到的算
+
+
+def _sens_registry(inv):
+    """`sensitivity.yaml` → `{path: tier}`（只取显式登记项；缺省档不在内）。"""
+    reg = {}
+    for sec in SENSITIVITY_SECTIONS:
+        for it in (inv.get(sec) or []):
+            p = (it or {}).get("path")
+            if p:
+                reg[p] = (it or {}).get("tier")
+    return reg
+
+
+def validate_input_provenance(cards, sensitivity_inv):
+    """O-66：卡面 `input-provenance` 义务的**纯函数**判定（⇒ 离线可正反夹测）。
+
+    `cards` = `[(label, frontmatter_dict, full_text)]`。返回 `(bad, stats)`；
+    `bad` 里**两类后果不同**（故分桶返回给上层取最严）：
+      · **FAIL 级**（规则 ① 缺字段 / ② 项未登记 / ③ 档位过宽）——**契约违规**
+      · **WARN 级**（规则 ④ `none` 不可证伪）——"提到 ≠ 读到"，机械判不出，**只报不拦**
+    """
+    reg = _sens_registry(sensitivity_inv)
+    default_tier = str(sensitivity_inv.get("default_tier") or "local-only")
+    fail, warn = [], []
+    n_trig = n_ok = n_none = 0
+    for label, fm, body in cards:
+        if not isinstance(fm, dict):
+            continue
+        ae = str(fm.get("attach-egress") or "").strip().lower()
+        if ae not in ("ok", "yes", "true"):
+            continue                                  # 未声明 ⇒ 运行时根本不放行出网附件 ⇒ 不触发
+        tier = str(fm.get("sensitivity") or "").strip().lower() or default_tier
+        if tier not in ("public", "sanitized"):
+            continue                                  # local-only / unverified 本就不出网
+        n_trig += 1
+        prov = fm.get("input-provenance")
+        if prov in (None, "", []):
+            fail.append(f"{label}: 声明 `attach-egress` 且 `sensitivity={tier}` ⇒ **`input-provenance` 必填**"
+                        f"（确无本仓输入请显式写 `input-provenance: {PROVENANCE_NONE}`）")
+            continue
+        entries = [str(e).strip() for e in (prov if isinstance(prov, list) else [prov]) if str(e).strip()]
+        if len(entries) == 1 and entries[0].lower() == PROVENANCE_NONE:
+            n_none += 1
+            # 规则 ④（WARN 级）：`none` 必须**可证伪** —— 正文不得出现 tier **严于本卡**的已登记路径。
+            #   ⚠ 只判"严于本卡"：卡天然会引用自身所在目录（实测 A2 写了 `dogfood-cards/...`，
+            #     而该目录登记为 `public`）⇒ 若判"任何已登记路径"会**假红**（本轮实测踩到并收窄）。
+            hits = sorted({p for p in reg
+                           if TIER_RANK.get(reg.get(p) or default_tier, 0) < TIER_RANK.get(tier, 0)
+                           and p.rstrip("/") in body})
+            if hits:
+                warn.append(f"{label}: 声明 `input-provenance: {PROVENANCE_NONE}`，但正文出现 **tier 严于本卡"
+                            f"（{tier}）** 的已登记路径 {hits} ⇒ `{PROVENANCE_NONE}` 的可证伪性不成立"
+                            f"（要么把该路径列进 `input-provenance`，要么把档位降到不宽于它）")
+            continue
+        n_ok += 1
+        for e in entries:
+            if e not in reg:
+                fail.append(f"{label}: `input-provenance` 项 `{e}` **未登记**于 sensitivity.yaml"
+                            f"（未登记 = `{default_tier}`，fail-closed）⇒ 先立项登记或改档位")
+                continue
+            et = reg[e] or default_tier
+            if TIER_RANK.get(et, 0) < TIER_RANK.get(tier, 0):
+                fail.append(f"{label}: 卡档位 `{tier}` **宽于**输入 `{e}` 的 tier `{et}`"
+                            f" ⇒ 档位不得比它读的输入更宽")
+    return fail, warn, {"cards": len(cards), "triggered": n_trig, "ok": n_ok, "none": n_none}
+
+
+def check_input_provenance(ctx):
+    """O-66：卡面 `input-provenance` 义务（规则见 `validate_input_provenance`）。
+
+    为什么这条**非有不可**：`sensitivity` 是**卡作者的声明**，不是**内容的属性**（不写 = 默认 `public`）
+    ⇒ 缺本判据时，"一张写 `public` 的卡带未发表内容出网"**没有任何机制知道**（§13.2 的实测结论）。
+    """
+    try:
+        import yaml
+    except Exception:
+        return "WARN", "缺 pyyaml, 跳过 input-provenance 断言", []
+    if not SENSITIVITY_INV.exists():
+        return "FAIL", "inventory/sensitivity.yaml 缺失（本断言的登记依据）", []
+    try:
+        inv = yaml.safe_load(SENSITIVITY_INV.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        return "FAIL", f"sensitivity.yaml 解析失败: {type(e).__name__}: {e}", []
+    cards = []
+    for p in sorted(ROOT.glob(CARD_GLOB)):
+        if p.name.lower() == "readme.md":
+            continue
+        fm = _card_frontmatter(p)
+        if fm is None:
+            continue
+        try:
+            body = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            body = ""
+        cards.append((p.relative_to(ROOT).as_posix(), fm, body))
+    fail, warn, st = validate_input_provenance(cards, inv)
+    note = (f"卡 {st['cards']} 张 · 触发 {st['triggered']} 张（attach-egress ∧ public/sanitized）"
+            f" · 合规 {st['ok']} · 声明 {PROVENANCE_NONE} {st['none']}")
+    if fail:
+        return "FAIL", note, fail + (["", "⚠ 以下为 WARN 级（不阻断）："] + warn if warn else [])
+    if warn:
+        # 规则 ④ 属"提到≠读到"⇒ 只报不拦（本仓 WARN 语义：执行后有非阻断发现）
+        return "WARN", note + " · ⚠ none 可证伪性存疑 " + str(len(warn)), warn
+    return "PASS", note, []
+
+
+
 # ── P1-3 `facade`：`cluster.py` 必须**可达**其消费者引用的每一个 `cluster.<符号>` ──────────
 FACADE = ROOT / "ops" / "cluster.py"
 # 消费形态两种：`import cluster`（用 `cluster.<x>`）与 `import cluster as C`（用 `C.<x>`）
@@ -3517,6 +3682,14 @@ CHECKS = [
      "fix": "O-51: sensitivity.yaml 是「内容→档位」的真值(权威源在自身) —— 断言其自洽: "
             "① path 必须真实存在 ② tier 必须 ∈ 封闭枚举 ③ **同一 path 不得两处不同 tier** "
             "④ default_tier 必须为 local-only (fail-closed)"},
+    # O-66 (2026-09-25): 卡面 `input-provenance` 义务的**机判** —— 此前只在文档里（`ops/` 全域零命中）。
+    {"id": "input-provenance", "title": "卡面输入来源义务", "fn": check_input_provenance, "quick": True,
+     "fix": "O-66: 卡声明 `attach-egress: ok` 且 `sensitivity` ∈ {public, sanitized} 时，它**要带附件出网** ⇒ "
+            "按 `CROSS-PROJECT-WORK-STANDARD §4` 必填 `input-provenance`：① 逐项本仓相对路径；"
+            "② 每项须在 `inventory/sensitivity.yaml` 有 `tier`；③ 卡档位**不得宽于**该项 tier。"
+            "确无本仓输入 ⇒ **显式写 `input-provenance: none`**（不要留空；留空 = 缺字段 ⇒ FAIL）。"
+            "⚠ 报『none 可证伪性存疑』= **WARN 不阻断**：声明 none 却在正文提到 tier 严于本卡的已登记路径 —— "
+            "『提到』不等于『读到』，机械判不出 ⇒ 请人工核一次：若确实读了，把它列进 `input-provenance` 或降档。"},
     {"id": "facade", "title": "门面符号可达性", "fn": check_facade, "quick": True,
      "fix": "P1-3: `cluster.py` 是统一门面, `cluster_web.py` 以 `import cluster` 复用其符号 —— "
             "缺符号即 FAIL 并点名『哪个符号·被谁引用』; 修法: 在 cluster.py 重导出(或改回引用处)"},
