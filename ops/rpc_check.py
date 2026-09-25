@@ -1414,6 +1414,87 @@ def check_cluster_deps(ctx):
     return ("FAIL" if bad else ("WARN" if unhit else "PASS")), note, detail
 
 
+# ── 断言: ADR 必留"考虑的替代方案" (D6-P2-2) ──────────────────────────
+# 目的: ADR 是"非平凡改动必留决策"的载体; 而"**当时考虑过/否决了哪些方案**"最容易被**静默省略**
+#   （写"我决定做什么"容易，写"我否掉了什么"难）⇒ 它是决策记录里**最该被机器盯住**的那一项。
+# ★ 锚 = ADR 模板的**现名** `考虑的替代方案（Alternatives Considered）`（见 `spec/vulkan-version-control/ADR_TEMPLATE.md`；
+#   ADR-0001/0002 与它同源，其余 6 份于 2026-09-25 由 `否决/比较对象` / `被否的方案` **改名**统一，内容未改）。
+#   比较前**规范化**（去括号内容 / 空白 / 全半角）⇒ 防"半角括号 typo"这类**假红**（ADR-0001 历史形态）。
+# ⚠ **范围只含 `adr/ADR-*.md`**，**不含** `spec/d6-agent-standard/DECISIONS.md` —— 后者是**表格载体**，
+#   "否决/比较对象"是它的**列**（表格在结构上每行都有该槽位，且值可为 `—` 表"确无替代"）⇒
+#   门禁的价值在**形状无保证**处；硬要求它也"非空"会假红（实测 D-02 / D-09 该列 = `—`）。
+ADR_GLOB = "ADR-*.md"
+ADR_DIR = ROOT / "adr"
+ADR_CANON = "考虑的替代方案"
+ADR_LEGACY = ("否决/比较对象", "被否的方案")
+
+
+def _norm_head(s):
+    """规范化标题用于比较：去括号内容 + 去空白 + 统一全半角括号 ⇒ 只留中文核心词。"""
+    s = s.replace("（", "(").replace("）", ")")
+    return re.sub(r"\s+", "", re.sub(r"\(.*?\)", "", s))
+
+
+def validate_adr(text):
+    """**纯函数** → `(bad, notes)`。
+
+    规则（P2-2）：① **恰 1 个**规范节 `考虑的替代方案`；② 节体**非空**（≥1 列表项 **或** ≥2 表格行 = 表头+数据）；
+    ③ **不得**留旧节名（`否决/比较对象` / `被否的方案`）。
+    ⚠ 节体扫描**只到下一个二级标题为止** —— `### 替代方案 A` 是**子节**、属节体（ADR-0001/0002 的节体**全是**子节），
+      若按"任意标题"截断会把它们判成空节。
+    """
+    lines = text.splitlines()
+    heads = [(i, ln.strip()) for i, ln in enumerate(lines)
+             if ln.startswith("## ") and not ln.startswith("### ")]
+    canon = [(i, raw) for i, raw in heads if _norm_head(raw[3:]) == ADR_CANON]
+    bad, notes = [], []
+    for i, raw in heads:
+        if _norm_head(raw[3:]) in {_norm_head(x) for x in ADR_LEGACY}:
+            bad.append(f"第 {i + 1} 行仍是**旧节名** `{raw}` ⇒ "
+                       f"统一为 `## {ADR_CANON}（Alternatives Considered）`")
+    if not canon:
+        bad.append(f"**缺** `## {ADR_CANON}（Alternatives Considered）` 节 ⇒ "
+                   f"非平凡改动必须写明**考虑过 / 否决了哪些方案**")
+        return bad, notes
+    if len(canon) > 1:
+        bad.append(f"有 **{len(canon)}** 个规范节（行 {[i + 1 for i, _ in canon]}）⇒ "
+                   f"只允许 1 个（改名后残留旧节？）")
+    i0 = canon[0][0]
+    body = []
+    for ln in lines[i0 + 1:]:
+        if ln.startswith("# ") or (ln.startswith("## ") and not ln.startswith("### ")):
+            break
+        body.append(ln)
+    n_item = sum(1 for b in body if re.match(r"^\s*(?:[-*+]|\d+\.)\s+\S", b))
+    n_row = sum(1 for b in body
+                if b.strip().startswith("|") and not re.match(r"^\s*\|[\s:|-]+\|\s*$", b))
+    if n_item == 0 and n_row < 2:
+        bad.append(f"第 {i0 + 1} 行 `## {ADR_CANON}…` 节**是空的**（列表项 {n_item} · 表格行 {n_row}）"
+                   f"⇒ 只写了标题没写内容（需 ≥1 列表项 **或** ≥2 表格行 = 表头+数据）")
+    else:
+        notes.append(f"列表项 {n_item} · 表格行 {n_row}")
+    return bad, notes
+
+
+def check_adr(ctx):
+    """P2-2: `adr/ADR-*.md` 必须有"考虑的替代方案"节（恰 1 个 · 非空 · 不留旧节名）。"""
+    files = sorted(ADR_DIR.glob(ADR_GLOB))
+    if not files:
+        return "WARN", f"adr/{ADR_GLOB} 无匹配（本断言的登记依据）", []
+    bad, summ = [], []
+    for p in files:
+        b, notes = validate_adr(_read_text(p))
+        bad += [f"{p.name}: {x}" for x in b]
+        if notes:
+            summ.append(f"{p.stem}: {notes[0]}")
+    detail = summ + bad
+    n_bad_file = len({x.split(":", 1)[0] for x in bad})
+    note = f"ADR {len(files)} 份 · 节名统一 `{ADR_CANON}` · 违规 {n_bad_file} 份"
+    if not bad:
+        note += f"（全部含 `{ADR_CANON}` 节且非空）"
+    return ("FAIL" if bad else "PASS"), note, detail
+
+
 # ── 断言 A3: inventory 单点真值 (P1) ──────────────────────────────
 # 目的: 阻止"改了这个忘了那个" —— 端口/模型标识变更时, 保证声明源与真值表一致。
 #
@@ -3252,6 +3333,12 @@ CHECKS = [
             "② 模块级 import 成环 ⇒ 拆环，或把其中一条改成**函数内懒加载**（并登记 `cluster_lazy_allow`）; "
             "③ 层序越界（反向/同层）⇒ 调整层次或改依赖方向（只允许依赖**严格下层**）; "
             "④ 反向懒加载未登记 ⇒ 登记原因，或调层; ⚠ 报『未命中登记 N』= 那条登记已可移除（删掉）"},
+    {"id": "adr", "title": "ADR 替代方案节", "fn": check_adr, "quick": True,
+     "fix": "P2-2: ADR 必须有 `## 考虑的替代方案（Alternatives Considered）` 节"
+            "（模板: spec/vulkan-version-control/ADR_TEMPLATE.md），节体内**至少 1 个列表项 或 2 个表格行(表头+数据)**"
+            " —— 要写「考虑过/否决了什么」，不是只写标题; **恰 1 个**（改名后别留旧节）; "
+            "旧名 `否决/比较对象` / `被否的方案` 一律换规范名; "
+            "⚠ 范围只含 adr/ADR-*.md —— DECISIONS.md 是表格载体（列在结构上已保证槽位、值可为 `—`），不在范围"},
     {"id": "doclinks", "title": "文档链接可达", "fn": check_doclinks, "quick": True,
      "fix": "资源移动/改名后, 文档里的相对链接要跟着改 (注意别写重前缀: spec/<x>/ 里是 "
             "`../y` 不是 `../spec/y`, 引 docs/ 是 `../../docs/z`); 确有不可修的登记 DOCLINK_ALLOW; "
