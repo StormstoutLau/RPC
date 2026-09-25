@@ -4356,17 +4356,20 @@ function Invoke-BatchTask {
         $line = ("$raw").Trim()
         if (-not $line -or $line.StartsWith('#')) { continue }
         $tok = @($line -split '\s+')
-        $card = $tok[0]; $st = ''; $md = ''
+        $card = $tok[0]; $st = ''; $md = ''; $at = ''
         for ($i = 1; $i -lt $tok.Count; $i++) {
             if ($tok[$i] -match '^(?i)station=(A|B|C)$') { $st = $Matches[1].ToUpper() }
             elseif ($tok[$i] -match '^(?i)model=(.+)$') { $md = $Matches[1] }
+            elseif ($tok[$i] -match '^(?i)attach=(.+)$') { $at = $Matches[1] }
         }
         $err = ''
         if (-not (Test-Path $card)) { $err = 'CARD_NOT_FOUND' }   # ★ 单项 fail-fast: 该行标错, **不整批崩**
+        elseif ($at -and -not (Test-Path $at)) { $err = 'ATTACH_NOT_FOUND' }
         # ★ 解析成**绝对路径**: job（Start-Job）的 cwd **不是**仓库根 ⇒ 相对路径在子进程里解析不到（实测: 子进程零输出）
-        $abs = ''
+        $abs = ''; $absAt = ''
         if (-not $err) { $abs = (Resolve-Path -LiteralPath $card).Path }
-        $items += [pscustomobject]@{ line = $ln; card = $card; cardAbs = $abs; station = $st; model = $md; err = $err; station_used = ''; host = '' }
+        if ($at -and (Test-Path $at)) { $absAt = (Resolve-Path -LiteralPath $at).Path }
+        $items += [pscustomobject]@{ line = $ln; card = $card; cardAbs = $abs; attach = $at; attachAbs = $absAt; station = $st; model = $md; err = $err; station_used = ''; host = '' }
     }
     if ($items.Count -eq 0) { Write-Host "BATCH_ABORT: 清单里没有可解析的行"; return 2 }
 
@@ -4421,6 +4424,8 @@ function Invoke-BatchTask {
                 $h = @{ Command = 'task'; Proj = $proj; Card = $c.cardAbs }
                 if ($c.host) { $h.RemoteHost = $c.host }   # 钉站（父进程已把站字母换成 host 串）
                 if ($c.model) { $h.Model = $c.model } elseif ($model) { $h.Model = $model }
+                # 逐卡附件（清单 key `attach=<path>`）—— 传**绝对路径**（同卡路径的理由）
+                if ($c.attachAbs) { $h.Attach = @($c.attachAbs) }
                 if ($sensitive) { $h.Sensitivity = $sensitive }
                 if ($type) { $h.Type = $type }
                 # ★★ `*>&1` 而不是 `2>&1`: `agent-cli` 的进度行多数是 **`Write-Host`**（= 信息流 6），

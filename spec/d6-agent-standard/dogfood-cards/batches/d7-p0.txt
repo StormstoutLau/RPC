@@ -1,0 +1,9 @@
+# D7-P0 三卡批次 —— D7 阶段门 P0 的第一个"合法并发"目标
+#
+# 为什么这 3 张能并发: **每卡产物互不相同**（不同文件）⇒ 不触发"同卡产物同名"；跨站各 1 ⇒ 无同站锁冲突。
+# 覆盖 batch v1.1: 清单新增 `attach=<path>`（逐卡附件）。
+# 命令: & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/d7-p0.txt"
+
+spec/d6-agent-standard/dogfood-cards/d7-p0-1-adr-boundary-draft.md attach=spec/d6-agent-standard/dogfood-cards/inputs/d7-p0-boundary-excerpt.md
+spec/d6-agent-standard/dogfood-cards/d7-p0-2-protocol-freeze.md
+spec/d6-agent-standard/dogfood-cards/d7-p0-3-positioning-judgments.md
