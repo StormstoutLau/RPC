@@ -72,15 +72,17 @@
 | [a3-workspace-accumulation.md](a3-workspace-accumulation.md) | 无 | `public` | ✗（出网档） | **站上工作区累计到什么程度** —— 量化 O-57 家族（跨 run 证据错配）的**根源**；**顺带**钉 README 纪律 7 那条未定的**沙箱可读边界** |
 | [b3-gate-newjudges-falsegreen.md](b3-gate-newjudges-falsegreen.md) | `ops/rpc_check.py`（附件，已登记 `public`） | `public` + **`attach-egress: ok`** | ✗ | **B2 之后新增的那几项判据会不会假绿**（`py-tests` · `input-provenance` · `ps1-runstamp` · `stations` orphan 段 · `evidence` 第三态）—— 即 §13.0① 「**改门禁的任务本身要被门禁管**」 |
 
-### 第三批（2026-09-25 起草 · **O-68② 的验收探针**；两张均已跑通）
+### 第三批（2026-09-25 起草 · **仪器卡**：O-68② 的验收探针 + O-67 的 fan-out 探针；**三张均已跑通**）
 
-> **定位**：O-68 修法②（per-run 命名）的**验收件**（判据 V4/V5/V6，见 [DEV-LOG-014 §36.F](../../../docs/DEV-LOG-014-decision-refinement.md)）。
+> **定位**：**验收件**（判据 V4/V5/V6，见 [DEV-LOG-014 §36.F](../../../docs/DEV-LOG-014-decision-refinement.md)）与
+> **待裁项取证件**（O-67 的 fan-out 并行性）。
 > 它们**不是**审计卡，而是**仪器卡**：形状刻意压到最小，只为压到被测的那条路径。
 
 | 卡（本目录） | 输入 | 档位 / 开关 | 危险面？ | 它回答什么 |
 |---|---|---|---|---|
 | [v4-attach-golden-probe.md](v4-attach-golden-probe.md) | `ops/rpc_check.py`（附件，已登记 `public`） | `public` + `attach-egress: ok` + `accept-golden` | **是**（有附件 ∨ golden ⇒ 排他） | **V4**：per-run 改名后，**附件清单**与 **golden 产物**两条路径**仍能被正确回收**（`ATTACH_MANIFEST_LINES≥1` · `ACCEPT_GOLDEN_OK=1` · 站上 11 个后缀件齐全） |
 | [v5-shared-readonly-probe.md](v5-shared-readonly-probe.md) | 无 | `public`，**`readonly: true`** | **否**（无附件 ∧ 无 golden ⇒ 共享） | **V5/V6**：这是**唯一**能造出"**同站同 proj 并存**"的形状 —— 探"两份 runDir 证据各自完整"与"6 并发 6/6 `exit=0`、无 `exit 3`" |
+| [o67-egress-fanout-probe.md](o67-egress-fanout-probe.md) | 无 | `public`，**`readonly: true` + `decompose`（两片平衡）** | 否 | **O-67**：出网档 `decompose` 的并行性是**未验证假设**（代码自己的 `SPLIT_WARN` 承认）⇒ 用两片测"批墙钟是否真按 ~2× 缩短"。★ 两片**只能纯 stdout**（拆片器要求 readonly，而 readonly 与落文件互斥 ⇒ 纪律 10） |
 
 > ⚠ `v5` 的卡面**刻意不写 `accept`**：站上 claude 通道在 `readonly` 下可能拒绝落文件，而本卡的判据是**框架证据件**是否各自完整（**不是**产物）⇒ 不落文件也应 `exit=0`。
 
