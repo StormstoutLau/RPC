@@ -764,7 +764,7 @@ Assert-True "rc: 末元素非数字 => 抛错(响, 而非静默 0)" $rcThrew
 $exitRaw = ([regex]::Matches($cliText, 'exit \$code')).Count
 Assert-True "rc: 全仓不再有裸 exit `$code 写法(实测 $exitRaw 处 ⇒ 必须过标量化守卫)" ($exitRaw -eq 0)
 $exitGuard = ([regex]::Matches($cliText, 'exit \(Resolve-ExitCode \$code\)')).Count
-Assert-True "rc: exit (Resolve-ExitCode `$code) = 5(实测 $exitGuard) ⚠ 增删子命令须同步改本数" ($exitGuard -eq 5)
+Assert-True "rc: exit (Resolve-ExitCode `$code) = 6(实测 $exitGuard) ⚠ 增删子命令须同步改本数（2026-09-26 加 batch ⇒ 5→6）" ($exitGuard -eq 6)
 # ⚠ 用 **AST** 判"裸调用"(不是文本 —— 文本会被注释里的函数名骗, 本项目踩过):
 #   裸调用 = 该命令是**单元素管道**且父节点是语句容器(既没被赋值、也没 `| Out-Null`)。
 # ⚠⚠ **本判据第一版是假判(变异自证当场抓到, 2026-09-22)**: 只判了 `StatementBlockAst`,
@@ -1171,6 +1171,26 @@ Assert-True "o79③: 三条对照证据留在源码里（继承=TIMEOUT / redire
     $content.Contains('stdin 继承** ⇒ **TIMEOUT 20s') -and $content.Contains('裸 `ssh -n`'))
 Assert-True "o79④: 写明『为什么单发测不出来』（交互上下文 stdin 会 EOF；后台/批处理才触发）" (
     $content.Contains('为什么单发时测不出来') -and $content.Contains('每次必挂'))
+
+# --- O-80 (2026-09-26): 批次派发入口（"多张不同卡并发"）—— 落档见 DEV-LOG-014 §42 ---
+Assert-True "o80①: 有 batch verb 且落在既有 `$Command` 派发链里 + 进 usage 文本" (
+    $codeOnlyFull.Contains("`$Command -eq 'batch'") -and
+    $codeOnlyFull.Contains('agent-cli batch <proj> --card <清单文件>'))
+# ⚠ 措辞就地更正（§42.7 ② 原写"子进程必须 redirect stdin+Close"）: 实际选型 = **Start-Job + 原生调用**,
+#   **不自起 ProcessStartInfo** ⇒ 子进程 stdin 由 shell 正常处理、ssh 的 stdin 由 `Invoke-CappedSsh`（O-79 修好）承担。
+#   ⇒ 判据改成: 用 Start-Job 机制 + 源码写明"不在本层重复造一遍"（重复造 = 两处真值）。
+Assert-True "o80②: batch 用 Start-Job 机制, 且源码写明『不在本层重复造 stdin 处理』" (
+    $codeOnlyFull.Contains('Start-Job -ScriptBlock') -and $content.Contains('不在本层重复造一遍'))
+Assert-True "o80③: 输出落日志文件（源码写明不用 OS 管道收集, 防缓冲死锁）" (
+    $codeOnlyFull.Contains('_batch\') -and $content.Contains('不用 OS 管道收集'))
+Assert-True "o80④: 每站默认并发 1（v1 只跨站并行）" (
+    $codeOnlyFull.Contains('$Script:BATCH_PER_STATION = 1'))
+Assert-True "o80⑤: 单卡墙钟默认 2400s, 且超时**显式记为未完成**（绝不静默）" (
+    $codeOnlyFull.Contains('$Script:BATCH_TIMEOUT_S = 2400') -and $content.Contains('显式记为未完成'))
+Assert-True "o80⑥: 三条硬约束写在源码里（ADR-0004 不加脚本 / param 块加不了参数 / env 桥是权宜）" (
+    $content.Contains('ADR-0004') -and $content.Contains('加不了新参数') -and $content.Contains('权宜, 不是设计偏好'))
+Assert-True "o80⑦: >1 每站并发**显式拒绝**（不许静默按 1 跑）+ 说明『计划==现实』的钉站理由" (
+    $codeOnlyFull.Contains('BATCH_ABORT: AGENT_BATCH_PER_STATION=') -and $content.Contains('plan == reality'))
 
 # --- O-56 (2026-09-25): 基线"**声明无条件 / 产出有条件**"(两处) ---
 # ① 主路: `accept-cmds` 原为**裸列**, 而站上只在 `[ -n "$ACCEPT_B64" ]` 时才写 ⇒ 无 accept 的卡

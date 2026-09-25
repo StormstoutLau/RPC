@@ -100,6 +100,17 @@
 > 且 4 格**如实写 `依据不足`**（没猜）⇒ **摘要路线够用、不必起站内引擎**；缺料 6 条已逐条定性（含**原文一处笔误**"五处 vs 8 项"）。
 > 详见 [DEV-LOG-014 §39.4](../../../docs/DEV-LOG-014-decision-refinement.md)。
 
+### 批次派发（O-80，2026-09-26）—— "多张不同卡并发"
+
+```powershell
+& ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec\d6-agent-standard\dogfood-cards\batches\o80-smoke.txt"
+```
+**清单格式**（逐行；`#` 注释、空行忽略）：`<卡路径> [station=A|B|C] [model=<别名>]`，示例 [batches/o80-smoke.txt](batches/o80-smoke.txt)。
+**env 桥**（顶层 `param()` 块在本环境加不了新参数 ⇒ 走既有 env 模式）：`AGENT_BATCH_DRYRUN=1`（干跑，0 个新 runDir）· `AGENT_BATCH_PER_STATION`（v1 只支持 1）· `AGENT_BATCH_TIMEOUT_S`（默认 2400，超时**显式记未完成**）。
+**调度**：**每站内部串行 · 站间并行**（并行度 = 站数 ≤ 3）；未钉站的按"当前最少"轮转 ⇒ 3 张卡 = A/B/C 各一。站是**真钉**的（父进程把站字母换成 host 串）⇒ **计划 == 现实**。
+**产物/日志**：汇总表按 **runDir 为真值**（读 `run.json`）；每站日志在 `tmp/dogfood-ws/agent-out/_batch/<ts>/st-<站>.log`。
+⚠ **v1 边界**：只支持**无附件**卡（带附件请单张跑）· 不做失败卡自动换站 · 不做产物归并。
+
 ### 两张卡的设计要点（不是风格，是依据）
 
 - **`a3` 的"双结果"设计**：站上沙箱**可读边界并未完全确定**（已知工作目录可读；**同级目录未验证**）⇒

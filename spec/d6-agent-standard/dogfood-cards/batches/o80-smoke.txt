@@ -1,0 +1,10 @@
+# O-80 批次派发 · 冒烟清单（覆盖 DEV-LOG-014 §42.6 的 V3/V4/V6）
+#
+# 格式: <卡路径> [station=A|B|C] [model=<别名>]      # 以 # 开头是注释；空行忽略
+# 本清单**刻意**含一行不存在的卡（V6: 单项 fail-fast, 其余照跑, 批次退出码 = 1）
+# v1 边界: **只支持无附件卡**（带附件卡请单张跑 —— 见 §42.4）
+
+spec/d6-agent-standard/dogfood-cards/v5-shared-readonly-probe.md
+spec/d6-agent-standard/dogfood-cards/smoke-model-sample.md
+spec/d6-agent-standard/dogfood-cards/glob-probe.md
+spec/d6-agent-standard/dogfood-cards/_o80-deliberately-missing-card.md
