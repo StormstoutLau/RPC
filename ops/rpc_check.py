@@ -3375,6 +3375,13 @@ PS1_GOLDEN = ROOT / "ops" / "station-bin" / "_fm_golden_test.ps1"
 #   它要起 8 个 **独立进程** + 两次共同释放时刻(各 2.5s) ⇒ 约 6s；塞进 quick 会让 pre-commit 明显变慢。
 #   但**必须接进 CHECKS** —— 否则就是本仓反复点名的"有测试 ≠ 有人在跑"。
 PS1_RUNSTAMP = ROOT / "ops" / "station-bin" / "_runstamp_hammer.ps1"
+# O-64 (2026-09-25): Python 测试的**统一入口**。此前它**不在 CHECKS 里** ⇒ 无任何机械执行者 ⇒
+#   实测被两轮提交（59d97c3 / fd96a89）穿透：O-62/O-63 改实现后 `test_cli_concurrency_guards.py`
+#   当场红两条，**没有任何钩子出声**。这正是本仓点名的"有测试 ≠ 有人在跑"。
+# 为什么 `quick:False`（实测值，与 ps1-runstamp 同一决策依据）：本入口 **12.2s**，而 quick 门禁本体 18.4s
+#   ⇒ 塞进 quick 会让 pre-commit 从 ~18s 涨到 ~31s（+66%）。**非 quick 仍能兜住**：pre-push 跑全量
+#   ⇒ 红状态**推不出去**。若将来想让它更早暴露，把 CHECKS 里那项改成 quick=True 即可（一行）。
+PY_TESTS = ROOT / "tests" / "run_py_tests.py"
 
 
 def _decode_out(b: bytes) -> str:
@@ -3415,6 +3422,39 @@ def check_ps1_runstamp(ctx):
         note += f" · 退出码 {p.returncode}"
     # ⚠ 缺任一汇总行 ⇒ **直接 FAIL**（"什么都没跑"不得算过 —— 本仓"假绿"头号形态）
     detail = lines[-8:]
+    return ("PASS" if ok else "FAIL"), note, detail
+
+
+def check_py_tests(ctx):
+    """O-64 (2026-09-25): 跑 `tests/run_py_tests.py`（`tests/` 下全部独立测试的统一入口）。
+
+    为什么需要本断言：该入口此前**不在 CHECKS 里** ⇒ **无任何机械执行者** ⇒ 实测被两轮提交穿透
+    （O-62/O-63 改实现后 `test_cli_concurrency_guards.py` 当场红两条，无钩子出声）。
+    ★ 判据 = **退出码 0 ∧ 解析到汇总行 ∧ 通过数 == 总数 ∧ 总数 > 0**，四者缺一即 FAIL。
+      为什么不能只看"跑起来了"：`总数 == 0`（例如入口被改坏、discover 返回空）或"什么都没判"
+      都会通过 ⇒ 又落进本仓头号形态（**假绿**）。入口自身也已在"未发现测试"时退 1，这里是双保险。
+    ⚠ 解释器用 **`sys.executable`**（= 门禁自身的解释器）—— 依据 O-36：换解释器会**静默少跑 4 个套件**
+      （PATH 上的 `python` 与钩子用的 `py.exe` 是不同环境）。用 `sys.executable` 从构造上杜绝该漂移。
+    """
+    if not PY_TESTS.is_file():
+        return "WARN", f"{PY_TESTS} 不存在（本断言的登记依据）", []
+    try:
+        p = subprocess.run([sys.executable, str(PY_TESTS)], cwd=ROOT,
+                           capture_output=True, timeout=420)
+    except subprocess.TimeoutExpired:
+        return "FAIL", "Python 测试套件超时（>420s）⇒ 可能挂死", []
+    out = _decode_out(p.stdout or b"") + _decode_out(p.stderr or b"")
+    lines = [ln.rstrip() for ln in out.splitlines() if ln.strip()]
+    m = re.search(r"结果:\s*(\d+)/(\d+)\s*通过", out)
+    n_pass, n_tot = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    bad = next((ln for ln in lines if ln.startswith("失败:")), "")
+    ok = bool(m) and n_tot > 0 and n_pass == n_tot and p.returncode == 0
+    note = f"Python 测试套件: {n_pass}/{n_tot} 通过"
+    if bad:
+        note += f" · {bad}"
+    if not m:
+        note += " · ⚠ 未解析到汇总行（入口可能被改坏）"
+    detail = [ln for ln in lines if "PASS" in ln or "FAIL" in ln][-15:]
     return ("PASS" if ok else "FAIL"), note, detail
 
 
@@ -3530,6 +3570,15 @@ CHECKS = [
             "⚠ 只报负向 = **夹具是装饰**（正向根本没产生唯一 ts）；只报正向 = 负向没跑（少一行 ⇒ 本断言直接 FAIL）。"
             "⚠ 若出现 `dup:` ⇒ **真的撞了**：检查 `Get-UniqueRunStamp` 的原子原语是否被改回 "
             "`New-Item -ItemType Directory`（实测它会漏，uniq=11）—— 必须是 `[IO.File]::Open(..., CreateNew, ...)`"},
+    # O-64 (2026-09-25): **测试套件接进门禁** —— 此前 21 套测试无任何机械执行者（"有测试 ≠ 有人在跑"）。
+    #   实测依据与本项定位见 check_py_tests 的 docstring 与 PY_TESTS 上方注释（含 quick 取舍的实测值）。
+    {"id": "py-tests", "title": "Python 测试套件(统一入口)", "fn": check_py_tests, "quick": False,
+     "fix": "跑 `py tests/run_py_tests.py`（或 `-v` 看每题完整输出）⇒ 修明细里的 FAIL。"
+            "⚠ **先判「是回归还是断言陈旧」**：若实现侧确有语义变更（看 `ops/station-bin/agent-cli.ps1` 的"
+            "注释/O- 台账）⇒ 改**断言**并写明理由（**方向是改写断言，不是回退代码** —— 回退等于把修好的洞挖回来）；"
+            "若实现侧无变更 ⇒ **是回归**，改代码。"
+            "⚠ 报『总数 == 0』或『未解析到汇总行』= 入口本身坏了（如 discover 找不到测试）⇒ 先修入口 —— "
+            "那是**比任何单条测试更严重**的失效（整批验证静默消失）"},
     {"id": "usb4", "title": "USB4 三角环链路", "fn": check_usb4, "quick": False,
      "fix": "地址/路由不符 => 对照 inventory/net.yaml 与归档 §6.3/§6.6; "
             "链路不通 => 先查 BIOS USB4 安全等级与是否冷启动(归档 §6.5)"},
