@@ -26,6 +26,7 @@ entry:
 # 拆分方案见 docs/2026-09-23_cluster.py模块化重构_调研与方案.md (阶段 1 逐批抽取)。
 entry_modules:
   - ops/cluster_const.py
+  - ops/cluster_console.py
   - ops/cluster_ssh.py
   - ops/cluster_model.py
   - ops/cluster_secrets.py
@@ -36,7 +37,7 @@ entry_modules:
 # **新模块必须在此登记层次**（未登记 ⇒ FAIL）—— 登记这个动作就是"声明它站在哪一层"。
 # 判据: `ops/rpc_check.py` 的 `check_cluster_deps`（**AST** 解析, 严格区分模块级 / 函数内懒加载）。
 cluster_layers:
-  - [ops/cluster_const.py]                            # L0 最底: 无内部依赖
+  - [ops/cluster_const.py, ops/cluster_console.py]    # L0 最底: 无内部依赖(纯声明 / 纯工具)
   - [ops/cluster_ssh.py]                              # L1: → const
   - [ops/cluster_model.py, ops/cluster_secrets.py]    # L2 平面类(互不依赖): → ssh/const
   - [ops/cluster_egress.py]                           # L3: → secrets/ssh/const
