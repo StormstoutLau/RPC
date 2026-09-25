@@ -1147,6 +1147,19 @@ Assert-True "o76③(行为): 8 天前的被删、**刚刚的保留**（= 不误�
 Remove-Item $log76 -ErrorAction SilentlyContinue
 if (Test-Path ($o76Root -replace '/', '\')) { Remove-Item ($o76Root -replace '/', '\') -Recurse -Force -ErrorAction SilentlyContinue }
 
+# --- O-77 (2026-09-26): 框架保留目录必须永远从 sync 排除（同站并发 tar race 的根因） ---
+# 一手实测: 同站 3 张 readonly 卡并发 ⇒ 3/3 死在 sync（`tar: ./agent-out: file changed as we read it`）。
+Assert-True "o77①: sync 分支把框架保留目录 `agent-out` 并入排除清单" (
+    $codeOnlyFull.Contains("`$excl = @(`$excl) + @('agent-out')"))
+# ⚠ 顺序判据: 并入必须**发生在** Convert-ToExcludeArgs **之前** —— 否则清单算出来也不会进 tar 的 --exclude
+#   （同族先例: D4 的"后缀定义必须早于第一个写点"）。
+Assert-True "o77②: 并入发生在 Convert-ToExcludeArgs **之前**（否则不生效）" (
+    $codeOnlyFull.IndexOf("`$excl = @(`$excl) + @('agent-out')") -lt
+    $codeOnlyFull.IndexOf('$exArgs = Convert-ToExcludeArgs $excl'))
+# ⚠ 只看代码会漏掉这条: 本条要的正是**源码注释里必须存留的理由**（为什么写在代码而非各 proj 的 .agentsync）。
+Assert-True "o77③: 源码里写明了『为什么写在代码而非载体 .agentsync』(版本控制内才是真值源)" (
+    $content.Contains('修复必须落在版本控制内的真值源上') -and $content.Contains('file changed as we read it'))
+
 # --- O-56 (2026-09-25): 基线"**声明无条件 / 产出有条件**"(两处) ---
 # ① 主路: `accept-cmds` 原为**裸列**, 而站上只在 `[ -n "$ACCEPT_B64" ]` 时才写 ⇒ 无 accept 的卡
 #    每个 run 假报一条 missing-artifact gap。⇒ 与 `accept-output` **同条件列**(= O-29 对 golden-cmd 的同法)。

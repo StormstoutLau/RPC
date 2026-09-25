@@ -506,6 +506,18 @@ md5sum AGENTS.md CLAUDE.md .agentsync
     elseif ($act -eq 'sync') {
         # incremental push source subset per .agentsync; never overwrite out/ (unidirectional, inv 6)
         $excl = Get-AgentsyncExcludes $proj $type
+        # ★★ O-77 (2026-09-26): **框架保留目录必须永远排除** —— 与 :2238 的 diff 过滤**同一件事**（那里早已排除 `agent-out`）。
+        #   一手实测（2026-09-26 02:20，同站 3 张 readonly 卡并发）: **3/3 死在 sync**：
+        #     `/usr/bin/tar: ./agent-out: file changed as we read it` ⇒ rc≠0 ⇒ `throw "tar sync failed"`。
+        #   根因: 本地结果目录 `agent-out/` 落在 **proj 根内**（dogfood 载体 = `tmp/dogfood-ws`），
+        #     而**每个 run 都在往里写自己的 runDir** ⇒ 并发时 tar 读到"正在变"的目录。
+        #   ⚠ **这不是锁的问题**: 三个 run 都正常拿到 `shared` 租约、0 个 `exit 3` ⇒ 是**同步面把本地私有目录也带上了**。
+        #   语义: `agent-out/` 是**框架自有**的本地结果区（与 `out/` 同族），**不是**被同步的工作区内容。
+        #   ⚠ **为什么写在代码里而不是改 proj 的 `.agentsync`**: 后者是**运行时载体**里的文件（`tmp/dogfood-ws/.agentsync`），
+        #     **不在版本控制内** ⇒ 修它会随载体重建而**静默消失**（本仓纪律: 修复必须落在版本控制内的真值源上）。
+        #     实测该文件当下只排除了 `archive/`、`runs/` —— 两个在该载体里**并不存在**的目录（= 排了个寂寞）。
+        #   ⚠ **本轮只修已证实的这一个**；`out/`/`.attach/` 是否同病、以及"载体 `.agentsync` vs 本清单"如何合流，见 O-78（待实测再定）。
+        $excl = @($excl) + @('agent-out')
         $exArgs = Convert-ToExcludeArgs $excl
         # 2026-09-23 (F-14): 三处 tar 名都必须带 per-invocation 身份 —— 原为共享固定名
         #   `agent-cli-sync-<proj>.tar`(本地 temp 与**站上 /tmp** 同名), 而 **sync 发生在远端 flock 之前**
