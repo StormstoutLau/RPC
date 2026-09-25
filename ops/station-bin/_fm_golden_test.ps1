@@ -212,9 +212,13 @@ Assert-True "evm-state: 反例 state 为空 → 拒" ((Test-EvmStatePull -state 
 Assert-True "evm-state: 反例 path 为空 → 拒" ((Test-EvmStatePull -state 'out/x.json' -path '').ok -eq $false)
 
 # --- ADR-0007 路B: 框架固定件基线 + 合并 (纯函数, 无需真派发即可验证) ---
+# 2026-09-25 (D6-P3-2 接线): 期望 11 → **10** —— **不是回归**: O-29(2026-09-23) 把 `golden-cmd`
+#   从"裸列"改成"`$goldenActive` 条件列"（见 agent-cli.ps1 该件注释：裸列会让每个无 golden 的 run
+#   记一条 missing-artifact gap）⇒ **基线少 1 件**。该期望值当时没跟着改，而本夹具此前不在门禁里
+#   ⇒ **静静积累了多轮**。⚠ 判据：这是**合法演进**（有代码注释为证），不是回归 —— 故改期望值而非改代码。
 $b0 = @(Get-FrameworkSubjects @() $false)
 $n0 = @($b0 | ForEach-Object { $_.name })
-Assert-True "baseline: 无 accept 无 golden => 11 件" ($b0.Count -eq 11)
+Assert-True "baseline: 无 accept 无 golden => 10 件" ($b0.Count -eq 10)
 Assert-True "baseline: 含 judgment-record/prompt/workspace-diff/card" (
     ($n0 -contains 'judgment-record') -and ($n0 -contains 'prompt') -and
     ($n0 -contains 'workspace-diff') -and ($n0 -contains 'card'))
@@ -245,8 +249,8 @@ $cardSubs = @(
     @{ name = 'station-tmp-log'; path = ''; collect = 'tail -5 /tmp/x.log'; digest = 'sha256'; ephemeral = $true }
 )
 $mg = @(Merge-EvidenceSubjects $cardSubs @() $false)
-# 11(基线) + 2(卡声明) - 1(其中 prompt 与基线同 path, 去重) = 12
-Assert-True "merge: 基线11 + 卡声明2 - 重复1 = 12" ($mg.Count -eq 12)
+# 10(基线) + 2(卡声明) - 1(其中 prompt 与基线同 path, 去重) = 11
+Assert-True "merge: 基线10 + 卡声明2 - 重复1 = 11" ($mg.Count -eq 11)
 Assert-True "merge: 卡声明与基线同 path 只出现一次" ((@($mg | Where-Object { $_.path -eq 'prompt.txt' })).Count -eq 1)
 $tmp = @($mg | Where-Object { $_.name -eq 'station-tmp-log' })
 Assert-True "merge: 卡特有 subject 保留(collect/ephemeral 未丢)" (
@@ -271,7 +275,7 @@ Assert-True "merge: 未声明 state 的件缺省空串(保六键纯净, 不插 n
 
 # 路B 的核心目的: **无 manifest 的卡**(= 71 个真实 run 的来源)也能拿到非空声明 ⇒ 不再是 recipe v1
 $m0 = @(Merge-EvidenceSubjects @() @() $false)
-Assert-True "merge: 空卡仍得 11 件(=> 不再退化为 recipe v1)" ($m0.Count -eq 11)
+Assert-True "merge: 空卡仍得 10 件(=> 不再退化为 recipe v1)" ($m0.Count -eq 10)
 
 # --- O-15/AUDIT (2026-09-21): claude 备路按路基线(证据面到齐 => recipe v2) ---
 # 该路归档件集 = opencode 子集 + stderr, 无 judgment-record 等远端合成批件
@@ -309,9 +313,9 @@ $cmg2 = @(Merge-EvidenceSubjects $csubs @() $false { param($ac,$ga) Get-ClaudeFr
 Assert-True "claude merge: 基线5 + 卡声明2 - 重复1 = 6" ($cmg2.Count -eq 6)
 Assert-True "claude merge: prompt.txt 只出现一次" ((@($cmg2 | Where-Object { $_.path -eq 'prompt.txt' })).Count -eq 1)
 Assert-True "claude merge: 卡特有件保留" ((@($cmg2 | Where-Object { $_.name -eq 'station-tmp-log' })).Count -eq 1)
-# baselineFn 缺省(主路调用点)不传时行为不变 => 既有的 11 件合并仍成立(防退化)
+# baselineFn 缺省(主路调用点)不传时行为不变 => 既有的 10 件合并仍成立(防退化)
 $defmg = @(Merge-EvidenceSubjects @() @() $false)
-Assert-True "claude merge: 缺省 baselineFn 仍得主路 11 件(未破坏主路调用)" ($defmg.Count -eq 11)
+Assert-True "claude merge: 缺省 baselineFn 仍得主路 10 件(未破坏主路调用)" ($defmg.Count -eq 10)
 
 # --- O-15/AUDIT (2026-09-21): auto-fallback 触发判定(纯函数, rc 表) ---
 # 正向: 只认 rc=6(引擎死锁/超时)才切 claude 备路
@@ -818,14 +822,18 @@ $spArgs = @($ast.FindAll({ param($n)
             $n.Left.Extent.Text -eq '$scpArgs' }, $true))
 Assert-True "ssh: Start-Process 形式的 scp 也带 BatchMode（调用 $(@($spScp).Count) 处 / `$scpArgs 赋值 $(@($spArgs).Count) 处）" (@($spScp).Count -gt 0 -and @($spArgs).Count -eq 1 -and $spArgs[0].Extent.Text -match 'BatchMode=yes')
 
-# --- cluster.py（paramiko 侧）: 建连走**唯一入口** `_connect` 且三个超时全显式 ---
+# --- cluster_ssh.py（paramiko 侧）: 建连走**唯一入口** `_connect` 且三个超时全显式 ---
+# 2026-09-25 (D6-P3-2 接线): 扫描目标 `cluster.py` → **`cluster_ssh.py`**。
+#   为什么: `cluster.py` 模块化重构把 paramiko 建连**下沉**到 `cluster_ssh.py` ⇒ 旧目标上恒得
+#   `SSHClient=0 connect=0` ⇒ 两条断言恒失败。⚠ 而本夹具此前**不在门禁里** ⇒ 该失败**静静积累了多轮**
+#   （正是"有测试但没人跑"的腐化）。这是本轮把它接进 CHECKS 的**直接收益**。
 # paramiko 无 BatchMode（它不弹口令、认证失败是抛异常）⇒ 这一侧的对应物是"把卡住的上界压到 SSH_TIMEOUT"。
 # ⚠ 上游事实（paramiko 5.0.0 **实测源码**，非推测）: `self.banner_timeout = 15` / `self.auth_timeout = 30`
 #   ⇒ 两者**不同源**，只给 banner_timeout 的话认证阶段仍会等 30s。
 # ⚠⚠ 这里**必须用 Python 的 AST**，不能用文本判：第一版我用
 #   `[regex]::Matches($text, 'paramiko\.SSHClient\(\)')` 数出 **2 处**，其中一处是 `_connect` 的
 #   **docstring 里提到这个名字** —— 正是"文本判据被注释骗"（本项目第 5 次）。改用 `ast` 数**真实调用节点**。
-$clusterPy = Join-Path (Split-Path (Split-Path $cli -Parent) -Parent) 'cluster.py'
+$clusterPy = Join-Path (Split-Path (Split-Path $cli -Parent) -Parent) 'cluster_ssh.py'
 $pyProbe = @'
 import ast, sys
 tree = ast.parse(open(sys.argv[1], encoding="utf-8").read())
@@ -837,8 +845,8 @@ print("SSHClient={} connect={} kwargs={}".format(len(newc), len(conn), ",".join(
 '@
 $pyRes = 'PYERR: not run'
 try { $pyRes = (@($pyProbe | python - $clusterPy 2>&1) | Select-Object -Last 1) } catch { $pyRes = "PYERR: $($_.Exception.Message)" }
-Assert-True "ssh: cluster.py 建连只有唯一入口（AST: SSHClient 调用=1, connect 调用=1）—— 实测 $pyRes" ($pyRes -match '^SSHClient=1 connect=1 ')
-Assert-True "ssh: cluster.py 的 connect 三超时全显式（否则 auth 默认 30s）—— 实测 $pyRes" ($pyRes -match 'kwargs=auth_timeout,banner_timeout,timeout')
+Assert-True "ssh: cluster_ssh.py 建连只有唯一入口（AST: SSHClient 调用=1, connect 调用=1）—— 实测 $pyRes" ($pyRes -match '^SSHClient=1 connect=1 ')
+Assert-True "ssh: cluster_ssh.py 的 connect 三超时全显式（否则 auth 默认 30s）—— 实测 $pyRes" ($pyRes -match 'kwargs=auth_timeout,banner_timeout,timeout')
 
 # O-42 (2026-09-24): claude 通道 `-p` 的权限开关 —— 正反注入(AST/文本级, 不真派发)。
 #   反(必拒形态): `readonly: true` 的卡若竟带 acceptEdits ⇒ 破卡面契约(= D-06/D-07 级安全面)。
