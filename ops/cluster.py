@@ -3319,6 +3319,50 @@ def agent_audit_baseline_accept(keys) -> dict:
     return {"added": new, "total": len(merged), "path": str(tgt)}
 
 
+def _card_accept_list(card_text: str) -> list:
+    """取卡的 front-matter 里 `accept:` 的**有序列表** —— 与产出侧逐字对齐。
+
+    为什么口径必须与产出侧一致：站上写 `out/.accept-cmds.txt` 的内容是
+    `($accept -join "\\n")`（`agent-cli.ps1` 的 `$acceptB64`），**行序 = 卡里的声明序**
+    ⇒ 这里也必须**保序**取列表，才能做等值判定。
+
+    只认 `---` 围栏内的顶层 `accept:` 块（与 `Get-FrontMatter` 同规则）：
+      · `accept-golden:` 是**另一个键**，不得混入；
+      · 行内写法（`accept: foo`）产出侧**不采**（PS 解析器只认 `- item` 列表式）⇒ 这里同样不采。
+    纯函数（不碰站 / 不碰文件系统）⇒ 离线可测（与 `Test-EvmStatePull` 同纪律）。
+    """
+    lines = card_text.replace("\r\n", "\n").split("\n")
+    if not lines or lines[0].strip() != "---":
+        return []
+    out, in_acc = [], False
+    for ln in lines[1:]:
+        if ln.strip() == "---":
+            break
+        if re.match(r"^accept\s*:", ln):
+            in_acc = True
+            continue
+        if in_acc:
+            m = re.match(r"^\s*-\s+(.+)$", ln)
+            if m:
+                out.append(m.group(1).strip())
+                continue
+            if ln.strip() and not ln[:1].isspace():
+                in_acc = False          # 顶层下一个键 ⇒ 块结束
+    return out
+
+
+def compare_accept_cmds(card_text: str, archived_text: str) -> tuple:
+    """比较**归档的** `accept-cmds.txt` 与**该 run 卡的** `accept:` 声明（O-57 配套判据）。
+
+    返回 `(same, want_n, got_n)`。纯函数（只吃两个文本）⇒ 离线可测。
+    为什么**保序等值**而不是"集合包含"：产出侧写的是 `($accept -join "\\n")` ⇒ 归档字节就是
+    卡里那段声明的**逐字有序**副本；序不同 = 不是同一份声明 ⇒ 同样属残留（不放过）。
+    """
+    want = _card_accept_list(card_text)
+    got = [x.strip() for x in archived_text.splitlines() if x.strip()]
+    return (want == got), len(want), len(got)
+
+
 def agent_audit(limit: int = 0, save: bool = False) -> dict:
     """阶段 3-a (ADR-0007): **证据可复现性审计** → 机器可判 gap 表（advisory）。
 
@@ -3344,6 +3388,8 @@ def agent_audit(limit: int = 0, save: bool = False) -> dict:
         runs = runs[-limit:]
     out_runs, gaps, gap_keys = [], [], []   # gap_keys 与 gaps **逐条平行**(K1: 供水印比对)
     n_sub = n_offline = n_collect = n_undecl = n_runs_v2 = n_ephemeral = 0
+    n_acc_ok = n_acc_bad = n_acc_skip = 0     # O-57: `accept-cmds` 归属核对三态
+    n_locked = 0                              # O-61: `exit 3`(锁占用) ⇒ 缺件属"设计性缺席"
     for ts, proj, run_dir in runs:
         label = f"{proj}/{ts}"
         jp = run_dir / ".agent-run.json"
@@ -3355,6 +3401,13 @@ def agent_audit(limit: int = 0, save: bool = False) -> dict:
             continue
         subs = ((j.get("evidence_manifest") or {}).get("subjects")) or []
         recipe = "v2" if subs else "v1"
+        # O-61 (2026-09-25): `exit 3` = **锁占用** ⇒ run body 走 `LOCK_HELD` 早退、**从未运行** ⇒
+        #   框架件(progress-trace/workspace-diff/attach-manifest/prompt/judgment-record…)**天然不会产出**。
+        #   这是 O-59/T1 之后的**预期形态**(危险面配对从"静默互删"变成"可见 `exit 3`"), **不是缺口**
+        #   ⇒ 给**第三态** `locked-out-by-design`(与 `ephemeral` 同族: 缺席有正当理由, 不报 missing-artifact,
+        #   单列且**不计入可离线复算**, 否则覆盖率虚高)。
+        #   判据源 = `.agent-run.json` 的 `exit_code`(派发时写入, 与 runDir 同级)。
+        locked_out = (j.get("exit_code") == 3)
         per = _run_digest(run_dir, recipe) or {}
         files = per.get("files") or {}
         subjects, covered = [], set()
@@ -3387,9 +3440,13 @@ def agent_audit(limit: int = 0, save: bool = False) -> dict:
                 gaps.append(f"{label}: subject '{name}' 既无 path 也无 collect ⇒ 不可复现")
                 gap_keys.append(_gap_key("no-path-no-collect", label, name))
             elif not exists:
-                rdy = "missing-artifact"
-                gaps.append(f"{label}: subject '{name}' 声明的 `{path}` 不在 runDir")
-                gap_keys.append(_gap_key("missing-artifact", label, name))
+                if locked_out:
+                    rdy = "locked-out-by-design"
+                    n_locked += 1
+                else:
+                    rdy = "missing-artifact"
+                    gaps.append(f"{label}: subject '{name}' 声明的 `{path}` 不在 runDir")
+                    gap_keys.append(_gap_key("missing-artifact", label, name))
             else:
                 # ⚠ 此处**刻意不比对链上摘要**（那是 `verify` 的轴）: `_run_digest` 是按**当前字节**重算的,
                 #   拿它跟"刚算出的文件哈希"比必然相等 —— 写进判据就是**恒真判据**（自欺, 实测踩到）。
@@ -3415,6 +3472,30 @@ def agent_audit(limit: int = 0, save: bool = False) -> dict:
         if undecl:
             gaps.append(f"{label}: 已归档但未被任何 subject 覆盖: {', '.join(undecl)}")
             gap_keys.append(_gap_key("undeclared", label, ",".join(undecl)))
+        # O-57 配套机判 (2026-09-25): **归档件的归属** —— `accept-cmds.txt` 的**内容**必须等于
+        #   该 run **自己那张卡**声明的 `accept:` 列表。
+        #   为什么必须另立这条: 站上 `out/` 是**累计**的，而固定名拉回**无 run 窗口** ⇒ 上一次 run
+        #   的残留会被当本次证据归档（O-57 实测: 4 个 proj 根 83 个 run 里 **12 条**）；而那条路径的
+        #   症状是"**在**" ⇒ 上面的 `missing-artifact` 判据**永远看不见它** ⇒ 只有本判据能判。
+        #   ⚠ 派发前的 reset（批 1 / O-57-A）修掉的是**产出面**；本条守的是**存量**与**回归**。
+        #   分工复述: 本条判"**归属**"（谁是产出方）; `verify` 判"**是否被改**"; recipe 判"能否离线复算"。
+        accp = run_dir / "accept-cmds.txt"
+        cardf = run_dir / "card.md"
+        if accp.is_file():
+            if not cardf.is_file():
+                n_acc_skip += 1          # 缺卡 ⇒ 判不了 ⇒ **不报**（如实计数，不假装已判）
+            else:
+                same, wn, gn = compare_accept_cmds(
+                    cardf.read_text(encoding="utf-8-sig", errors="replace"),
+                    accp.read_text(encoding="utf-8-sig", errors="replace"))
+                if not same:
+                    n_acc_bad += 1
+                    gaps.append(f"{label}: `accept-cmds.txt` 与**本 run 卡**的 `accept:` **不符**"
+                                f"（卡 {wn} 条 / 归档 {gn} 条）⇒ 该证据件疑为**别的 run 的残留**"
+                                f"（O-57: 累计 `out/` + 固定名拉回无 run 窗口）")
+                    gap_keys.append(_gap_key("accept-cmds-mismatch", label, f"{wn}v{gn}"))
+                else:
+                    n_acc_ok += 1
         out_runs.append({"label": label, "recipe": recipe, "declared": len(subs),
                          "offline_ok": sum(1 for x in subjects if x["readiness"] == "offline-ok"),
                          "not_exec": sum(1 for x in subjects if x["readiness"].startswith("declared-not-executed")),
@@ -3425,6 +3506,9 @@ def agent_audit(limit: int = 0, save: bool = False) -> dict:
         f"collect 型（声明了命令但从未执行）: {n_collect} 条",
         f"**设计性临时产物**（卡声明 ephemeral ⇒ 产物不进 runDir）: {n_ephemeral} 条"
         f" —— 不计入缺口, 也**不计入可离线复算**(否则覆盖率虚高)",
+        # O-61 (2026-09-25): `exit 3`(锁占用) 的 run body **从未运行** ⇒ 框架件天然不产出。与 ephemeral 同族。
+        f"**锁占用缺席**（`exit 3` ⇒ body 未运行, 证据件天然不产出）: {n_locked} 条"
+        f" —— 不计入缺口, 也**不计入可离线复算**（O-61；这是 O-59/T1 之后的**预期形态**）",
         f"已归档但未声明: {n_undecl} 件",
         f"有 manifest 的 run: {n_runs_v2}/{len(out_runs)}",
         # P1 (ADR-0007 路A, 2026-09-18): **口径要说实话** —— 上面那行只说"有多少个 run 有 manifest",
@@ -3435,13 +3519,21 @@ def agent_audit(limit: int = 0, save: bool = False) -> dict:
         f"**零声明（recipe v1）运行**: {len(out_runs) - n_runs_v2}/{len(out_runs)} 个"
         f" —— 这些 run **不参与可重放性判定**（v1 无「声明」这回事；属**历史欠账非缺陷**，"
         f"改卡不回溯）。故上方 `可离线复算` 的分母**只覆盖 v2 run**，不是语料级结论",
+        # O-57 (2026-09-25): 归属核对的三态 —— 显式报"无法判定"的条数，避免把"判不了"读成"全对"。
+        f"`accept-cmds` **归属**核对: 相符 {n_acc_ok} / **不符 {n_acc_bad}** / 无法判定 {n_acc_skip}"
+        f" —— 「不符」= 归档内容是**别的 run** 的声明（O-57）；该形态**在** ⇒ 上面 "
+        f"`missing-artifact` 判据看不见它，故须单列",
     ]
     out = {"runs": out_runs, "coverage": coverage, "gaps": gaps,
            "gap_keys": gap_keys,      # K1: 与水印比对用（**单调集合**，不含文本细节）
            "gap_items": [{"key": k, "text": t} for k, t in zip(gap_keys, gaps)],
            "totals": {"runs": len(out_runs), "subjects": n_sub, "offline_ok": n_offline,
                       "collect": n_collect, "undeclared": n_undecl, "runs_v2": n_runs_v2,
-                      "ephemeral": n_ephemeral}}
+                      "ephemeral": n_ephemeral,
+                      # O-61: `exit 3`(锁占用) ⇒ 证据件"设计性缺席"
+                      "locked_out": n_locked,
+                      # O-57: 归属核对三态（不符 = 归档件疑为别的 run 的残留）
+                      "accept_ok": n_acc_ok, "accept_bad": n_acc_bad, "accept_skip": n_acc_skip}}
     if save:
         # 落库**第一层**(3-b-2 定案): 机器产物落**项目侧** `<projRoot>/agent-out/_audits/<ts>.json`
         #   —— 与 runDir 同级、名字不以数字开头 ⇒ `_chain_runs` 不会把它当 run, **不碰链**;

@@ -218,7 +218,7 @@ Assert-True "evm-state: 反例 path 为空 → 拒" ((Test-EvmStatePull -state '
 #   ⇒ **静静积累了多轮**。⚠ 判据：这是**合法演进**（有代码注释为证），不是回归 —— 故改期望值而非改代码。
 $b0 = @(Get-FrameworkSubjects @() $false)
 $n0 = @($b0 | ForEach-Object { $_.name })
-Assert-True "baseline: 无 accept 无 golden => 10 件" ($b0.Count -eq 10)
+Assert-True "baseline: 无 accept 无 golden => 9 件" ($b0.Count -eq 9)
 Assert-True "baseline: 含 judgment-record/prompt/workspace-diff/card" (
     ($n0 -contains 'judgment-record') -and ($n0 -contains 'prompt') -and
     ($n0 -contains 'workspace-diff') -and ($n0 -contains 'card'))
@@ -249,8 +249,10 @@ $cardSubs = @(
     @{ name = 'station-tmp-log'; path = ''; collect = 'tail -5 /tmp/x.log'; digest = 'sha256'; ephemeral = $true }
 )
 $mg = @(Merge-EvidenceSubjects $cardSubs @() $false)
-# 10(基线) + 2(卡声明) - 1(其中 prompt 与基线同 path, 去重) = 11
-Assert-True "merge: 基线10 + 卡声明2 - 重复1 = 11" ($mg.Count -eq 11)
+# 9(基线) + 2(卡声明) - 1(其中 prompt 与基线同 path, 去重) = 10
+# O-56 (2026-09-25): 10 -> 9 —— `accept-cmds` 已改**条件列**（无 accept 的卡站上**永不产出**该件）。
+#   与 §218 那条同性质: **合法演进**（判据缺陷修复），故改期望值而非改代码。
+Assert-True "merge: 基线9 + 卡声明2 - 重复1 = 10" ($mg.Count -eq 10)
 Assert-True "merge: 卡声明与基线同 path 只出现一次" ((@($mg | Where-Object { $_.path -eq 'prompt.txt' })).Count -eq 1)
 $tmp = @($mg | Where-Object { $_.name -eq 'station-tmp-log' })
 Assert-True "merge: 卡特有 subject 保留(collect/ephemeral 未丢)" (
@@ -271,11 +273,11 @@ $cardSubsSt = @(@{ name = 'station-reality'; path = 'station-reality.json'; coll
 $mgSt = @(Merge-EvidenceSubjects $cardSubsSt @() $false)
 $srSt = @($mgSt | Where-Object { $_.name -eq 'station-reality' })
 Assert-True "merge: 卡声明 state 透传到合并结果(run.json 留痕)" ($srSt.Count -eq 1 -and $srSt[0]['state'] -eq 'out/station-reality.json')
-Assert-True "merge: 未声明 state 的件缺省空串(保六键纯净, 不插 null)" ((@($mgSt | Where-Object { $_.state -eq '' })).Count -ge 10)
+Assert-True "merge: 未声明 state 的件缺省空串(保六键纯净, 不插 null)" ((@($mgSt | Where-Object { $_.state -eq '' })).Count -ge 9)
 
 # 路B 的核心目的: **无 manifest 的卡**(= 71 个真实 run 的来源)也能拿到非空声明 ⇒ 不再是 recipe v1
 $m0 = @(Merge-EvidenceSubjects @() @() $false)
-Assert-True "merge: 空卡仍得 10 件(=> 不再退化为 recipe v1)" ($m0.Count -eq 10)
+Assert-True "merge: 空卡仍得 9 件(=> 不再退化为 recipe v1)" ($m0.Count -eq 9)
 
 # --- O-15/AUDIT (2026-09-21): claude 备路按路基线(证据面到齐 => recipe v2) ---
 # 该路归档件集 = opencode 子集 + stderr, 无 judgment-record 等远端合成批件
@@ -313,9 +315,9 @@ $cmg2 = @(Merge-EvidenceSubjects $csubs @() $false { param($ac,$ga) Get-ClaudeFr
 Assert-True "claude merge: 基线5 + 卡声明2 - 重复1 = 6" ($cmg2.Count -eq 6)
 Assert-True "claude merge: prompt.txt 只出现一次" ((@($cmg2 | Where-Object { $_.path -eq 'prompt.txt' })).Count -eq 1)
 Assert-True "claude merge: 卡特有件保留" ((@($cmg2 | Where-Object { $_.name -eq 'station-tmp-log' })).Count -eq 1)
-# baselineFn 缺省(主路调用点)不传时行为不变 => 既有的 10 件合并仍成立(防退化)
+# baselineFn 缺省(主路调用点)不传时行为不变 => 既有的 9 件合并仍成立(防退化; O-56: 10 -> 9)
 $defmg = @(Merge-EvidenceSubjects @() @() $false)
-Assert-True "claude merge: 缺省 baselineFn 仍得主路 10 件(未破坏主路调用)" ($defmg.Count -eq 10)
+Assert-True "claude merge: 缺省 baselineFn 仍得主路 9 件(未破坏主路调用)" ($defmg.Count -eq 9)
 
 # --- O-15/AUDIT (2026-09-21): auto-fallback 触发判定(纯函数, rc 表) ---
 # 正向: 只认 rc=6(引擎死锁/超时)才切 claude 备路
@@ -382,14 +384,16 @@ Assert-True "station: pref 不在候选集 ⇒ 顺序不变(不因未知 pref �
     ((Resolve-ClaudeStationCandidates -Avoid '' -Stations @('A','B') -Preferred 'Z') -join ',') -eq 'A,B')
 # 结构性断言(安全带): ① 判据按**后端属性**参数化(P2 的核心), 不再硬编码 $true;
 #   ② 站上不可用时**明确 return 4**(fail-closed)且**不**回退本地 spawn。
-Assert-True "station: 判据已参数化 -backendEgress (-not \$useStation)(P2 的核心)" (
-    $content.Contains('-backendEgress (-not $useStation)'))
-Assert-True "station: 分流判据 = sensitivity eq 'local-only'" (
-    $content.Contains('$useStation = ($sens -eq ''local-only'')'))
+Assert-True "station: 判据已参数化 -backendEgress (-not \$backendLocal)(P2 的核心; D7 起与位置解耦)" (
+    $content.Contains('-backendEgress (-not $backendLocal)'))
+Assert-True "station: 分流判据 = local-only **或** 路由声明了站(D7 拆成两个量)" (
+    $content.Contains('$useStation = ($sens -eq ''local-only'') -or [bool]$r[''station'']'))
+Assert-True "station: 后端属性独立于位置(\$backendLocal 只由 sensitivity 判)(D7 拆锁)" (
+    $content.Contains('$backendLocal = ($sens -eq ''local-only'')'))
 Assert-True "station: 站上不可用 ⇒ fail-closed(有 REJECT 行 + return 4, 且该分支内无 Invoke-ClaudeFly 回退)" (
     $content.Contains('REJECT local-only-no-station-engine (exit 4)'))
 $iNoSt = $content.IndexOf('REJECT local-only-no-station-engine')
-$iBlk  = $content.IndexOf('$useStation = ($sens -eq ''local-only'')')
+$iBlk  = $content.IndexOf('$useStation = ($sens -eq ''local-only'') -or [bool]$r[''station'']')
 $blkSeg = $content.Substring($iBlk, $iNoSt - $iBlk)
 Assert-True "station: fail-closed 分支里**没有**主控本地 spawn(回退=出网)" (
     -not ($blkSeg -match 'Invoke-ClaudeFly\s'))
@@ -398,10 +402,62 @@ Assert-True "station: 两处 runner 调用点都已分流(首跑 + resume)" (
 # ⚠ 位置断言 —— 2026-09-21 **实弹踩到的顺序 bug**: 初版把 `$stPref` 块放在 `$useStation` 赋值
 #   **之前** ⇒ PS 未定义变量为 `$null` ⇒ `if ($useStation)` 为假 ⇒ 走旧的 `REJECT claude-station`
 #   分支 ⇒ `local-only` 卡被旧语义误拒。**夹具当时全绿**(它只查"串在不", 查不出顺序) ⇒ 补此条。
-$iUse = $content.IndexOf('$useStation = ($sens -eq ''local-only'')')
+$iUse = $content.IndexOf('$useStation = ($sens -eq ''local-only'') -or [bool]$r[''station'']')
 $iPref = $content.IndexOf("`$stPref = ''")
 Assert-True "station: \$useStation 赋值**早于** \$stPref 使用(实弹踩到的顺序 bug)" (
     $iUse -gt 0 -and $iPref -gt 0 -and $iUse -lt $iPref)
+
+# --- D7 (2026-09-25): **站上 claude + OpenRouter**（撤掉"站上 ⇒ 必不出网"那把锁） ---
+# 锁的形态: `$useStation = ($sens -eq 'local-only')` 让"跑在站上"与"不出网"互为充要
+#   ⇒ 站上 claude **永远配不了 OpenRouter**(真正想跑的形态)。D7 把它拆成两个独立量。
+Assert-True "D7: 旧闸已撤除(无 `REJECT claude-station=` 残留)" (
+    -not $content.Contains('REJECT claude-station=$'))
+Assert-True "D7: 替代闸 = 站上 egress 模式打 local/* id ⇒ 前置拒(fail-closed)" (
+    $content.Contains('REJECT claude-station-egress-local-id'))
+Assert-True "D7: 站不可用 ⇒ 拒跑并列出替代站(**不静默换站**, 用户裁定 2026-09-25)" (
+    $content.Contains('REJECT claude-station-unavailable='))
+Assert-True "D7: 站上 egress 就绪判据是**独立函数**(不是引擎就绪)" (
+    $content.Contains('function Test-StationClaudeEgressReady'))
+Assert-True "D7: 该判据含 claude bin + 站上 openrouter.key 两条" (
+    $content.Contains('command -v claude') -and $content.Contains('$HOME/.config/rpc/openrouter.key'))
+# egress 分支**不得**复用引擎就绪探针 —— 那会要求先 infer-load, 而该模式物理上不需要引擎(实测)。
+$iM2 = $content.IndexOf('模式② (2026-09-25)')
+$iEg = $content.IndexOf('CLAUDE_EGRESS_STATION_SELECT')
+Assert-True "D7: egress 分支内**不**调 Test-StationEngineReady(该模式不需要引擎)" (
+    $iM2 -gt 0 -and $iEg -gt $iM2 -and
+    -not ($content.Substring($iM2, $iEg - $iM2) -match 'Test-StationEngineReady'))
+Assert-True "D7: 站上脚本有 or 分支(OpenRouter 三件套语义)且 API_KEY 显式置空" (
+    $content.Contains('"ANTHROPIC_BASE_URL":"https://openrouter.ai/api"') -and
+    $content.Contains('"ANTHROPIC_API_KEY":""'))
+Assert-True "D7: or 模式缺站上 openrouter.key ⇒ 站上脚本 fail-closed(不回落本地引擎)" (
+    $content.Contains('缺 $ORKEYF ⇒ fail-closed'))
+Assert-True "D7: 站上 --model 实参按后端分(local=引擎别名 main / or=真 id)" (
+    $content.Contains('$stModelAlias = if ($backendLocal) { ''main'' } else { $id }'))
+Assert-True "D7: 两处 runner 调用点都传 -Mode/-ModelId(站上 settings 按后端分叉)" (
+    ([regex]::Matches($content, '-WorkDir \$stWorkDir -Mode \$stMode -ModelId \$stModelId')).Count -ge 2)
+Assert-True "D7: 站上脚本调用透传 mode/model-id(第 5/6 个实参)" (
+    $content.Contains('$p3id'' ''$Mode'' ''$ModelId'))
+# ⚠ 2026-09-25 实测踩到(同族第 2 例): `Invoke-RemoteScript` 早在 2026-09-24 补过 CRLF→LF 归一(R9 根因),
+#   但 `Invoke-ClaudeFly-Station` **自写文件**、绕过那道归一 ⇒ Windows checkout 下站上 `set -uo pipefail\r`
+#   失败(`rc=7`) ⇒ 站上 claude 路径**整条**不可用(含 P3 原有的 local-only 支)。故就地补归一 + 护栏。
+Assert-True "D7: 生成站上脚本时做 CRLF→LF 归一(本函数自写文件, R9 那道保护不到)" (
+    $content.Contains('$runSh = $runSh -replace "`r`n", "`n"'))
+# ⚠ 2026-09-25 实测踩到(同族第 3 例): O-31 把站上临时名"固定名 → $PFX 前缀"时**丢了 `/tmp/`**,
+#   而脚本已 `cd "$WORK"` ⇒ 相对路径解析到工作区 ⇒ `没有那个文件或目录` ⇒ 首跑+续跑均 rc=7。
+#   (O-31 注记自认"站上实机并发复跑未做" ⇒ 这正是漏掉的。) 故钉住**绝对路径**形态。
+Assert-True "D7: 站上脚本的 stdin/out/err 引用带 /tmp/(O-31 前缀化时丢过 ⇒ 实测 rc=7)" (
+    $content.Contains('"/tmp/${PFX}_in.txt"') -and
+    $content.Contains('"/tmp/${PFX}_out.txt"') -and
+    $content.Contains('"/tmp/${PFX}_err.txt"'))
+# ROUTE_TABLE 真值断言(用**提取出来的真表**, 不是文本 grep): 三别名同 id、站分别 A/B/C、cli=claude。
+Assert-True "D7: ROUTE_TABLE claude-a/-b/-c = 同一 id + station A/B/C + cli=claude" (
+    $Script:ROUTE_TABLE['claude-a']['station'] -eq 'A' -and
+    $Script:ROUTE_TABLE['claude-b']['station'] -eq 'B' -and
+    $Script:ROUTE_TABLE['claude-c']['station'] -eq 'C' -and
+    $Script:ROUTE_TABLE['claude-a']['id'] -eq $Script:ROUTE_TABLE['claude']['id'] -and
+    $Script:ROUTE_TABLE['claude-c']['id'] -eq $Script:ROUTE_TABLE['claude']['id'] -and
+    $Script:ROUTE_TABLE['claude-a']['cli'] -eq 'claude' -and
+    $Script:ROUTE_TABLE['claude']['station'] -eq '')
 # ⚠ "优先选与死锁站不同的一站"这条 **2026-09-21 复查时实测未生效**(只读 env, 而无人填 env):
 #   ⇒ 兜底调用点必须把主路死锁站传进来; 且 `$avoid` 必须**优先取参数**(env 降级为手工覆盖通道)。
 Assert-True "station: AUTO_FALLBACK 调用点把主路死锁站传进来(-AvoidStation \$station)" (
@@ -436,13 +492,15 @@ Assert-True "reject: 缺省(空 sensitivity) + 出网后端 => 放行(与既有�
 # 覆盖(结构): 判据必须在**两个入口都真被调用** —— 只判一处会漏(这正是本洞的成因)。
 # ⚠ P3 (2026-09-21) 更新: 原断言要求两处**都**是 `-backendEgress $true`(P0 期的实现细节)。
 #   分流后**有意**不同: 兜底入口起的 claude 在**主控本地**(=云端=出网) ⇒ `$true`;
-#   直接入口按**后端属性** ⇒ `(-not $useStation)`(站上本地时不出网)。故断言改为:
+#   直接入口按**后端属性** ⇒ `(-not $backendLocal)`(站上本地时不出网)。故断言改为:
 #   "两处都调判据" + "两种输入形式都在"(后者正是 P2 的核心, 单列一条以防被改回硬编码)。
+#   ⚠ D7 (2026-09-25): 直接入口的入参由 `$useStation` 改为 `$backendLocal` —— **值等价**,
+#     但语义**独立于位置**(站上也能出网) ⇒ 断言同步。
 Assert-True "reject: 判据在两个入口均被调用(直接入口 + 兜底入口)" (
     ([regex]::Matches($content, [regex]::Escape('Get-SensitivityBackendReject -sensitivity $sens -backendEgress'))).Count -ge 2)
-Assert-True "reject: 兜底入口用 \$true(主控本地=出网), 直接入口用 (-not \$useStation) 按后端属性" (
+Assert-True "reject: 兜底入口用 \$true(主控本地=出网), 直接入口用 (-not \$backendLocal) 按后端属性" (
     $content.Contains('Get-SensitivityBackendReject -sensitivity $sens -backendEgress $true') -and
-    $content.Contains('Get-SensitivityBackendReject -sensitivity $sens -backendEgress (-not $useStation)'))
+    $content.Contains('Get-SensitivityBackendReject -sensitivity $sens -backendEgress (-not $backendLocal)'))
 Assert-True "reject: 两条路径的拒绝串可分辨路径(claude-direct / fallback 均在)" (
     $content.Contains('(claude-direct, $id)') -and $content.Contains('(fallback, $fbModel)'))
 
@@ -855,6 +913,152 @@ $o42J = ([regex]::Matches($content, '\+ \$pmArg\)')).Count
 Assert-True 'o42: 四处 claude argStr 拼接均带 $pmArg(站上/本地 × 首跑/resume=4)' ($o42J -eq 4)
 $o42Def = "    `$pmArg = if (`$readonly) { '' } else { ' --permission-mode acceptEdits' }"
 Assert-True 'o42: $pmArg 定义受 readonly 分支控制(readonly=false 才 acceptEdits, true 空串保只读)' ($content.Contains($o42Def))
+
+# --- O-57-A (2026-09-25): 站上证据暂存件 —— 派发前**无条件** reset, 且清单**只有一份** ---
+# 根因(实测 2026-09-25): `out/` 是累计的 + 固定名拉回**无 run 窗口** ⇒ 上一次 run 的
+#   `.accept-cmds.txt` 被当**本次**证据归档(4 个 proj 根 83 个 run 里 **12 条**)。
+#   原 reset **只在失败路径**(`O46_CLEAN`) ⇒ 成功路径不清。修法 = 把清提前到**派发前**,
+#   与既有的 `.attach/` 无条件 reset **同段**(那也是它的既有纪律)。
+$evDef = ([regex]::Matches($content, '\$Script:EV_STAGE_NAMES = @\(')).Count
+Assert-True "o57: 暂存件清单**只定义一处**(禁第二份枚举 —— 本仓头号失败形态)" ($evDef -eq 1)
+$evLine = ($content -split "`n" | Where-Object { $_ -match '\$Script:EV_STAGE_NAMES = @\(' } | Select-Object -First 1)
+$evNeed = @('.meta', '.prompt.txt', '.progress', '.accept-cmds.txt', '.golden-cmd.txt', '.workspace-diff.txt', '.attach-manifest.txt', '.session-meta.txt')
+Assert-True "o57: 清单含全部 8 个暂存件(逐名核对)" (
+    [bool]$evLine -and (($evNeed | Where-Object { -not $evLine.Contains($_) }).Count -eq 0))
+Assert-True "o57: reset 命令由该**唯一真值派生**(不是手写 8 条 rm)" (
+    $content.Contains('EV_STAGE_NAMES | ForEach-Object'))
+Assert-True "o57: reset 已接进**派发前**那个 body(与附件中转同段)" (
+    $content.Contains('$evRmCmd') -and $content.Contains('rm -rf "`$STAGE" && mkdir -p "`$STAGE/attach"'))
+# ⚠ 2026-09-25 (T1) **就地更正本条**: 原断言要求"派发前 body 里也有 `.attach` 的 reset" ——
+#   T1 之后那条**已移进锁内落盘段**(理由见 DEV-LOG §27.11-A), 故此处改为只认"中转目录"。
+#   若有人把 `.attach` 的重置搬回派发前, 由下面 t1 段的**位置断言**兜住。
+Assert-True "o57: collect 的拉回清单**改为引用**同一真值(不再手写字面量)" (
+    $content.Contains('$evNames = $Script:EV_STAGE_NAMES'))
+# 位置不变量: reset 段必须**早于**主 run body 对 `out/` 的写入(否则会删掉本次自己刚写的件)。
+$iReset = $content.IndexOf('$evRmCmd')
+$iProg = $content.IndexOf('out/.progress')
+Assert-True "o57: reset 段**早于** out/ 任何写入(位置不变量)" (
+    $iReset -gt 0 -and $iProg -gt $iReset)
+
+# --- O-56 (2026-09-25): 基线"**声明无条件 / 产出有条件**"(两处) ---
+# ① 主路: `accept-cmds` 原为**裸列**, 而站上只在 `[ -n "$ACCEPT_B64" ]` 时才写 ⇒ 无 accept 的卡
+#    每个 run 假报一条 missing-artifact gap。⇒ 与 `accept-output` **同条件列**(= O-29 对 golden-cmd 的同法)。
+$iFn = $content.IndexOf('function Get-FrameworkSubjects')
+$iList = $content.IndexOf('$list = @(', $iFn)
+$iHasAcc = $content.IndexOf('if ($hasAccept) {', $iList)
+$segBase = if ($iList -gt 0 -and $iHasAcc -gt $iList) { $content.Substring($iList, $iHasAcc - $iList) } else { '' }
+# ⚠ needle 必须用**键值形态** `name = 'accept-cmds'`，不能用裸词 —— 该段里有说明注释也含这个词
+#   (夹具自身踩过: 第一版用裸词 ⇒ 恒红)。
+Assert-True "o56①: 主路基线**不再裸列** accept-cmds(无 accept 的卡永不产出该件)" (
+    $iFn -gt 0 -and $iList -gt $iFn -and $iHasAcc -gt $iList -and -not ($segBase -match "name = 'accept-cmds'"))
+Assert-True "o56①: accept-cmds 已与 accept-output **一起**条件列" (
+    $iHasAcc -gt 0 -and ($content.Substring($iHasAcc, 400) -match "name = 'accept-cmds'"))
+# ② 备路: `stderr` 在基线里**无条件声明** ⇒ 归档侧**必须**保证产出(缺件则补空件),
+#    **不改成条件声明** —— 失败路径的 stderr 恰是最该留的证据。
+Assert-True "o56②: 备路基线仍**无条件声明** stderr(未被改成条件声明)" (
+    $content.Contains("@{ name = 'stderr';"))
+Assert-True "o56②: 备路归档侧补空件(声明无条件 ⇒ 产出也必须无条件)" (
+    $content.Contains('if (-not (Test-Path $errTxt))'))
+
+# --- O-59 / T1 (2026-09-25): staging 进锁 + **危险面 ⇒ 排他**（一对，缺一不可） ---
+# 先验红(实测, DEV-LOG §27.11-G): 两跑各带 1 件却都 `ATTACH_MANIFEST_LINES=2`、agent 都列出对方的件。
+# 本段钉四件事: ① 危险面判据 ② 锁模式公式 ③ `.attach` 的重置**只在锁内** ④ 落盘段早于 manifest 采样。
+Assert-True "t1①: 危险面判据 = 有附件 ∨ golden active(**单一来源** `$leaseX`, O-62/C1 上移)" (
+    $content.Contains('$leaseX = (($attach.Count -gt 0) -or $goldenActive)') -and
+    $content.Contains('$dangerFace = $leaseX'))
+Assert-True "t1②: 锁模式 = `readonly ∧ ¬危险面` 才 shared(否则 exclusive)" (
+    $content.Contains('$flockShared = if ($readonly -and -not $dangerFace) { ''1'' } else { ''0'' }'))
+$iLockAcq = $content.IndexOf('LOCK_ACQUIRED pid=')
+$iAttachReset = $content.IndexOf('rm -rf "`$W/.attach" && mkdir -p "`$W/.attach"')
+Assert-True "t1③: `.attach` 的重置**出现在 LOCK_ACQUIRED 之后**(⇒ 只在锁内)" (
+    $iLockAcq -gt 0 -and $iAttachReset -gt $iLockAcq)
+Assert-True "t1④: 落盘段早于 `.attach-manifest` 采样(manifest 记的是注入的字节)" (
+    $content.IndexOf('ATTACH_STAGED=') -gt 0 -and
+    $content.IndexOf('ATTACH_STAGED=') -lt $content.IndexOf('out/.attach-manifest.txt'))
+# console 侧**不得**再碰共享面: 附件 scp 目标与 golden 中转都必须落在 `$stage`
+Assert-True "t1⑤: 附件 scp 落点 = 私有中转(不是 `$W`)" (
+    -not $content.Contains('${hostName}:$Script:WORKSPACE_ROOT/$proj/.attach/') -and
+    $content.Contains('${hostName}:$stage/attach/'))
+Assert-True "t1⑥: golden 只传中转(`$stage/golden.tgz`), 旧的 `$goldenInject` 已删" (
+    $content.Contains('${hostName}:$stage/golden.tgz') -and
+    -not $content.Contains('$goldenInject'))
+Assert-True "t1⑦: 中转目录有**失败路径兜底**清理(且用本 run token, 不用通配)" (
+    $content.Contains('rm -rf `"/tmp/agent-stage-$($Script:RUN_TOKEN)`"'))
+# ⚠ O-59/T1 实测踩到(并发才现形): 这两个 body 的内容现在是 **per-run** 的(含各自 `$STAGE`),
+#   而远端落点曾是**固定名** ⇒ 并发时 B 覆盖 A 的脚本 ⇒ A 建出 **B 的** stage ⇒ A 的 scp 必失败。
+#   (与 F-1/F-2/F-14/O-31 同族: "固定远端名 + 并发"必互踩。) 故名字必须带 per-run 身份。
+Assert-True "t1⑧: 两处附件中转脚本名带 per-run 身份(固定名 + per-run 内容 = 并发互踩)" (
+    $content.Contains('LocalName "agent-cli-attach-reset-$($Script:RUN_TOKEN).sh"') -and
+    $content.Contains('LocalName "agent-cli-attach-mkdir-dir-$($Script:RUN_TOKEN).sh"'))
+# ⚠ per-run 名的**代价**: 不再互相覆盖 ⇒ 会在 /tmp **累积**(实测三站 0/4/0 个) ⇒ 必须自删。
+$trapNeedle = 'trap ''rm -f "`$0"'' EXIT'
+Assert-True "t1⑨: 两处中转脚本**自删**(trap EXIT, 覆盖早退路径)" (
+    ([regex]::Matches($content, [regex]::Escape($trapNeedle))).Count -ge 2)
+# ⚠ 2026-09-25 另一条实测缺陷(**非 T1 引入**): 备路 `$ts` 无去重 ⇒ 同滴答内两个 claude run 共用
+#   `%TEMP%\agent-cli-claude-<ts>` scratch ⇒ 互相搬走 agent-output.txt(实测 cc-A/cc-B 同 ts, cc-B 失败)。
+#   **后续 (O-63)**: 先补的 `Test-Path` 式判据被实测证明只是 check-then-act(两进程同时通过、`TS_DEDUP`
+#   一次未打印) ⇒ 见下方 o63 段, 那层判据已被**原子抢占**取代。
+
+# --- O-63 (2026-09-25): ts 必须**原子**取得（create-or-fail），两条通道共用同一判据 ---
+# 先验证据(实测): 两 claude run 同 ts、`TS_DEDUP` 一次未打印、**该 ts 下只有一个 runDir**(而两跑各应有一个)、
+#   一方 rc=7。⚠ 件数**不作为论据**: 备路 runDir 的**正常件数就是 5**(9 是主路 opencode 的件数) ——
+#   我起初把撞车写成"5 件 vs 正常 9 件", 那是**跨通道**拿错了基线; 换成"runDir 个数"才不受件数影响。
+# 钉四件事: ① create-or-fail 不带 -Force ② 两处调用点 ③ 旧 check-then-act 已消失 ④ 抢占物有 GC(有出口)
+Assert-True "o63①: 用 `[IO.File]::Open(..., CreateNew, ...)` 做 create-or-fail(文档级原子)" (
+    $content.Contains('[IO.File]::Open($cf, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)'))
+# ⚠ 这条钉的是**实测教训**: 第一版用 `New-Item -ItemType Directory`（它也抛 IOException）,
+#   但 12 进程 hammer 下**仍出现一对重复**(uniq=11) ⇒ 换成 CreateNew。别改回去。
+#   (注: 不能用"是否含 -Force"当判据 —— `Remove-Item $cf -Force` 里那个 -Force 是**合法**的;
+#    第一版断言就那么写, 结果 needle 被 PS 插值成噪声 ⇒ 恒红。)
+Assert-True "o63①b: 抢占**不再**用 `New-Item` 建目录(实测它会漏)" (
+    -not $content.Contains('New-Item -ItemType Directory -Path (Join-Path $claims $cand)'))
+Assert-True "o63②: 主路 + 备路**都**改调 Get-UniqueRunStamp(跨通道同判据 ⇒ 不会互撞)" (
+    ([regex]::Matches($content, 'Get-UniqueRunStamp -ProjOutRoot')).Count -ge 2)
+Assert-True "o63③: 旧 check-then-act 去重已消失(`TS_DEDUP` 不再出现)" (
+    -not $content.Contains('TS_DEDUP:'))
+Assert-True "o63④: 抢占目录有**出口**(对应 runDir 已存在 或 超 7 天 ⇒ 删；防'登记无出口')" (
+    $content.Contains("agent-cli-claims") -and $content.Contains('$d.CreationTime -lt $cut'))
+Assert-True "o63⑤: 抢占物刻意**不在 agent-out 里**(证据根不放判据看不见的杂物)" (
+    $content.Contains("Join-Path `$env:TEMP 'agent-cli-claims'"))
+
+# --- O-62 / C3 + C1 (2026-09-25): 控制台侧**工作区租约**(覆盖 staging; 三处调用) ---
+# 实测背景: 同站同 proj 并发两 claude run ⇒ 站上 `.attach` 剩两件、agent 见到不属于它的件。
+Assert-True "o62①: 租约为 **rwlock**(排他=`FileShare.None` / 共享=`FileShare.Read`)" (
+    $content.Contains('[IO.FileShare]::None') -and $content.Contains('[IO.FileShare]::Read') -and
+    $content.Contains('$Script:LEASES +='))
+Assert-True "o62②: 备路站上取租约在 **staging 之前**(`$useStation` 分支开头)" (
+    $content.IndexOf('Enter-WorkspaceLease -Key "st-$st/$proj"') -lt $content.IndexOf('CLAUDE-STATION: sync 项目工作区'))
+Assert-True "o62③: 备路站上取不到 ⇒ **显式 REJECT**(exit 3, 与主路 LOCK_HELD 同码)" (
+    $content.Contains('REJECT claude-station-busy (exit 3)') -and $content.Contains('return 3'))
+# C1: 主路也参与**同一把逻辑锁**(key 格式 `st-<站>/<proj>`) ⇒ **跨通道**闭环
+Assert-True "o62④(C1): 主路取租约在 `TASK sync` 之前, 且 key 与备路**同格式**" (
+    $content.IndexOf('Enter-WorkspaceLease -Key $leaseKey -Exclusive $leaseX') -lt $content.IndexOf('TASK sync source ->') -and
+    $content.Contains('$leaseKey = $(if ($station) { "st-$station" } else { ''local'' }) + "/$proj"'))
+Assert-True "o62⑤(C1): 主路模式按危险面(有附件 ∨ golden) 决定排他/共享" (
+    $content.Contains('$leaseX = (($attach.Count -gt 0) -or $goldenActive)') -and
+    $content.Contains('REJECT main-workspace-busy (exit 3)'))
+# 危险面判据**单一来源**(防两份判据漂移 = 本仓头号失败形态)
+# ⚠ 计数 = **2**(不是 1): 两个通道各算一次 —— 主路 `Invoke-Task` 一份、备路 claude 一份。
+#   "单一来源"指的是**同一函数内不得有两份**(原先备路就有两份: 附件块内 + golden 段) ⇒ 出 3 即回归。
+Assert-True "o62⑥: 危险面表达式**每通道仅一处**(全仓 2 处; 主路一份 + 备路一份)" (
+    $content.Contains('$dangerFace = $leaseX') -and
+    ([regex]::Matches($content, '\$leaseX = \(\(\$attach\.Count')).Count -eq 2)
+Assert-True "o62⑦(本地): 本地带附件时取租约(key=`local/$proj`)且**早于** `projRoot\.attach` 复制" (
+    $content.Contains('Enter-WorkspaceLease -Key "local/$proj"') -and
+    $content.Contains('REJECT claude-local-busy (exit 3)') -and
+    $content.IndexOf('Enter-WorkspaceLease -Key "local/$proj"') -lt $content.IndexOf('$attachLocal = Join-Path $projRoot'))
+# ⚠ **实测回归**(2026-09-25, 被**我自己的**跨通道对照实验抓到): 第一版把备路两处租约都写死
+#   `-Exclusive $true` ⇒ 良性跨通道配对(只读·无附件, 如 6 并发里的 oc+cc 同站对)也被串行化
+#   ⇒ 当场 `REJECT claude-station-busy`。修: 两处都改成危险面 `$leaseX`。
+#   ⚠ 漏掉它的根因: **只复跑了 claude×claude，没复跑 6 并发**(该对照是唯一能看见"良性配对"的夹具)。
+Assert-True "o62⑧(回归): 备路两处租约都按危险面取模式(非硬编码排他)" (
+    ([regex]::Matches($content, [regex]::Escape('Enter-WorkspaceLease -Key "st-$st/$proj" -Exclusive $leaseX'))).Count -eq 1 -and
+    ([regex]::Matches($content, [regex]::Escape('Enter-WorkspaceLease -Key "local/$proj" -Exclusive $leaseX'))).Count -eq 1)
+# ⚠ 回归的**根因**是判据位置: 危险面原在"有附件"块内算 ⇒ **无附件的站上 golden run** 读到 `$null`(=共享)
+#   ⇒ 危险序① 漏挡。修: 上移到本函数开头(两处租约之前)**单点**算。这条钉住**位置不变式**。
+Assert-True "o62⑨(根因): 危险面判据在 `if ($useStation)` **之前**(否则无附件站上 golden run 会漏挡)" (
+    $content.IndexOf('$leaseX = (($attach.Count -gt 0) -or $goldenActive)') -gt 0 -and
+    $content.IndexOf('$leaseX = (($attach.Count -gt 0) -or $goldenActive)') -lt $content.IndexOf('if ($useStation)'))
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"

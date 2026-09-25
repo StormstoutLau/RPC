@@ -2140,7 +2140,16 @@ STATION_CMD = (
     "LF=$(ls -1 $HOME/.unsloth/run-*.log 2>/dev/null | wc -l); "
     "LK=$(grep -lE 'sk-(or-v1|unsloth|RPC|local|lm)-[A-Za-z0-9_-]{6,}' $HOME/.unsloth/run-*.log 2>/dev/null | wc -l); "
     "LL=$(find $HOME/.unsloth -maxdepth 1 -name 'run-*.log' ! -perm 0600 2>/dev/null | wc -l); "
-    "echo \"unslothlog=dirperm:${DP} files:${LF} withkeys:${LK} loose:${LL}\""
+    "echo \"unslothlog=dirperm:${DP} files:${LF} withkeys:${LK} loose:${LL}\"; "
+    # (h) 长龄 orphan 探针 (O-58, 2026-09-25): 站上 ad-hoc ssh 探针/派发留下的僵尸/长龄进程。
+    #   起因(一手实测): B 站留了 2 条 —— `bash` 1-12:19 与 `bash`+**活着的裸 `opencode`**
+    #   1-04:59(47 fd、持**共享** `opencode.db` 180MB)；根因是**未加引号的 `|`** 被远端 shell
+    #   当管道(纪律 12)。该信号此前**只能靠人肉 `ps` 偶然撞见** ⇒ 本段把它变机判。
+    #   ⚠ 模式**不带空格**且用**多枚 `-e`**：带空格的引号经 PS/ssh 会被剥掉，远端 shell 会把
+    #     模式后半当**文件名**(纪律 12, 实测 `grep: run: 没有那个文件或目录`)。
+    #   只输出 `pid ppid etimes comm` 四列，**阈值与豁免全留在门禁侧**(与 [conf]/[mpath] 同分工)。
+    "printf '\\n[orph]\\n'; ps -eo pid=,ppid=,etimes=,comm= 2>/dev/null "
+    "| grep -e opencode -e claude -e timeout -e defunct | head -20; "
 )
 # 刻意不取 infer-list: (1) 它自身约 10s+, 三站并行也要 30s+ (实测全量从 31s 涨到 60s);
 # (2) 判定"别名在该站是否可用"本来就该看 conf —— infer-load 读的正是
@@ -2470,13 +2479,42 @@ def check_stations(ctx):
                           f"—— DHCP 可能已漂移, 请同步更新 ~/.ssh/config 与 net.yaml 的 lan 段; "
                           f"不更新则连该站要走公网 IPv6 且每次多付 ~16s")
 
+    # (h) 长龄 orphan (O-58, 2026-09-25) —— 站上 ad-hoc 探针/派发留下的僵尸 / 长龄进程。
+    #   判据: comm ∈ {opencode, claude, timeout, defunct} 且 etimes ≥ 阈值。
+    #   ⚠ **刻意只 WARN、不 FAIL**: 该阈值**判不出"合法的长 run"**(我们自己的长卡可以跑 >6h)
+    #     ⇒ 需要人判。本条的价值是**把信号从"偶然人肉 ps"变成"每次全量门禁都报"**，
+    #     不是自动清理(清孤儿是不可逆动作, 见 O-58 的裁定记录)。
+    #   ⚠ 阈值可由 `RPC_ORPHAN_SEC` 覆盖 —— **为了能先验红**: 6h 的长龄进程无法现场造出来,
+    #     而新判据必须双向自证(否则无从区分"判据对"与"判据恒假")。默认仍是 6h。
+    ORPHAN_SEC = int(os.environ.get("RPC_ORPHAN_SEC") or 6 * 3600)
+    orphan_checked = 0
+    for st in reach:
+        stale = []
+        for line in (live[st].get("orph") or "").splitlines():
+            f = line.split()
+            if len(f) < 4:
+                continue
+            pid, ppid, et, comm = f[0], f[1], f[2], " ".join(f[3:])
+            if not et.isdigit():
+                continue
+            orphan_checked += 1
+            et = int(et)
+            if et >= ORPHAN_SEC:
+                stale.append(f"{comm} (pid {pid}, ppid {ppid}, 已 {et // 3600}h{(et % 3600) // 60}m)")
+        if stale:
+            warn.append(f"{st} 站发现**长龄 orphan** (≥{ORPHAN_SEC // 3600}h；见台账 O-58): "
+                        f"{'; '.join(stale)} —— ⚠ 正在跑的**合法**长 run 也会命中，先确认再清")
+        else:
+            info.append(f"{st} 站无长龄 orphan (≥{ORPHAN_SEC // 3600}h)")
+
     if unreachable:
         info.insert(0, f"站点不可达 (未计入判定): {', '.join(unreachable)}")
     note = (f"可达 {len(reach)}/3 站 · 对账 cfg{len(WATCHED)}/ROUTE{len(cluster.ROUTE)}"
             f"/RPC{len(cluster.RPC_MODELS)}/conf{sum(len(v) for v in declared_conf.values())}"
             f"/bind{sum(1 for m in (ports_inv or {}).values() if m.get('expect_bind'))}"
             f"/port{checked_ports}(豁免临时段 {ignored_eph})/plugin{plugin_checked}"
-            f"/weight{sum(1 for st in reach for _ in (live[st].get('mpath') or '').splitlines())}")
+            f"/weight{sum(1 for st in reach for _ in (live[st].get('mpath') or '').splitlines())}"
+            f"/orph{orphan_checked}")
     if detail:
         return "FAIL", note, info + detail + [f"(WARN) {w}" for w in warn]
     if warn:
@@ -3333,6 +3371,10 @@ def check_inbox(ctx):
 #   ⇒ 放进 `--quick`，**由 pre-commit 钩子强制**（否则仍只是"跑全量才判"，等于没接线）。
 # ⚠ 定义必须在本行**之前**（`CHECKS` 在模块级求值）。
 PS1_GOLDEN = ROOT / "ops" / "station-bin" / "_fm_golden_test.ps1"
+# O-63 (2026-09-25): 取号并发夹具 —— 与黄金夹具**分开**成一项，且 `quick:False`：
+#   它要起 8 个 **独立进程** + 两次共同释放时刻(各 2.5s) ⇒ 约 6s；塞进 quick 会让 pre-commit 明显变慢。
+#   但**必须接进 CHECKS** —— 否则就是本仓反复点名的"有测试 ≠ 有人在跑"。
+PS1_RUNSTAMP = ROOT / "ops" / "station-bin" / "_runstamp_hammer.ps1"
 
 
 def _decode_out(b: bytes) -> str:
@@ -3343,6 +3385,37 @@ def _decode_out(b: bytes) -> str:
         except UnicodeDecodeError:
             continue
     return b.decode("utf-8", "replace")
+
+
+def check_ps1_runstamp(ctx):
+    """O-63: 跑 `_runstamp_hammer.ps1`（ts **取号**的跨进程并发夹具）—— **退出码 0 才算过**。
+
+    它守的是"两个并发派发拿到同一个 ts ⇒ 共用 scratch/runDir ⇒ 证据面混且归属不可复原"这条
+    **不可回改**的失败（实测 2026-09-25）。夹具自带**双向**：正向（新实现 8 进程全不同 ts）+
+    负向（**同一把锤子**打旧实现 ⇒ 必须检出撞车）⇒ **必须两行都在**才算过，否则"跑空了"也会通过。
+    """
+    if not PS1_RUNSTAMP.is_file():
+        return "WARN", f"{PS1_RUNSTAMP.name} 不存在（本断言的登记依据）", []
+    try:
+        p = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(PS1_RUNSTAMP),
+             "-N", "8", "-SelfTest"],
+            cwd=ROOT, capture_output=True, timeout=180)
+    except FileNotFoundError:
+        return "WARN", "本机无 powershell ⇒ 跳过（夹具只能在 Windows 侧跑）", []
+    except subprocess.TimeoutExpired:
+        return "FAIL", "取号夹具超时（>180s）⇒ 可能挂死", []
+    out = _decode_out(p.stdout or b"") + _decode_out(p.stderr or b"")
+    lines = [ln.rstrip() for ln in out.splitlines() if ln.strip()]
+    pos = next((ln for ln in lines if ln.startswith("RUNSTAMP_HAMMER ")), "")
+    neg = next((ln for ln in lines if ln.startswith("RUNSTAMP_HAMMER_SELFTEST")), "")
+    ok = bool(pos and "PASS" in pos) and bool(neg and "PASS" in neg) and p.returncode == 0
+    note = f"取号并发夹具：{pos or '（无正向汇总行）'} · {neg or '（无负向汇总行）'}"
+    if p.returncode != 0 and ok:
+        note += f" · 退出码 {p.returncode}"
+    # ⚠ 缺任一汇总行 ⇒ **直接 FAIL**（"什么都没跑"不得算过 —— 本仓"假绿"头号形态）
+    detail = lines[-8:]
+    return ("PASS" if ok else "FAIL"), note, detail
 
 
 def check_ps1_golden(ctx):
@@ -3449,6 +3522,14 @@ CHECKS = [
             "看明细里的 FAIL 行。⚠ **先判「是回归还是夹具期望值陈旧」**："
             "若代码侧确有语义变更（看 agent-cli.ps1 里的注释/新件/O- 台账）⇒ 改**夹具期望值**并写明理由；"
             "若代码侧无变更 ⇒ **是回归**，改代码。⚠ 出站硬闸的判据本体在夹具里，本断言只负责让它**每次都被跑**"},
+    # O-63 (2026-09-25): 取号并发夹具。**刻意 quick:False**（要起 8 个独立进程 + 两次 2.5s 共同释放时刻 ⇒ 约 6s）。
+    {"id": "ps1-runstamp", "title": "ts 取号并发夹具", "fn": check_ps1_runstamp, "quick": False,
+     "fix": "O-63: 跑 `powershell -NoProfile -ExecutionPolicy Bypass -File ops/station-bin/_runstamp_hammer.ps1 -N 8 -SelfTest`。"
+            "两行**都要**在：`RUNSTAMP_HAMMER … PASS`（正向：8 进程 ts 全不同）+ "
+            "`RUNSTAMP_HAMMER_SELFTEST … PASS`（负向：**同一把锤子**打旧实现必须检出撞车）。"
+            "⚠ 只报负向 = **夹具是装饰**（正向根本没产生唯一 ts）；只报正向 = 负向没跑（少一行 ⇒ 本断言直接 FAIL）。"
+            "⚠ 若出现 `dup:` ⇒ **真的撞了**：检查 `Get-UniqueRunStamp` 的原子原语是否被改回 "
+            "`New-Item -ItemType Directory`（实测它会漏，uniq=11）—— 必须是 `[IO.File]::Open(..., CreateNew, ...)`"},
     {"id": "usb4", "title": "USB4 三角环链路", "fn": check_usb4, "quick": False,
      "fix": "地址/路由不符 => 对照 inventory/net.yaml 与归档 §6.3/§6.6; "
             "链路不通 => 先查 BIOS USB4 安全等级与是否冷启动(归档 §6.5)"},

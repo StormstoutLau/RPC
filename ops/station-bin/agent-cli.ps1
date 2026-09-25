@@ -134,6 +134,18 @@ $Script:ROUTE_TABLE = @{
     # full id 直传 (与上面 local/* 同例): 使 `--model <openrouter-id>` 与 env `AGENT_FALLBACK_MODEL` 可解析
     'thinkingmachines/inkling:free'          = @{ id = 'thinkingmachines/inkling:free';          station = ''; cli = 'claude' }
     'nvidia/nemotron-3-ultra-550b-a55b:free' = @{ id = 'nvidia/nemotron-3-ultra-550b-a55b:free'; station = ''; cli = 'claude' }
+    # ── 2026-09-25: **站上 claude + OpenRouter** per-station 别名 ─────────────────────────────
+    #   解锁的"锁": P3(2026-09-21) 把 claude 通道收窄成「local-only ⇒ 站上 + 站上本地引擎」/
+    #   「其余 ⇒ 主控本地 spawn(OpenRouter)」⇒ 站上 claude **永远配不了 OpenRouter**。
+    #   而 design 表里 `public`/`sanitized` 那一行本就写着"站上跑 claude + OpenRouter(按站独立 key)"
+    #   (见 docs/research/2026-09-21_D6备路站上化与sensitivity设闸调研与方案.md §3.1) —— 那一支从未落地。
+    #   与 `ultra-a`/`ultra-c` **同构**(同一 id、不同 station ⇒ 不新立模型清单)。
+    #   用途: ① 三站各 1 并发且**各有独立 OpenRouter 账户** ⇒ 限流互不干扰;
+    #         ② 绕开主控单点(3 个 claude 挤一台机器 + 一个账户)。
+    #   ⚠ 站不可用 ⇒ **不作静默换站**(用户裁定 2026-09-25): 拒跑并**列出可用替代站**供裁定。
+    'claude-a'     = @{ id = 'thinkingmachines/inkling:free';          station = 'A'; cli = 'claude' }
+    'claude-b'     = @{ id = 'thinkingmachines/inkling:free';          station = 'B'; cli = 'claude' }
+    'claude-c'     = @{ id = 'thinkingmachines/inkling:free';          station = 'C'; cli = 'claude' }
 }
 
 # ---------------- .agentsync four-type templates (T1, F3) ----------------
@@ -145,6 +157,17 @@ $Script:AGENTSYNC_TEMPLATES = @{
 }
 
 # ---------------- helpers ----------------
+
+# ── O-57-A (2026-09-25): 站上 `out/` 里的**证据暂存件**（点前缀）—— **唯一真值** ──────────────
+# 两处消费（**只此一份清单，禁在别处再手写**）:
+#   ① 派发前**无条件** reset（`Invoke-Task` 的 attach-reset body）—— O-57 实测根因:
+#      `out/` 是**累计**的，而 collect 的固定名拉回**无 run 窗口** ⇒ 把**上一次 run**的残留
+#      当本次证据归档（4 个 proj 根 83 个 run 里 **12 条**归档了别的卡的 `accept-cmds.txt`；
+#      门禁**看不见**它，因为它"在" ⇒ 不是 `missing-artifact`）。
+#      ⚠ 原 reset **只在失败路径**（`O46_CLEAN`）⇒ 成功路径不清 ⇒ 与 **O-22**（`.meta` 残留）同根。
+#   ② collect 的固定名拉回清单（原 `$evNames` 字面量）。
+# ⚠ **只含暂存件**（点前缀）—— `out/` 里的**交付物绝不能删**（那是卡要产出的东西）。
+$Script:EV_STAGE_NAMES = @('.meta', '.prompt.txt', '.progress', '.accept-cmds.txt', '.golden-cmd.txt', '.workspace-diff.txt', '.attach-manifest.txt', '.session-meta.txt')
 
 function Get-TargetHost([string]$station) {
     if ($station -eq 'A') { return 'scott-lau-NEX.local' }
@@ -487,9 +510,9 @@ function Invoke-Router {
 
     # rule B: local-only never leaves the console。**判据 = 后端属性**（W1a 2026-09-21：不再看型号前缀
     #   `^opencode/` —— 白名单式判据每加一个云后端就漏一次，已漏两次）。
-    #   ⚠ **claude 通道豁免**：该通道的实际后端由 P3 决定（站上有本地引擎 ⇒ 站上本地引擎 = 不出网），
-    #     故交由 `Invoke-Task-Claude` 以 `-backendEgress (-not $useStation)` 按运行时判；
-    #     此处若按 route id 判会**误杀 P3**。
+    #   ⚠ **claude 通道豁免**：该通道的实际后端由 P3/D7 决定（`local-only` ⇒ 站上本地引擎 = 不出网；
+    #     其余 ⇒ OpenRouter = 出网），故交由 `Invoke-Task-Claude` 以 `-backendEgress (-not $backendLocal)` 按运行时判；
+    #     此处若按 route id 判会**误杀 P3**（也会误杀 D7 的站上 OpenRouter 分支）。
     if ([string]$r['cli'] -ne 'claude') {
         $rejB = Get-SensitivityBackendReject -sensitivity $sensitivity -backendEgress (Get-BackendEgress $id)
         if ($rejB) { Write-Host "REJECT $rejB (route, $id) exit 4 - no override channel (owner-policy)"; return 4 }
@@ -705,6 +728,96 @@ function Assert-AgentOutWritable {
     }
 }
 
+function Get-UniqueRunStamp {
+    # O-63 (2026-09-25): **原子**取 run 时间戳 —— runDir 名唯一性的唯一来源。
+    # 为什么必须原子: 原实现是 `while (Test-Path …) { 递增 }` = **check-then-act**。两个并发进程会**同时**
+    #   判"不存在" ⇒ 同时取到同一个 ts（实测 2026-09-25: 两 claude run 同 ts、`TS_DEDUP` **一次都没打印**、
+    #   **只产生一个 runDir**(5 件 vs 正常 9 件)、一方 rc=7）。runDir 是**不可回改的证据单元**
+    #   ⇒ 撞车 = 证据面混且**归属不可复原**（比丢中间产物严重得多 ⇒ 危害序: runDir ≫ scratch）。
+    # 修法: 把"检查"换成"**创建**" —— `New-Item -ItemType Directory` **不带 -Force**：已存在即抛错
+    #   ⇒ 只有**一个**进程能拿到该 ts（mkdir 在 NTFS 上是原子的）。冲突则微睡后**换一个** ts 重试。
+    # 抢占物位置: `%TEMP%\agent-cli-claims\<ts>` —— **刻意不放进 `agent-out`**：
+    #   ① 证据根不该有"判据看不见的杂物"；② audit 只认含 `.agent-run.json` 的目录（`cluster.py` 里
+    #   `if not jp.is_file(): continue`）⇒ 空的 runDir 会被**静默跳过** ⇒ 那就是**隐形垃圾**。
+    # GC（本仓纪律"登记无出口 ⇒ 腐化"）: 每次派发顺带扫一遍抢占目录 —— ① 对应 runDir **已存在**（该 run
+    #   已完成）⇒ 使命结束，删；② 创建超 7 天（早已废弃/被杀）⇒ 删。⇒ 不会无限增长。
+    # ⚠ 与 `$Script:TMP_ROOT`/`Assert-AgentOutWritable` 同族：**用"per-invocation 身份"而不是"撞了再改"**。
+    param([string]$ProjOutRoot, [int]$MaxTry = 200)
+    $claims = Join-Path $env:TEMP 'agent-cli-claims'
+    try { if (-not (Test-Path $claims)) { New-Item -ItemType Directory -Path $claims -Force | Out-Null } }
+    catch { Write-Host "RUNSTAMP_WARN: 抢占目录不可建($claims): $($_.Exception.Message)"; return (Get-Date).ToString('yyyyMMddHHmmssffff') }
+    try {
+        $cut = (Get-Date).AddDays(-7)
+        foreach ($d in @(Get-ChildItem $claims -File -ErrorAction SilentlyContinue)) {
+            if ((Test-Path (Join-Path $ProjOutRoot $d.BaseName)) -or ($d.CreationTime -lt $cut)) {
+                Remove-Item $d.FullName -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    catch { }   # GC 是 best-effort，绝不影响派发
+    for ($i = 0; $i -lt $MaxTry; $i++) {
+        $cand = [DateTime]::Now.ToString('yyyyMMddHHmmssffff')
+        # **原子原语**: `FileMode::CreateNew` —— 文件已存在即抛 IOException（文档级保证"创建或失败"）。
+        #   ⚠ 曾用 `New-Item -ItemType Directory`（它**也**会在已存在时抛 IOException），但**实测 12 进程
+        #   并发下仍出现一对重复**（hammer 报 uniq=11）⇒ 换成语义最明确的 CreateNew，并把该原语**钉进夹具**。
+        #   另注: `[IO.Directory]::CreateDirectory()` 在目录已存在时**不抛**（返回对象）⇒ **不可**用于抢占。
+        $cf = Join-Path $claims ($cand + '.lock')
+        try {
+            $fs = [IO.File]::Open($cf, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            $fs.Close(); $fs.Dispose()
+        }
+        catch { Start-Sleep -Milliseconds 3; continue }
+        # 双保险: 若该 ts 的 runDir 已存在（历史遗留 / 跨机同 ts），退掉抢占再换一个
+        if (Test-Path (Join-Path $ProjOutRoot $cand)) {
+            Remove-Item $cf -Force -ErrorAction SilentlyContinue
+            continue
+        }
+        Write-Host "RUNSTAMP: $cand (atomic claim; O-63)"
+        return $cand
+    }
+    Write-Host "RUNSTAMP_FAIL: $MaxTry 次抢占全冲突(异常时钟?); 放弃"
+    return $null
+}
+
+function Enter-WorkspaceLease {
+    # O-62 / C3 + O-62/C1 (2026-09-25): **控制台侧的"工作区租约"** —— 覆盖 staging + 执行**整次派发**。
+    # 为什么要有它: 两条通道都直接 `rm -rf <workspace>/.attach` + scp，而站上锁只覆盖"执行相"；
+    #   危险序① 发生在 **staging 相**（锁外）⇒ 只有把租约放在**发起方**这一侧才能把 staging 一起圈进来
+    #   （与 T1 同一结论: **锁的范围必须 ≥ staging + 执行**）。
+    # 三处调用（**同一把逻辑锁、同一 key 格式** ⇒ 跨通道也互斥）:
+    #   · 主路 `Invoke-Task`（opencode）：`-Exclusive $leaseX`（有附件 ∨ golden ⇒ 排他；否则**共享**）
+    #   · 备路站上（`$useStation`）：`-Exclusive $leaseX`（**同一条危险面规则**）
+    #   · 备路本地（有附件时）：`-Exclusive $leaseX`（写的是**控制台** `projRoot\.attach`，**非 per-run**）
+    # ⚠ **三条都用 `$leaseX`, 不许写死 `$true`**（2026-09-25 实测回归）: 站上/本地备路一律排他 ⇒
+    #   把良性跨通道配对（只读·无附件，6 并发里就有 oc+cc 同站对）也串行化 ⇒ 对照实验当场 REJECT。
+    # **模式语义**: `FileShare.None` = 排他；`FileShare.Read`（且只读打开）= 共享 ⇒ 即 rwlock：
+    #   共享×共享 允许、其余组合互相排斥。⇒ 良性只读并发（如 6 并发那种）**不受影响**。
+    # ⚠ **已登记边界（如实写，别当它解决了全部）**:
+    #   ① 只覆盖**控制台发起**的派发；第二台控制台 / 手工 ssh 不在内；
+    #   ② 本地模式**只在有附件时**取租约（无附件 ⇒ 不碰 `.attach` ⇒ 无须串行）；
+    #   ③ 站上**遗留**的长任务（不是本次控制台发起）不会持有租约 ⇒ 覆盖不到。
+    # 释放: 句柄挂脚本作用域、由**进程存活期**持有（进程退出即释放）—— 与主路 flock 的"fd 由进程持有"
+    #   同一模型 ⇒ **不必**在每条 return 路径手动释放（也就不会漏放）。
+    param([string]$Key, [bool]$Exclusive = $true, [string]$Why = '')
+    if (-not $Key) { return $null }
+    if (-not $Script:LEASES) { $Script:LEASES = @() }
+    $safe = ($Key -replace '[^A-Za-z0-9]', '_')
+    $p = Join-Path $env:TEMP "agent-cli-lease-$safe.lock"
+    try {
+        if ($Exclusive) {
+            $fs = [IO.File]::Open($p, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+        }
+        else {
+            # 共享模式: `OpenOrCreate` 不能配 `FileAccess.Read`（组合非法）⇒ 先确保文件存在，再只读打开 + 允许他读
+            if (-not (Test-Path $p)) { try { [IO.File]::WriteAllText($p, '') } catch { } }
+            $fs = [IO.File]::Open($p, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        }
+        $Script:LEASES += $fs
+        return $fs
+    }
+    catch { return $null }
+}
+
 function Get-FrontMatter {
     # minimal front-matter parser from a task card md.
     # P1b (D6 audit 2026-09-03): the card BODY is the clean-room task spec (DESIGN §6.1
@@ -908,7 +1021,6 @@ function Get-FrameworkSubjects($accept, [bool]$goldenActive) {
         @{ name = 'agent-output';    path = 'agent-output.txt' }
         @{ name = 'judgment-record'; path = 'judgment-record.txt' }
         @{ name = 'prompt';          path = 'prompt.txt' }
-        @{ name = 'accept-cmds';     path = 'accept-cmds.txt' }
         @{ name = 'progress-trace';  path = 'progress-trace.txt' }
         @{ name = 'session-meta';    path = 'session-meta.txt' }
         @{ name = 'attach-manifest'; path = 'attach-manifest.txt' }
@@ -918,7 +1030,14 @@ function Get-FrameworkSubjects($accept, [bool]$goldenActive) {
     )
     $hasAccept = $false
     foreach ($a in @($accept)) { if ("$a".Trim()) { $hasAccept = $true } }
-    if ($hasAccept) { $list += @{ name = 'accept-output'; path = 'accept-output.txt' } }
+    # O-56 (2026-09-25): `accept-cmds` 原为**裸列** ⇒ 与 `accept-output` 同一条件列。
+    #   为什么: 站上只在 `[ -n "$ACCEPT_B64" ]` 时才写 `out/.accept-cmds.txt`（无 accept 的卡**永不产出**），
+    #   而裸列的后果 = 每个这类 run 假报一条 `missing-artifact` 可重放 gap（且要人工 `--accept` 才回绿）。
+    #   ⚠ 这正是 O-29 当年为 `golden-cmd.txt` 犯过的**同一个错**（见本节尾部注释）—— 本条是**该原则漏用的第二个件**。
+    if ($hasAccept) {
+        $list += @{ name = 'accept-output'; path = 'accept-output.txt' }
+        $list += @{ name = 'accept-cmds';   path = 'accept-cmds.txt' }
+    }
     # 2026-09-23 (O-29): `golden-cmd.txt` 只在 `$goldenActive` 时才由远端写入(见 IM 里的 $goldenBlock,
     #   它把命令落盘到 `out/.golden-cmd.txt`) ⇒ **必须与 accept-* 一样条件列**。
     #   旧实现把它**裸列**在本节顶部 ⇒ 无 golden 的卡该件必缺 ⇒ **每个 run 都记一条 missing-artifact 可重放 gap**
@@ -1250,8 +1369,8 @@ function Get-SensitivityBackendReject {
 #   ⇒ 白名单式判据**每加一个云后端就漏一次**。本组函数把它换成"后端属性"：**判据只在一处定义**，
 #     新增后端**自动纳管**（夹具 `_fm_golden_test.ps1` 有"假想云端后端"负例钉住这一点）。
 # ⚠ 调用方注意（一条容易搞错的边界）: **claude 通道不要用 `Get-BackendEgress` 判** —— 那条路的
-#   实际后端由 P3 决定（站上有本地引擎 ⇒ 站上本地引擎 = 不出网），由 `Invoke-Task-Claude`
-#   以 `-backendEgress (-not $useStation)` 按**运行时**判。此处若按 route id 判会**误杀 P3**。
+#   实际后端由 P3/D7 决定（`local-only` ⇒ 站上本地引擎 = 不出网；其余 ⇒ OpenRouter = 出网），
+#   由 `Invoke-Task-Claude` 以 `-backendEgress (-not $backendLocal)` 按**运行时**判。此处若按 route id 判会**误杀 P3**。
 
 function Get-BackendEgress {
     # route id 用它自己跑时会不会出网。规则刻意**反转为 fail-closed 默认**：
@@ -1298,7 +1417,7 @@ function Get-AttachEgressReject {
     #     **假防线**（"抹了一半"比"明确不抹"**更难发现**）⇒ 只能靠**不出网**兜底。
     # 三条全中才拒: ① 有附件 ② 目标后端**会出网** ③ 卡**未**显式声明放行。
     # 放行通道 = 卡写 `attach-egress: ok|yes|true`（与 `review-model` 同属"**显式接受出网**"家族）。
-    # ⚠ 后端是否出网由调用方按通道给（opencode 通道 = Get-BackendEgress $id；claude 通道 = -not $useStation）。
+    # ⚠ 后端是否出网由调用方按通道给（opencode 通道 = Get-BackendEgress $id；claude 通道 = -not $backendLocal）。
     # 纯函数 ⇒ 夹具可按名提取离线单测（与 Get-SensitivityBackendReject / Resolve-ReviewPrompt 同族）。
     param([int]$attachCount, [bool]$backendEgress, [string]$declared)
     if ($attachCount -le 0) { return '' }
@@ -1396,13 +1515,13 @@ function Invoke-Task {
     $effectiveCli = if ($cli) { $cli.ToLower() } elseif ($r['cli']) { [string]$r['cli'] } elseif ($fm['cli']) { [string]$fm['cli'].ToLower() } else { 'opencode' }
     # W1a (2026-09-21): local-only 出网闸。**判据 = 后端属性**（不再看型号前缀 `^opencode/`）。
     #   ⚠ 先算 `$effectiveCli`（故上面那行提前到闸之前）：**claude 通道豁免本闸** —— 其实施后端由 P3
-    #     决定（站上有本地引擎 ⇒ 站上本地引擎 = 不出网），交由 `Invoke-Task-Claude` 按运行时判；
-    #     此处按 route id 判会**误杀 P3**。
+    #     决定（`local-only` ⇒ 站上本地引擎 = 不出网；其余 ⇒ OpenRouter = 出网），交由 `Invoke-Task-Claude` 按运行时判；
+    #     此处按 route id 判会**误杀 P3**（也会误杀 D7 的站上 OpenRouter 分支）。
     if ($effectiveCli -ne 'claude') {
         $rejB = Get-SensitivityBackendReject -sensitivity $sens -backendEgress (Get-BackendEgress $id)
         if ($rejB) { Write-Host "REJECT $rejB (task, $id) exit 4 - no override channel"; return 4 }
         # W4 裁定 B（2026-09-22）: **附件默认不出网**（后端属性判据；claude 通道那条由
-        #   `Invoke-Task-Claude` 按运行时 `$useStation` 判 —— 它的后端属性只有那里才知道）。
+        #   `Invoke-Task-Claude` 按运行时 `$backendLocal` 判 —— 它的后端属性只有那里才知道）。
         $rejAtt = Get-AttachEgressReject -attachCount @($attach).Count -backendEgress (Get-BackendEgress $id) -declared $fm['attach-egress']
         if ($rejAtt) { Write-Host "REJECT $rejAtt (task, $id) exit 4 - 附件默认不出网; 卡里加 ``attach-egress: ok`` 才放行"; return 4 }
     }
@@ -1535,6 +1654,25 @@ function Invoke-Task {
     # O-19: station env-ready gate (discover engine port + inject local provider baseURL BEFORE dispatch)
     # (already run above as part of radical fix B - engine ctx discovery)
 
+    # O-62/C1 (2026-09-25): **主路也参与控制台侧租约**（跨通道闭环）。
+    #   为什么需要: T1 的站上锁只覆盖 **opencode×opencode**；而**备路 stage 时不取任何站上锁**
+    #   ⇒ 备路的 `rm -rf $W/.attach` 仍能在主路的执行相里删掉主路的附件 ⇒ **跨通道**危险序① 可达。
+    #   模式按**危险面**（有附件 ∨ golden）⇒ 排他；否则 **共享** ⇒ 与另一条良性只读派发互不阻塞
+    #   （"6 并发那种只读·无附件"的形状**不受影响**）。
+    #   ⚠ 必须在**第一次 staging 写入之前**取（此处即 sync 之前）。
+    #   `$g`/`$goldenActive` 为此刻意**上移**到这里（原来在 §4c 附近）—— 免得为租约另立第二份判据。
+    $g = $fm['accept-golden']
+    $goldenActive = [bool]($g.source -and $g.cmd)
+    $leaseKey = $(if ($station) { "st-$station" } else { 'local' }) + "/$proj"
+    $leaseX = (($attach.Count -gt 0) -or $goldenActive)
+    $leaseMain = Enter-WorkspaceLease -Key $leaseKey -Exclusive $leaseX -Why 'main-opencode'
+    if (-not $leaseMain) {
+        $modeTxt = $(if ($leaseX) { 'exclusive' } else { 'shared' })
+        Write-Host "REJECT main-workspace-busy (exit 3) - $leaseKey 上已有**排他**派发在跑（本 run 想取 $modeTxt）(O-62/C1)"
+        return 3
+    }
+    Write-Host "LEASE_ACQUIRED: main $leaseKey ($(if ($leaseX) { 'exclusive' } else { 'shared' }))"
+
     # 3) sync source subset (never overwrite out/); target station is B (memory master) ws root
     Write-Host "TASK sync source -> $proj (model=$id station=$station sens=$sens readonly=$readonly)"
     try { Invoke-Workspace -proj $proj -act 'sync' -type $type -Station $station | Out-Null }
@@ -1554,16 +1692,39 @@ function Invoke-Task {
     #   `$attach.Count -gt 0` 时才重建 ⇒ **无附件的派发会留着上一次的附件**(agent 可 `ls`/读到, 且
     #   `attach-manifest` 会把外来文件算进本次 run —— 实测两次无附件 run 都报 `ATTACH_MANIFEST_LINES=3`)。
     #   代价: 无附件派发多一次 ssh(reset) —— 正确性优先, 且该 reset 必须在 scp 之前。
+    $evRmCmd = (($Script:EV_STAGE_NAMES | ForEach-Object { 'rm -f "$W/out/' + $_ + '"' }) -join "`n")
+    # ── O-59 / T1 (2026-09-25): **staging 中转目录（run 级私有）** ──────────────────────────────
+    # 为什么要有它: 附件的 reset+scp 与 golden 的注入原都在**远端 flock 之外**, 而 `readonly:true`
+    #   的锁是 **shared** ⇒ 同站同 proj 并发两跑会**互删/互灌 `.attach/`**。**先验红(实测)**: 两跑各带
+    #   1 件, 却都 `ATTACH_MANIFEST_LINES=2`、agent 都列出**对方**的件(见 DEV-LOG §27.11-G)。
+    # ⇒ 改为: 先落 **私有中转**(`/tmp/agent-stage-<RUN_TOKEN>`, 与 `$W` 零接触 —— 故**不需要**锁),
+    #   再由 run body **在锁内**落到 `$W`。见 body 里的「O-59/T1 落盘段」。
+    # ⚠ 用 `$Script:RUN_TOKEN` 而非 `$ts`: 后者在**本段之后**才赋值(见 `$ts = …` 那行), 且 RUN_TOKEN
+    #   本就是 per-invocation 唯一(Guid) ⇒ 并发下必然不撞。
+    $stage = "/tmp/agent-stage-$($Script:RUN_TOKEN)"
     $body = @"
 set -eu
+# O-59/T1: 脚本**自删** —— 名字带 per-run 身份后不再互相覆盖 ⇒ 会**累积**(实测三站各 0/4/0 个)。
+#   `trap … EXIT` 覆盖早退路径(`set -e` 触发时也删)。旧固定名是"被覆盖"所以不累积, 别退回那种写法。
+trap 'rm -f "`$0"' EXIT
 W="$Script:WORKSPACE_ROOT/$proj"
+STAGE="$stage"
 # ADR-0007 缺口 5 实测发现(2026-09-18): `.attach/` **从不回收** —— 站上实测残留着 09-05/09-12 五次派发的
 #   附件(fileA.md/fileB.txt/inbox.txt/_o11_src.txt/_o26_src.txt + docs/emptydir/), 与 IMPLEMENTATION
 #   "`.attach/` 生命周期=单次 task(结束即回收)" 的声明**正相反**。后果有二: ①**污染本次附件摘要**
 #   (上一轮的旧文件混进本次 digest ⇒ 摘要看着正常但内容不是本次注入的); ②agent 可能读到残留件。
 #   ⇒ 改为**派发前清空**(等价于所声明的语义, 且不必依赖"collect 回收"那一步)。
-rm -rf "`$W/.attach" && mkdir -p "`$W/.attach"
+# O-59/T1 (2026-09-25): **这里不再碰 `$W/.attach`** —— 共享锁下两跑会互删(先验红见 DEV-LOG §27.11-G)。
+#   改为只备**本 run 私有**的中转目录;`.attach` 的"重置 + 落件"移到 **run body 的锁内**(见 body 内 O-59/T1 段)。
+rm -rf "`$STAGE" && mkdir -p "`$STAGE/attach"
+# O-57-A (2026-09-25): **证据暂存件派发前无条件清** —— 根因/后果/量化见 `$Script:EV_STAGE_NAMES` 注释。
+#   与上面 `.attach/` reset **同一纪律**: "上一轮的残留"绝不能进本次的证据面。
+#   ⚠ 本 body 是**每次派发最早的远端写入点**(早于附件 scp、早于主 run body) ⇒ 放这里才不会删掉
+#     本次 run 自己刚写的件。
+$evRmCmd
 "@
+    # O-57-A: 上面那段 rm 清单由 `$Script:EV_STAGE_NAMES` **派生**（`$W` 用单引号拼出 ⇒ 由 bash 展开，
+    #   PS 不碰它）。**禁**在此处手写第二份名单 —— 两份枚举漂移正是本仓头号失败形态。
     # ⚠⚠ **W2 实测根因 (2026-09-22): 这一行曾漏 `| Out-Null`, 是"进程 rc 恒为 0"的来源** ——
     #   `Invoke-RemoteScript` 返回 int rc(成功=0), 而本行是**裸调用** ⇒ 该 0 落进 `Invoke-Task` 的
     #   **管道**(= 函数返回值集合), 于是调用方拿到 `$code = @(0, <真 rc>)`, 而 `exit $数组` ⇒ **进程 rc=0**。
@@ -1571,7 +1732,12 @@ rm -rf "`$W/.attach" && mkdir -p "`$W/.attach"
     #   所以**任何走过此处之后的失败**都被抹成 0(实测: 不带 AUTO_FALLBACK 的普通超时 run 也是 `exit=6` / `rc=0`)。
     #   归零纪律 09-18 清点时只覆盖了 cmdlet(`Copy-Item`/`Move-Item`/`Remove-Item`/`Add-Content`),
     #   **漏了自定义函数的返回值** ⇒ 这次补上; 并加出口守卫 `Resolve-ExitCode`(结构性, 见其注)。
-    Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-attach-reset.sh" | Out-Null
+    # ⚠ O-59/T1 (2026-09-25) **实测踩到的并发缺陷**: 本脚本内容现在是 **per-run** 的(含各自的 `$STAGE`),
+    #   而远端落点是**固定名** `/tmp/agent-cli-attach-reset.sh` ⇒ 同站并发时 B 会**覆盖** A 的脚本,
+    #   A 执行到的是 B 的版本 ⇒ 建出 **B 的** stage 目录 ⇒ A 自己的 `$STAGE/attach` 从不存在
+    #   ⇒ `scp: dest open "/tmp/agent-stage-<A-token>/attach/": No such file or directory`(实测)。
+    #   ⇒ **名字必须带 per-invocation 身份**(与本仓 F-1/F-2/F-14/O-31 同一族:"固定远端名 + 并发"必互踩)。
+    Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-attach-reset-$($Script:RUN_TOKEN).sh" | Out-Null
     if ($attach.Count -gt 0) {
         foreach ($a in $attach) {
             if (-not (Test-Path $a)) { Write-Host "attach missing (skip): $a"; continue }
@@ -1579,16 +1745,20 @@ rm -rf "`$W/.attach" && mkdir -p "`$W/.attach"
             $name = Split-Path $a -Leaf
             if ($isDir) {
                 # scp -r 不复制空目录 -> 预建远端同名目录兜底 (O-01 edge)
+                # O-59/T1: 兜底目录建在**私有中转**里（`cp -a "$STAGE/attach/."` 会连空目录一起带过去）；
+                #   若仍建在 `$W/.attach/` 就等于又把共享面从锁外碰了一次。
                 $bodyDir = @"
 set -eu
-W="$Script:WORKSPACE_ROOT/$proj"
-mkdir -p "`$W/.attach/$name"
+# O-59/T1: 同上, 自删(名字已带 per-run 身份 ⇒ 不覆盖但会累积)
+trap 'rm -f "`$0"' EXIT
+STAGE="$stage"
+mkdir -p "`$STAGE/attach/$name"
 "@
-                Invoke-RemoteScript -HostName $hostName -ScriptBody $bodyDir -LocalName "agent-cli-attach-mkdir-dir.sh" | Out-Null
-                scp -q -r -o BatchMode=yes -o ConnectTimeout=10 $a "${hostName}:$Script:WORKSPACE_ROOT/$proj/.attach/" 2>$null
+                Invoke-RemoteScript -HostName $hostName -ScriptBody $bodyDir -LocalName "agent-cli-attach-mkdir-dir-$($Script:RUN_TOKEN).sh" | Out-Null
+                scp -q -r -o BatchMode=yes -o ConnectTimeout=10 $a "${hostName}:$stage/attach/" 2>$null
             }
             else {
-                scp -q -o BatchMode=yes -o ConnectTimeout=10 $a "${hostName}:$Script:WORKSPACE_ROOT/$proj/.attach/" 2>$null
+                scp -q -o BatchMode=yes -o ConnectTimeout=10 $a "${hostName}:$stage/attach/" 2>$null
             }
             if ($LASTEXITCODE -ne 0) { Write-Host "NETFAIL: attach scp failed: $a"; return 5 }
             $attachNames += $name
@@ -1633,23 +1803,20 @@ mkdir -p "`$W/.attach/$name"
 
     # 5) fused remote script: orphan->flock->state->opencode(stdin)->state->output (R14)
     $W = "$Script:WORKSPACE_ROOT/$proj"
-    $ts = [DateTime]::Now.ToString('yyyyMMddHHmmssffff')
-    # 2026-09-23 (O-28 RC②): **并发 ts 去重**。Windows 时钟粒度(~15.6ms)使**同一滴答内启动的两个进程
-    #   取到完全相同的 ts**(实测两进程都是 202609232242536720) ⇒ `agent-out\<ts>` 与
-    #   `%TEMP%\agent-cli-ev-<ts>` 互踩(EVIDENCE_PULL_WARN: being used by another process + COLLECT_FAIL)。
-    #   **刻意保持 18 位数字形状**(scrubber 的长度判据与全仓 204 处引用依赖它) ⇒ **只做"已存在则递增"**,
-    #   不改 ts 的形状/位数。
     $tsOutRoot = Join-Path $projRoot 'agent-out'
-    $tsN = [Int64]$ts
-    while (Test-Path (Join-Path $tsOutRoot ([string]$tsN))) { $tsN++ }
-    if ([string]$tsN -ne $ts) { Write-Host "TS_DEDUP: $ts -> $tsN (concurrent collision, O-28 RC2)"; $ts = [string]$tsN }
+    # O-63 (2026-09-25): ts 改由**原子抢占**取得 —— 取代 O-28 RC② 的 `while (Test-Path …) { 递增 }`。
+    #   为什么换: 那是 **check-then-act**，两个并发进程会**同时**判"不存在"而取到同一 ts（实测两进程同 ts ⇒
+    #   同 runDir ⇒ 证据面混 + 一方 rc=7）。`Get-UniqueRunStamp` 用 `New-Item` **不带 -Force** 做 create-or-fail。
+    #   形状仍是 **18 位数字**（scrubber 的长度判据与全仓引用依赖它）。
+    $ts = Get-UniqueRunStamp -ProjOutRoot $tsOutRoot
+    if (-not $ts) { Write-Host "ABORT: 无法取得唯一 run 时间戳(exit 13)"; return 13 }
 
     # 4c) golden (O-12, IMPLEMENTATION §3.2 M2): authoritative golden test injected BEFORE dispatch
     #     (inv 3: after sync, before $body; clean-inject = .golden equals current injection).
     #     source resolved against REPO_ROOT; checksum computed console-side ONCE and embedded as
     #     literal in fused script (inv 5, P1-1: no .golden.sha256 manifest file in workspace).
-    $g = $fm['accept-golden']
-    $goldenActive = [bool]($g.source -and $g.cmd)
+    # O-62/C1 (2026-09-25): `$g` / `$goldenActive` 已**上移**到 sync 之前（租约需要它判危险面）
+    #   —— 此处**不再重算**，免得同一件事存在第二份判据（本仓头号失败形态）。
     $goldenSha = ''; $goldenCmdB64 = ''; $goldenBase = ''
     $goldenBlock = ''
     if ($goldenActive) {
@@ -1666,19 +1833,17 @@ mkdir -p "`$W/.attach/$name"
         $goldenTgz = Join-Path $env:TEMP "agent-cli-golden-$ts.tgz"
         & $Script:GNU_TAR --force-local -C (Split-Path $gSrc) -cf $goldenTgz $goldenBase
         if ($LASTEXITCODE -ne 0) { Write-Host "GOLDEN_TAR_FAIL: $($g.source)"; Remove-Item $goldenTgz -ErrorAction SilentlyContinue; return 2 }
-        scp -q -o BatchMode=yes -o ConnectTimeout=10 $goldenTgz "${hostName}:$W/.golden.tgz"
+        scp -q -o BatchMode=yes -o ConnectTimeout=10 $goldenTgz "${hostName}:$stage/golden.tgz"
         if ($LASTEXITCODE -ne 0) { Write-Host "NETFAIL: golden scp failed"; Remove-Item $goldenTgz -ErrorAction SilentlyContinue; return 5 }
         Remove-Item $goldenTgz -ErrorAction SilentlyContinue
-        # clean-inject (inv 3, P2-3): rm -rf .golden THEN extract -> golden path equals current injection
+        # ── O-59/T1 (2026-09-25): **注入动作不再在这里做** ───────────────────────────────────────
+        # 原来这里是一段独立 remote script: `rm -rf "$W/.golden"` + 解包 —— 与 `.attach` 是**同一族**
+        #   (在远端 flock **之外**碰共享面) ⇒ `readonly:true` 的共享锁下两跑会互删/互相覆盖 `.golden`。
+        #   ⇒ 现在只把 tgz 落到**私有中转**, 解包移到 run body 的**锁内落盘段**(见 body 内 O-59/T1 段)。
+        # ⚠ **别把这段搬回来**: `$goldenBlock`(sha 校验 + 执行)本就在锁内 ⇒ 注入与校验**必须同处锁内**,
+        #   否则"被校验的件"与"注入的件"之间又开出一个可被第三方改写的窗口 ⇒ clean-inject 不变式被破。
         # compress convention: plain tar (`-cf`/`-xf`) matches live sync chain (L246/L260) - NOT gzip;
         # mismatched `-xzf` would fail "not in gzip format" (V0 real-run finding, 2026-09-09)
-        $goldenInject = @"
-set -eu
-W="$Script:WORKSPACE_ROOT/$proj"
-rm -rf "`$W/.golden" && mkdir -p "`$W/.golden" \
-  && tar -xf "`$W/.golden.tgz" -C "`$W/.golden" && rm -f "`$W/.golden.tgz"
-"@
-        Invoke-RemoteScript -HostName $hostName -ScriptBody $goldenInject -LocalName "agent-cli-golden-$ts.sh" | Out-Null
         # M3 golden block (fused into $body below; literal interpolation ONLY for the three
         # console-side values goldenSha/goldenBase/goldenCmdB64 - all remote vars backtick-escaped)
         $goldenBlock = @"
@@ -1704,10 +1869,24 @@ echo "ACCEPT_GOLDEN_OK=`$ACCEPT_GOLDEN_OK"
     # Codex RwLock semantics: shared readers may be concurrent; any writer is exclusive.
     # Concurrency PLANNING stays with slot-gate (O-25) + O-18 cross-station discipline - the lock only
     # guarantees write-safety, it is decoupled from how many readers actually get dispatched.
-    $flockShared = if ($readonly) { '1' } else { '0' }
+    # O-59/T1 (2026-09-25): **危险面 ⇒ 排他**。原来只看 `readonly`; 但"落盘段"要重置 `.attach`/`.golden`
+    #   (共享面) ⇒ 若两个只读 run 同持**共享**锁, 它们仍会**互删**对方刚落下的件(先验红见 DEV-LOG §27.11-G)。
+    #   ⇒ 危险面 = `有附件 ∨ golden active` ⇒ 一律 **exclusive**; 只有"既无附件又无 golden 的只读卡"
+    #     才走 shared —— 那种卡的落盘段只做一次 `rm -rf .attach`(两边都是空目录) ⇒ 并发无害。
+    # ⚠ 这条与"落盘段"是**一对**(§27.11-A): 只上其一都堵不住危险序①。capability 代价见 §27.11-E。
+    # ⚠ O-62/C1 (2026-09-25): 判据**唯一来源 = 上面租约用的 `$leaseX`** —— 此处**不再重写表达式**
+    #   （否则同一件事两份判据，正是本仓头号失败形态）。
+    $dangerFace = $leaseX
+    $flockShared = if ($readonly -and -not $dangerFace) { '1' } else { '0' }
+    # 落盘段用它决定"是否解包 golden"。**刻意走 PS 字面量**(在 body 里落成 `1`/`0`),
+    #   不引入新的远端变量 —— 少一个"两边名字必须对齐"的耦合点。
+    $goldenHint = if ($goldenActive) { '1' } else { '0' }
     $body = @"
 set -u
 W="$W"
+# O-59/T1: 私有中转路径 —— 与 attach-reset body 里那个**同源**（都由 `$stage` 插值而来）。
+#   ⚠ `set -u` 下**必须**在这里定义: 落盘段要用 `$STAGE`（实测漏定义 ⇒ `STAGE: 未绑定的变量` ⇒ rc=255）。
+STAGE="$stage"
 S="`$W/.agent-state.json"
 mkdir -p "`$W" "`$W/out"
 # O-09 isolate-xdg: 同站并行写任务时把 opencode 数据目录隔离到 per-task 工作区,
@@ -1743,6 +1922,21 @@ if ! flock `$LOCK_FLAGS -n 9; then
   exit 3
 fi
 echo "LOCK_ACQUIRED pid=`$$ mode=`$( [ -n "`$LOCK_FLAGS" ] && echo shared || echo exclusive )"
+# ── O-59/T1 (2026-09-25): **落盘段 —— 必须在锁内** ──────────────────────────────────────────
+# 为什么放这里(三个理由, 缺一即错):
+#   ① 本段要**重置** `.attach`/`.golden`(共享面) ⇒ 必须**已持锁**(见上面 `$flockShared` 的危险面判据);
+#   ② 必须**早于** `.attach-manifest.txt` 采样(它在下面) —— 那份 manifest 记的是"**注入的字节**";
+#   ③ `$STAGE` 是**本 run 私有**的中转(console 侧写入, 与 `$W` 零接触, 故它自己不需要锁)。
+# ⇒ 落地后立即删中转目录(`rm -rf "$STAGE"`), 不留残留。
+rm -rf "`$W/.attach" && mkdir -p "`$W/.attach"
+if [ -d "`$STAGE/attach" ]; then cp -a "`$STAGE/attach/." "`$W/.attach/" 2>/dev/null || true; fi
+echo "ATTACH_STAGED=`$(ls -1 "`$W/.attach" 2>/dev/null | wc -l)"
+if [ "$goldenHint" = 1 ]; then
+  rm -rf "`$W/.golden" && mkdir -p "`$W/.golden"
+  tar -xf "`$STAGE/golden.tgz" -C "`$W/.golden" 2>/dev/null || echo "GOLDEN_STAGE_FAIL"
+  echo "GOLDEN_STAGED=`$(ls -1 "`$W/.golden" 2>/dev/null | wc -l)"
+fi
+rm -rf "`$STAGE"
 Q0=`$(date +%s%N)
 printf '{"state":"running","pid":%d,"ts_start":"%s","task_id":"%s","host":"agent-cli"}' "`$$" "`$(date -Is)" "$ts" > "`$S"
 sleep 2   # artificial intake gap (BP-4: makes queue_s measurable on contention holder)
@@ -1955,7 +2149,9 @@ exit `$FINAL_RC
         # ADR-0007 缺口 5: 增 `.attach-manifest.txt`(附件**注入字节**的逐文件哈希; 无附件时为**空件**,
         #   仍会发 marker ⇒ 靠下面的**存在性**判定归档, 不靠真值判定)。
         # ADR-0007 缺口 8: 增 `.session-meta.txt`(站上会话库遥测; helper **一定**产出该件, 含"取不到"情形)。
-        $evNames = @('.meta', '.prompt.txt', '.progress', '.accept-cmds.txt', '.golden-cmd.txt', '.workspace-diff.txt', '.attach-manifest.txt', '.session-meta.txt')
+        # O-57-A (2026-09-25): 清单**不在此处手写** —— 与派发前的 reset 共用
+        #   `$Script:EV_STAGE_NAMES`（唯一真值；两份枚举漂移是本仓头号失败形态）。
+        $evNames = $Script:EV_STAGE_NAMES
         $evCmd = (($evNames | ForEach-Object { "if [ -f $W/out/$_ ]; then echo FILE:$_ ; base64 -w0 $W/out/$_ ; echo ; fi" }) -join ' ; ')
         $evRaw = @(& ssh -o BatchMode=yes -o ConnectTimeout=10 $hostName $evCmd 2>$null)
         $evBuf = @{}; $evCur = ''
@@ -2351,9 +2547,13 @@ exit `$FINAL_RC
                 }
                 $safef = $del | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }
                 $body = "cd `"$W`"`nfor f in $($safef -join ' '); do [ -e `"`$f`" ] && rm -f -- `"`$f`"; done"
+                # O-59/T1 (2026-09-25): 本 run 的**私有中转目录**也要清 —— 正常路径由锁内落盘段删
+                #   (`rm -rf "$STAGE"`), 但**失败路径可能走不到那一步**(如 LOCK_HELD 早退) ⇒ 在此兜底。
+                # ⚠ **必须用本 run 的 token**, 绝不能用通配 `/tmp/agent-stage-*` —— 那会**误删并发 run 的中转**。
+                $body += "`nrm -rf `"/tmp/agent-stage-$($Script:RUN_TOKEN)`""
                 try { Invoke-RemoteScript -HostName $hostName -ScriptBody $body | Out-Null }
                 catch { Write-Host "O46_CLEAN_WARN: 远端清理失败(非阻断): $($_.Exception.Message)" }
-                Write-Host "O46_CLEAN: 失败 run 已清理远端 $($del.Count) 项"
+                Write-Host "O46_CLEAN: 失败 run 已清理远端 $($del.Count) 项 + 私有中转"
             }
             # 2026-09-23 (F-2) **已删除**此处原有的一行:
             #   Remove-Item (Join-Path $projRoot 'agent-out\.agent-run.json') -ErrorAction SilentlyContinue
@@ -2395,9 +2595,12 @@ exit `$FINAL_RC
         #   原 rc 已在上一行 `TASK_DONE … exit=$code` 打印, 未丢失。
         # ⚠ **必须用 `$taskModel`(顶部快照), 不能用 `$m`** —— 后者已被 collect 段改写为 .meta 全文
         #   (2026-09-21 真实站实弹实测踩到, 见上方快照处注释)。
-        # 备路模型: claude 备路只接受 `station=''` 的**本地** claude 路由(Invoke-Task-Claude 内护栏),
-        #   而主路模型(如 gpt-oss-20b)解析出 station='B' ⇒ **不能透传**, 否则被
-        #   `REJECT claude-station=B (exit 4)` 拦掉 ⇒ 备路等于白切。故按语义切到 claude 备路型号:
+        # 备路模型: **不能透传主路型号** —— 主路型号(如 gpt-oss-20b)解析出 station='B'、且是 `local/*`,
+        #   而 claude 站上分支在**非 local-only** 下会用 OpenRouter ⇒ `local/*` id 会被
+        #   `REJECT claude-station-egress-local-id (exit 4)` 前置拒掉 ⇒ 备路等于白切。故按语义切到 claude 备路型号:
+        #   ⚠ 2026-09-25 更正: 旧文本说"只接受 station='' 的路由, 否则被 `REJECT claude-station` 拦掉" ——
+        #     那道闸已撤除(站上 claude 现可用 OpenRouter); 但"**不透传主路型号**"这条结论**不变**,
+        #     只是理由从"跨站违规"变成"本地 id 打不了 OpenRouter"。
         #   默认 ROUTE_TABLE 的 `claude`(=**thinkingmachines/inkling:free**, OpenRouter 可服务;
         #   2026-09-21 实测修正: 原值 `claude-sonnet-4-5` 是 Claude 原生 id ⇒ 经 OpenRouter 被路由到
         #   真实 Anthropic 上游 ⇒ **403 地区墙**, 见 ROUTE_TABLE 处注释), 可用 env `AGENT_FALLBACK_MODEL` 覆盖。
@@ -2666,18 +2869,27 @@ function Invoke-Task-Claude {
     #   初版把 `$stPref` 块放在本行**之前** ⇒ PS 里未定义变量为 `$null` ⇒ `if ($useStation)` 为假
     #   ⇒ 走了旧的 `REJECT claude-station` 分支(local-only 卡被旧语义误拒)。夹具只查"串在不"，
     #   **查不出顺序** ⇒ 已补位置断言(见 _fm_golden_test.ps1)。
-    $useStation = ($sens -eq 'local-only')
+    # 2026-09-25: **「跑在哪」与「后端是否出网」拆成两个量** —— 原先两者绑在一个 `$useStation` 上,
+    #   后果是"站上 claude"与"不出网"互为充要 ⇒ 站上 claude **永远配不了 OpenRouter**(那把锁)。
+    #   · `$useStation`   = 跑在站上与否: `local-only`(强制) **或** 路由声明了站(显式别名 claude-a/-b/-c)
+    #   · `$backendLocal` = 后端是不是**站上本地引擎**(= 不出网): **只有** `local-only` 是;
+    #                       其余一律 OpenRouter(会出网 —— 主控本地 或 站上, 由 `$useStation` 决定在哪台机器)
+    #   ⇒ 后端属性**独立于位置**判: 站上也允许出网(站上 OpenRouter, 按站独立 key)。
+    $useStation = ($sens -eq 'local-only') -or [bool]$r['station']
+    $backendLocal = ($sens -eq 'local-only')
     # ⚠ P3 (2026-09-21) 探查期发现的**真实缺口**: `$r['station']` 的语义**按分支不同** ——
-    #   · **主控本地** spawn(= 云端后端) ⇒ 非空 station 是**跨站违规** ⇒ REJECT(原有语义, 保留)
-    #   · **站上**分支(= 站上本地引擎)   ⇒ 非空 station 是**偏好站** —— 卡若写 `model: gpt-oss-20b`
+    #   · **主控本地** spawn(= 云端后端, 路由未声明站) ⇒ 无 station 可言, 走它自己的路径
+    #   · **站上**分支 ⇒ 非空 station 是**偏好站** —— 卡若写 `model: gpt-oss-20b`
     #     (自然的写法: "我只用本地模型"), `Resolve-Model` 必然给出 `station='B'`。
     #     若仍按旧语义拒绝, 则 `local-only` 卡**无解**: 写本地型号被拦, 写云端型号名语义错。
     #     ⇒ 站上分支把它当**首选站**, 不是违规。
+    # D7 (2026-09-25): 旧闸 `REJECT claude-station` **已撤除** —— 它把"站上"与"不出网"绑死, 那正是那把锁。
+    #   取而代之是下面这条**有意义**的配对闸: 站上 **egress** 模式下打 `local/*` id ⇒ OpenRouter 服务不了
+    #   ⇒ 前置拒(等价于原行为: 本地型号 + claude + 非 local-only 仍被拦, 只是理由变准了)。
     $stPref = ''
-    if ($useStation) {
-        $stPref = $r['station']
-    } elseif ($r['station']) {
-        Write-Host "REJECT claude-station=$($r['station']) (exit 4) - claude channel must run local (station='')"
+    if ($useStation) { $stPref = [string]$r['station'] }
+    if ($useStation -and -not $backendLocal -and $id -match '^local/') {
+        Write-Host "REJECT claude-station-egress-local-id ($id) (exit 4) - 站上 OpenRouter 模式只能服务云端 id; 本地 id 请用 sensitivity: local-only"
         return 4
     }
     # W3 步 2 (2026-09-22): 原先这里是一道**"站上变体 + 有附件 ⇒ 一律拒绝"**的 fail-closed 闸
@@ -2694,11 +2906,15 @@ function Invoke-Task-Claude {
     #   **P3 (2026-09-21, 用户裁定"按 sensitivity 分流")**:
     #     · `local-only`  ⇒ **站上**跑 claude + **站上本地引擎**(127.0.0.1:8080) ⇒ **物理不出网**;
     #                       站上不可用 ⇒ **fail-closed**(绝不退回主控本地 = 那会出网)
-    #     · 其余         ⇒ **主控本地** spawn(现状, 已实弹验证) ⇒ 后端 = OpenRouter = 出网
+    #     · 其余 + 路由**未声明站**(别名 `claude`/`claude-opus`) ⇒ **主控本地** spawn(现状, 已实弹验证)
+    #     · 其余 + 路由**声明了站**(2026-09-25 新增 `claude-a/-b/-c`) ⇒ **站上**跑 claude +
+    #                       **站上 OpenRouter**(按站独立 key) ⇒ 出网; 站不可用 ⇒ 拒跑并列出替代站
     #   站上 claude 打本地引擎的能力已实测(2026-09-21): `claude -p` ⇒ `LOCAL-OK`。
     #   `$useStation` 已在**上方**算好(见那条顺序注释 —— 它必须先于 `$stPref`)。
-    $stHost = ''; $stUser = ''
+    $stHost = ''; $stUser = ''; $st = ''
     if ($useStation) {
+      if ($backendLocal) {
+        # ── 模式①: `local-only` ⇒ 站上 claude + **站上本地引擎**(物理不出网)。逻辑**一字未改**。──
         # ⚠ 2026-09-21 复查修正: `$avoid` **必须优先取参数** —— 原版只读 env, 而**没有人在运行时填
         #   env** ⇒ "优先选与死锁站不同的一站"(P3 设计的一条) **实际未生效**: 兜底时会**优先选中
         #   刚 rc=6 的那一站**(它的引擎"在服务" ⇒ 就绪探针通过, 而它可能已被 wedge)。
@@ -2720,18 +2936,41 @@ function Invoke-Task-Claude {
             Write-Host "REJECT local-only-no-station-engine (exit 4) - 无可用的站上本地引擎 ⇒ fail-closed；**绝不**退回主控本地(会出网)"
             return 4
         }
+      } else {
+        # ── 模式② (2026-09-25): 非 local-only ⇒ 站上 claude + **站上 OpenRouter**(出网, 按站独立 key)──
+        #   就绪判据**不是**"引擎在服务" —— 该模式物理上不需要站上引擎(2026-09-25 实测: 站上引擎未加载
+        #   (`/props` 000)仍可出网)。判据换成 ssh 可达 + `claude` 可执行 + 站上 `~/.config/rpc/openrouter.key` 存在。
+        #   ⚠ **不静默换站**(用户裁定 2026-09-25): 首选站不可用 ⇒ **拒跑**, 并**列出可用替代站**供用户裁定。
+        #     理由: 换站会**静默换账户**(每站独立 OpenRouter 账户 ⇒ 限流/配额归属不同) + 让"claude-a 落在 A"
+        #     这个调用方预期失真 ⇒ 属"两件事说成一件"。要换站, 请调用方换别名重发。
+        if (Test-StationClaudeEgressReady -hostName (Get-TargetHost $stPref) -remoteUser $Script:REMOTE_USER) {
+            $st = $stPref; $stHost = Get-TargetHost $stPref; $stUser = $Script:REMOTE_USER
+            Write-Host "CLAUDE_EGRESS_STATION_SELECT: station=$st host=$stHost (backend=OpenRouter)"
+        } else {
+            $alt = @()
+            foreach ($c in @('A', 'B', 'C')) {
+                if ($c -eq $stPref) { continue }
+                if (Test-StationClaudeEgressReady -hostName (Get-TargetHost $c) -remoteUser $Script:REMOTE_USER) { $alt += $c }
+            }
+            $altTxt = if (@($alt).Count -gt 0) { ($alt -join ',') } else { '无' }
+            Write-Host "REJECT claude-station-unavailable=$stPref (exit 4) - 目标站不可用(ssh 不可达 / 缺 claude / 缺站上 openrouter.key)；换站需用户裁定 ⇒ 现可用的替代站: $altTxt"
+            return 4
+        }
+      }
     }
-    # 硬闸（P2 的核心: 判据输入从"型号前缀"改为"**后端出网属性**"）。站上本地 ⇒ 不出网(放行 local-only);
-    #   主控本地 ⇒ 出网 ⇒ local-only 必须被拒。**保留本闸是防线**: 若将来有人加了新的云端 claude
-    #   后端却忘了同步 `$useStation`, 它仍会拦(而不是静默放行)。
-    $rej = Get-SensitivityBackendReject -sensitivity $sens -backendEgress (-not $useStation)
+    # 硬闸（P2 的核心: 判据输入从"型号前缀"改为"**后端出网属性**"）。`$backendLocal` ⇒ 不出网(放行 local-only);
+    #   否则 ⇒ 出网 ⇒ local-only 必须被拒。**保留本闸是防线**: 若将来有人加了新的云端 claude
+    #   后端却忘了同步 `$backendLocal`, 它仍会拦(而不是静默放行)。
+    #   ⚠ 2026-09-25: 入参由 `(-not $useStation)` 改为 `(-not $backendLocal)` —— **值等价**(local-only ⟺ 站在站上),
+    #     但语义**独立于位置**: 后端属性只由 sensitivity 判, 不再被"跑在哪台机器"污染。
+    $rej = Get-SensitivityBackendReject -sensitivity $sens -backendEgress (-not $backendLocal)
     if ($rej) {
         Write-Host "REJECT $rej (claude-direct, $id) exit 4 - no override channel (owner-policy)"
         return 4
     }
     # W4 裁定 B（2026-09-22）: **附件默认不出网**。claude 通道的后端属性同样按**运行时**判
     #   （站上本地 claude ⇒ 不出网 ⇒ 放行; 主控本地 ⇒ OpenRouter 云端 ⇒ 需显式放行）。
-    $rejAtt = Get-AttachEgressReject -attachCount @($attach).Count -backendEgress (-not $useStation) -declared $fm['attach-egress']
+    $rejAtt = Get-AttachEgressReject -attachCount @($attach).Count -backendEgress (-not $backendLocal) -declared $fm['attach-egress']
     if ($rejAtt) {
         Write-Host "REJECT $rejAtt (claude-direct, $id) exit 4 - 附件默认不出网; 卡里加 ``attach-egress: ok`` 才放行"
         return 4
@@ -2740,7 +2979,12 @@ function Invoke-Task-Claude {
     $prof = Resolve-Profile -model $m -complexity $complexity -taskType $taskType
     Write-Host "PROFILE: profile=$($prof.profile) ctx=$($prof.context) max_out=$($prof.max_output) flavor=$($prof.flavor) (claude local)"
 
-    $ts = [DateTime]::Now.ToString('yyyyMMddHHmmssffff')
+    # O-63 (2026-09-25): 与主路**用同一个**原子抢占（唯一性判据同为 `agent-out\<ts>` ⇒ **跨通道**也不会撞）。
+    #   由来: O-60 曾给备路补 `Test-Path` 式去重，但实测证明那只是 check-then-act —— 两个并发 claude run
+    #   同时通过检查、取到同一 ts（`TS_DEDUP` 一次未打印），共用 scratch **且共用 runDir**（只出一个 runDir，
+    #   5 件 vs 正常 9 件，一方 rc=7）。⇒ 换 `Get-UniqueRunStamp` 的 create-or-fail。
+    $ts = Get-UniqueRunStamp -ProjOutRoot (Join-Path $projRoot 'agent-out')
+    if (-not $ts) { Write-Host "ABORT: 无法取得唯一 run 时间戳(exit 13)"; return 13 }
     $scratch = Join-Path $env:TEMP "agent-cli-claude-$ts"
     New-Item -ItemType Directory -Path $scratch -Force | Out-Null
     $promptIn  = Join-Path $scratch '.claude-prompt.txt'
@@ -2755,8 +2999,33 @@ function Invoke-Task-Claude {
     # ---- prompt assembly (镜像远程分支; claude 本地不需要 base64, 直写 UTF-8 文件喂 stdin) ----
     $promptFull = "[proj:$proj]`n$($fm['task'])"
     if ($fm['body']) { $promptFull += "`n`n" + $fm['body'] }
+    # ---- 危险面判据 (O-62/C3, **单一真值**; 本函数两处租约共用) -------------------------------
+    # 危险面 = 有附件 ∨ golden active ⇒ 取**排他**; 否则**共享**(rwlock) ⇒ 良性并发不受影响。
+    #   ⚠ 回归经过(2026-09-25 实测): 第一版把备路租约写死 `-Exclusive $true` ⇒ 良性跨通道配对
+    #     (只读·无附件, 如 6 并发里的 oc+cc 同站对)也被串行化 ⇒ 跨通道对照实验当场 `REJECT claude-station-busy`。
+    #     漏掉它的原因: 只复跑了 claude×claude, 没复跑 6 并发。
+    #   ⚠ 必须在此处(两处租约**之前**)**单点**计算 —— 原先只在"有附件"块内算 ⇒ **无附件的站上 golden run**
+    #     读到 `$null`(=$false=共享), 而 golden 注入是**共享面写入** ⇒ 危险序① 漏挡(同一件事两份判据的经典后果)。
+    $g = $fm['accept-golden']
+    $goldenActive = [bool]($g.source -and $g.cmd)
+    $leaseX = (($attach.Count -gt 0) -or $goldenActive)
     $attachEntries = @()
     if ($attach.Count -gt 0) {
+        # O-62/C3 补 (2026-09-25): **本地模式**也有同族共享面 —— 附件被复制到 `<projRoot>\.attach`
+        #   （**非 per-run**，见下面两行）⇒ 同 proj 并发**本地** claude run 会互覆（§29.4 边界②）。
+        #   租约必须放在**复制之前**才覆盖得住。
+        #   ⚠ 模式 `$leaseX`(危险面) 在**本函数开头**单点计算（两处租约共用；含"实测回归"经过，见上）。
+        #   ★ 上一条的意思: 本块只在**有附件**时进 ⇒ 无附件就压根不碰 `.attach` ⇒ 良性并发不受影响。
+        #   ⚠ key 用 `'local'`: 与站上租约是**两个不同资源**（一个在控制台 `projRoot\.attach`，一个在站上 `WSROOT/<proj>`）。
+        # O-62/C3 (2026-09-25, **实测回归修正**): 模式一律由危险面 `$leaseX` 决定 —— 写死 `-Exclusive $true`
+        #   会把良性跨通道配对（只读·无附件，如 6 并发里的 oc+cc 同站对）也串行化 ⇒ 对照实验当场
+        #   `REJECT claude-station-busy`。漏掉它的原因是**只复跑了 claude×claude，没复跑 6 并发**。
+        $leaseLocal = Enter-WorkspaceLease -Key "local/$proj" -Exclusive $leaseX -Why 'claude-local'
+        if (-not $leaseLocal) {
+            Write-Host "REJECT claude-local-busy (exit 3) - 同 proj($proj) 已有**本地带附件**的 claude 派发在跑 (O-62; DEV-LOG §29.4)"
+            return 3
+        }
+        Write-Host "LEASE_ACQUIRED: claude-local $proj (exclusive; 因有附件 ⇒ 会写 <projRoot>\.attach)"
         # claude cwd=projRoot -> attach 复制到 projRoot\.attach (与远程 workspace 语义一致)
         $attachLocal = Join-Path $projRoot '.attach'
         New-Item -ItemType Directory -Path $attachLocal -Force -EA SilentlyContinue | Out-Null
@@ -2807,6 +3076,15 @@ function Invoke-Task-Claude {
     #   marker 出现在 agent 输出里 ⇒ 附件在站上确实可读; 项目文件面由"该工作区确有项目文件"佐证。
     $stWorkDir = ''
     if ($useStation) {
+        # O-62/C3 (2026-09-25): **同站同 proj** 的租约 —— 必须**在 staging 之前**取，否则覆盖不到危险序①
+        #   （备路是 `rm -rf $W/.attach` + scp 在锁外 ⇒ 只锁"执行相"等于没锁）。理由/边界见函数内注释。
+        #   模式由危险面 `$leaseX` 决定（本函数开头单点算）: 危险面 ⇒ 排他; 否则 ⇒ 共享 ⇒ 良性并发保留。
+        $lease = Enter-WorkspaceLease -Key "st-$st/$proj" -Exclusive $leaseX -Why 'claude-station'
+        if (-not $lease) {
+            Write-Host "REJECT claude-station-busy (exit 3) - 同站($st)同 proj($proj) 已有**排他**备路派发在跑 (O-62/C3; DEV-LOG §28.1)"
+            return 3
+        }
+        Write-Host "LEASE_ACQUIRED: claude-station $st/$proj ($(if ($leaseX) { 'exclusive' } else { 'shared' }); 释放=本进程退出)"
         Write-Host "CLAUDE-STATION: sync 项目工作区 -> $proj (station=$st)"
         try { Invoke-Workspace -proj $proj -act 'sync' -Station $st | Out-Null }
         catch {
@@ -2863,8 +3141,8 @@ mkdir -p "$stWorkDir/.attach/$nm2"
     # ---- accept criteria ----
     $accept = @($fm['accept'] | Where-Object { $_.Trim() })
     # ---- golden (O-12 M2, 本地注入) ----
-    $g = $fm['accept-golden']
-    $goldenActive = [bool]($g.source -and $g.cmd)
+    # ⚠ `$g` / `$goldenActive` **不在这里算** —— 已在**本函数开头**(危险面判据处)**单点**计算，
+    #   因为**租约模式**依赖它（无附件但 golden ⇒ 排他）。此处再算一份就是"同一件事两份判据"(本仓头号坑)。
     $goldenSha = ''; $goldenBase = ''
     if ($goldenActive) {
         try { $gSrc = Resolve-Path (Join-Path $Script:REPO_ROOT $g.source) -ErrorAction Stop } catch {
@@ -2891,17 +3169,24 @@ mkdir -p "$stWorkDir/.attach/$nm2"
     #   (实测 run `202609221331304084` 写成 `thinkingmachines/inkling:free`)。
     #   ⚠ 为何要紧: 这两件都是**真值源**, 而"按 model 列判该 run 是否出网"是个**看起来能用**的判据
     #   ⇒ 会把不出网的 run 读成出网（方向: 假警报; **同族的反向错误会掩盖真出网**）。
-    #   ⇒ 站上分支写 `station:<站>/<别名>`(= 位置 + 实际模型); 非站上分支**保持 `$id`**(那时它就是真值)。
+    #   ⇒ 站上分支写 `station:<站>/<实际模型>`(= 位置 + 实际模型); 非站上分支**保持 `$id`**(那时它就是真值)。
     #   ⚠ 信息不丢: 请求的路由 id 仍可从**归档的卡**(`card.md`, run 的证据件之一)+ `ROUTE_TABLE` 复原。
-    $stModelAlias = 'main'   # 单一真值: 既用于 `--model` 实参, 也用于上面这个执行身份串(免得两处漂移)
+    #   ⚠ 2026-09-25: 站上分支的 `--model` 实参**按后端分**: 本地引擎用引擎别名 `main`(站上 settings 也是
+    #     这么映射的); 站上 OpenRouter 则必须用**真 id** —— 给 OpenRouter 发 `main` 会被当成未知模型。
+    #     故 `$stModelAlias` 由 `$backendLocal` 决定(单一真值, 回避"两处各写一份而漂移")。
+    $stModelAlias = if ($backendLocal) { 'main' } else { $id }
     $execModel = if ($useStation) { "station:$st/$stModelAlias" } else { $id }
     # O-42 (2026-09-24): claude 通道 `-p` 的权限开关。`settings.json` 的 `defaultMode` 在 `-p` 下**不生效**,
     #   须 CLI 显式传。产物型任务(readonly=$false)需要写 ⇒ `--permission-mode acceptEdits`;
     #   `readonly: true` 的卡**不加**(保持只读 —— 破卡面契约 = D-06/D-07 同级安全面)。
     #   空串时 argStr 不变(向后兼容)。正反注入见 _fm_golden_test.ps1 的 O-42 段。
     $pmArg = if ($readonly) { '' } else { ' --permission-mode acceptEdits' }
+    # 2026-09-25: 站上脚本按后端写**不同的**临时 settings(local = 站上本地引擎 / or = 站上 OpenRouter)。
+    #   `-ModelId` 只在 or 模式需要(写进 settings 的 ANTHROPIC_MODEL); local 模式由引擎别名 `main` 管。
+    $stMode = if ($backendLocal) { 'local' } else { 'or' }
+    $stModelId = if ($backendLocal) { '' } else { $id }
     if ($useStation) {
-        $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('-p "" --model "' + $stModelAlias + '"' + $pmArg) -stdin $promptIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $timeout -WorkDir $stWorkDir
+        $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('-p "" --model "' + $stModelAlias + '"' + $pmArg) -stdin $promptIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $timeout -WorkDir $stWorkDir -Mode $stMode -ModelId $stModelId
     } else {
         $rcov = Invoke-ClaudeFly -argStr ('-p "" --model "' + $id + '"' + $pmArg) -stdin $promptIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $timeout -cwd $projRoot
     }
@@ -2919,7 +3204,7 @@ mkdir -p "$stWorkDir/.attach/$nm2"
         Add-Content $outTxt "`n=== RESUME[$contAttempt] prev_rc=$rc ==="
         [IO.File]::WriteAllText($contIn, ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($contB64))), $utf8NoBom)
         if ($useStation) {
-            $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('--continue -p "" --model "' + $stModelAlias + '"' + $pmArg) -stdin $contIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $continueTimeout -WorkDir $stWorkDir
+            $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('--continue -p "" --model "' + $stModelAlias + '"' + $pmArg) -stdin $contIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $continueTimeout -WorkDir $stWorkDir -Mode $stMode -ModelId $stModelId
         } else {
             $rcov = Invoke-ClaudeFly -argStr ('--continue -p "" --model "' + $id + '"' + $pmArg) -stdin $contIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $continueTimeout -cwd $projRoot
         }
@@ -3041,6 +3326,12 @@ mkdir -p "$stWorkDir/.attach/$nm2"
             # ADR-0005 D1 (2026-09-16) 证据回收闭环(本地备路): prompt 全文 + stderr 归 runDir ——
             #   本路的 prompt/stderr 是主控本地 scratch 里的件, 此前同样不归档(出 bug 时无从复核)。
             if (Test-Path $promptIn) { Copy-Item $promptIn (Join-Path $runDir 'prompt.txt') -Force | Out-Null }
+            # O-56 (2026-09-25): `stderr` 在备路基线里是**无条件声明**（Get-ClaudeFrameworkSubjects）⇒
+            #   归档侧**必须**保证产出: 站上 runner 走 catch / scp 失败时 `$errTxt` 可能**根本不存在**
+            #   （实测 run `202609251257301180` 因此假报一条 `missing-artifact`）。
+            #   为什么不改成"条件声明": **失败路径的 stderr 恰是最该留的证据** —— 缺件本身是信号，
+            #   把声明改成条件等于把"这次失败没留下 stderr"这件事一起藏掉。
+            if (-not (Test-Path $errTxt)) { [IO.File]::WriteAllText($errTxt, '', (New-Object System.Text.UTF8Encoding $false)) }
             if (Test-Path $errTxt) { Copy-Item $errTxt (Join-Path $runDir 'stderr.txt') -Force | Out-Null }
         } catch { $collectOk = $false; Write-Host "COLLECT_FAIL: $($_.Exception.Message)" }
     }
@@ -3218,6 +3509,29 @@ function Test-StationEngineReady {
     }
 }
 
+function Test-StationClaudeEgressReady {
+    # 2026-09-25 (D7): "站上 claude + OpenRouter" 模式的就绪判据。
+    # ⚠ **刻意不是** `Test-StationEngineReady` —— 该模式物理上不需要站上推理引擎
+    #   (2026-09-25 实测: B 站引擎未加载 `/props`=000 仍可经 OpenRouter 出网)。
+    #   三条判据(缺一即不可用 ⇒ 调用方 fail-closed + 列出替代站供裁定):
+    #     ① ssh 可达(用 `BatchMode=yes` ⇒ 认证异常**快速失败**而不是弹口令挂住, 见 ssh 纪律块)
+    #     ② 站上 `claude` 可执行(claude 通道的前提; 实测三站 2.1.258)
+    #     ③ 站上 `~/.config/rpc/openrouter.key` 存在(or 模式的凭据面; 每站独立账户)
+    # 归零纪律: 本函数只有 bool 进管道 ⇒ 内部输出一律 Write-Host。
+    param([string]$hostName, [string]$remoteUser)
+    try {
+        # 单引号串 ⇒ `$HOME` 保持字面量交给远端 shell 展开(不在本机展开)。
+        $probe = 'command -v claude >/dev/null 2>&1 && test -f "$HOME/.config/rpc/openrouter.key" && echo EGRESS_READY'
+        $out = & ssh -o BatchMode=yes -o ConnectTimeout=8 "${remoteUser}@${hostName}" $probe 2>&1
+        $rc = $LASTEXITCODE
+        foreach ($l in @($out)) { Write-Host "  [station-claude-egress $hostName] $l" }
+        return ($rc -eq 0 -and (($out | Out-String) -match 'EGRESS_READY'))
+    } catch {
+        Write-Host "  [station-claude-egress $hostName] EXC: $($_.Exception.Message)"
+        return $false
+    }
+}
+
 function Invoke-ClaudeFly-Station {
     # P3 (2026-09-21): claude 通道的**站上**执行器。与 Invoke-ClaudeFly **严格同契约**
     #   (argStr/stdin/stdout/stderr/scratch/budgetS ⇒ @{code;msg}; 超时 ⇒ 124),
@@ -3226,13 +3540,21 @@ function Invoke-ClaudeFly-Station {
     # 为什么必须站上: `local-only` 卡的 claude 通道**不得**在主控本地 spawn —— 主控
     #   ~/.claude/settings.json 指向**云端 OpenRouter** ⇒ 会出网。站上跑 + 指向站上本地引擎
     #   = **物理不出网**(不变式②)。站上 claude 的能力已实测(2026-09-21): `claude -p` ⇒ LOCAL-OK。
-    # ⚠ **显式落一份临时 settings, 不依赖站上既有那份** —— 理由有二:
+    # 2026-09-25 (D7): 本执行器**不再只服务 local-only** —— `-Mode or` 时写的是"站上 OpenRouter"
+    #   的临时 settings(出网, 按站独立 key), 服务 `claude-a/-b/-c`。两种模式**只在 settings 上分叉**,
+    #   其余(工作区 / 附件 / 档案 / 契约)**完全同一套** ⇒ 上层编排零改动。
+    # ⚠ **显式落一份临时 settings, 不依赖站上既有那份** —— 理由有三:
     #   ① 既有那份的 ANTHROPIC_BASE_URL 虽已指向 127.0.0.1:8080, 但**依赖"恰好"不可判**;
     #   ② 既有那份 `CLAUDE_CODE_MAX_CONTEXT_TOKENS = 120000`, 而引擎 ctx 实测 32768
     #      ⇒ claude 会**以为有 120k** 并把超限请求发出去 ⇒ 引擎 400(自造"预算不可信", O-23 同构)。
     #      故本函数**从引擎 /props 现读 n_ctx** 并对齐(留输出余量) ⇒ 自对齐, 不靠外部传参。
+    #   ③ (2026-09-25) or 模式必须**与 local 模式的 settings 形状不同** ⇒ 更不能靠站上既有那份。
     param([string]$hostName, [string]$remoteUser, [string]$argStr, [string]$stdin,
           [string]$stdout, [string]$stderr, [string]$scratch, [int]$budgetS,
+          # 2026-09-25: `local` = 站上本地引擎(不出网, `local-only` 用); `or` = 站上 OpenRouter(出网)。
+          #   `-ModelId` **仅 or 模式**使用(写进临时 settings 的 `ANTHROPIC_MODEL`; local 模式由引擎别名 `main` 管)。
+          [ValidateSet('local','or')][string]$Mode = 'local',
+          [string]$ModelId = '',
           # W3 步 2 (2026-09-22): **站上 claude 的 cwd**（执行点目录）。空/不存在 ⇒ 站上脚本 fail-closed
           #   退 8 —— 绝不退回 `$HOME`（那正是"卡里相对路径全解析不到却照样跑完"的假绿灯形状）。
           [string]$WorkDir)
@@ -3247,44 +3569,71 @@ function Invoke-ClaudeFly-Station {
         # [1] 落盘站上运行脚本(R14: 远程命令一律脚本落盘, 免引号地狱)
         $runSh = @'
 #!/bin/bash
-# _p3_claude_run.sh — 站上跑 claude headless 并指向**站上本地引擎**(物理不出网)
-# 由 agent-cli.ps1 的 Invoke-ClaudeFly-Station 生成; 参数: $1=argStr  $2=budgetS  $3=workdir  $4=pfx(站上临时名前缀, O-31)
+# _p3_claude_run.sh — 站上跑 claude headless。
+#   模式 local: 指向**站上本地引擎**(物理不出网)  |  模式 or: 指向**站上 OpenRouter**(出网, 按站独立 key)
+# 由 agent-cli.ps1 的 Invoke-ClaudeFly-Station 生成;
+#   参数: $1=argStr  $2=budgetS  $3=workdir  $4=pfx(站上临时名前缀, O-31)  $5=mode(local|or)  $6=model-id(or 用)
 set -uo pipefail
-ARGSTR="$1"; BUDGET="$2"; WORK="$3"; PFX="$4"
-KEYF="$HOME/.config/rpc/unsloth.key"
-K=""; [ -f "$KEYF" ] && K=$(tr -d '[:space:]' < "$KEYF")
-# 引擎真实 ctx(自对齐; 取不到则退回保守值)
-CTX=$(curl -s -m 10 -H "Authorization: Bearer $K" http://127.0.0.1:8080/props \
-      | grep -oE '"n_ctx":[0-9]+' | head -1 | cut -d: -f2)
-[ -z "$CTX" ] && CTX=32768
-# 留输出余量: claude 的 MAX_CONTEXT_TOKENS 是**输入侧**上限, 而引擎 ctx 含输入+输出
-MAXC=$((CTX - 4096)); [ "$MAXC" -lt 2048 ] && MAXC=2048
+ARGSTR="$1"; BUDGET="$2"; WORK="$3"; PFX="$4"; MODE="${5:-local}"; MODELID="${6:-}"
 SET="/tmp/_p3_settings_$$.json"
-cat > "$SET" <<JSON
+if [ "$MODE" = "or" ]; then
+  # 站上 OpenRouter: 与 `_env_openrouter.ps1 -ForClaude`(主控侧)同三件套语义 —— key 不落文件,
+  #   走 apiKeyHelper 现读站上 `~/.config/rpc/openrouter.key`(每站独立账户)。
+  #   ⚠ `ANTHROPIC_API_KEY` **必须显式置空**, 否则 claude 回落官方端点。
+  ORKEYF="$HOME/.config/rpc/openrouter.key"
+  [ -f "$ORKEYF" ] || { echo "P3_STATION_ERR: 缺 $ORKEYF ⇒ fail-closed(绝不回落站上本地引擎)"; exit 8; }
+  cat > "$SET" <<JSON
+{"env":{"ANTHROPIC_BASE_URL":"https://openrouter.ai/api","ANTHROPIC_API_KEY":"","ANTHROPIC_MODEL":"$MODELID","DISABLE_AUTOUPDATER":"1"},
+ "apiKeyHelper":"/bin/cat $ORKEYF","model":"main","modelOverrides":{"main":"main"}}
+JSON
+  echo "P3_STATION: mode=or base_url=https://openrouter.ai/api model=$MODELID cwd=$WORK"
+else
+  KEYF="$HOME/.config/rpc/unsloth.key"
+  K=""; [ -f "$KEYF" ] && K=$(tr -d '[:space:]' < "$KEYF")
+  # 引擎真实 ctx(自对齐; 取不到则退回保守值)
+  CTX=$(curl -s -m 10 -H "Authorization: Bearer $K" http://127.0.0.1:8080/props \
+        | grep -oE '"n_ctx":[0-9]+' | head -1 | cut -d: -f2)
+  [ -z "$CTX" ] && CTX=32768
+  # 留输出余量: claude 的 MAX_CONTEXT_TOKENS 是**输入侧**上限, 而引擎 ctx 含输入+输出
+  MAXC=$((CTX - 4096)); [ "$MAXC" -lt 2048 ] && MAXC=2048
+  cat > "$SET" <<JSON
 {"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8080","CLAUDE_CODE_MAX_CONTEXT_TOKENS":"$MAXC","DISABLE_AUTOUPDATER":"1"},
  "apiKeyHelper":"/bin/cat $KEYF","model":"main","modelOverrides":{"main":"main"}}
 JSON
-echo "P3_STATION: engine_ctx=$CTX max_context_tokens=$MAXC base_url=http://127.0.0.1:8080 cwd=$WORK"
+  echo "P3_STATION: mode=local engine_ctx=$CTX max_context_tokens=$MAXC base_url=http://127.0.0.1:8080 cwd=$WORK"
+fi
 # W3 步 2 (2026-09-22): **不再 `cd "$HOME"`** —— 改到**执行点目录**(站上为该次 run 建的工作区)，
 #   否则卡里以相对路径引用的附件(`.attach/<name>`)与项目文件**都解析不到**。
 #   **fail-closed**: 目录不可用就当场退 8 —— 绝不在错的 cwd 下跑完(那正是"假绿灯"的形状)。
 [ -n "$WORK" ] && [ -d "$WORK" ] || { echo "P3_STATION_ERR: workdir 不可用: '$WORK'"; exit 8; }
 cd "$WORK" || exit 8
 # O-31: 三个临时名由 $PFX 前缀隔离 —— 固定名会让**同站两个备路 run 互相覆盖/混写**。
-timeout -k 10 "$BUDGET" claude --settings "$SET" $ARGSTR < "${PFX}_in.txt" \
-  > "${PFX}_out.txt" 2> "${PFX}_err.txt"
+# ⚠ 2026-09-25 修(实测): 这三个引用**必须带 `/tmp/`** —— 上面已 `cd "$WORK"`, 而 scp 落点是
+#   `/tmp/${p3id}_*`;O-31 把固定名改前缀时丢了 `/tmp/`, 于是相对路径解析到工作区 ⇒ 报
+#   "`p3_xxx_in.txt`: 没有那个文件或目录" ⇒ 首跑/续跑**两次**都 rc=7(整条站上 claude 路径不可用)。
+#   O-31 自己的注记已承认"站上实机并发复跑未做" —— 这就是那次未复跑漏掉的东西。
+timeout -k 10 "$BUDGET" claude --settings "$SET" $ARGSTR < "/tmp/${PFX}_in.txt" \
+  > "/tmp/${PFX}_out.txt" 2> "/tmp/${PFX}_err.txt"
 RC=$?
 rm -f "$SET"
 echo "P3_STATION_RC=$RC"
 exit $RC
 '@
         $localSh = Join-Path $scratch '_p3_claude_run.sh'
+        # 站上脚本 CRLF→LF 归一（与 `Invoke-RemoteScript` 的 R9 归一**同一根因**, 2026-09-24）:
+        #   Windows checkout 下 here-string 行尾是 CRLF ⇒ 直写 /tmp ⇒ 站上 bash 把 `set -uo pipefail\r`
+        #   的 `\r` 当**无效选项** ⇒ 报 `set: pipefail` 并当场退出。
+        #   ⚠ 实测 2026-09-25: 两次派发 `claude first rc=7` / `resume[1] rc=7`, 站上 `/tmp/_p3_run.sh`
+        #     第 6 行 `cat -A` 显 `^M$`;归一后同卡 rc 恢复。
+        #   ⚠ **本函数自写文件**(不走 `Invoke-RemoteScript`) ⇒ 那道归一**保护不到这里** —— 这就是漏网原因。
+        #     ⇒ 新增/改动站上脚本体时, 归一**必须在本函数内做**(别再假设上游已归一)。
+        $runSh = $runSh -replace "`r`n", "`n"
         [IO.File]::WriteAllText($localSh, $runSh, (New-Object System.Text.UTF8Encoding $false))
         # [2] scp: 运行脚本 + stdin 上站（两次显式调用 —— 多源 scp 在不同版本上语义不一致）
         & scp -q -o BatchMode=yes -o ConnectTimeout=8 $localSh "${ru}:/tmp/_p3_run.sh" 2>&1 | Out-Null
         & scp -q -o BatchMode=yes -o ConnectTimeout=8 $stdin "${ru}:${rIn}" 2>&1 | Out-Null
         # [3] 执行(预算在**站上** timeout 里; ssh 自身不设超时以免掩盖真实 rc)
-        $out = & ssh -o BatchMode=yes -o ConnectTimeout=8 $ru "bash /tmp/_p3_run.sh '$argStr' $budgetS '$WorkDir' '$p3id'" 2>&1
+        $out = & ssh -o BatchMode=yes -o ConnectTimeout=8 $ru "bash /tmp/_p3_run.sh '$argStr' $budgetS '$WorkDir' '$p3id' '$Mode' '$ModelId'" 2>&1
         $rc = $LASTEXITCODE
         foreach ($l in @($out)) { Write-Host "  [station-claude $hostName] $l" }
         # [4] 收 stdout/stderr(上层编排只看这两个文件)

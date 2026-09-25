@@ -1205,3 +1205,557 @@ TTL 表（含 `开/关` · `无 (零自加载)` · `未比对` 等**中文值列
 - **★ 落点位置的真正约束常来自"架构断言"而非"复用"**：工具放哪不由"谁用得多"决定，而由**层序**决定 ——
   上一轮建的 `deps` 断言在本轮直接**否决**了"留在 cluster.py"这个默认选项。
 - **★ 改"表头"必须连"值列"一起改**：只改表头会让错位**换个方向**，看起来像修了却仍不齐。
+
+---
+
+## 26. D7 落地：**站上 claude + OpenRouter**（拆掉"站上 ⇒ 必不出网"那把锁）+ 6 并发实测（2026-09-25）
+
+> 起因：用户要求"用 openrouter 模型重测三站 × opencode/claude 共 6 个 agent 并发"。
+> **侦察即发现架构级阻塞**：`claude` 通道的站上/主控分流把"跑在站上"与"不出网"绑成**充要**
+> ⇒ 站上 claude **永远配不了 OpenRouter**。用户裁定：**先解决这个锁**（并接受 dogfood 沙箱为作用范围）。
+
+### 26.1 锁的确切位置（一处判据 + 一处硬闸）
+
+```powershell
+$useStation = ($sens -eq 'local-only')            # ← 位置 = 只看 sensitivity
+... elseif ($r['station']) { REJECT claude-station (exit 4) }   # ← 非 local-only 时"有站"一律拒
+```
+⇒ 站上 claude 只在 `local-only` 下发生，而那时后端是**站上本地引擎**（物理不出网）。
+而 [调研 §3.1](../docs/research/2026-09-21_D6备路站上化与sensitivity设闸调研与方案.md) 的架构表里
+`public`/`sanitized` 那一行本就写着"站上跑 claude + OpenRouter（按站独立 key）"—— P3 实施时按裁定
+**收窄**为"保持主控本地 spawn"，**那一支从未落地**。
+
+### 26.2 ★ 先实测可行性再动代码（探针：站上 claude 能不能真出网）
+
+`_o17` 式探针（只写站上 `/tmp`、key 不落文件）在 B 站实测：`claude --settings <临时>` +
+`apiKeyHelper → ~/.config/rpc/openrouter.key` + `ANTHROPIC_BASE_URL=https://openrouter.ai/api`
+⇒ **`rc=0` / 12s / 输出 `OR-STATION-OK`**。附带两条：站上本地引擎**当前未加载**（`/props` 000）
+⇒ 新模式**不需要 infer-load**；站上 claude **2.1.258**。
+
+### 26.3 改动（最小增量，六点）
+
+| # | 位置 | 改动 |
+|---|---|---|
+| 1 | `ROUTE_TABLE` | 加 `claude-a`/`claude-b`/`claude-c`（**同一 openrouter id、不同 station**，与 `ultra-a`/`ultra-c` 同构 ⇒ **不新立模型清单**） |
+| 2 | 判据拆分 | `$useStation` = 跑在站上与否（`local-only` **或** 路由声明了站）；`$backendLocal` = 后端是否**站上本地引擎**（**只** `local-only` 是）⇒ **后端属性与位置解耦** |
+| 3 | 硬闸 | `-backendEgress` 入参 `(-not $useStation)` → `(-not $backendLocal)`（**值等价**，语义变准）；旧 `REJECT claude-station` 撤除，换成**配对闸** `REJECT claude-station-egress-local-id`（站上 egress 打 `local/*` ⇒ 前置拒） |
+| 4 | 站上就绪 | 新模式用 `Test-StationClaudeEgressReady`（ssh 可达 + `claude` bin + 站上 `openrouter.key`），**不要求引擎就绪** |
+| 5 | 站上脚本 | `_p3_claude_run.sh` 加 `$5=mode(local\|or)`：`or` 写 `ANTHROPIC_BASE_URL=https://openrouter.ai/api` + `apiKeyHelper→openrouter.key` + `ANTHROPIC_MODEL=<真 id>`（**逐字复刻已实测通过的探针**） |
+| 6 | 执行身份 | `$stModelAlias` 按后端分（local=`main` 引擎别名 / or=**真 id**）；台账写 `station:<站>/<真 id>` |
+
+**用户裁定（2026-09-25，两问）**：① 触发方式 = **显式别名**（默认路径零改动）；② 目标站不可用 =
+**不许静默换站**，须**拒跑并列出可用替代站**供裁定（换站会**静默换账户** —— 每站独立 OpenRouter 账户）。
+
+### 26.4 ★ 端到端真派发**当场抓出两处既有缺陷**（都不是本轮新增）
+
+| # | 现象 | 根因 | 处置 |
+|---|---|---|---|
+| **A** | `rc=7`，站上报 `set: pipefail` | 生成的 `.sh` 是 **CRLF** ⇒ 站上 `set -uo pipefail\r` 把 `\r` 当无效选项。`Invoke-RemoteScript` 早在 **2026-09-24（R9）**补过 CRLF→LF 归一，但 `Invoke-ClaudeFly-Station` **自写文件**、**绕过那道归一** | 就地补归一（`-replace "`r`n","`n"`）+ 护栏 |
+| **B** | `rc=7`，站上报 `p3_xxx_in.txt: 没有那个文件或目录` | **O-31 的回归**：把固定名改成 `$PFX` 前缀时**丢了 `/tmp/`** ⇒ 脚本内成了**相对路径**，而脚本已 `cd "$WORK"`、scp 落点却是 `/tmp/${p3id}_*` | 三处引用补 `/tmp/` + 护栏（并回写 O-31 更正） |
+
+⇒ ★ **A+B 合起来说明：站上 claude 通道（含 P3 原有的 `local-only` 支）自 2026-09-23 起整条不可用。**
+根因不在本轮改动，而在**两次"改了没复跑"**：R9 归一漏了一个自写文件的函数；O-31 的注记自己写着"站上实机并发复跑未做"。
+**净方法论**：**"同一根因的第二处实例"只能靠真派发抓** —— 夹具查"串在不"，查不出"这条链现在跑不跑得起来"。
+
+### 26.5 自证（双向 + 并发）
+
+- **夹具** `_fm_golden_test.ps1` **200/200**（新增 9 条 D7 断言；其中 ROUTE_TABLE 用**提取出来的真表**断言三别名"同 id / 站 A·B·C / cli=claude"，不是文本 grep）。
+- **正向**（dogfood + `claude-a` + public）：`CLAUDE_EGRESS_STATION_SELECT: station=A host=scott-lau-NEX.local (backend=OpenRouter)` → `P3_STATION: mode=or base_url=https://openrouter.ai/api model=thinkingmachines/inkling:free` → `P3_STATION_RC=0` → `exit=0`；台账 `station:A/thinkingmachines/inkling:free`。
+  ★ **出网是"可判"的，不是看配置字面**：站上临时 settings 指向 OpenRouter **且** `ss` 抓到 claude 进程到 `[2606:4700::6812:273]:443` 的 **ESTAB**，该 IP 正是 `getent hosts openrouter.ai` 的解析结果。
+- **负向 ①**（`local-only` + `claude-a`）：三站引擎均未加载 ⇒ `REJECT local-only-no-station-engine (exit 4)` ⇒ **没有**静默走 OpenRouter（fail-closed 保持）。
+- **负向 ②**（`local/gpt-oss` + `-Cli claude` + public）：`REJECT claude-station-egress-local-id (local/gpt-oss) (exit 4)`。
+- **6 并发**（用户原始诉求）：3 站 × opencode（`ultra-a`/`ultra`/`ultra-c`）+ 3 站 × claude（`claude-a`/`claude-b`/`claude-c`），全 openrouter，同一 `readonly:true` 卡（shared 锁 ⇒ 可并发）：
+  **6/6 `exit=0` · 批墙钟 78s**；三站 claude 各落**指定站**；站上 `out/o17_readonly.txt` 内容均为 `O17_READONLY_OK|passed`；**无孤儿、无残留 settings**（三站 `p3run=0 / settings_left=0`）。
+- **门禁** `rpc.ps1 check`：**PASS（绿 22 / 黄 2 / 红 0）**；证据链补录 156 → **164**（未入链 0）。
+
+### 26.6 诚实边界（未做 / 未证）
+
+1. **"目标站不可用"分支未实弹**（三站当时全在线）⇒ 只有夹具级证据。
+2. **出网面从 2 处变 3 处**（站上 opencode + 主控 claude → **+ 站上 claude**）。**凭据面不变**（复用站上既有 `openrouter.key`，**不新增明文**），但该扩张必须写下来，否则"每站独立账户"会被误读成"没有新风险"。
+3. **同站 co-tenancy 未隔离**：`claude-a` 与 `ultra-a` 落在**同一站工作区**（`<WSROOT>/<proj>`），`readonly:true` 时二者**共享 cwd 并发跑**。本次任务只读、产物同名同内容 ⇒ 无可见污染；**写型任务会有真冲突** ⇒ 记为待办（候选：按通道分工作区，或写型任务禁同站配对）。
+4. 新增 1 条可重放 gap 属**本轮那次 CRLF 失败 run**（声明 `stderr.txt` 而 runDir 无该件）⇒ 与该失败态同源；水印是否 `--accept` 仍待裁。
+
+---
+
+## 27. D6 复盘：6 并发测试之后的三项调研（**全只读**；含两处自我更正）（2026-09-25）
+
+> 用户指令 = "三件事情详细展开分析调研"。三项分别是：① 证据水印是否 `--accept`；② B 站遗留孤儿是否清理；③ 同站 co-tenancy 是否立项。
+> **本轮未改任何文件、未动站上任何状态** —— 全部只读取证。结论倒逼出 **4 条新台账**（O-56…O-59）。
+
+### 27.1 ① 水印：门禁那 4 条 gap 逐条定性 ⇒ **先别 accept**
+
+| # | run | 定性 |
+|---|---|---|
+| 1 | `Cpp_Hub/202609251226552846` | **O-56（主路）**：`accept-cmds` 声明无条件 / 产出有条件 |
+| 2-3 | `dogfood/202609242324089370`·`…2326005982` | **O-52 修复前的历史 run** ⇒ 缺陷已修且有 e2e（`202609250018594080`，`pulled=1`）⇒ **这两条可以 accept** |
+| 4 | `dogfood/202609251257301180` | **O-56（备路）**：`stderr` 声明无条件 / 归档 `if (Test-Path …)` ⇒ **不是"我 Ctrl-C 的锅"** |
+
+**O-56 的形态**：`Get-FrameworkSubjects`（`:923`）与 `Get-ClaudeFrameworkSubjects`（`:961`）各**裸列 1 件**，而两件的产出端都是**有条件**的。★ 关键：**这条原则就写在同一个函数的注释里**（`:934-942` = O-29 当年为 `golden-cmd.txt` 犯过同一个错）⇒ **是"原则漏应用"而非"新错误"**，第 2 个件（且备路那份也漏）。
+
+### 27.2 ★ 顺手的全仓对账抓出一条**门禁看不见**的缺陷（O-57）
+
+在做上面取证时顺手做了 4 个 proj 根 **83 个 run** 的对账（归档 `accept-cmds.txt` 内容 vs 该 run **自己那张卡**的 `accept:`）⇒ **12 条不符**：
+
+- **人工逐字核对的 1 条**：run `202609251304421233` 卡是 `_o17_readonly.md`（**无 accept**），归档内容却是**另一张卡**的 `test -f out/glob-probe.txt …`。
+- **逐站残留 ↔ 逐站归档内容一致**（A/C = `smoke` 那套 09-24 18:58；B = `glob-probe` 那套 09-25 00:19）⇒ 机制坐实：`out/` **累计** + 固定名拉回**无 run 窗口** ⇒ 收了**上一次 run** 的暂存件。
+- **根因与"半修"**：reset **只在失败路径**（`O46_CLEAN`，`:2354-2359`），成功路径不清 ⇒ 与 **O-22**（`.meta` 残留）**同根**、同一批文件、另一处症状。
+
+**为什么它比"缺件"严重**：`--accept` 与水印**只作用于缺件**；这类是"**在**" ⇒ 门禁**永远不报**，而 run.json 的摘要**把别人的字节钉成了本次运行的证据**（链没错·字节没错·**归属错**）—— 本仓头号形态「把两件事说成一件」的机器版。
+
+**两条缺陷耦合（顺序不可换）**：残留让主语"在" ⇒ **O-57 正在掩盖 O-56**。⇒ 单修 O-57，O-56 会从"偶发"变"每个无 accept 的卡**必发**"。
+
+### 27.3 ② B 站孤儿：**2 条、同一根因、其中一条是"活的"**
+
+| pid | 进程 | etime | 状态 | 关键 |
+|---|---|---|---|---|
+| `2993016` | `bash -c … grep -icE error\|auth\|…` | **1-12:19** | `do_wait` | 子进程 `grep -icE error`(2993080) 卡死 |
+| `3032557` + `3032561` | `bash` + **`opencode`** | **1-04:59** | `do_wait` / **`ep_poll`** | **47 fd**，持 `opencode.db`（**180MB**）+wal+shm + `memory.db` + **两个 `opencode.log` 写 fd** |
+
+- **根因不是 O-48 的 `timeout` 语义**，而是**未加引号的 `\|`**：远端 shell 当**管道** ⇒ 拆出 `auth`/`credential`… 当命令；更糟的一条是 `grep -E stability_sample\|opencode` ⇒ **`| opencode`** ⇒ **裸 `opencode` TUI**（交互式、无 `-p`、无 EOF）⇒ `epoll_wait` 永不返回 ⇒ 父子**互锁 29h**。
+- ⇒ **O-48 的修法盖不住本条**（它管 4 处派发位；本类来自**探针** = 第 5 类来源）。
+- A/C 同法扫描 **0 条**、无 zombie。
+- ★ **我自己也踩同坑**：`grep -e "[o]pencode run"` 经 PS 5.1 → ssh 被**剥掉内层引号** ⇒ 远端 `grep: run: 没有那个文件或目录`（当时无害，但证明该脆性在工具链里**是活的**）⇒ **纪律 12 入册**。
+
+### 27.4 ③ 同站 co-tenancy：**危险序被我自己更正**
+
+原判"最危险 = `out/` 产物同名"。实测更正：**最危险是 `.attach/` 互删** —— 两条通道**都无条件** `rm -rf "$W/.attach"`（主路 `:1565-1577` · 备路 `:2820-2827`），`.golden` 同（`:1690`），而 `readonly ⇒ flock -s`（**共享**）⇒ **一方在跑、另一方把附件删了** ⇒ 附件中途消失却照跑完 = **"缺件跑完"假绿灯**。
+
+⇒ **危险序**：① `.attach/` 互删 ≫ ② `.golden` 互覆 > ③ `out/` 同名交付物 > ④ 证据暂存件交叉（= O-57）。
+
+★ **必须写下的判读纪律**：**当天"6/6 成功"≠ 隔离成立** —— 该卡 `readonly` 且**不带附件** ⇒ ① 删的是**空目录**、③ 产物**同名同内容** ⇒ 被掩盖；**而 ④ 在同批真实发生了**（正是 O-57 的第一例）。结论只能是"**任务恰好无害**"。
+
+### 27.5 ★ 两处自我更正（都属"先证工具，再取证物"）
+
+1. **对账脚本的 11 条假阳性**：曾报"11 条卡声明 accept 却无 `accept-cmds.txt`" ⇒ 抽 **11/11 全为 claude 路 run**（有 `stderr.txt`、无 `judgment-record.txt`），而备路基线**本来就不声明该件** ⇒ **收回**。
+2. **co-tenancy 危险序**：见 27.4（原判 ③ 最危险，实为 ①）。
+
+### 27.6 落档清单
+
+- 台账新增 **O-56**（基线声明/产出不对称）· **O-57**（跨 run 证据错配，含量化与配套机判）· **O-58**（探针孤儿 + 纪律 12）· **O-59**（co-tenancy，含 O1/O2'/O4 三选项）。
+- 纪律入册：dogfood README **纪律 12**。
+- **未执行**：`--accept`、站上进程清理、任何代码改动（均待裁定）。
+
+### 27.7 裁定与执行批次（2026-09-25，用户："先落档 然后按照顺序执行"）
+
+| 批 | 内容 | 自证判据 | 状态 |
+|---|---|---|---|
+| **立即** | O-58-A：清 B 站 4 个孤儿进程（`3032561` `3032557` `2993016` `2993080`） | kill → 复核 fd/DB 释放 + **三站复扫 0 条** | ✅ **已完成** |
+| **批 1** | **O-57-A**（派发前**无条件** reset 站上证据暂存件，**清单从既有 `$evNames` 派生**）+ **O-56-B**（主路 `accept-cmds` 条件列 / 备路 `stderr` 无条件产出空件） | 夹具静态断言 + **真派发**：同一工作区连跑两次 ⇒ 第二次的 `accept-cmds.txt` **不得**是上一次的内容 | ✅ **已完成** |
+| **批 2** | **O-59 / T1**：staging 移进锁内（#1-#5/#7/#8）+ 危险面 ⇒ 排他（#6）。~~原 O2' 前提被实测推翻（§27.9）~~ ⇒ 改 T1（§27.11 定稿 + 先验红 §27.11-G + 实施自证 §27.11-H） | 夹具 + **真派发**（V1-V8 全过：含**并发互删被消除** V7、**capability 不退化** V6） | ✅ **已完成** |
+| **批 3** | 两条机判：audit「归档 `accept-cmds.txt` == 本 run 卡的 `accept:`」+ 门禁 `stations`「长龄 orphan」 | 离线单测（正/反/对照）+ 三站实跑 | ✅ **已完成** |
+| **收尾** | `agent audit --accept`（先把 **O-61 第三态**补上再执行，避免把一次性噪声写进存量） | 门禁明细只剩"已登记存量" | ✅ **已完成**（接受 **25** 条，累计 53；`新增` 归零） |
+| **不做** | **O1** 分通道工作区（撞 `--continue` **按目录**恢复会话）· `readonly` 全局改排他（砍 O-17 能力，且治不了 `.attach` 互删） | — | ✅ 已裁 |
+
+**顺序硬约束（写下来防止将来被"顺手"打乱）**
+
+1. **O-57 与 O-56 必须同批** —— 单修 O-57 ⇒ O-56 从"偶发"变"每个无 accept 的卡**必发**"。
+2. **O-57-A 的 reset 清单必须从 `$evNames` 派生** —— 手写一份就是造"第二份枚举"（本仓头号形态）；`$evNames`（`:1970`）**已经是**那份清单的唯一真值。
+3. **批 3 不得并入批 1** —— 批 1 是**纯离线**运行时改动；混入网络依赖判据会削弱"离线夹具全绿"这个强信号。
+4. **`--accept` 只在批 1 完成后** —— 否则等于把 O-56 的**假 gap** 与 O-57 的**真缺陷**一起锁进白名单（假绿）。
+
+### 27.8 批 1 自证记录（2026-09-25）
+
+**改动**（全部在 `ops/station-bin/agent-cli.ps1`）
+- 新增**脚本级唯一真值** `$Script:EV_STAGE_NAMES`（8 个暂存件）；**两处消费**：① 派发前无条件 reset（`$evRmCmd`，与既有 `.attach/` reset **同段**）② collect 的拉回清单（原 `$evNames` 字面量 ⇒ 改为引用）。
+- `Get-FrameworkSubjects`：`accept-cmds` 从**裸列**移到 `if ($hasAccept)`（与 `accept-output` 同条件）。
+- 备路 collect：`stderr.txt` 缺失时**补空件**（声明无条件 ⇒ 产出也必须无条件）。
+
+**双向自证（真派发，同一站 B / 同一工作区 / 同一张 `_o17_readonly.md`）**
+
+| 阶段 | 站上埋哨兵 | runDir | 站上残留 |
+|---|---|---|---|
+| **修前**（run `202609251407424475`） | `out/.accept-cmds.txt` | **有** `accept-cmds.txt`，内容 = 我埋的哨兵（该卡**无 `accept:`**，站上不可能产出它） | 未清（4B 仍在） |
+| **修后**（run `202609251411107591`） | `out/.accept-cmds.txt` + `out/.golden-cmd.txt` | **无** `accept-cmds.txt`、**无** `golden-cmd.txt` | 两件均 **DELETED** |
+
+⇒ 夹具 **210/210**（+7 条 O-57 断言、+4 条 O-56 断言；含"清单**只定义一处**"与"reset 段**早于** `out/` 任何写入"两条结构性不变量）。门禁 **PASS（绿 22 / 黄 2 / 红 0）**，链 166、未入链 0。
+
+★ **顺手当场实证了 O-57 的"不可见性"**：修前那次对照 run 归档了**别人的** `accept-cmds.txt`，而门禁的可重放 gap 列表里**一条都没报**（因为该件"在" ⇒ 不是 `missing-artifact`）⇒ 从推理变实测，也正好说明"`--accept` 为何盖不住它"。
+
+⚠ **两处自我更正（夹具自身）**：① 基线件数 `10 → 9`（O-56① 的**合法位移**，非回归）⇒ 5 条期望值同步更新；② 我第一版 o56① 断言用**裸词** `accept-cmds` 匹配区段，而该区段的**说明注释**里也含这个词 ⇒ **恒红**（改用键值形态 `name = 'accept-cmds'`）。
+
+### 27.9 ★ 批 2 前提被实测推翻（O2' 不成立）—— 已落档，待重裁
+
+**原方案 O2'**（已获裁）：把该 run 的远端锁改成排他（有附件 ∨ golden active 时）。
+
+**复核实测 ⇒ 推翻**：
+- `flock` 在**主 run 体**内（`agent-cli.ps1:1771-1782`）。
+- 而 `sync` / `.attach` 的 reset+scp / `.golden` 注入**全在锁之外** —— `:432` 的注释早就写明「**sync 发生在远端 flock 之前**」（那是 F-14 修 tar 名时留下的）。
+- ⇒ **锁只覆盖 agent 执行相**。改成排他，只能让"执行相"互斥；**staging 相照样重叠** ⇒ B 的 staging 仍会在 A 的执行相里删掉 A 的附件 ⇒ **危险序 ① 未被覆盖**。
+
+**⇒ 修法必须把"锁"扩到"整次派发"**（即"租约"），两条候选：
+
+| 代号 | 做法 | 覆盖 | 代价 / 盲区 |
+|---|---|---|---|
+| **T1（推荐，治本）** | **把 staging 移进锁内**：附件/golden 先传到**私有** `/tmp/<runid>/`（共享面无接触），再由**锁内**的 run body 落到 `$W/.attach` / `$W/.golden` | **任何**派发来源（站内生效） | 动 attach/golden 的装配顺序（中等）⇒ 需 attach + golden **双向复跑**；⚠ 触碰安全面（附件 = "缺件跑完"风险族） |
+| **T2（便宜）** | 控制台侧 `(站,proj)` **共享/排他租约**（危险面 ⇒ 排他；良性 ⇒ 共享）；锁文件用 `FileShare.Read`/`None` 得 rwlock 语义 | **控制台**派发（= 当前唯一威胁面） | 约 30 行；**已登记盲区**：第二台控制台 / 手工 ssh 不覆盖 ⇒ 属"有意的半修"，必须标注 |
+| **O4（可叠加，与 T 无关）** | run.json 记"该 workspace 已有并存 run"（派发时探 `.agent-state.json` 的 `running` + 活 pid）⇒ WARN | 仅可见化 | 近零；**不防**，只把现象变可判 |
+
+★ **注意**：这正是本仓的既有纪律 —— **"前提被实测推翻 ⇒ 改方案并重新裁定，不得按旧方案硬做"**（同 P2-2 方案 C 那次）。⇒ **批 2 暂停，等重裁。**
+
+### 27.10 批 3 自证记录（2026-09-25）：两条机判
+
+**① audit 归属判据（O-57 配套）**
+- 新增**纯函数** `_card_accept_list`（口径与产出侧 `$accept -join "\n"` 对齐：围栏内顶层 `accept:` 的 `- item`、**保序**、不混 `accept-golden`、不采行内写法）+ `compare_accept_cmds`（保序等值）；接入 `agent_audit`（gap kind **`accept-cmds-mismatch`**，走 `_gap_key` ⇒ 可进水印）；`totals` 加三态计数（**显式报"无法判定"条数**，免得把"判不了"读成"全对"）。
+- 离线护栏 [`tests/test_agent_audit_accept_owner.py`](../tests/test_agent_audit_accept_owner.py) **16/16**（A1-A8 口径 / B1-B5 三态 / C1-C3 结构护栏 —— 其中 **C1 专防"写了判据但没接进链路"**这一族）。
+- ★ **真实验红**：`agent audit` ⇒ **相符 49 / 不符 13 / 无法判定 17**，gap 表 **32 → 45**；那 13 条**此前对门禁完全不可见**（它们"在" ⇒ 不是 `missing-artifact`）。
+- ⚠ **13 的构成**：手工扫出 12 条存量 + **1 条本轮先验红对照 run**（`202609251407424475`）⇒ **判据与手工口径互证**（差 1 可解释）。
+
+**② stations 长龄 orphan 探针（O-58 配套）**
+- `STATION_CMD` 加 `[orph]` 段（**免空格多枚 `-e`**，遵纪律 12；判定留在门禁侧）；`check_stations` 加 **(h)** 判据 ⇒ **WARN**（刻意不 FAIL）；`note` 加 `/orphN`。
+- **先验红（关键）**：6h 无法现场造 ⇒ 加 `RPC_ORPHAN_SEC` 覆盖。`RPC_ORPHAN_SEC=1` + 站上自造 `opencode`（`cp /bin/sleep /tmp/orphantest/opencode`）⇒ **B 站点名报出** `opencode (pid …, ppid 1, 已 0h0m)`、`orph1`。
+- **对照**：恢复默认阈值 ⇒ 三站 `orph0` / "无长龄 orphan"。
+- **清理**：临时进程与目录已清；`ps -eo comm` 复扫 B 站无 `opencode/claude/timeout`。
+- ⚠ **过程中踩到两个新坑（同族，已并入纪律 12 正文）**：(a) **`pkill -f <模式>` 自匹配**携带该模式的 ssh 命令行 ⇒ 连同**后续命令**一起被杀（实测 `rm -rf` 没跑成）；(b) `/tmp/opencode` **已是目录**，`ln -sf`/`cp` 落进它**里面**而非替换。
+
+**总账**：ps1 黄金夹具 **210/210** · 离线套件 **21/21**（含本文件）· 全量门禁 **PASS 绿 22 / 黄 2 / 红 0** · 链 **166**、未入链 **0**。
+（※ 本节数字是**当时**的快照；后续批次的数字见 §27.11-H —— **不回改历史快照**。）
+
+---
+
+## 28. 两个边界的调研（备路无锁 · 隔离粒度）（2026-09-25，只读侦察 + 一次联合实测）
+
+> ⚠ **位置说明（如实标注，不搬家）**：本节成文**晚于** §27.11，但被我的编辑锚点插在了它**前面**。
+> 大段搬运（4.5KB CJK）出错风险高于收益 ⇒ **保留原位 + 编号即权威**：请按**编号**阅读（§27 → §27.11 → §28）。
+> 本节的实测**共用**了 §27.11 引入的探针卡 `t1-attach-shared-probe.md`。
+
+> 起因：我在 T1 收尾时如实标注了两条边界（① T1 只覆盖 opencode 主路；② 备路 `$ts` 去重只防"同滴答"）。
+> 用户指令 = "两个边界调研分析"。**未改任何代码**（除本节记录）；唯一动作是**一次并发实测**（结论见 28.1/28.2）。
+
+### 28.1 边界① 备路（station claude）**无锁** ⇒ 危险序① 可达且**零保护**
+
+**代码事实**
+- 备路站上分支（`Invoke-Task-Claude`）`$stWorkDir = "$Script:WORKSPACE_ROOT/$proj"`（`:2963`）—— **与主路同一个工作区**；
+  `:2969` **直接** `rm -rf "$W/.attach" && mkdir -p "$W/.attach"`，随后逐件 scp 到 `$W/.attach/`（`:2982/2984`）。
+- **全文件 `flock` 只出现在两处**：`:652-653`（`lock` 子命令）与 `:1805/1810`（**主路 run body**）⇒ **备路没有任何锁**。
+- 备路**不做 golden**：其 golden 相关路径全在**本地 scratch**（`:2897` / `:3018` / `:3088` = `Join-Path $scratch '.golden'`）⇒
+  **备路站上共享面 = `.attach/` + `$W/out/`（agent cwd 产物）+ `$W` 本身（cwd）**。
+
+**实测（同站 B · 同 proj `dogfood` · 并发两跑 · `-Model claude-b` · 卡 `t1-attach-shared-probe.md` · 各带 1 件不同名附件）**
+
+| 观测 | 结果 |
+|---|---|
+| 站上 `$W/.attach` 跑完 | **剩两件**（`fileA.md` + `fileB.txt`）—— 各 run 只注入了 1 件 |
+| 归档 agent 输出 | `T1_ATTACH_LIST: fileA.md,fileB.txt` ⇒ **agent 看到了不属于它的件** |
+
+⇒ **危险序① 在备路可达，且**（与主路不同）**没有任何机制在挡**。⚠ 本次实测同时撞上了 28.2 的 `$ts` 撞车（两跑共用
+scratch/runDir，其中一跑 rc=7）⇒ 上面那行 agent 输出所属的 run 严格说**归属已被撞车污染**；但"`.attach` 剩两件"
+与"agent 见到两件"这两条**不受影响**（单件注入却出现两件 ⇒ 互灌成立）。
+
+### 28.2 边界② 隔离粒度：**"存在性检查"式去重是 TOCTOU**，且撞的不止 scratch —— 还有 **runDir**
+
+**实测（同上那次并发）**
+- 两跑日志 `scratch=C:\Users\Peng\AppData\Local\Temp\agent-cli-claude-202609251516391217` —— **同一个 ts**；
+- **`TS_DEDUP` 一次都没打印**（该行只在"发现冲突并递增"时输出）⇒ **O-60 那层去重根本没触发**；
+- **只产生一个 runDir**（`agent-out\202609251516391217`）—— 两个 run **本应各有一个**；
+  ⚠ **就地更正（同日）**：我最初把这条写成"5 件 vs 正常 9 件" ⇒ **错**。备路 runDir 的**正常件数就是 5**
+  （实测：全部 claude run 都是 5 件，含多枚 exit=0 的干净 run）—— 我把**主路（opencode）的 9 件**当成了通用基线。
+  ⇒ **论据换成不受件数影响的那条**：该 ts 下只有**一个** runDir，而两个 run 期望两个；
+- 一跑报 `open local "…\claude-err.txt": No such file` + `agent-output.txt` 不存在 ⇒ **另一方 collect 的 `Move-Item` 把共享 scratch 里的文件搬走了**。
+
+**机制**：两个进程**几乎同时**执行"`agent-out\<ts>` 不存在 ∧ `…claude-<ts>` 不存在 ⇒ 沿用该 ts" ⇒
+**双方都通过**（经典的 check-then-act TOCTOU）。⇒ **加判据只是降低概率，不能消除**。
+
+**★ 危害序（本次调研最重要的结论）**：**runDir 撞车 ≫ scratch 撞车**。
+scratch 撞车丢的是**中间产物**（可重跑）；**runDir 撞车丢的是"证据单元本身"** —— 两个 run 写同一目录后，
+`run.json` / manifest / agent 输出**混在一起且归属不可复原**，而 runDir 是**声明为不可回改**的东西
+（本仓对它的所有判据、水印、链都建立在这一前提上）。
+
+**根治方向（本仓已有正确做法，只是没统一）**
+1. **runDir 原子抢占**：`New-Item -ItemType Directory` **不带 `-Force`** —— 已存在即**抛错**，捕获后递增 ts 重试
+   （check-then-act 换成 create-or-fail）。同理主路的 runDir。
+2. **scratch / 临时根一律用 `$Script:RUN_TOKEN`（Guid）**：主路本地临时根**已经是** `agent-cli-<RUN_TOKEN>`、
+   备路**站上** scratch 已经是 `/tmp/p3_<Guid12>_*` ⇒ 只有"以 `$ts` 命名的本地 scratch"这一处是漏的（主路 `agent-cli-ev-<ts>` + 备路 `agent-cli-claude-<ts>`）。
+3. `$ts` **只保留一个职责**：runDir 的**对外名字**（18 位数字形状被全仓引用与 scrubber 依赖）⇒ 不再兼任命名空间。
+
+**⚠ 一条推理，明确标注未证实**：备路站上投递脚本 `/tmp/_p3_run.sh` 是**固定名**且 `scp` **非原子**
+⇒ 理论上存在"另一 run 的 scp 截断正在执行的脚本"。本次实测到的 rc=7 **已归因 `$ts` 撞车**（且 `:3489-3497`
+另有 **CRLF** 归因、已修）⇒ **不把 rc=7 算作它的证据**；要证它需专门实验（同站两 claude + 高频 scp 干扰）。
+
+### 28.3 待裁
+
+- **O-62**：备路是否接线（C1 复用同一把锁 / C2 staging 同 T1 形状 / C3 仅互斥）—— 以及**何时**（现在 vs 等有真实触发）。
+- **O-63**：是否立刻做"runDir 原子抢占 + scratch 用 RUN_TOKEN"（**建议立刻**：它与 T1 无关、改动小、且**主路同样暴露**）。
+
+### 27.11 批 2 / **T1** 定稿：改动点 + 验收判据（2026-09-25，落档后动手）
+
+> 用户裁定 **T1（治本）**：把 staging 移进锁内。本节 = **动手前的改动点清单与判据**（先落档再改）。
+
+#### A. 核心设计（★ 两个部分**必须成对**，这是本节最要紧的一条）
+
+只做"把 staging 移进锁内"**不够**：`readonly:true` 的锁是 **shared**，两个只读 run 会**同时**持有锁
+⇒ 仍会互相 `rm -rf "$W/.attach"` ⇒ **危险序①照旧**。故 T1 = **① staging 进锁** + **② 危险面决定锁模式**，
+缺一不可。危险面 = `(附件数 > 0) ∨ goldenActive`。
+
+落盘顺序（都在锁内、且**早于** `.attach-manifest` 采样）：
+`LOCK_ACQUIRED` → **落盘段**（`.attach` 重置+落件 / `.golden` 重置+解包 / 删中转目录）→ `.prompt.txt` → `ATTACH_MANIFEST`（`:1826-1833`，本就在锁内）→ agent。
+
+#### B. 改动点（`ops/station-bin/agent-cli.ps1`）
+
+| # | 位置 | 现状 | 改成 |
+|---|---|---|---|
+| 1 | `Invoke-Task` 内新增 | — | `$stage = "/tmp/agent-stage-$ts"`（**run 级私有**中转；`$ts` 已并发去重） |
+| 2 | attach reset body（`:1580-1594`） | `rm -rf "$W/.attach" && mkdir -p "$W/.attach"` | `rm -rf "$stage" && mkdir -p "$stage/attach"`（**不再碰 `$W`**） |
+| 3 | attach scp（`:1619-1629`） | `mkdir -p "$W/.attach/$name"` / scp → `$W/.attach/` | 同两处 → **`$stage/attach/`**（空目录兜底语义不变） |
+| 4 | golden scp（`:1705`） | `→ $W/.golden.tgz` | `→ $stage/golden.tgz` |
+| 5 | `$goldenInject`（`:1711-1716`） | 独立 remote script 做 `rm -rf $W/.golden` + 解包 | **整段删除**（提取动作并入 #7 的落盘段） |
+| 6 | 锁模式（`:1743`） | `$flockShared = if ($readonly) {1} else {0}` | `$danger = ($attach.Count -gt 0) -or $goldenActive`；`$flockShared = if ($readonly -and -not $danger) {1} else {0}` |
+| 7 | run body：`LOCK_ACQUIRED` 之后、`.prompt.txt` 之前（`:1782`/`:1784` 之间） | — | **落盘段**：① `rm -rf "$W/.attach" && mkdir -p "$W/.attach"`；② `[ -d "$stage/attach" ] && cp -a "$stage/attach/." "$W/.attach/"`；③ golden active 时 `rm -rf "$W/.golden" && mkdir -p "$W/.golden" && tar -xf "$stage/golden.tgz" -C "$W/.golden"`；④ `rm -rf "$stage"` |
+| 8 | 失败清理 `O46_CLEAN`（`:2354-2359`） | 删 `out/.meta`、`.progress`、`.agent-lock`… | 追加 `rm -rf "/tmp/agent-stage-$ts"`（`$ts` 在该函数作用域内；**不得**用通配 —— 会误删并发 run 的中转） |
+
+#### C. 必须写下来、防"顺手改回"的四条
+
+1. **#6 不能省**（见 A）：只做 #2-#5/#7 等于把"共享锁下的互删"从**锁外**搬到**锁内**，隐患不减。
+2. **落盘段必须在 `.attach-manifest` 之前**：manifest 记的是"**注入的字节**"（`:1827`），采样点错了就记成空。
+3. **不新增第二套工作区概念**：`$W` 仍是唯一执行点；`$stage` 只是**一次性传输中转**，落地即删。
+4. **`cp -a "$stage/attach/." "$W/.attach/"` 必须用 `/.` 形式**：保留隐藏文件与**空目录**（`scp -r` 不复制空目录 ⇒ #3 的 `mkdir -p` 兜底仍然必要）。
+
+#### D. 验收判据（双向 + 对照；**先验红不可省**）
+
+| # | 判据 | 用的卡 / 做法 | 期望 |
+|---|---|---|---|
+| **V1** | 锁选择**真值表**（夹具）：`readonly × 有附件 × golden` 8 组合 | 纯文本/结构断言 | **仅** `readonly ∧ 无附件 ∧ 无 golden` ⇒ shared；其余 ⇒ exclusive |
+| **V2** | 落盘段位置不变量（夹具） | 文本位置断言 | console 侧**不再**出现 `$W/.attach` 的 reset/scp；body 内落盘段**早于** `.attach-manifest` |
+| **V3** | **附件正向** | `dogfood-cards/b1b-u2-dialect-map-analyze.md`（**已有**：public + `attach-egress: ok` + proj `dogfood` + model `ultra`）+ `--attach .../inputs/d7-dialect-excerpt.md` | `ATTACH_MANIFEST_LINES ≥ 1`；runDir `attach-manifest.txt` 非空；agent 产出含该附件内容 |
+| **V4** | **golden 正向**（顺带证 #6） | **新增** `test-cards/t1-golden-probe.md`（public · readonly · 无附件 · `accept-golden` → **复用** `golden/smoke_dispatch_golden.sh`，该脚本只断 `.golden` 存在 + 自身被注入 + cwd ⇒ **任务无关**） | `ACCEPT_GOLDEN_OK=1`；且该 run 因 `goldenActive` 走 **exclusive** |
+| **V5** | **残留负向** | 先往 B 站 `$W/.attach/foreign.txt` 埋哨兵，再跑 `_o17_readonly.md`（无附件） | 跑完站上 `$W/.attach` **不含** `foreign.txt`（锁内 reset 生效；这是 O-57-A 对 `.attach` 的等价保证） |
+| **V6** | **对照·capability 不退化** | 同批 1 的 6 并发（只读 · 无附件 · 无 golden） | 仍 **6/6** 成功、**无** `exit 3` |
+| **V7** | **危险面·互删被消除**（★ 本批最要紧的一条） | **同站同 proj 并发两张** `b1b`（station B、proj `dogfood`、各带**不同名**附件 ⇒ 可判归属） | 恰一张成功；另一张 `exit 3`（锁占用）**或**串行完成；**胜者的 `attach-manifest` 只含自己的附件名**（不得混入对方） |
+| **V8** | **清理** | 三站巡检 | `/tmp/agent-stage-*` **归零**（run body 与失败路径都删） |
+
+**先验红（动手前先证明判据能红）**：V7 的形态在**改前**必须能复现 —— 现代码下同站同 proj 并发两张带附件的卡，胜者的 `.attach/` 会含**对方**的件（即 manifest 混入外来名）。**若复现不出，则"T1 修的就是不存在的问题"**，须先解释再改。
+
+#### E. 风险与回退
+
+- **capability 代价（有意）**：有附件/golden 的同站配对从"并发"变"**串行或 `exit 3`**" ⇒ 与 O-18 纪律同向；**6 并发那种（只读·无附件·无 golden）不受影响**（V6 守）。
+- **触碰安全面**：附件是"缺件跑完"假绿灯的高危区 ⇒ V3/V5 必跑，且 `attach-manifest` 行数要**人工核对**（不是只看非空）。
+- **回退**：改动集中在 `Invoke-Task` 一个函数内，且 #5 是**删除**一处 remote script ⇒ 若 V3/V7 不过，可只回退 #2-#5/#7（保留 #6，#6 单独也是净收益：有附件/golden 的同站配对至少变成"可见的拒绝"）。
+
+#### F. ★ 落档时的核实：危险序①**可达但卡面近乎不可达** —— 影响 T1 的**紧迫度**（2026-09-25）
+
+写 D 表时逐卡核实了"能不能凑出会互删的形态"，结论推翻了我此前对紧迫度的默认判断：
+
+| 条件 | 现状 |
+|---|---|
+| 需要 **shared** 锁（`readonly:true`）才有互删；`readonly:false` 本就走 exclusive | ✅ 成立 |
+| 需要**同时**有附件 | ⚠ 全仓 `attach-egress: ok` 只有 **3 张卡**（`a2` / `b1b` / `b2`，**全是 `readonly:false`**） |
+| `readonly:true` 的带附件卡（`attach-dir/empty/light`、`smoke-attach`、`scrub-attach-probe`） | **均未声明 `attach-egress`** ⇒ 出网档会被 `Get-AttachEgressReject` **拒** |
+
+⇒ **出网档下危险序①无法凑齐**（要么 `readonly:false`（已 exclusive），要么被 `attach-egress` 闸拒）。
+**唯一可达路径**是 **`local-only` + 附件 + `readonly:true` + 同站同 proj 并发**（现成卡 = `smoke-attach.md`），
+而它要先 **`infer-load`** 才有站上引擎。
+
+**⇒ 两条结论（必须让裁定方看到）**：
+1. **T1 不是"在修一个正在出错的 bug"，是"消掉一个可达但尚未被卡面触发的隐患"** ⇒ 紧迫度低于我此前的表述；它同时是**放开"只读+附件"这类卡的铺路工程**。
+2. **D 表的 V3/V7 需要改口径**：用现有 `b1b`（`readonly:false`）**测不到危险面**（它本就 exclusive）。先验红只能二选一：
+   - **(a) 轻**：新增一张探针卡 `readonly:true` + `attach-egress: ok`（出网档，30s 级真派发）；
+   - **(b) 真**：`smoke-attach.md`（`local-only`）**+ `infer-load`** 走现网真实形态（重，但覆盖 local-only 这条同样受影响的路径）。
+   ⚠ 二者都**不是**"用现有卡直接跑"，故 V3/V4/V7 的卡片选择须先定，再动手。
+
+#### G. ★ 先验红已成立（2026-09-25，动手前）
+
+裁定：**做完整 T1** + **新增探针卡**做先验红。新增
+[`test-cards/t1-attach-shared-probe.md`](../spec/d6-agent-standard/test-cards/t1-attach-shared-probe.md)
+（`readonly:true` + `attach-egress: ok` ⇒ 唯一能凑出"共享锁 + 附件"的组合）。
+
+**真派发（同站 B / 同 proj `dogfood` / 同时发起，各带不同名附件）**：
+
+| run | 自己带的 | runDir `attach-manifest.txt` | agent 实见（卡要求列 `.attach/` 文件名） |
+|---|---|---|---|
+| `202609251437578427` | `fileA.md` | `fileA.md` + **`fileB.txt`** | `T1_ATTACH_LIST: fileA.md,fileB.txt` |
+| `202609251437578537` | `fileB.txt` | `fileA.md` + **`fileB.txt`** | `T1_ATTACH_LIST: fileA.md,fileB.txt` |
+
+两跑均 `LOCK_ACQUIRED mode=**shared**`。⇒ **危险序① 从理论变实证**：共享锁下两跑**互删/互灌 `.attach/`**，
+且**两份 manifest（进而 run.json 摘要）都把对方的件记成本次的** ⇒ 与 O-57 同族的**归属错**（每跑的证据面
+都声称自己注入了两件）。⇒ **T1 的先验红条件满足，可以动手。**
+
+★ 顺带更正一条：我在 27.4 把危险序① 记为"假绿灯"形态 —— 实测更准确的表述是 **"证据面归属错 + 缺件"双症状**
+（manifest 记了没注入的件；agent 也可能读不到自己的件）。
+
+#### H. T1 **实施与自证结果**（2026-09-25）
+
+**改动**（`ops/station-bin/agent-cli.ps1`，全部落在 `Invoke-Task` 内；`route`/`lock`/备路**未动**）
+按 §27.11-B 的 #1-#8 全部落地，另加两处实施期发现的修（见下）。
+
+**验收判据结果**
+
+| 判据 | 结果 | 证据 |
+|---|---|---|
+| **V1** 锁选择真值表 | ✅ 静态钉住 | 夹具 `t1①`/`t1②`（危险面判据 + `readonly ∧ ¬危险面` 公式） |
+| **V2** 落盘段位置 | ✅ | 夹具 `t1③`（`.attach` reset **在 `LOCK_ACQUIRED` 之后**）/ `t1④`（早于 manifest 采样）/ `t1⑤⑥`（console 侧不再碰 `$W`；golden 只传中转）/ `t1⑦`（失败路径兜底清理用本 run token） |
+| **V3** 附件正向 | ✅ | run `202609251443047595`：`mode=exclusive` · `ATTACH_STAGED=1` · `ATTACH_MANIFEST_LINES=1` · agent `T1_ATTACH_LIST: fileA.md` · exit=0 |
+| **V4** golden 正向 | ✅ | run `202609251446231100`（新卡 `t1-golden-probe.md`）：`mode=exclusive`（**无附件但 golden ⇒ 排他** = #6 第二输入项被证）· `GOLDEN_STAGED=1` · `ACCEPT_GOLDEN_OK=1` · exit=0 |
+| **V5** 残留负向 | ✅ | 先埋 `$W/.attach/foreign.txt` 再跑 ⇒ 跑后站上 `foreign_present=NO`、`.attach` 只剩 `fileA.md` |
+| **V6** capability 对照 | ✅ | 6 并发（只读·无附件·无 golden）**6/6 exit=0**、批墙钟 **56s**（批 1 为 78s）、**无 `exit 3`** |
+| **V7** 危险面互删被消除 | ✅ | 同站同 proj 并发两跑：胜者 `mode=exclusive`+`ATTACH_STAGED=1`+`MANIFEST=1`+**只自己的件**+exit=0；负者 `LOCK_HELD … mode=exclusive` ⇒ **`exit 3`（可见拒绝）** |
+| **V8** 清理 | ✅ | 三站 `stage_dirs=0` · `attach_scripts=0` · `procs=0` |
+
+夹具 **220/220**（+11 条 t1 断言）；离线套件 21/21；门禁 **PASS 绿 22 / 黄 2 / 红 0**。
+
+---
+
+## 29. O-63 + O-62/C3 实施与自证（2026-09-25）
+
+> 裁定：用户"执行吧" = 按 §28.3 的优先级执行 ① **O-63**（runDir 原子抢占）② **O-62/C3**（备路互斥）③ 备路双向自证。
+
+### 29.1 O-63：ts **原子抢占**（取代"存在性检查"）
+
+**改动**：新增 `Get-UniqueRunStamp`（create-or-fail + 抢占物 GC）；**主路与备路两处** ts 选择都改调它
+（唯一性判据同为 `agent-out\<ts>` ⇒ **跨通道**不会互撞）。`$ts` 的 18 位数字形状保持不变。
+抢占物在 `%TEMP%\agent-cli-claims\<ts>.lock`（**刻意不进 `agent-out`**：audit 只认含 `.agent-run.json` 的目录
+⇒ 空 runDir 会被**静默跳过** = 隐形垃圾）；GC 在每次派发顺带做（对应 runDir 已存在 或 超 7 天 ⇒ 删）。
+
+**★ 实施中抓到"我自己的原语选错"**：第一版用 `New-Item -ItemType Directory`（它**确实**在已存在时抛
+`IOException`，我单独验过）⇒ 但 12 进程 hammer 报 **uniq=11**（仍有一对重复）⇒ 换成
+`[IO.File]::Open(..., FileMode::CreateNew, Write, None)`（文档级 create-new）⇒ **12/12 唯一**（连跑 3 次稳定）。
+⇒ 夹具钉住"**不再**用 `New-Item` 建抢占目录"。**教训**：原语"看起来原子"要**用并发实测证**，不能靠语义推断。
+
+**双向自证**：新增夹具 [`_runstamp_hammer.ps1`](../ops/station-bin/_runstamp_hammer.ps1)（12 个**独立进程** +
+**共同释放时刻**）。它自己也被修了两处（**都是"假通过"型**）：
+
+| 夹具自身的坑 | 症状 | 修法 |
+|---|---|---|
+| **没有共同释放时刻** | 子进程 PS 启动抖动把 `Now` 自然散开 ⇒ **负向对照也拿到 12/12 唯一** ⇒ "夹具是装饰" | 加自旋屏障（先 spin 到同一时刻再取 ts）—— 这也**更接近产品形态**（两个 run 走过相同前置工作 ⇒ 同步） |
+| 负向判据写成 `uniq < N` | `got=0` 时 `0 < N` 也通过 ⇒ **假绿**（"什么都没跑"算检出撞车） | 必须同时要求 **跑满 N** |
+| `Write-Output (if …)` | PS 5.1 **`if` 不是表达式** ⇒ 解析错（子进程全空 ⇒ 又一轮假绿） | 包 `$()` |
+| 文件无 BOM | PS 5.1 按 ANSI 读 ⇒ **CJK 乱码 + 引号断裂** | 写文件必须带 BOM（`ps1-bom` 门禁正是为此 —— 它当场抓到了） |
+
+结果：**正向 `n=12 uniq=12` PASS；负向（同一把锤子打旧实现）`uniq=2` PASS（夹具能看见撞车）**。
+
+### 29.2 O-62 / C3：备路**同站同 proj 互斥**（控制台侧租约）
+
+**改动**：新增 `Enter-ClaudeStationLease`（`FileShare.None` 排他；句柄挂脚本作用域、由**进程存活期**持有 ⇒
+与主路 flock 的"fd 由进程持有"同一模型，**不必**逐条 return 手动释放）；调用点在 `if ($useStation)` **staging 之前**；
+拿不到 ⇒ `REJECT claude-station-busy (exit 3)`（与主路 `LOCK_HELD` 同码 ⇒ 操作者一个心智模型）。
+
+**双向自证（同一实验：同站 B · 同 proj · 并发两跑 · 各带 1 件不同名附件）**
+
+| | 修前（§28.1 那次） | **修后** |
+|---|---|---|
+| c1 | rc=0，但 agent 见到**对方的**件 | `RUNSTAMP …762` · `LEASE_ACQUIRED` · rc=0 · agent 只见 `fileA.md` |
+| c2 | **rc=7**（与 c1 同 ts `…1216`） | `RUNSTAMP …888`（**不同 ts**）· **`REJECT claude-station-busy (exit 3)`** |
+| 站上 `.attach` | **剩两件**（互灌） | 只剩 `fileA.md`（**对方从未 staging**） |
+| runDir | 1 个（两 run 混写） | 1 个（c2 未参与 ⇒ 干净）；批墙钟 25s |
+
+### 29.3 ★ 一处**事实错误**的就地更正
+
+我在 §28.2 与 O-63 里把撞车证据写成"**5 件** vs 正常 **9** 件" ⇒ **错**：备路 runDir 的**正常件数就是 5**
+（实测全部 claude run 都是 5，含多枚 exit=0 的干净 run）；**9 是主路（opencode）的件数** —— 我把主路基线当成了
+通用基线。⇒ 论据已换成**不受件数影响**的那条：**该 ts 下只有一个 runDir，而两个 run 期望各有一个**。
+（同一个 ts + 少一个 runDir + 一方 rc=7 ⇒ 结论不变。）
+
+### 29.4 边界（如实，未解决）
+
+1. C3 的三条已登记边界（第二台控制台 / 手工 ssh / **主路不参与本租约** ⇒ 跨通道仍未闭环，需 C1）。
+2. **本地模式**（`$useStation=$false`）**不取租约**，而它有自己的同族共享面：附件被复制到
+   `<projRoot>\.attach`（**非 per-run**，`:2939-2948`）⇒ 同 proj 并发**本地** claude 仍会互覆。**未修**。
+3. `/tmp/_p3_run.sh` 固定名 + 非原子 scp 的 race 仍是**推理**（未证）。
+
+> ⚠ **位置说明（如实标注实际状态，不美化）**：本节成文晚于 §27.11，而我的编辑锚点把它插进了 §27.11-H **中间**
+> ⇒ 结果 **§27.11-H 被本节劈成两半**：其"夹具总账"在**本节之前**，其尾块（"实施期 2 个缺陷" + "O-61 已实施"）
+> 在**本节之后**。同日 §28 也有同类错位（它落在 §27.11 **之前**）。
+> ⇒ **编号即权威**：请按编号阅读（§27 → §27.11 ），两处错位已知未修（重排要大段搬运，收益低于出错风险）。
+
+**★ 实施期又抓到 2 个缺陷（都靠 V7 的并发才现形）**
+
+| # | 现象 | 根因 | 处置 |
+|---|---|---|---|
+| **1** | 并发时 A 报 `scp: dest open "/tmp/agent-stage-<A>/attach/": No such file or directory` | 两个中转脚本的**内容**因 T1 变成 per-run（含各自 `$STAGE`），而**远端落点仍是固定名** ⇒ B 覆盖 A 的脚本 ⇒ A 建出 **B 的** 目录 | 两处改带 `$($Script:RUN_TOKEN)`（= F-1/F-2/F-14/O-31 **同一族**）；夹具 `t1⑧` 钉住 |
+| **2** | 6 并发里 cc-B `scp: open local "…agent-cli-claude-<ts>\agent-output.txt": No such file` ⇒ rc=7 | **备路 `$ts` 无去重** ⇒ 同时钟滴答内 cc-A/cc-B 取到**同一个 ts** ⇒ 共用 scratch ⇒ 一方 `Move-Item` 搬走另一方的产物 | 补 O-28 RC② 去重到备路，且**判据同时看 scratch 目录**（只看 `agent-out\<ts>` 不够 —— runDir 是 collect 时才建，两个并发 run 都会通过）。夹具 `t1⑩`。⚠ **非 T1 引入**，是既有缺陷 |
+| **3** | per-run 脚本在 `/tmp` **累积**（实测三站 0/4/0） | per-run 名不再互相覆盖 ⇒ 旧固定名"被覆盖所以不累积"的性质丢了 | 脚本加 `trap 'rm -f "$0"' EXIT`（覆盖早退）；夹具 `t1⑨`；并清掉三站历史遗留 |
+
+**⚠ 新暴露的一条待裁项**：`exit 3`（锁占用）的 run **天然没有证据件**（body 未运行）⇒ 每个这类 run 记若干条
+`missing-artifact`（本轮新增 gap 从 17 → **30**，其中 13 条来自 exit-3 run）。这是 T1 的**预期副作用**（多了一些
+"可见拒绝"），但它把可重放 gap 表变成噪声 ⇒ 需要"**第三态**"（类比 `ephemeral`：`locked-out-by-design`）。
+
+**✅ 该项已实施（O-61，同日完成）**：`agent_audit` 里由 `.agent-run.json` 的 `exit_code == 3` 判定，缺件时记为
+**`locked-out-by-design`**（不报 `missing-artifact`、单列、**不计入可离线复算**）⇒ 实测 **8 条**被分离出缺口表；
+`totals.locked_out` 供机器消费；离线护栏 `tests/test_evidence_judges.py` 新增 **O61-1…O61-4** 四条（含"第三态必须
+位于 `missing-artifact` 前置分支"的位置断言）。**先修该项、再执行收尾**（否则一次性噪声会被写进水印）。
+
+---
+
+## 30. C1 跨通道闭环 + C3 回归（含 C3 自身一处**回归**与被它牵出的同族缺陷）（2026-09-25）
+
+> 本节接 §29。执行顺序按用户授权：③ hammer 接线 → ② 本地模式 `.attach` 租约 → ① C1 跨通道。
+> ★ 本节最重要的一条不是"做了什么"，而是 **② 的自证实验把 ① 的一处回归当场打了出来**。
+
+### 30.1 ③ hammer 接线（`ps1-runstamp` 进 `CHECKS`）
+
+- `$Script:PS1_RUNSTAMP` = `ops/station-bin/_runstamp_hammer.ps1`；`check_ps1_runstamp(ctx)` 跑 `-N 8 -SelfTest`，
+  判据 = **正向 PASS ∧ 负向 PASS ∧ rc==0**（三合一，防"只看正向"被恒过型夹具骗过）。
+- `CHECKS` 新增 `{"id":"ps1-runstamp", …, "quick": False}`。**为什么 `quick:False`**：它起 8 个独立进程 + 自旋屏障
+  ⇒ 不进 pre-commit（秒级预算），进 pre-push / 全量。
+- **手册计数 24 → 25**：手工改了断言总账行 `# 25 项断言 (quick 18 + 全量 7)`。**改完由门禁 `mirror` 精确点名**
+  （它逐项核对 "手册声明的项数/quick 分布" == `CHECKS` 实况）⇒ 忘了改会被红，不是靠人记。
+- 实测：正向 `n=8 uniq=8` PASS · 负向（同一把锤子打旧实现）`uniq=1`（另一次跑出 `uniq=3`）PASS —— 负向读数
+  **随竞态浮动**，判据是"**< N** 即证明夹具看得见撞车"，故**不能**把某个具体值当预期。
+
+### 30.2 ② 本地模式 `.attach` 租约（规则**只在有附件时**）
+
+- 位置：备路 claude 的 `if ($attach.Count -gt 0)` 块内，**在** `projRoot\.attach` 复制**之前**。
+- **规则精确**：无附件 ⇒ 压根不碰 `.attach` ⇒ **不取租约** ⇒ 良性并发不受影响（§30.3 的回归就是这么来的：
+  凡"一律取"都会误伤良性配对）。
+- key = `local/<proj>`（与站上 `st-<站>/<proj>` 是**两个不同资源**：一个写控制台 `projRoot\.attach`，一个写站上
+  `WSROOT/<proj>`）⇒ 不互相阻塞。
+
+### 30.3 ① C1 跨通道闭环：`Enter-ClaudeStationLease` → **`Enter-WorkspaceLease`**
+
+- **通用化依据**：站上锁（`flock`）在**主 run 体内**，而两条通道的 `.attach` staging 都在**锁外** ⇒ "同站同 proj
+  的两条通道"必须共**同一把逻辑锁**。故把单一用途的 `Enter-ClaudeStationLease` 改成 rwlock 语义的
+  `Enter-WorkspaceLease -Key -Exclusive -Why`（排他=`FileShare.None`；共享=`FileShare.Read`+只读打开）。
+- **三处调用点（同一 key 格式 + 同一把逻辑锁）**：
+  | 通道 | key | 取模式 | 位置 |
+  |---|---|---|---|
+  | 主路 `Invoke-Task`（opencode） | `st-<站>/<proj>`（无站 ⇒ `local/<proj>`） | `$leaseX` | `# 3) sync source subset` **之前** |
+  | 备路站上（claude） | `st-<站>/<proj>` | `$leaseX` | `if ($useStation)` 分支开头、**staging 之前** |
+  | 备路本地（claude） | `local/<proj>` | `$leaseX` | `projRoot\.attach` 复制之前（仅**有附件**时） |
+- **危险面单一来源**：`$dangerFace = $leaseX`（主路），`$leaseX = (($attach.Count -gt 0) -or $goldenActive)`。
+- **e2e（危险面跨通道）**：同站同 proj 同时发 `main` + `claude`，两边都带附件 ⇒ **恰好一跑**（main `exit=0`；
+  claude `REJECT main-workspace-busy`/`claude-station-busy` ⇒ `exit 3`）。
+
+### 30.4 ★★ ② 的自证实验打出 ① 的**回归**（C3 第一版写死排他）
+
+**现象**（我的跨通道**良性**对照 · case B：只读 · 无附件 · 同站同 proj）：
+
+```
+b-claude.out: REJECT claude-station-busy (exit 3) - 同站(B)同 proj(dogfood) 已有**备路**派发在跑
+b-main.out:   exit=0
+```
+
+**根因**：C3 第一版把**两处备路**租约都写死 `-Exclusive $true` ⇒ 连**良性跨通道配对**（只读·无附件，
+6 并发里就有 oc+cc 同站对）也被串行化 ⇒ capability 退化。
+
+**⚠ 为什么没早发现**：我复跑了 `claude×claude`（危险面场景），**没复跑 6 并发**（良性场景）——
+而 6 并发是**唯一**能看见"良性配对被误伤"的夹具。**教训：改锁模式必须同时复跑"危险面"与"良性"两套对照，
+缺一套就会朝反方向翻车。**
+
+**修**：两处备路租约都改成危险面 `$leaseX`（与主路**同一规则**）。
+
+### 30.5 ★ 修回归时**牵出的同族缺陷**：判据位置 ⇒ 无附件 golden run 漏挡
+
+把危险面判据从"有附件块内"上移到本函数开头时，发现原位置的**语义后果**：
+
+> 判据原先只在 `if ($attach.Count -gt 0)` **块内**计算 ⇒ **无附件的站上 golden run** 读到 `$leaseX = $null`
+> （= `$false` = **共享**），而 **golden 注入是共享面写入** ⇒ **危险序① 漏挡**。
+
+即"V4 golden 正向（无附件但 golden ⇒ 排他）"在**主路**成立，在**备路**却因判据位置而失效 —— 典型的
+**"同一件事两份判据"**（本仓头号失败形态）。**修**：判据上移到备路函数开头（两处租约**之前**）**单点**计算，
+golden 段改成指针注释（不再另算一份）。
+
+### 30.6 验收（全部实测）
+
+| 项 | 结果 |
+|---|---|
+| 夹具 `_fm_golden_test.ps1` | **234/234**（新增 `o62⑧` 两处都按危险面 · `o62⑨` 判据位置在 `if ($useStation)` 之前；`o62⑥` 计数由 1 **改 2** 并写明"单一来源"= **同函数内**仅一处，两通道各一份合法） |
+| `ps1-runstamp` | 正向 8/8 唯一 · 负向 uniq=3 ⇒ **PASS** |
+| **V6 良性 6 并发（本次回归的守门夹具）** | 3 站 × opencode（`ultra-a`/`ultra`/`ultra-c`）+ 3 站 × claude（`claude-a`/`claude-b`/`claude-c`），同一 `readonly:true` 卡、**无附件**、**无 golden** ⇒ **6/6 `exit=0`** · **6/6 lease=shared** · **无 `exit 3`** · 批墙钟 **66.7s**（基线 56–78s ⇒ 未串行化） |
+| V6 站上残留 | 三站 `out/o17_readonly.txt` 均为 `O17_READONLY_OK\|passed` · `ATTACHN=0` · `STAGEN=0`（无跨通道污染、无遗留中转目录） |
+| PS 语法 | `Parser::ParseFile` **PARSE_OK 0 错误** |
+
+### 30.7 本轮修复的两处**我自己**的错误（如实）
+
+1. **`SearchReplace` 锚点命中刚插入的 C1 块** ⇒ 把 `$g`/`$goldenActive` 的计算**删掉**（块内那份被替换掉了）。
+   ⇒ 恢复块内计算，把**后面**那份改成指针注释。
+2. **`o62⑥` 的期望值本身错**（写成"全仓仅 1 处"）⇒ 实际合法值是 **2**（每通道一份）。是夹具当场报 FAIL 才暴露的
+   —— 这次**是夹具抓我**，不是我又"看着对"。⇒ 已改成 `-eq 2` 并注明"单一来源 = **同函数内**"的准确含义。
+

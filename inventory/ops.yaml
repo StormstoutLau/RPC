@@ -242,6 +242,11 @@ frozen_ops_scripts:
   - ops/station-bin/_r_sympy_provision.sh
   - ops/station-bin/_reload_ctx.sh
   - ops/station-bin/_runA.sh
+  # 2026-09-25 (O-63): ts **取号**的跨进程并发夹具。**为何不能并入入口** (ADR-0004 要求写明理由):
+  #   它判的正是"**独立进程**同时抢占同一 ts" —— 必须 `Start-Process` 起 N 个**真进程** + 共同释放时刻
+  #   屏障, 才能复现 OS 级竞态; 同一 Python 进程内的子命令**物理上不可能**制造出这个竞态 ⇒ 归 ③ 类。
+  #   它被门禁 `ps1-runstamp` (quick=False) 以 `-File` 方式调起, 属受治理的**门禁夹具**, 与 `_fm_golden_test.ps1` 同类。
+  - ops/station-bin/_runstamp_hammer.ps1
   - ops/station-bin/_scrubber_coverage_test.ps1
   - ops/station-bin/_switch_qwen_flavor.ps1
   - ops/station-bin/_switch_qwen_flavor.sh
