@@ -914,31 +914,116 @@ Assert-True 'o42: 四处 claude argStr 拼接均带 $pmArg(站上/本地 × 首�
 $o42Def = "    `$pmArg = if (`$readonly) { '' } else { ' --permission-mode acceptEdits' }"
 Assert-True 'o42: $pmArg 定义受 readonly 分支控制(readonly=false 才 acceptEdits, true 空串保只读)' ($content.Contains($o42Def))
 
-# --- O-57-A (2026-09-25): 站上证据暂存件 —— 派发前**无条件** reset, 且清单**只有一份** ---
+# --- O-57-A (2026-09-25): 站上证据暂存件 —— 派发前清理, 且清单**只有一份** ---
 # 根因(实测 2026-09-25): `out/` 是累计的 + 固定名拉回**无 run 窗口** ⇒ 上一次 run 的
 #   `.accept-cmds.txt` 被当**本次**证据归档(4 个 proj 根 83 个 run 里 **12 条**)。
 #   原 reset **只在失败路径**(`O46_CLEAN`) ⇒ 成功路径不清。修法 = 把清提前到**派发前**,
 #   与既有的 `.attach/` 无条件 reset **同段**(那也是它的既有纪律)。
-$evDef = ([regex]::Matches($content, '\$Script:EV_STAGE_NAMES = @\(')).Count
-Assert-True "o57: 暂存件清单**只定义一处**(禁第二份枚举 —— 本仓头号失败形态)" ($evDef -eq 1)
-$evLine = ($content -split "`n" | Where-Object { $_ -match '\$Script:EV_STAGE_NAMES = @\(' } | Select-Object -First 1)
-$evNeed = @('.meta', '.prompt.txt', '.progress', '.accept-cmds.txt', '.golden-cmd.txt', '.workspace-diff.txt', '.attach-manifest.txt', '.session-meta.txt')
-Assert-True "o57: 清单含全部 8 个暂存件(逐名核对)" (
-    [bool]$evLine -and (($evNeed | Where-Object { -not $evLine.Contains($_) }).Count -eq 0))
-Assert-True "o57: reset 命令由该**唯一真值派生**(不是手写 8 条 rm)" (
-    $content.Contains('EV_STAGE_NAMES | ForEach-Object'))
-Assert-True "o57: reset 已接进**派发前**那个 body(与附件中转同段)" (
-    $content.Contains('$evRmCmd') -and $content.Contains('rm -rf "`$STAGE" && mkdir -p "`$STAGE/attach"'))
+# ★ 2026-09-25 (O-68/D1) **就地更正本段**: 真值由"名字数组"升级为"名字 + pull 表"
+#   ⇒ 原断言钉的 `$Script:EV_STAGE_NAMES = @(` **字面量已不存在**(清单改为从表**派生**)。
+#   **方向是改写断言、不是回退代码** —— 这正是 O-65 的教训(改实现必须同步改断言)。
+$evTbl = ([regex]::Matches($content, '\$Script:EV_FILES = @\(')).Count
+Assert-True "o57: 暂存件真值**只定义一处**(禁第二份枚举 —— 本仓头号失败形态)" ($evTbl -eq 1)
+$evAll = @('.meta', '.prompt.txt', '.progress', '.accept-cmds.txt', '.golden-cmd.txt',
+           '.workspace-diff.txt', '.attach-manifest.txt', '.session-meta.txt',
+           '.agent-output.txt', '.accept-output.txt', '.accept-golden-output.txt')
+$evMiss = @($evAll | Where-Object { -not $content.Contains("name = '$_'") })
+Assert-True "o57: 真值表含全部 **11** 个暂存件(逐名核对; 缺: $($evMiss -join ', '))" ($evMiss.Count -eq 0)
+Assert-True "o57: 合批清单**从真值表派生**(不手写第二份枚举)" (
+    $content.Contains('$Script:EV_FILES | Where-Object { $_.pull -eq ''batch'' }'))
+Assert-True "o57: per-run **后缀**的构造规则**只定义一处**(唯一命名规则)" (
+    ([regex]::Matches($content, 'function Get-EvSuffix\(')).Count -eq 1)
+Assert-True "o57: 后缀分隔符**只有一处定义**(`Script:EV_SUFFIX_SEP" (
+    ([regex]::Matches($content, '\$Script:EV_SUFFIX_SEP = ')).Count -eq 1)
+Assert-True "o57: 清理命令由该**唯一真值派生**(不是手写 8 条 rm)" (
+    $content.Contains('$Script:EV_FILES | ForEach-Object {'))
+# ★★ O-68/D2-D3 (2026-09-25) —— 本批**只落 D1 + D3**，**D2 与 D4 同批**（见下）。
+#   为什么 D2 必须等 D4: 移除 O-57-A 的 reset 而**尚未** per-run 改名 ⇒ 裸名仍被 collect 读 ⇒
+#     **等于把 O-57 放回"修前"状态**（上一次 run 的残留被当本次证据）⇒ 两件**互为前提**。
+#   ⇒ 断言按**当前真实状态**钉住三件事（这比"假装已完成"有用）:
+#     ① GC **存在**且**只按龄**（`-mtime +7 -delete`）—— 即"不可能误删活件"这个**语义**；
+#     ② O-57-A 的 reset **仍在**（过渡态，不是遗漏）；
+#     ③ 源码里**写明了"D2 尚未落地"及其理由** —— 防未来有人"顺手"删掉 reset 却没做 D4。
+Assert-True "o68: 派发前**有按龄 GC**(只删 >7 天死件 ⇒ 不可能误删活件)" (
+    $content.Contains('$evGcCmd') -and $content.Contains('-mtime +7 -delete'))
+Assert-True "o68: ★ GC 的**裕度理由**写在源码里(7天 vs 最长 timeout_s=1800s ⇒ 300×)" (
+    $content.Contains('1800') -and $content.Contains('300'))
+Assert-True "o68: ★★ **已无**'无条件删固定名'(D2 落地 = O-68 修法的**前提条件**)" (
+    -not $content.Contains('$evRmCmd'))
+Assert-True "o68: ★ 源码**写明**'不要把它加回来'的理由(防有人手滑复原 reset)" (
+    $content.Contains('不要加回来'))
+Assert-True "o57: 清理段已接进**派发前**那个 body(与附件中转同段)" (
+    $content.Contains('$evGcCmd') -and $content.Contains('rm -rf "`$STAGE" && mkdir -p "`$STAGE/attach"'))
+
+# --- ★★ O-68/D4-D6 (2026-09-25): per-run 命名 —— 站上 10 件 + 主控 3 处 + helper 1 处 ---
+Assert-True "o68: 站上后缀变量与主控**同源**(body 内 `EV_SUF=` + PS 变量 `evSuf)" (
+    $content.Contains('EV_SUF="$evSuf"'))
+$iSufDef = $content.IndexOf('EV_SUF="$evSuf"')
+# ⚠ 参考点**不能**取 golden 段: 它的**字符串定义**在 `EV_SUF=` **之前**, 而它的**插值点**在**之后**
+#   ⇒ 文本位置只能拿"body 内自己的写点"当参考（这里取 `.prompt.txt`, 在 body 主段内）。
+$iFirstEv = $content.IndexOf('$W/out/.prompt.txt`$EV_SUF')
+Assert-True "o68: ★ 后缀定义**早于** body 内第一个写点(位置不变量)" (
+    $iSufDef -gt 0 -and $iFirstEv -gt $iSufDef)
+# golden 段另判**插值点**（它自己也写两件 ⇒ 必须晚于后缀定义, 否则那两件会落成裸名）
+$iGoldenUse = $content.IndexOf("`n`$goldenBlock`n")
+Assert-True "o68: ★ golden 段的**插值点**晚于后缀定义(故它那两件也带后缀)" (
+    $iGoldenUse -gt $iSufDef)
+# ★★ 最强的那条: **10 个 body 内基名的写点全部带后缀**, 且**裸名残留必须为 0**
+$evBases = @('.meta', '.prompt.txt', '.progress', '.accept-cmds.txt', '.golden-cmd.txt',
+             '.workspace-diff.txt', '.attach-manifest.txt',
+             '.agent-output.txt', '.accept-output.txt', '.accept-golden-output.txt')
+$evBare = @($evBases | Where-Object { $content.Contains('$W/out/' + $_ + '"') })
+Assert-True "o68: ★★ 站上写点**无裸名残留**(逐个核对; 残留: $($evBare -join ', '))" ($evBare.Count -eq 0)
+$evNoSuf = @($evBases | Where-Object { -not $content.Contains('$W/out/' + $_ + '`$EV_SUF') })
+Assert-True "o68: ★★ 10 个基名**逐个**都插了后缀(缺: $($evNoSuf -join ', '))" ($evNoSuf.Count -eq 0)
+Assert-True "o68: 主控侧三处用 **PS 变量 `evSuf`**(不是站上那个 bash 变量 ⇒ 语法域不同)" (
+    ([regex]::Matches($content, '\$W/out/\.(agent-output|accept-output|accept-golden-output)\.txt\$evSuf')).Count -ge 3)
+Assert-True "o68: 会话遥测 helper 的目标路径也带后缀(它**不走** body ⇒ 单独一处)" (
+    $content.Contains(".session-meta.txt`$evSuf'"))
+Assert-True "o68: 合批的远端路径带后缀, 但 **marker 仍发基名**(归档映射靠基名)" (
+    $content.Contains('$W/out/$($_)$evSuf') -and $content.Contains('echo FILE:$_'))
 # ⚠ 2026-09-25 (T1) **就地更正本条**: 原断言要求"派发前 body 里也有 `.attach` 的 reset" ——
 #   T1 之后那条**已移进锁内落盘段**(理由见 DEV-LOG §27.11-A), 故此处改为只认"中转目录"。
 #   若有人把 `.attach` 的重置搬回派发前, 由下面 t1 段的**位置断言**兜住。
 Assert-True "o57: collect 的拉回清单**改为引用**同一真值(不再手写字面量)" (
     $content.Contains('$evNames = $Script:EV_STAGE_NAMES'))
-# 位置不变量: reset 段必须**早于**主 run body 对 `out/` 的写入(否则会删掉本次自己刚写的件)。
-$iReset = $content.IndexOf('$evRmCmd')
+# 位置不变量: 清理段必须**早于**主 run body 对 `out/` 的写入(否则会删掉本次自己刚写的件)。
+$iGc = $content.IndexOf('$evGcCmd')
 $iProg = $content.IndexOf('out/.progress')
-Assert-True "o57: reset 段**早于** out/ 任何写入(位置不变量)" (
-    $iReset -gt 0 -and $iProg -gt $iReset)
+Assert-True "o57: 清理段**早于** out/ 任何写入(位置不变量)" (
+    $iGc -gt 0 -and $iProg -gt $iGc)
+
+# --- ★★ O-71 (2026-09-25): 环境层 `Remove-Item` 包装器吐 `$null` ⇒ 把**函数返回值**污染成数组 ---
+# 一手复现(最小, 已写进 DEV-LOG §38): 本机 profile 把 `Remove-Item` 别名到 `__Safe-Remove-Item-Wrapper`,
+#   该包装器**每次调用都往管道吐 1 个 `$null`**（同一命令、同一文件的两个计数: 包装器 = 1,
+#   原生 `Microsoft.PowerShell.Management\Remove-Item` = 0）。
+# 症状链(实测): `Get-UniqueRunStamp` 的**抢占 GC 一执行** ⇒ 它返回 `@($null, <ts>)` ⇒ 调用方 `$ts` 变**数组**
+#   ⇒ `"agent-cli-task-$ts.sh"` 里多一个空格 ⇒ 远端 `bash: /tmp/agent-cli-task-: 没有那个文件或目录`
+#   ⇒ **exit 255**（报错点离病因很远 ⇒ 曾被误判为"网络/站上问题"）。
+# ⇒ 判据取**全文件级**（不逐函数写），防"下次换个函数再漏一遍"。
+$rmBad = @()
+$rmNo = 0
+foreach ($ln in ($content -split "`n")) {
+    $rmNo++
+    # ⚠ 归一化两步都**必需**: ① 去注释(`#` 之后非代码) ② 剥单/双引号内文本。
+    #   漏掉 ② 会**恒红** —— 本段自己的 ABORT 消息串里就含 `Remove-Item` 这个词（实测）;
+    #   而"用全文子串判"正是 O-65 那次假绿的同一个坑（该判据必须只看代码）。
+    $cOnly = $ln -replace '#.*$', ''
+    $cOnly = $cOnly -replace "'[^']*'", 'Q'
+    $cOnly = $cOnly -replace '"[^"]*"', 'Q'
+    $nRm = ([regex]::Matches($cOnly, 'Remove-Item')).Count
+    if ($nRm -gt 0) {
+        $nOut = ([regex]::Matches($cOnly, '\| Out-Null')).Count
+        if ($nOut -lt $nRm) { $rmBad += "L$rmNo($nRm/$nOut)" }
+    }
+}
+Assert-True "o71①: 代码行里**每个** Remove-Item 都 `| Out-Null`(违规: $($rmBad -join ', '))" (
+    $rmBad.Count -eq 0)
+Assert-True "o71②: `Get-UniqueRunStamp` 尾注**写明**根因与包装器名(防有人把它当噪声删掉)" (
+    $content.Contains('本函数**返回一个 18 位字符串**') -and
+    $content.Contains('__Safe-Remove-Item-Wrapper'))
+Assert-True "o71③: `$ts` 消费点有**形状 fail-closed**(数组 ⇒ exit 13; 绝不静默取一个元素接着跑)" (
+    $content.Contains('if ($ts -is [array]) { Write-Host "ABORT: ts 形状异常'))
 
 # --- O-56 (2026-09-25): 基线"**声明无条件 / 产出有条件**"(两处) ---
 # ① 主路: `accept-cmds` 原为**裸列**, 而站上只在 `[ -n "$ACCEPT_B64" ]` 时才写 ⇒ 无 accept 的卡

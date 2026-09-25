@@ -70,7 +70,7 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
              与"零自加载"方针并存 —— TTL 只释放已加载资源, 从不加载任何模型。
     agent    agent 任务进度/吞吐 (P0, 只读; 见 spec/agent-observability/ 调研):
              runs=派发台账尾 N 条(join <projRoot>/agent-out/<ts>/.agent-run.json 详情);
-             live=扫三站 $HOME/agent-workspaces/*/out/.progress (运行中节拍: 末行 t=end ⇒ finished);
+             live=扫三站 $HOME/agent-workspaces/*/out/.progress[.<ts>] (运行中节拍: 末行 t=end ⇒ finished);
              tail=台账原始行。**不新增采集器**, 只读站上既有文件。
              ⚠ 口径: 产出列是 **agent 产出字节口径** (output_bytes / B/s), **不是 token** ——
              与 reqlog 的引擎耗时口径 t/s、API timings 互不可比; 无头 run 不吐 usage ⇒ 不做换算;
@@ -2381,7 +2381,7 @@ def cmd_flow(argv) -> int:
 #        出网"是个**看起来能用**的判据 ⇒ 会读出假警报(同族的反向错误会**掩盖真出网**)。
 #        ⇒ **判"是否出网"请看 `local-only` + `station:` 前缀, 别把 model 当云端型号去匹配。**
 #   ② 主控 run 详情 <projRoot>/agent-out/<ts>/.agent-run.json (status/run_s/output_bps/slot/profile/accept)
-#   ③ 站上运行中节拍 $HOME/agent-workspaces/<proj>/out/.progress (5s 一行 t=.. bytes=.. bytes_s=.., 终值 t=end)
+#   ③ 站上运行中节拍 $HOME/agent-workspaces/<proj>/out/.progress[.<ts>] (5s 一行 t=.. bytes=.. bytes_s=.., 终值 t=end)
 #
 # ⚠ 口径 (调研 §3 的关键结论, 别混):
 #   · 本视图的"产出"列是 **agent 产出字节口径** (output_bytes / output_bps) —— **不是 token**,
@@ -3122,13 +3122,20 @@ def agent_chain_verify() -> dict:
 
 
 def _agent_beat(st: str) -> list:
-    """扫一站运行中节拍。**只读**: 遍历站上既有 .progress, 不写任何东西, 不装采集器。"""
+    """扫一站运行中节拍。**只读**: 遍历站上既有 .progress, 不写任何东西, 不装采集器。
+
+    ⚠ O-68/D4 (2026-09-25): 站上节拍文件**已 per-run 化**（`.progress.<ts>`）。只认裸 `.progress`
+      会在改名后**恒读旧件/恒空** —— 即"视图静默失效"（本仓头号形态：看起来一切正常）。
+      ⇒ 取「裸名 + 全部带后缀名」里 **mtime 最新**的那一份（= 最近一个 run 的节拍）;
+        裸名保留是为了兼容改名之前的**历史残留**（D3 的按龄 GC 会在 7 天后清掉它们）。
+    """
     cmd = ("for d in " + AGENT_WS + "/*/out; do "
-           "[ -f \"$d/.progress\" ] || continue; "
+           "f=$(ls -1t \"$d\"/.progress \"$d\"/.progress.* 2>/dev/null | head -1); "
+           "[ -n \"$f\" ] || continue; "
            "proj=$(basename \"$(dirname \"$d\")\"); "
-           "last=$(grep '^t=' \"$d/.progress\" 2>/dev/null | tail -1); "
+           "last=$(grep '^t=' \"$f\" 2>/dev/null | tail -1); "
            "[ -z \"$last\" ] && continue; "
-           "printf 'BEAT|%s|%s|%s\\n' \"$proj\" \"$last\" \"$(stat -c %Y \"$d/.progress\" 2>/dev/null)\"; "
+           "printf 'BEAT|%s|%s|%s\\n' \"$proj\" \"$last\" \"$(stat -c %Y \"$f\" 2>/dev/null)\"; "
            "done")
     ok, out = ssh_run(st, cmd, timeout=45)
     if not ok:
@@ -4347,7 +4354,7 @@ def cmd_agent(argv) -> int:
             print(json.dumps({"time": time.strftime("%Y-%m-%d %H:%M:%S"), "beats": beats},
                              ensure_ascii=False))
             return 0
-        print("\n=== agent 运行中 (站上 $HOME/agent-workspaces/*/out/.progress) — 只读 ===")
+        print("\n=== agent 运行中 (站上 $HOME/agent-workspaces/*/out/.progress[.<ts>]) — 只读 ===")
         print("  口径: 产出为 **字节口径** (bytes / bytes_s), 不是 token; ETA 需目标量, 运行中不可得 ⇒ NA\n")
         running = [b for b in beats if b.get("running")]
         cols = [(3, "站", 0), (10, "proj", 0), (11, "状态", 0), (6, "已跑s", 1), (10, "已产出", 1),
