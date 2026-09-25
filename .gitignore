@@ -24,6 +24,11 @@ tmp/
 # ── 系统垃圾 ──
 Thumbs.db
 Desktop.ini
+# Python 字节码缓存 (2026-09-25 收敛): 原先只有 `ops/__pycache__/` 一条**按路径**的规则 ⇒
+#   `tests/` 等其它目录的缓存不被覆盖, 每次跑独立测试脚本都冒出 `?? tests/__pycache__/` 噪声,
+#   且 `secrets` 断言会报"另有 1 个未跟踪文件未计入"。改为**无前缀**规则: git 的 `__pycache__/`
+#   匹配**任意层级**同名目录 ⇒ 一条覆盖全部, 故删掉那条按路径的旧规则 (冗余窄规则本身就是噪声)。
+__pycache__/
 
 # D2 运行时生成物
 ops/cluster_status.html
@@ -37,7 +42,7 @@ ops/.or-borrow.json
 # 2026-09-23 (D7-P1-1): `.audit-baseline.json` **已入仓**（移至 inventory/）——
 #   决策依据见 docs/research/2026-09-18_证据流审计常跑…md §D-b 的升级条件（多机 ⇒ 入仓）。
 #   故此处**不再忽略**它；留痕即 `git log inventory/audit-baseline.json`。
-ops/__pycache__/
+# (2026-09-25) 原先此处还有一条 `ops/__pycache__/` —— 已由上方"系统垃圾"段的通用 `__pycache__/` 覆盖, 故删除。
 
 # agent-cli / 评测 运行日志与结果快照 (不入库)
 ops/station-bin/*.log
