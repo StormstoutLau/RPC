@@ -239,11 +239,25 @@ function Invoke-CappedSsh {
     $psi.Arguments = "-o BatchMode=yes " + $Arguments
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
+    # ★★ O-79 真根因（2026-09-26）: **必须给子进程一个"空且立即关闭"的 stdin** —— 否则 ssh **永不退出**。
+    #   一手 A/B/C 对照（同一站、同一命令、都在**后台 job** 上下文里）:
+    #     ① 重定向 stdout/err 但 **stdin 继承** ⇒ **TIMEOUT 20s**（ssh 一直在等 stdin 关闭）
+    #     ② 同上 + `RedirectStandardInput=$true` 且启动后**立即 `Close()`** ⇒ `rc=0 / 179 ms / out=alive` ✅
+    #     ③ 裸 `ssh -n`（等价于 stdin 指 /dev/null）⇒ `rc=0 / 179 ms` ✅（与 ② 互为佐证）
+    #   ⚠ **为什么单发时测不出来**（= 这个缺陷装了一天没被发现的原因）: 在**交互/主会话**里，子进程拿到的 stdin
+    #     **会 EOF** ⇒ ssh 正常退出；只有在**后台 job / 批处理 / 管道**上下文里 stdin 才"**永不 EOF**" ⇒ **每次必挂**。
+    #     ⇒ 而那恰恰是**批次派发**要用的上下文（本会话"同站 3 卡并发"正是这样跑出来的）。
+    #   ★ 同族先例: ADR-0006「后果与待办」已登记"未统一加 `BatchMode` 防**静默等 stdin**（实测 >90s 挂起）" ——
+    #     本条是它的**机制变体**: 不是等认证, 而是**等 stdin EOF**。
+    #   ⇒ 修法 = 让 stdin 空且立即关闭（即 `ssh -n` 的等价物，也是 ssh 对非交互调用的建议用法）。
+    $psi.RedirectStandardInput = $true
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     $p = $null
     try {
         $p = [System.Diagnostics.Process]::Start($psi)
+        # ⚠ 只设 `RedirectStandardInput` 而**不关**它 = 仍是"永不 EOF 的管道" ⇒ 白设（② 的对照正是这一点）。
+        try { $p.StandardInput.Close() } catch { }
         if (-not $p.WaitForExit($TimeoutS * 1000)) {
             try { $p.Kill() } catch { }
             Write-Host "SSH_PROBE_TIMEOUT: ${TimeoutS}s 未返回 ⇒ 已杀该 ssh(见台账 O-75)"
