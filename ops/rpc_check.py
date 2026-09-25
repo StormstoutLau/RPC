@@ -18,6 +18,7 @@
   python ops/rpc_check.py --list           # 只列断言清单
 """
 import argparse
+import ast
 import concurrent.futures
 import hashlib
 import json
@@ -1258,6 +1259,159 @@ def check_doclinks(ctx):
     if _unhit:
         note += f" · ⚠ 豁免未命中 {len(_unhit)} 条（已可移除，见明细）"
     return ("FAIL" if n_bad else ("WARN" if _unhit else "PASS")), note, detail
+
+
+# ── 断言: cluster 模块依赖方向 (D6-P2-1) ─────────────────────────────
+# 目的: `cluster_*.py` 拆出 5 个模块后, "谁能 import 谁"原先**无任何约束** ⇒ 反向依赖会悄悄长回来。
+# ★ 必须用 **AST** 而不是正则区分两类 import —— 正则分不清"这行 in 不 in 函数里", 会把两类混成一个桶
+#   （本仓头号失败形态），而两者**语义不同**：
+#   · **模块级** import = **导入期**依赖 ⇒ 有环 ⇒ `import` 当场就炸 ⇒ **真环, FAIL**；
+#   · **函数内懒加载** import = **运行期**耦合 ⇒ 不构成导入环（它是**刻意打破环**的手段），
+#     但**反向**（越层）懒加载仍是设计越界 ⇒ **未登记即 FAIL**（登记后 PASS，未命中会自报"已可移除"）。
+CLUSTER_GLOB = "cluster*.py"
+CLUSTER_LAYER_KEY = "cluster_layers"
+CLUSTER_LAZY_ALLOW_KEY = "cluster_lazy_allow"
+
+
+def _mods_of(node):
+    """从单个 Import/ImportFrom 节点取模块名（`from . import x` 的相对形态不取）。"""
+    if isinstance(node, ast.Import):
+        return {a.name for a in node.names}
+    if node.level == 0 and node.module:
+        return {node.module}
+    return set()
+
+
+def _collect_imports(node, into):
+    """递归收集 import，但**不进入函数体**（函数体里的 import 属"懒加载"，另行收集）。"""
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if isinstance(child, (ast.Import, ast.ImportFrom)):
+            into |= _mods_of(child)
+            continue
+        _collect_imports(child, into)
+
+
+def cluster_dep_edges(text):
+    """**纯函数**: 源码 → `(模块级边, 懒加载边)`（模块名 set；**未**过滤"是否本组模块"）。"""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return set(), set()
+    top = set()
+    _collect_imports(tree, top)
+    lazy = set()
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            _collect_imports(n, lazy)      # 该函数体(含嵌套块)里的 import；再嵌套的函数由外层 walk 覆盖
+    return top, lazy
+
+
+def cluster_dep_graph(sources):
+    """**纯函数**: `{模块名: 源码}` → `{"top": {u:{v}}, "lazy": {u:{v}}}`（只保留**组内**边，去自环）。"""
+    g = {"top": {}, "lazy": {}}
+    for name, text in sources.items():
+        t, l = cluster_dep_edges(text)
+        g["top"][name] = {v for v in t if v in sources and v != name}
+        g["lazy"][name] = {v for v in l if v in sources and v != name}
+    return g
+
+
+def find_cycles(graph):
+    """**纯函数**: 有向图找环 ⇒ `[[n1,n2,…,n1], …]`（DFS 三色；按名排序保证结论**确定**）。"""
+    color = {n: 0 for n in graph}
+    stack, cycles = [], []
+
+    def dfs(u):
+        color[u] = 1
+        stack.append(u)
+        for v in sorted(graph.get(u, ())):
+            if color.get(v) == 1:
+                cycles.append(stack[stack.index(v):] + [v])
+            elif color.get(v) == 0:
+                dfs(v)
+        stack.pop()
+        color[u] = 2
+
+    for n in sorted(color):
+        if color[n] == 0:
+            dfs(n)
+    return cycles
+
+
+def validate_cluster_deps(graph, layers, lazy_allow):
+    """**纯函数** → `(bad, notes, unhit)`。
+
+    `layers` = 按层从底到顶的 `[[路径,…], …]`；`lazy_allow` = `[[上游, 下游, 原因], …]`。
+    规则：① 新模块**必须**在 layers 登记层次；② 模块级图**不得成环**；③ 模块级边**只能向下**（严格下层）；
+    ④ **反向**懒加载必须登记（未登记 ⇒ FAIL）；⑤ 已登记但**未命中** ⇒ `unhit`（自报"已可移除"，同 P0-2 纪律）。
+    """
+    bad, notes, unhit = [], [], []
+    lvl = {}
+    for i, layer in enumerate(layers):
+        for p in layer:
+            lvl[Path(p).stem] = i
+    # ① 未登记模块 ⇒ 新模块必须声明站在哪一层
+    for m in sorted(graph["top"]):
+        if m not in lvl:
+            bad.append(f"{m}: **未在 inventory/ops.yaml 的 `{CLUSTER_LAYER_KEY}` 登记层次** "
+                       f"⇒ 新模块必须显式声明站在哪一层（否则依赖方向无人约束）")
+    # ② 成环（模块级 = 导入期依赖 ⇒ 真环）
+    for cyc in find_cycles(graph["top"]):
+        bad.append(f"**模块级 import 成环**: {' → '.join(cyc)} ⇒ 导入期就会炸"
+                   f"（要么拆环，要么把其中一条改成函数内懒加载 + 登记）")
+    # ③ 层序：模块级边必须指向**严格下层**
+    for u, vs in sorted(graph["top"].items()):
+        for v in sorted(vs):
+            if u in lvl and v in lvl and lvl[v] >= lvl[u]:
+                bad.append(f"**层序越界**: {u}(L{lvl[u]}) → {v}(L{lvl[v]}) —— 只允许依赖**严格下层**")
+    # ④ 反向懒加载：不构成环，但仍是越层 ⇒ 须登记
+    allow = {(Path(a).stem, Path(c).stem): msg for a, c, msg in lazy_allow}
+    hit = set()
+    for u, vs in sorted(graph["lazy"].items()):
+        for v in sorted(vs):
+            if u in lvl and v in lvl and lvl[v] >= lvl[u]:
+                if (u, v) in allow:
+                    hit.add((u, v))
+                    notes.append(f"反向懒加载**已登记**: {u}(L{lvl[u]}) → {v}(L{lvl[v]})")
+                else:
+                    bad.append(f"**未登记的反向懒加载**: {u}(L{lvl[u]}) → {v}(L{lvl[v]}) "
+                               f"⇒ 要么调层，要么在 `{CLUSTER_LAZY_ALLOW_KEY}` 登记原因")
+    unhit = allow_unhit(list(allow), hit)
+    return bad, notes, unhit
+
+
+def check_cluster_deps(ctx):
+    """P2-1: `cluster_*.py` 依赖方向（未登记模块 / 成环 / 层序越界 / 反向懒加载）。"""
+    files = sorted(ROOT.glob(f"ops/{CLUSTER_GLOB}"))
+    if not files:
+        return "WARN", f"ops/{CLUSTER_GLOB} 无匹配（本断言的登记依据）", []
+    src = {p.stem: _read_text(p) for p in files}
+    try:
+        import yaml          # 与本文件其它断言一致: 函数内导入 ⇒ 缺 pyyaml 时降级而不是整仓报错
+    except ImportError:
+        return "WARN", "未安装 pyyaml ⇒ 层序无依据（跳过；装上后自动生效）", []
+    try:
+        inv = yaml.safe_load(OPS_INV.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        return "WARN", f"inventory/ops.yaml 不可读 ⇒ 层序无依据: {type(e).__name__}: {e}", []
+    layers = inv.get(CLUSTER_LAYER_KEY) or []
+    if not layers:
+        return "WARN", f"inventory/ops.yaml 缺 `{CLUSTER_LAYER_KEY}` ⇒ 层序无依据（不判）", []
+    graph = cluster_dep_graph(src)
+    bad, notes, unhit = validate_cluster_deps(graph, layers, inv.get(CLUSTER_LAZY_ALLOW_KEY) or [])
+    for k in unhit:
+        notes.append(f"⚠ 登记的反向懒加载**未命中**（已可移除）: {k[0]} → {k[1]}")
+    n_top = sum(len(v) for v in graph["top"].values())
+    n_lazy = sum(len(v) for v in graph["lazy"].values())
+    detail = ["层序(底→顶): " + " < ".join("{" + ", ".join(Path(x).stem for x in l) + "}" for l in layers)]
+    detail += bad + notes
+    note = (f"模块 {len(src)} 个 · 层序 {len(layers)} 层 · 模块级边 {n_top} 条 · "
+            f"懒加载边 {n_lazy} 条 · 违规 {len(bad)}")
+    if unhit:
+        note += f" · ⚠ 未命中登记 {len(unhit)}（已可移除）"
+    return ("FAIL" if bad else ("WARN" if unhit else "PASS")), note, detail
 
 
 # ── 断言 A3: inventory 单点真值 (P1) ──────────────────────────────
@@ -3093,6 +3247,11 @@ CHECKS = [
     {"id": "scripts", "title": "脚本治理", "fn": check_scripts, "quick": True,
      "fix": "管理操作请走统一入口 (ops/cluster.py <sub> / web 卡片), 不要新增一次性脚本; "
             "确需独立脚本则在 inventory/ops.yaml 登记并在提交信息里说明理由 (ADR-0004)"},
+    {"id": "deps", "title": "cluster 模块依赖方向", "fn": check_cluster_deps, "quick": True,
+     "fix": "P2-1: ① 新 `ops/cluster_*.py` 模块 ⇒ 必须在 `inventory/ops.yaml` 的 `cluster_layers` 登记层次; "
+            "② 模块级 import 成环 ⇒ 拆环，或把其中一条改成**函数内懒加载**（并登记 `cluster_lazy_allow`）; "
+            "③ 层序越界（反向/同层）⇒ 调整层次或改依赖方向（只允许依赖**严格下层**）; "
+            "④ 反向懒加载未登记 ⇒ 登记原因，或调层; ⚠ 报『未命中登记 N』= 那条登记已可移除（删掉）"},
     {"id": "doclinks", "title": "文档链接可达", "fn": check_doclinks, "quick": True,
      "fix": "资源移动/改名后, 文档里的相对链接要跟着改 (注意别写重前缀: spec/<x>/ 里是 "
             "`../y` 不是 `../spec/y`, 引 docs/ 是 `../../docs/z`); 确有不可修的登记 DOCLINK_ALLOW; "
