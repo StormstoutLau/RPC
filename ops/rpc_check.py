@@ -2315,6 +2315,19 @@ STATION_CMD = (
     #   只输出 `pid ppid etimes comm` 四列，**阈值与豁免全留在门禁侧**(与 [conf]/[mpath] 同分工)。
     "printf '\\n[orph]\\n'; ps -eo pid=,ppid=,etimes=,comm= 2>/dev/null "
     "| grep -e opencode -e claude -e timeout -e defunct | head -20; "
+    # (i) O-70 第二类: 白名单**之外、但是我们自己的**残留（2026-09-25）—— **只报数, 不判定**。
+    #   为什么需要: (h) 的白名单只认 4 个 comm ⇒ 实测那条**真孤儿**(`bash /tmp/agent-cli-task-*.sh`
+    #     + 它的 `sleep` 子壳, 存活 **28.6h**, 见台账 O-72)**完全不在白名单里** ⇒ 只因人肉 `ps` 才发现
+    #     = b3 说的"**在路灯下找钥匙**"。
+    #   ⚠⚠ 第一版按 `ps -u $USER --ppid 1` 取 —— **实测两处都不成立**:
+    #     ① 在一台桌面机上它抓到 **122 条系统守护**(`systemd-journald`/`udevd`/`avahi-daemon`…, 全是 **root**)
+    #        ⇒ 说明 `$USER` 在**非登录 ssh 会话**里可能为空 ⇒ `-u` 过滤**静默失效**（纪律 12 同族: 别赌远端变量在）;
+    #     ② 即便过滤对了, 桌面用户的 `ppid=1` 也天然包含 `systemd --user` 等**合法**长龄进程 ⇒ 恒有噪声。
+    #   ⇒ 改成按**产物名**匹配(args 里出现我们自己的脚本名): 这是"事实"判据、噪声面小得多,
+    #     且**正好**覆盖 O-72 那一类。阈值仍留在门禁侧(下面按 `ORPHAN_SEC` 判)。
+    "printf '\\n[orph2]\\n'; ps -eo pid=,etimes=,args= 2>/dev/null "
+    "| grep -e agent-cli-task -e agent-stage- -e _oc_session_meta -e _p3_run -e _station_ready -e _slot_gate "
+    "| grep -v -e grep | head -20; "
 )
 # 刻意不取 infer-list: (1) 它自身约 10s+, 三站并行也要 30s+ (实测全量从 31s 涨到 60s);
 # (2) 判定"别名在该站是否可用"本来就该看 conf —— infer-load 读的正是
@@ -2651,6 +2664,11 @@ def check_stations(ctx):
     #     不是自动清理(清孤儿是不可逆动作, 见 O-58 的裁定记录)。
     #   ⚠ 阈值可由 `RPC_ORPHAN_SEC` 覆盖 —— **为了能先验红**: 6h 的长龄进程无法现场造出来,
     #     而新判据必须双向自证(否则无从区分"判据对"与"判据恒假")。默认仍是 6h。
+    # ★ O-70 (2026-09-25) **射程写准**: 本条**只守本站 runtime 白名单那几类**, 不是"站上有无异常进程"。
+    #   依据(实测): O-72 那条真孤儿是 `bash` + `sleep`(存活 28.6h), **完全不在白名单** ⇒ 漏报。
+    #   ⇒ ① 报数/告警文案里**列出白名单**; ② 另设 (i) `[orph2]` = 白名单外的 ppid=1 长龄进程,
+    #     **只报数不判定**(见下), 补上"可见化"这一半。
+    ORPHAN_WHITELIST = "opencode|claude|timeout|defunct"
     ORPHAN_SEC = int(os.environ.get("RPC_ORPHAN_SEC") or 6 * 3600)
     orphan_checked = 0
     for st in reach:
@@ -2667,10 +2685,31 @@ def check_stations(ctx):
             if et >= ORPHAN_SEC:
                 stale.append(f"{comm} (pid {pid}, ppid {ppid}, 已 {et // 3600}h{(et % 3600) // 60}m)")
         if stale:
-            warn.append(f"{st} 站发现**长龄 orphan** (≥{ORPHAN_SEC // 3600}h；见台账 O-58): "
-                        f"{'; '.join(stale)} —— ⚠ 正在跑的**合法**长 run 也会命中，先确认再清")
+            warn.append(f"{st} 站发现**长龄 orphan** (⚠ 射程 = 本白名单 `{ORPHAN_WHITELIST}` · ≥{ORPHAN_SEC // 3600}h；"
+                        f"见台账 O-58/O-70): {'; '.join(stale)} —— ⚠ 正在跑的**合法**长 run 也会命中，先确认再清")
         else:
-            info.append(f"{st} 站无长龄 orphan (≥{ORPHAN_SEC // 3600}h)")
+            info.append(f"{st} 站无长龄 orphan (白名单 `{ORPHAN_WHITELIST}` · ≥{ORPHAN_SEC // 3600}h)")
+    # (i) O-70 第二类: **我们自己的**产物名命中的进程(不限于白名单 comm) —— **只报数, 永不进 warn/FAIL**。
+    #   为什么分开: 白名单内那四类是我们的 runtime, 长龄基本=卡死; 而这一类的匹配键是"**我们的脚本名**",
+    #     覆盖 `bash`/`sleep`/`find` 这些白名单看不到的形态(O-72 的真孤儿正是 `bash`+`sleep`) ——
+    #     按已裁定的口径**只做可见化**(判成 WARN 会淹信号; 判成 FAIL 更糟, 清孤儿**不可逆**)。
+    #   第三列是 `args`(完整命令行) ⇒ 直接打印出来, 人一眼能看出是哪条链漏的。
+    orph2_checked = 0
+    orph2_stale = []
+    for st in reach:
+        for line in (live[st].get("orph2") or "").splitlines():
+            f = line.split()
+            if len(f) < 3:
+                continue
+            pid, et, what = f[0], f[1], " ".join(f[2:])
+            if not et.isdigit():
+                continue
+            orph2_checked += 1
+            if int(et) >= ORPHAN_SEC:
+                orph2_stale.append(f"{st}:{what[:70]} (pid {pid}, {int(et) // 3600}h)")
+    if orph2_stale:
+        info.append(f"白名单外但**属于我们**的长龄残留 {len(orph2_stale)} 条 (**只报数不判定**; 见台账 O-70): "
+                    f"{'; '.join(orph2_stale[:5])}")
 
     if unreachable:
         info.insert(0, f"站点不可达 (未计入判定): {', '.join(unreachable)}")
@@ -2679,7 +2718,8 @@ def check_stations(ctx):
             f"/bind{sum(1 for m in (ports_inv or {}).values() if m.get('expect_bind'))}"
             f"/port{checked_ports}(豁免临时段 {ignored_eph})/plugin{plugin_checked}"
             f"/weight{sum(1 for st in reach for _ in (live[st].get('mpath') or '').splitlines())}"
-            f"/orph{orphan_checked}")
+            f"/orph{orphan_checked}"
+            f"/orphx{orph2_checked}")
     if detail:
         return "FAIL", note, info + detail + [f"(WARN) {w}" for w in warn]
     if warn:
