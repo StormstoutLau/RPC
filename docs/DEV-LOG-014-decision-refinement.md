@@ -2858,3 +2858,96 @@ ssh -G scott-lau-GTR-Pro.local   ⇒  hostname 192.168.1.32 / addressfamily inet
 | **多张不同卡并发（批次派发）** | ❌ **仍无入口** ⇒ 下一个要做的（§40.4 的头号瓶颈） |
 | `SESSION_META_AMBIGUOUS` 归属标注 | ✅ 框架自己在并发时标注（不是缺陷） |
 
+---
+
+## 42. 批次派发入口（**先落档，未动手**）—— "多张不同卡并发"的改动点与验收判据
+
+> **依据**：§40.4 的诚实清单把"**多张不同卡并发 = 无入口**"列为"用满 3 站 3 额度"的**头号瓶颈**；
+> §41 已把同站多卡并发的两个真阻塞（O-77/O-79）修掉 ⇒ **前置已具备**。
+
+### 42.1 落档前核对出的两条硬约束（**它们改了设计**）
+
+| # | 约束 | 证据 | 对设计的影响 |
+|---|---|---|---|
+| 1 | **不许新增脚本**（改动应落在既有资产里） | ADR-0004「统一管理入口为唯一管理面」；ADR-0006 实施记录亦明写"本 ADR **未新增脚本**，均为既有资产的改动" | ⇒ 入口做成 **`agent-cli.ps1` 的新 verb `batch`**，落进既有的 `$Command` 派发链（`:4320~4363`）+ usage 文本（`:4365`），**不建新脚本** |
+| 2 | **顶层 `param()` 块在本环境无法新增参数** | `agent-cli.ps1:4348-4349` 的实测记录：*"top-level param 块在此 PS5.1 环境**无法再新增一个 param**（pristine HEAD 单加一行也报 `Missing-')'`）⇒ 走函数级 switch, 由 **env 桥接**"* | ⇒ `batch` **不引入新参数**：输入复用既有 **`--card <清单文件>`**；三个开关走 **env 桥**（既有先例 `AGENT_AUTO_FALLBACK`） |
+
+⇒ ⚠ **如实标注这是权宜**：env 桥是**环境限制下的既有模式**，不是设计偏好。若将来 param 块可扩，应把下面三个 env 升为正式参数（届时本条作废）。
+
+### 42.2 接口（v1）
+
+```
+agent-cli batch <proj> --card <清单文件> [--model <默认模型别名>] [--sensitivity ...] [--type ...]
+```
+env 桥：
+| env | 默认 | 含义 |
+|---|---|---|
+| `AGENT_BATCH_DRYRUN=1` | 关 | **只打印分配表、不派发**（用于核对调度，0 个新 runDir） |
+| `AGENT_BATCH_PER_STATION` | **1** | 每站最多并发几张（默认 1 = 只跨站并行；>1 需自担同站锁语义） |
+| `AGENT_BATCH_TIMEOUT_S` | **2400** | 单卡墙钟上限（超时 ⇒ `Kill()` 并**显式记为"未完成"**，绝不静默） |
+
+**清单文件格式**（`.txt`/`.md` 均可，逐行）：
+```
+# 以 # 开头的行是注释；空行忽略
+spec/d6-agent-standard/dogfood-cards/a1-station-reality.md
+spec/d6-agent-standard/dogfood-cards/b2-gate-falsegreen-audit.md   station=A
+spec/d6-agent-standard/dogfood-cards/v5-shared-readonly-probe.md   model=ultra-c   station=C
+```
+行内可选的 `key=value`（空格分隔）：`station=A|B|C`（钉站）· `model=<别名>`（覆盖批次默认）。
+
+### 42.3 调度算法（v1 —— **刻意简单**，因为简单才可验证）
+
+1. 逐行解析 ⇒ 得到 `(card, station?, model?)` 列表；**卡文件不存在 ⇒ 该行立即报错并跳过**（单项 fail-fast，**不整批崩**）。
+2. **未钉站**的按轮转分配（A→B→C→A…），跳过已达 `PER_STATION` 上限的站。
+3. **每站内部串行**，**站与站之间并行** ⇒ 并行度 = 站数（≤3）。
+   ★ **为什么 v1 不做同站多卡**：同站串行**天然零锁冲突、零 `exit 3`**（实测：排他卡在共享持有者存在时**快速拒**，见 O-78）⇒ 把"锁语义"整个从 v1 里去掉，才有可验证性。
+   且"跨站各 1"正是**实测过的真并行形态**（跨站独立 key，O-67 实测）。
+4. 每张卡 = **独立子进程** `agent-cli task …`；⚠ **两处必须照 O-79 的教训办**（否则同一类缺陷会在调度器层重现）：
+   - **stdin**：`RedirectStandardInput=$true` + 启动后**立即 `Close()`**（空 stdin，等价 `ssh -n` 的教训）；
+   - **输出**：`RedirectStandardOutput/Error` 到**该卡的日志文件**，**禁止**用管道收集（防"大输出撑爆管道缓冲 ⇒ `WaitForExit` 死锁"）。
+5. 全部结束后打**汇总表**，判据**以 runDir 为真值**（子进程日志只作旁证 —— 与本仓"看件不看日志"一致）。
+
+**汇总表列**：`# | 卡 | 站 | RUNSTAMP | exit | ACCEPT_OK | runDir`。
+**批次退出码**：全 0 ⇒ `0`；**任一张非 0 ⇒ 返回 1**（batch 的失败语义 = "批次内有卡没成功"，同时逐行标注是哪张）。
+
+### 42.4 明确不覆盖（v1 边界，防"说成一件"）
+
+- ❌ 同站多卡并行（走 `PER_STATION>1` 需自担；v1 默认串行）
+- ❌ `split`/`decompose` fan-out（既有 `split` verb 负责，本 verb 不碰）
+- ❌ 站上引擎配额 / `/slots` 调度
+- ❌ 失败卡**自动换站重试**（只如实报告；换站属"策略"而非"调度"，会掩盖问题）
+- ❌ 产物归并 / 落盘（产物仍在各自 runDir，人工或既有 `collect` 语义）
+- ❌ 把结果写回卡 / 自动入链（钩子已负责入链）
+
+### 42.5 改动点清单
+
+| # | 文件 | 改动 |
+|---|---|---|
+| **C1** | `ops/station-bin/agent-cli.ps1` | ① `$Command -eq 'batch'` 分支（接进 `:4320~4363` 链）② `Invoke-BatchTask` 函数 ③ `$Script:BATCH_PER_STATION=1` / `$Script:BATCH_TIMEOUT_S=2400` ④ usage 文本加一行 |
+| **C2** | `ops/station-bin/_fm_golden_test.ps1` | `o80①~⑥` 结构性断言（见 42.6） |
+| **C3** | `spec/d6-agent-standard/dogfood-cards/README.md` | 用法 + 清单格式 + 纪律（同站串行 ⇒ 无锁冲突；钉站要自负） |
+| **C4** | `docs/DEV-LOG-014` | §42 实施记录 + 验收结果 |
+| **C5** | `spec/d6-agent-standard/OPEN-ISSUES.md` | 登记 **O-80**（批次派发入口，P1）⇒ 实施后转 ✅ |
+| **C6** | `inventory/impact.yaml` | **待评估**：新增 verb 不改既有行为 ⇒ 预计不动（若有 "agent-cli consumer" 登记则复核） |
+
+### 42.6 验收判据（缺一不可）
+
+| # | 判据 | 怎么判 |
+|---|---|---|
+| **V1** | 接口不变形 + **不新增脚本** | `scripts` 门禁仍"未登记 0"；usage 文本里 `batch` 与 `task/split/review` 并列 |
+| **V2** | **干跑** | `AGENT_BATCH_DRYRUN=1` ⇒ 打印分配表，且 runDir **新增 0 个**（可机判：跑前跑后数目录） |
+| **V3** | 真跑 3 卡（**不同卡**） | 3/3 `exit=0`；汇总表 3 行；每卡日志文件存在；**站分配符合轮转** |
+| **V4** | **真并行**（不是串行） | 3 卡的 `RUNSTAMP` **互不等待**（相邻间隔 ≪ 单卡 `RUN_S`）；批次墙钟 ≪ 3× 单卡 |
+| **V5** | 混排不静默丢 | 清单含 1 张**带附件**卡 + 2 张 readonly ⇒ 全部有汇总行；被拒的必须**显式**标 `exit 3` 而非消失 |
+| **V6** | 单项 fail-fast | 清单里混一行**不存在的卡** ⇒ 该行报错、**其余照跑**、批次退出码 = 1 |
+| **V7** | ★ **子进程 stdin**（O-79 的教训落到新代码） | 夹具断言 `RedirectStandardInput` + 立即 `Close()`；真跑时 **0 个 `SSH_PROBE_TIMEOUT`** |
+| **V8** | 收尾干净 | 三站 `stage=0`/`sleep=0`；≥ 3 站无孤儿；主控残留（批次日志目录位置）已登记 |
+
+### 42.7 夹具断言（静态结构性，o80①~⑥）
+
+① `batch` 在 `$Command` 链里且 usage 文本含它 · ② **子进程启动处必须** `RedirectStandardInput=$true` **且** 立即 `Close()`（★ O-79 教训的结构性保证）· ③ 子输出**必须**落文件（禁管道收集，理由写进源码）· ④ `BATCH_PER_STATION` 默认 = 1 · ⑤ `BATCH_TIMEOUT_S` 默认 = 2400 且超时**显式标未完成** · ⑥ 三条约束（ADR-0004 不加脚本 / param 块限制 / env 桥是权宜）**写进源码注释**。
+
+### 42.8 执行顺序
+
+1. C1（入口 + 调度）→ 2. C2（夹具，**先红**）→ 3. V2 干跑 → 4. V3/V4/V5/V6/V7 真跑 → 5. C3/C4/C5 落档 → 6. 门禁全绿 → 7. 提交。
+
