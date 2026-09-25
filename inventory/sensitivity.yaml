@@ -175,5 +175,11 @@ code:
 #   ③ docs/ 下 2026-09-23_* 与 DEV-LOG-01x 全部在表内 (防漏登记);
 #   ④ 卡面 `input-provenance` 非空时, 其每项在表内且卡档位不宽于该项 tier (可机判, 见上文"卡的义务")。
 #   ⑤ 【2026-09-24 新增】本表必须能被 `yaml.safe_load` 解析 (否则"真值"根本读不出来)。
+#   ★ 落地进度 (2026-09-25): ①②③+⑤ **已由门禁断言 `sensitivity`**(check_sensitivity → validate_sensitivity_inv) 覆盖;
+#     **④ 已于同日落地** —— 新增门禁断言 **`input-provenance`** (`ops/rpc_check.py`, quick, O-66):
+#       卡声明 `attach-egress: ok` ∧ `sensitivity ∈ {public, sanitized}` ⇒ 必填 `input-provenance`,
+#       逐项须在本表有 tier 且卡档位不得宽于该项; 显式 `input-provenance: none` = "输入不含本仓内容",
+#       且该声明**可证伪**(声明 none 的卡不得引用 tier **严于本卡**的已登记路径 ⇒ 否则 WARN)。
+#     ⇒ 本表从"有真值但无人读"变成**有消费者**(判据只读本表, 不新增第二份清单)。
 # ⚠ 接入即"改门禁" ⇒ 按 §12 盲区 **B2** 要求, 须同时给出"已知会红"的注入用例
-#   (否则无法证明新断言真的在判, 而不是又一条假绿)。
+#   (否则无法证明新断言真的在判, 而不是又一条假绿)。⇒ 本项已按此办: 见 `tests/test_input_provenance.py`(18 项)。
