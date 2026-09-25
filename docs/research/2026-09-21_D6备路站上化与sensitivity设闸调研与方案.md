@@ -1,6 +1,8 @@
 # D6 备路站上化 + sensitivity 设闸 —— 调研与方案（2026-09-21）
 
-> **状态：调研 + 方案 + P0 已实施 + P1 核对面完成（2026-09-21 当日）。** 本报告的起点是一条**已生效的策略洞**（§0.1）。**P0 止血已落地并双向自证**；**P1 的核对面已完成**（四开关实况入档 + 免费/付费档策略矩阵），并**顺带产生一次"加入又同日撤回"**（§4.1）。**P2–P5 未实施**。
+> **状态：调研 + 方案 + P0 已实施 + P1 核对面完成（2026-09-21 当日）；§3.1 的 `public`/`sanitized` 支已于 2026-09-25 落地（O-55）。** 本报告的起点是一条**已生效的策略洞**（§0.1）。**P0 止血已落地并双向自证**；**P1 的核对面已完成**（四开关实况入档 + 免费/付费档策略矩阵），并**顺带产生一次"加入又同日撤回"**（§4.1）。**P2–P5 未实施**。
+>
+> **⚠ 2026-09-25 补记（就地更正 P3 的收窄）**：§3.1 架构表里 **`sanitized`/`public` ⇒ "站上跑 claude + OpenRouter（按站独立 key）"** 这一支，P3 实施时按当日裁定**收窄**为"保持主控本地 spawn" ⇒ **从未落地**，其后果是**站上 claude 永远配不了 OpenRouter**。该支已于 2026-09-25 以**最小增量**补齐（`ROUTE_TABLE` 加 `claude-a/-b/-c`；判据拆成 `$useStation`（位置）与 `$backendLocal`（后端是否站上本地引擎）两个量；旧 `REJECT claude-station` 换成配对闸 `REJECT claude-station-egress-local-id`；站上就绪判据换 `Test-StationClaudeEgressReady`；站上脚本加 `-Mode local|or`）。**本报告其余各节的结论与实测记录不受影响** —— 详见 [OPEN-ISSUES O-55](../../spec/d6-agent-standard/OPEN-ISSUES.md) 与 [DEV-LOG-014 §26](../../docs/DEV-LOG-014-decision-refinement.md)。
 >
 > **落地摘要（详见 §4）**
 > - **P0**（§4.1）：判据收敛为唯一纯函数（`local-only` × 后端出网性），**两个出网入口各判** —— `AUTO_FALLBACK` 调用点（**拒绝兜底**）+ `Invoke-Task-Claude`。

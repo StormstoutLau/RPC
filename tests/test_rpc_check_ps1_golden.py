@@ -31,7 +31,7 @@ def main() -> int:
         "① 该拒": "local-only + 出网后端 => 'local-only+egress'",
         "② 放行(本地引擎)": "local-only + 本地引擎(不出网) => 放行",
         "③ 放行(防恒真)": "public + 出网后端 => 放行",
-        "④ claude 运行时判": "-backendEgress (-not $useStation)",
+        "④ claude 运行时判": "-backendEgress (-not $backendLocal)",
     }
     for label, needle in cases.items():
         hit = needle in src
