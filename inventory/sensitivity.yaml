@@ -143,6 +143,15 @@ contracts:
       B1(U-2 方言映射) 的输入。由 local-only 文档**人工摘录 + 脱敏**(Scott 2026-09-24 裁定 B1 = public + 摘要):
       只保留"符号 → 阶段/档位含义"的抽象对照, 已剔除主机名/IP/用户目录/源码标识符/行号/键名。
       ⚠ 它不承载原文档的完整性 ⇒ 卡面已明写"缺失项就是缺失, 不许补"
+  - path: spec/d6-agent-standard/dogfood-cards/inputs/d7-p0-boundary-excerpt.md
+    tier: public
+    fails: []
+    why: >-
+      D7-P0-1(分界判据入 ADR + 五处灰色地带归属) 的输入。由 local-only 文档
+      `docs/2026-09-23_D7调研_立项·机制·统一基座.md` §1.1–§1.3 **人工摘录 + 脱敏**(2026-09-25):
+      删去全部**他方仓库路径与内部文件名**、一处**外部方法论代号**、页内交叉引用编号;
+      保留的只有判据本身/归属/理由(纯机制内容 —— 逐段复核见 docs/DEV-LOG-014 §33, 该三节未命中 C1/C2/C3)。
+      ⚠ 同 d7-dialect-excerpt: **摘要不承载原文档完整性** ⇒ 卡面已明写"缺失项就是缺失, 不许补"
   - path: inbox/
     tier: local-only
     fails: [C2]
