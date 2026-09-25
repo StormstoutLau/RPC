@@ -159,15 +159,45 @@ $Script:AGENTSYNC_TEMPLATES = @{
 # ---------------- helpers ----------------
 
 # ── O-57-A (2026-09-25): 站上 `out/` 里的**证据暂存件**（点前缀）—— **唯一真值** ──────────────
+# ★★ O-68/D1 (2026-09-25): 由"名字数组"升级为**唯一真值表**（`name` + `pull`）。
+# 为什么升级: O-68 修法②（per-run 命名）要同时决定**三件事** —— ① 站上名字 ② 是否进合批拉回 ③ 是否参与清理
+#   —— 分散在三处就是"两份枚举漂移"（**本仓头号失败形态**）。⇒ 收敛为**一张表**，其余全部**派生**。
+# `pull` 语义: `batch` = 走 collect 的 marker+base64 合批（:2158）；`scp` = 单独 scp
+#   （`.agent-output.txt` / `.accept-output.txt` / `.accept-golden-output.txt` 三件各有独立本地变量与
+#    content_digest/golden 用途 ⇒ 不入合批，避免同一件被拉两次）。
 # 两处消费（**只此一份清单，禁在别处再手写**）:
-#   ① 派发前**无条件** reset（`Invoke-Task` 的 attach-reset body）—— O-57 实测根因:
-#      `out/` 是**累计**的，而 collect 的固定名拉回**无 run 窗口** ⇒ 把**上一次 run**的残留
-#      当本次证据归档（4 个 proj 根 83 个 run 里 **12 条**归档了别的卡的 `accept-cmds.txt`；
-#      门禁**看不见**它，因为它"在" ⇒ 不是 `missing-artifact`）。
-#      ⚠ 原 reset **只在失败路径**（`O46_CLEAN`）⇒ 成功路径不清 ⇒ 与 **O-22**（`.meta` 残留）同根。
-#   ② collect 的固定名拉回清单（原 `$evNames` 字面量）。
+#   ① 派发前清理（原为"无条件 reset"；★ O-68/D3 起改为**按龄 GC**，见 `Invoke-Task` 的 attach-reset body）
+#      —— O-57 实测根因: `out/` 是**累计**的，而 collect 的固定名拉回**无 run 窗口** ⇒ 把**上一次 run**
+#      的残留当本次证据归档（4 个 proj 根 83 个 run 里 **12 条**归档了别的卡的 `accept-cmds.txt`；
+#      门禁**看不见**它，因为它"在" ⇒ 不是 `missing-artifact`）。原 reset **只在失败路径**（`O46_CLEAN`）。
+#   ② collect 的固定名拉回清单（`$evNames`）。
 # ⚠ **只含暂存件**（点前缀）—— `out/` 里的**交付物绝不能删**（那是卡要产出的东西）。
-$Script:EV_STAGE_NAMES = @('.meta', '.prompt.txt', '.progress', '.accept-cmds.txt', '.golden-cmd.txt', '.workspace-diff.txt', '.attach-manifest.txt', '.session-meta.txt')
+$Script:EV_FILES = @(
+    @{ name = '.meta';                     pull = 'batch' },
+    @{ name = '.prompt.txt';               pull = 'batch' },
+    @{ name = '.progress';                 pull = 'batch' },
+    @{ name = '.accept-cmds.txt';          pull = 'batch' },
+    @{ name = '.golden-cmd.txt';           pull = 'batch' },
+    @{ name = '.workspace-diff.txt';       pull = 'batch' },
+    @{ name = '.attach-manifest.txt';      pull = 'batch' },
+    @{ name = '.session-meta.txt';         pull = 'batch' },
+    @{ name = '.agent-output.txt';         pull = 'scp' },
+    @{ name = '.accept-output.txt';        pull = 'scp' },
+    @{ name = '.accept-golden-output.txt'; pull = 'scp' }
+)
+# 派生①：合批拉回清单 —— 与旧 `$evNames` 字面量**同名同值** ⇒ 老消费者不受影响（O-68/D1 零行为变化）。
+$Script:EV_STAGE_NAMES = @($Script:EV_FILES | Where-Object { $_.pull -eq 'batch' } | ForEach-Object { $_.name })
+# 派生②：★ **per-run 站上名的唯一命名规则**（O-68/D4）—— **禁在别处拼这个字符串**。
+#   形状 `<base><后缀>`，后缀 = `.<ts>`（ts = 18 位 runstamp，O-63 原子取号 ⇒ 跨通道唯一）。
+#   为什么用 ts 而不是 RUN_TOKEN: collect 在**主控**跑且需要**同一个**标识去构造远端名 ⇒ 只有主控的
+#   `$ts` 是双方天然可共享的那一个（`RUN_TOKEN` 是 PS 进程内 Guid，站上拿不到）。
+#   ⚠ 为什么做成"**后缀**"而不是"给每个名字一个变量": 站上那份是 **bash**，PS 变量进不去 ⇒ 只能把
+#     **同一个后缀值**插值进去（body 内 `EV_SUF=...`），两侧由此**共用同一表达式**（单一定义点）。
+$Script:EV_SUFFIX_SEP = '.'
+function Get-EvSuffix([string]$Ts) {
+    if (-not $Ts) { return '' }             # 兜底：未取到 ts ⇒ 空后缀（退化为原名；调用处据此判）
+    return "$($Script:EV_SUFFIX_SEP)$Ts"
+}
 
 function Get-TargetHost([string]$station) {
     if ($station -eq 'A') { return 'scott-lau-NEX.local' }
@@ -377,7 +407,7 @@ function Invoke-Workspace {
     if ($act -eq 'create') {
         # 1. build skeleton (AGENTS.md/CLAUDE.md/.agentsync/out) in local staging
         $stag = Join-Path $env:TEMP "agent-cli-stag-$proj-$($Script:RUN_TOKEN)"
-        if (Test-Path $stag) { Remove-Item $stag -Recurse -Force }
+        if (Test-Path $stag) { Remove-Item $stag -Recurse -Force | Out-Null }
         New-Item -ItemType Directory -Path "$stag\out" -Force | Out-Null
 
         $agentsSrc = Join-Path $projRoot 'AGENTS.md'
@@ -393,7 +423,7 @@ function Invoke-Workspace {
 
         # 2. tar skeleton (full: AGENTS.md/CLAUDE.md/.agentsync/out)
         $tarFile = Join-Path $env:TEMP "agent-cli-create-$proj-$($Script:RUN_TOKEN).tar"
-        if (Test-Path $tarFile) { Remove-Item $tarFile -Force }
+        if (Test-Path $tarFile) { Remove-Item $tarFile -Force | Out-Null }
         Push-Location $stag
         try {
             & $Script:GNU_TAR --force-local -cf $tarFile AGENTS.md CLAUDE.md .agentsync out
@@ -433,7 +463,7 @@ md5sum AGENTS.md CLAUDE.md .agentsync
         #   ⇒ 同 proj 并发 sync 互删 ⇒ 实测 `sync failed: Cannot find path '…\Temp\agent-cli-sync-dogfood.tar'`。
         #   这是 BLINDSCAN-v3 §3 那条跨条目纪律的**第三次实例**(前两次 = F-1 探针 / F-2 死路径)。
         $tarFile = Join-Path $env:TEMP "agent-cli-sync-$proj-$($Script:RUN_TOKEN).tar"
-        if (Test-Path $tarFile) { Remove-Item $tarFile -Force }
+        if (Test-Path $tarFile) { Remove-Item $tarFile -Force | Out-Null }
         Push-Location $projRoot
         try {
             $tarArgs = @('-cf', $tarFile, '--force-local') + $exArgs + @('.')
@@ -717,7 +747,7 @@ function Assert-AgentOutWritable {
     try {
         if (-not (Test-Path $outRoot)) { New-Item -ItemType Directory -Path $outRoot -Force | Out-Null }
         Set-Content -Path $probe -Value 'ok' -ErrorAction Stop
-        Remove-Item $probe -Force -ErrorAction SilentlyContinue
+        Remove-Item $probe -Force -ErrorAction SilentlyContinue | Out-Null
         Write-Host "PREFLIGHT agent-out=WRITABLE ($outRoot)"
         return $true
     }
@@ -750,7 +780,8 @@ function Get-UniqueRunStamp {
         $cut = (Get-Date).AddDays(-7)
         foreach ($d in @(Get-ChildItem $claims -File -ErrorAction SilentlyContinue)) {
             if ((Test-Path (Join-Path $ProjOutRoot $d.BaseName)) -or ($d.CreationTime -lt $cut)) {
-                Remove-Item $d.FullName -Force -ErrorAction SilentlyContinue
+                # ⚠ O-71 (2026-09-25, 根因已定): **必须 `| Out-Null`** —— 见函数尾注释。
+                Remove-Item $d.FullName -Force -ErrorAction SilentlyContinue | Out-Null
             }
         }
     }
@@ -773,7 +804,7 @@ function Get-UniqueRunStamp {
         catch { Start-Sleep -Milliseconds 3; continue }
         # 双保险: 若该 ts 的 runDir 已存在（历史遗留 / 跨机同 ts），退掉抢占再换一个
         if (Test-Path (Join-Path $ProjOutRoot $cand)) {
-            Remove-Item $cf -Force -ErrorAction SilentlyContinue
+            Remove-Item $cf -Force -ErrorAction SilentlyContinue | Out-Null
             continue
         }
         Write-Host "RUNSTAMP: $cand (atomic claim; O-63)"
@@ -782,6 +813,20 @@ function Get-UniqueRunStamp {
     Write-Host "RUNSTAMP_FAIL: $MaxTry 次抢占全冲突(异常时钟?); 放弃"
     return $null
 }
+
+# ⚠⚠ O-71 (2026-09-25 · **根因已定, 一手复现**) —— 本函数**返回一个 18 位字符串**, 因此
+#   **函数体内每一个 `Remove-Item` 都必须 `| Out-Null`**（已全部补上, 共 2 处）。
+#   机理（实测）: 本机 PowerShell profile 把 `Remove-Item` 别名到 `__Safe-Remove-Item-Wrapper`,
+#     而该包装器**每次调用都往管道吐一个 `$null`**（对照: 原生 `Microsoft.PowerShell.Management\Remove-Item`
+#     吐 0 个 —— 同一命令、同一文件, 两个计数）⇒ 未吞掉输出的调用会把**本函数的返回值**变成
+#     `@($null, <ts>)` ⇒ 调用方 `$ts` 变成**数组** ⇒ `"agent-cli-task-$ts.sh"` 里多一个空格 ⇒
+#     远端报 `bash: /tmp/agent-cli-task-: 没有那个文件或目录` ⇒ **`exit 255`**。
+#   触发条件（解释"为什么时好时坏"）: 只有**抢占 GC 分支真的删了东西**时才会走到那两行
+#     ⇒ 判据 = "存在一个 claim, 其 runDir 已存在（或用龄 >7 天）" ⇒ **上一次成功 run 之后的那一次**最容易踩中。
+#   危害形状（本仓头号形态）: 故障点离病因很远（报错在 ssh/scp, 病因在本函数）⇒ 容易被误判成"网络/站上问题"。
+#   同族: `Invoke-RemoteScript` / `Invoke-RemoteCapture` / `Invoke-Judge` 的收尾删除都已按同一条纪律加过
+#     `| Out-Null`（各自注释里写了原因）⇒ 本条是**该纪律的漏用**, 不是新错误。
+#   护栏: `_fm_golden_test.ps1` 有**全文件级**断言 —— 代码行里每个 `Remove-Item` 都必须同现 `| Out-Null`。
 
 function Enter-WorkspaceLease {
     # O-62 / C3 + O-62/C1 (2026-09-25): **控制台侧的"工作区租约"** —— 覆盖 staging + 执行**整次派发**。
@@ -1696,7 +1741,27 @@ function Invoke-Task {
     #   `$attach.Count -gt 0` 时才重建 ⇒ **无附件的派发会留着上一次的附件**(agent 可 `ls`/读到, 且
     #   `attach-manifest` 会把外来文件算进本次 run —— 实测两次无附件 run 都报 `ATTACH_MANIFEST_LINES=3`)。
     #   代价: 无附件派发多一次 ssh(reset) —— 正确性优先, 且该 reset 必须在 scp 之前。
-    $evRmCmd = (($Script:EV_STAGE_NAMES | ForEach-Object { 'rm -f "$W/out/' + $_ + '"' }) -join "`n")
+    # ★★ O-68/D2-D3 (2026-09-25) —— **取代** O-57-A 的"无条件 reset"。
+    # 为什么取代: O-57-A 的 reset 是**无条件破坏性删除**，且**在远端 flock 之外**（本 body 早于主 run body）
+    #   而站上 flock 对 `readonly` 取 **`-s`（共享）** ⇒ **同站同 proj 并存时，后起 run 会删掉先起 run
+    #   正在用的件**（O-68）。⚠ 且"移进锁内"**挡不住** —— 共享持有者之间仍互删。
+    # ⇒ 治本 = **D4 的 per-run 命名**（名字层就不重叠）⇒ 于是"上次残留"**在名字层不存在** ⇒
+    #   **不再需要那个破坏性 reset**（O-57 / O-22 一并从根上消失）。
+    # ⚠ 但**移除 reset 必须与"加 GC"成对** —— 否则 `out/` 会**永久累积**（"登记无出口⇒腐化"）。
+    # GC 形状: **纯按龄**（`-mtime +7`），**不含任何无条件删除** ⇒ 对"在跑的 run"**结构上不可能误删**。
+    #   7 天的依据: 本工具最长 `timeout_s` = 1800s ⇒ 7 天 = **300× 裕度**。
+    #   同时覆盖**旧的无后缀名**（D4 后已无生产者/消费者 ⇒ 也是死件，按同一时间窗自然清掉）。
+    #   从 **EV_FILES 真值**派生 ⇒ 不手写第二份枚举。
+    $evGcCmd = (($Script:EV_FILES | ForEach-Object {
+        'find "$W/out" -maxdepth 1 -type f \( -name ''' + $_.name + ''' -o -name ''' + $_.name + '.*'' \) -mtime +7 -delete 2>/dev/null || true'
+    }) -join "`n")
+    # ★★ O-68/D2 **已落地（2026-09-25）—— O-57-A 的"无条件 reset"已移除**。
+    #   为什么可以移除: D4（per-run 改名）已落地 ⇒ "上一次 run 的残留"在**名字层**就不存在
+    #     （collect 只按**本 run** `$evSuf` 构造的名字拉回）⇒ reset 无必要。
+    #   ⇒ 由此 **O-57 / O-22 从根上消失**（二者同根: 跨 run 残留被当本次证据）。
+    #   ⚠ **不要把它加回来**: 它是**破坏性删除且在 flock 之外**，而站上 flock 对 `readonly` 取 `-s`（共享）
+    #     ⇒ 同站同 proj 并存时会**删掉先起 run 正在用的件**（O-68 的原始缺陷）。清理职责**只归 D3 的按龄 GC**
+    #     （`-mtime +7` ⇒ 结构上不可能误删活件）。夹具 `o68` 段把这个不变量钉住。
     # ── O-59 / T1 (2026-09-25): **staging 中转目录（run 级私有）** ──────────────────────────────
     # 为什么要有它: 附件的 reset+scp 与 golden 的注入原都在**远端 flock 之外**, 而 `readonly:true`
     #   的锁是 **shared** ⇒ 同站同 proj 并发两跑会**互删/互灌 `.attach/`**。**先验红(实测)**: 两跑各带
@@ -1721,14 +1786,22 @@ STAGE="$stage"
 # O-59/T1 (2026-09-25): **这里不再碰 `$W/.attach`** —— 共享锁下两跑会互删(先验红见 DEV-LOG §27.11-G)。
 #   改为只备**本 run 私有**的中转目录;`.attach` 的"重置 + 落件"移到 **run body 的锁内**(见 body 内 O-59/T1 段)。
 rm -rf "`$STAGE" && mkdir -p "`$STAGE/attach"
-# O-57-A (2026-09-25): **证据暂存件派发前无条件清** —— 根因/后果/量化见 `$Script:EV_STAGE_NAMES` 注释。
-#   与上面 `.attach/` reset **同一纪律**: "上一轮的残留"绝不能进本次的证据面。
-#   ⚠ 本 body 是**每次派发最早的远端写入点**(早于附件 scp、早于主 run body) ⇒ 放这里才不会删掉
-#     本次 run 自己刚写的件。
-$evRmCmd
+# ★★ O-68/D3 (2026-09-25): 暂存件**按龄 GC**（**新增**，与 O-57-A 的 reset 并存 —— 见下）。
+#   用途: 防"per-run 件"（以及旧的无后缀死件）**永久累积**（"登记无出口⇒腐化"）。
+#   形状: **只按龄**（`-mtime +7`）⇒ **没有**"删除活件"这种可能；裕度理由见上面 `$evGcCmd` 定义处。
+#   ⚠ 本 body 仍是**每次派发最早的远端写入点** ⇒ 放这里可保证"不会删掉本次 run 自己刚写的件"。
+$evGcCmd
+# ★★ O-68/D2 **已落地（2026-09-25）: 此处原为 O-57-A 的"无条件清"，现已移除**。
+#   为什么可以移除: D4 已给所有暂存件加了 per-run 后缀 ⇒ "上一次 run 的残留"在**名字层**不存在
+#     （collect 只按**本 run** 的名字拉回）⇒ 无需在派发前破坏性删除。
+#   ⚠ **不要加回来**: 它**无条件删固定名**、且在 flock **之外**，而站上 flock 对 `readonly` 取 `-s`（共享）
+#     ⇒ 同站同 proj 并存时会**删掉先起 run 正在用的件**（= O-68 的原始缺陷）。
+#   ⇒ 清理职责**只归上面那条按龄 GC**（`-mtime +7` ⇒ 结构上不可能误删活件）。
 "@
-    # O-57-A: 上面那段 rm 清单由 `$Script:EV_STAGE_NAMES` **派生**（`$W` 用单引号拼出 ⇒ 由 bash 展开，
-    #   PS 不碰它）。**禁**在此处手写第二份名单 —— 两份枚举漂移正是本仓头号失败形态。
+    # ★ O-68/D2-D3: 上面那段 **GC 清单**由 `$Script:EV_FILES` 真值**派生**（`$W` 用单引号拼出 ⇒ 由 bash
+    #   展开，PS 不碰它）。**禁**在此处手写第二份名单 —— 两份枚举漂移正是本仓头号失败形态。
+    # ⚠ 与 O-57-A 的**关键区别**: 那时是"**无条件删固定名**"（共享锁下会删掉**别人的活件** = O-68）；
+    #   现在是"**只按龄删**（`-mtime +7`）" ⇒ **结构上不可能**误删活件。
     # ⚠⚠ **W2 实测根因 (2026-09-22): 这一行曾漏 `| Out-Null`, 是"进程 rc 恒为 0"的来源** ——
     #   `Invoke-RemoteScript` 返回 int rc(成功=0), 而本行是**裸调用** ⇒ 该 0 落进 `Invoke-Task` 的
     #   **管道**(= 函数返回值集合), 于是调用方拿到 `$code = @(0, <真 rc>)`, 而 `exit $数组` ⇒ **进程 rc=0**。
@@ -1814,6 +1887,21 @@ mkdir -p "`$STAGE/attach/$name"
     #   形状仍是 **18 位数字**（scrubber 的长度判据与全仓引用依赖它）。
     $ts = Get-UniqueRunStamp -ProjOutRoot $tsOutRoot
     if (-not $ts) { Write-Host "ABORT: 无法取得唯一 run 时间戳(exit 13)"; return 13 }
+    # ⚠ O-71 (2026-09-25): **形状校验** —— `$ts` 必须是**单个 18 位字符串**。
+    #   为什么非判不可: 本机 profile 把 `Remove-Item` 别名到一个"每次调用吐一个 `$null`"的包装器
+    #   ⇒ 任何未 `| Out-Null` 的调用都会把上游函数的**返回值**变成 `@($null, <ts>)`。数组一旦流到这里,
+    #   下游是**静默畸形**而非报错: `"agent-cli-task-$ts.sh"` 里多一个空格 ⇒ 远端 `bash` 把它拆成两个词
+    #   ⇒ `bash: /tmp/agent-cli-task-: 没有那个文件或目录` + `exit 255`（**报错点离病因很远**, 23:23 实测）。
+    #   源头已全部补 `| Out-Null`（见 `Get-UniqueRunStamp` 尾注）; 此处再 fail-closed 一道:
+    #   **绝不"取数组最后一个元素接着跑"** —— 那是把"污染"当"一个更长的 ts", 属本仓禁的静默降级。
+    if ($ts -is [array]) { Write-Host "ABORT: ts 形状异常(数组, 疑似环境层 Remove-Item 包装器污染返回值) exit 13"; return 13 }
+    # ★ O-68/D4 (2026-09-25): per-run 后缀 —— **主控侧**的那个值（与站上 `EV_SUF` **必须同值**）。
+    #   主控侧消费点: collect 的拉回路径（单独 scp ×2 + 合批 ×1）+ 会话遥测 helper 的参数。
+    #   唯一表达式在 `Get-EvSuffix`（见 helpers 段）⇒ 禁在此处手拼。
+    #   ⚠ **fail-closed**: 取不到就**中止**，绝不"退化成裸名继续跑" —— 那等于**静默关掉** O-68 的隔离,
+    #     而现象上一切正常（正是本仓头号失败形态）。
+    $evSuf = Get-EvSuffix $ts
+    if (-not $evSuf) { Write-Host "ABORT: per-run 后缀为空(exit 13) - 拒绝以裸名派发(O-68 隔离会静默失效)"; return 13 }
 
     # 4c) golden (O-12, IMPLEMENTATION §3.2 M2): authoritative golden test injected BEFORE dispatch
     #     (inv 3: after sync, before $body; clean-inject = .golden equals current injection).
@@ -1836,10 +1924,12 @@ mkdir -p "`$STAGE/attach/$name"
         $goldenCmdB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($g.cmd))
         $goldenTgz = Join-Path $env:TEMP "agent-cli-golden-$ts.tgz"
         & $Script:GNU_TAR --force-local -C (Split-Path $gSrc) -cf $goldenTgz $goldenBase
-        if ($LASTEXITCODE -ne 0) { Write-Host "GOLDEN_TAR_FAIL: $($g.source)"; Remove-Item $goldenTgz -ErrorAction SilentlyContinue; return 2 }
+        if ($LASTEXITCODE -ne 0) { Write-Host "GOLDEN_TAR_FAIL: $($g.source)"; Remove-Item $goldenTgz -ErrorAction SilentlyContinue | Out-Null; return 2 }
         scp -q -o BatchMode=yes -o ConnectTimeout=10 $goldenTgz "${hostName}:$stage/golden.tgz"
-        if ($LASTEXITCODE -ne 0) { Write-Host "NETFAIL: golden scp failed"; Remove-Item $goldenTgz -ErrorAction SilentlyContinue; return 5 }
-        Remove-Item $goldenTgz -ErrorAction SilentlyContinue
+        if ($LASTEXITCODE -ne 0) { Write-Host "NETFAIL: golden scp failed"; Remove-Item $goldenTgz -ErrorAction SilentlyContinue | Out-Null; return 5 }
+        # ⚠ O-71 同族: 本函数**返回 rc**(调用方 `$code = Invoke-Task …`) ⇒ 本行**每次 golden 派发都会执行**
+        #   ⇒ 少了 `| Out-Null` 就会把 `$null` 混进返回值（实测机理见 `Get-UniqueRunStamp` 尾注）。
+        Remove-Item $goldenTgz -ErrorAction SilentlyContinue | Out-Null
         # ── O-59/T1 (2026-09-25): **注入动作不再在这里做** ───────────────────────────────────────
         # 原来这里是一段独立 remote script: `rm -rf "$W/.golden"` + 解包 —— 与 `.attach` 是**同一族**
         #   (在远端 flock **之外**碰共享面) ⇒ `readonly:true` 的共享锁下两跑会互删/互相覆盖 `.golden`。
@@ -1861,8 +1951,8 @@ if [ `$TAMPER_RC -ne 0 ]; then
   echo "GOLDEN_TAMPERED"
   ACCEPT_GOLDEN_OK=0
 else
-  echo "`$GOLDEN_CMD_B64" | base64 -d > "`$W/out/.golden-cmd.txt"
-  ( cd "`$W" && eval "`$(cat "`$W/out/.golden-cmd.txt")" ) > "`$W/out/.accept-golden-output.txt" 2>&1
+  echo "`$GOLDEN_CMD_B64" | base64 -d > "`$W/out/.golden-cmd.txt`$EV_SUF"
+  ( cd "`$W" && eval "`$(cat "`$W/out/.golden-cmd.txt`$EV_SUF")" ) > "`$W/out/.accept-golden-output.txt`$EV_SUF" 2>&1
   GOLDEN_RC=`$?
   [ `$GOLDEN_RC -ne 0 ] && { echo "GOLDEN_FAIL rc=`$GOLDEN_RC"; ACCEPT_GOLDEN_OK=0; }
 fi
@@ -1893,6 +1983,12 @@ W="$W"
 STAGE="$stage"
 S="`$W/.agent-state.json"
 mkdir -p "`$W" "`$W/out"
+# ★★ O-68/D4 (2026-09-25): **per-run 后缀** —— 站上暂存件的名字必须带它。
+#   值由主控插值而来（`$evSuf`，唯一表达式 = `Get-EvSuffix $ts`）⇒ 与 collect 侧**同值**。
+#   为什么必须带: 名字层不重叠 ⇒ 并存的 run **不可能**互删/互覆（于是 O-57-A 那个破坏性 reset 可移除）。
+#   ⚠ 本行**必须早于**任何写点 —— 尤其早于 golden 段（它同样写 `.golden-cmd.txt`）。
+#   ⚠ 交付物（非点前缀, 例如卡产出的 `out/x.json`）**不带**后缀 —— 那是卡面契约, 不是暂存件。
+EV_SUF="$evSuf"
 # O-09 isolate-xdg: 同站并行写任务时把 opencode 数据目录隔离到 per-task 工作区,
 #   消除共享 opencode.db 上的写锁串行化 (SQLite 写锁序列化事实见 _bs1.py)。
 #   仅隔离 data 目录: config(~/.config/opencode, 含 provider baseURL) 仍共享;
@@ -1944,7 +2040,7 @@ rm -rf "`$STAGE"
 Q0=`$(date +%s%N)
 printf '{"state":"running","pid":%d,"ts_start":"%s","task_id":"%s","host":"agent-cli"}' "`$$" "`$(date -Is)" "$ts" > "`$S"
 sleep 2   # artificial intake gap (BP-4: makes queue_s measurable on contention holder)
-printf '%s' "$promptB64" | base64 -d > "`$W/out/.prompt.txt"
+printf '%s' "$promptB64" | base64 -d > "`$W/out/.prompt.txt`$EV_SUF"
 echo "PIPE_STDIN_OK"
 cd "`$W" || exit 8    # cwd=workspace so agent reads AGENTS.md + project files (inv 4: stdin pipe, not cwd hijack)
 R0=`$(date +%s%N)     # P2-1: run clock starts here (queue = lock+intake up to this point)
@@ -1961,24 +2057,24 @@ CONT_B64="Q29udGludWUgdGhlIHVuZmluaXNoZWQgdGFzayBmcm9tIHdoZXJlIGl0IHN0b3BwZWQuIF
 # (R1 is defined only AFTER the run completes, so it must not be referenced here).
 SAMPLE=t
 SB0=`$(( `$(date +%s%N) / 1000000 ))   # sampler clock base (ms), captured before first run
-: > "`$W/out/.progress"
+: > "`$W/out/.progress`$EV_SUF"
 # O-37 (2026-09-24): **同时清空 agent 输出文件** —— 否则采样器第一个样本(t=0)读到的是**上一轮残留**。
 #   实测两条铁证: A1 `t=0 bytes=4434` == 上一轮 `OUT_BYTES=4434`; B2 `t=0 bytes=4470` == A1 的 `OUT_BYTES=4470`。
 #   后果 ① 首样本 bytes_s 假高(实测 1.4e6+ B/s); ② ★ `bytes>0` 在 t=0 即成立 ⇒ 任何"以字节增长判已产出"
 #   的消费者会在第 0 秒看到**假进度/假完成**(与 T-1「完成信号须与证据同源」、O-22「.meta 残留」同病族)。
 #   ⚠ 时序: 本行 → `sample_progress &` → opencode(自己的 `>` 再截断) ⇒ **必须在这里清**, 晚于此即有残留窗口。
-: > "`$W/out/.agent-output.txt"
+: > "`$W/out/.agent-output.txt`$EV_SUF"
 sample_progress() {
   while [ "`$SAMPLE" = t ]; do
     # 2026-09-23 (RC4) **必须容忍文件尚未创建**: agent 启动前 `out/.agent-output.txt` 不存在,
     #   而 bash 的**重定向失败消息由 shell 打印, 不受本命令 `2>/dev/null` 抑制** ⇒ 实测每 5s 刷一条
     #   "行 61: … 没有那个文件或目录" 噪音, 并把 run 打成 excode=255(采样器处中断)。
     #   ⚠ 连续两轮我都误判为"站上缺 out/" —— 真相是"采样器读了还没创建的文件"(取证定性, 见 O-32)。
-    ob=0; [ -f "`$W/out/.agent-output.txt" ] && ob=`$(wc -c < "`$W/out/.agent-output.txt" 2>/dev/null)
+    ob=0; [ -f "`$W/out/.agent-output.txt`$EV_SUF" ] && ob=`$(wc -c < "`$W/out/.agent-output.txt`$EV_SUF" 2>/dev/null)
     sw=`$(( `$(date +%s%N) / 1000000 - SB0 ))   # ms since sampler start
     st=`$(( sw / 1000 ))                        # s since sampler start
     bps=`$(( ob*1000/(sw+1) ))
-    printf 't=%s bytes=%s bytes_s=%s\n' "`$st" "`$ob" "`$bps" >> "`$W/out/.progress"
+    printf 't=%s bytes=%s bytes_s=%s\n' "`$st" "`$ob" "`$bps" >> "`$W/out/.progress`$EV_SUF"
     sleep 5
   done
 }
@@ -1987,11 +2083,11 @@ SPID=`$!
 # ADR-0007 缺口 5: 附件"注入字节"的**原始证据** —— 站上逐文件 `sha256sum`(`<hex>  <relpath>`)。
 #   必须在 agent 运行**之前**采样(故在 marker 之前): 记的是"注入的字节", 而非 agent 可能改写后的。
 #   与主控侧对**源文件**的独立哈希互为**跨信任域交叉验证**(e2e 据此自证"记录属实")。
-: > "`$W/out/.attach-manifest.txt"
+: > "`$W/out/.attach-manifest.txt`$EV_SUF"
 if [ -d "`$W/.attach" ]; then
-  ( cd "`$W/.attach" && find . -type f -printf '%P\n' 2>/dev/null | LC_ALL=C sort | xargs -r sha256sum ) > "`$W/out/.attach-manifest.txt" 2>/dev/null || true
+  ( cd "`$W/.attach" && find . -type f -printf '%P\n' 2>/dev/null | LC_ALL=C sort | xargs -r sha256sum ) > "`$W/out/.attach-manifest.txt`$EV_SUF" 2>/dev/null || true
 fi
-echo "ATTACH_MANIFEST_LINES=`$(wc -l < "`$W/out/.attach-manifest.txt" 2>/dev/null || echo 0)"
+echo "ATTACH_MANIFEST_LINES=`$(wc -l < "`$W/out/.attach-manifest.txt`$EV_SUF" 2>/dev/null || echo 0)"
 # ADR-0007 缺口 4: agent 运行**窗口起点**标记 —— 必须在 agent 运行前创建, 否则窗口错位、
 #   diff 恒空。后续用 `find -newer` 列出本窗口内被改动的文件(与 git 无关: 实测工作区非
 #   git 仓库, git diff 会静默返回空 = 假的"未越界")。
@@ -1999,7 +2095,7 @@ echo "ATTACH_MANIFEST_LINES=`$(wc -l < "`$W/out/.attach-manifest.txt" 2>/dev/nul
 # O-48: `-k 10` = 到点先 TERM、10s 后仍不退则 KILL。**裸 `timeout` 对忽略 SIGTERM 的子进程会一直等**
 #   (受控复现: `timeout 2 bash -c 'trap "" TERM; sleep 6'` ⇒ rc=124 但**耗时 6s**; 同命令加 `-k 1` ⇒ rc=137 **3s**)
 #   ⇒ opencode 挂死时**永不返回**、留孤儿占槽(B 站实测孤儿曾活 17.2h)。
-timeout -k 10 $timeout opencode run -m "$id" < "`$W/out/.prompt.txt" > "`$W/out/.agent-output.txt" 2>&1
+timeout -k 10 $timeout opencode run -m "$id" < "`$W/out/.prompt.txt`$EV_SUF" > "`$W/out/.agent-output.txt`$EV_SUF" 2>&1
 RC=`$?
 # O-24 P0-① resume loop: on failure retry <=2 via `--continue` (opencode isolates sessions
 # per workspace path -> in $W it resumes THIS run's session, verified 2026-09-09 on A station;
@@ -2010,18 +2106,18 @@ CONT_ATTEMPT=0
 while [ `$RC -ne 0 ] && [ `$CONT_ATTEMPT -lt 3 ]; do
   CONT_ATTEMPT=`$((CONT_ATTEMPT+1))
   # O-46 退避: 上次输出命中上游过载/超时 → 长退避(30s)尊重 provider 冷却; 否则短退避(5s)
-  if grep -qE '503|504|provider_overloaded|Service temporarily overloaded|idle timeout' "`$W/out/.agent-output.txt" 2>/dev/null; then
+  if grep -qE '503|504|provider_overloaded|Service temporarily overloaded|idle timeout' "`$W/out/.agent-output.txt`$EV_SUF" 2>/dev/null; then
     sleep 30
   else
     sleep 5
   fi
-  echo "=== RESUME[`$CONT_ATTEMPT] prev_rc=`$RC ===" >> "`$W/out/.agent-output.txt"
+  echo "=== RESUME[`$CONT_ATTEMPT] prev_rc=`$RC ===" >> "`$W/out/.agent-output.txt`$EV_SUF"
   # O-24 P0-①: resume runs under its OWN timeout budget (continue-timeout-s), not the first budget
   echo "`$CONT_B64" | base64 -d \
     | timeout -k 10 $continueTimeout opencode run --continue -m "$id" \
-       >> "`$W/out/.agent-output.txt" 2>&1
+       >> "`$W/out/.agent-output.txt`$EV_SUF" 2>&1
   RC=`$?
-  echo "=== RESUME[`$CONT_ATTEMPT] rc=`$RC ===" >> "`$W/out/.agent-output.txt"
+  echo "=== RESUME[`$CONT_ATTEMPT] rc=`$RC ===" >> "`$W/out/.agent-output.txt`$EV_SUF"
 done
 R1=`$(date +%s%N)
 # O-25 P0-② teardown: stop sampler, flush final write, capture aggregate throughput baseline.
@@ -2029,9 +2125,9 @@ R1=`$(date +%s%N)
 SAMPLE=f
 kill `$SPID 2>/dev/null   # sampler subshell keeps a COPY of SAMPLE (fork); f won't reach it -> kill directly, else wait blocks forever
 wait `$SPID 2>/dev/null
-TOTAL_BYTES=`$(wc -c < "`$W/out/.agent-output.txt" 2>/dev/null)
+TOTAL_BYTES=`$(wc -c < "`$W/out/.agent-output.txt`$EV_SUF" 2>/dev/null)
 TBPS=`$(( TOTAL_BYTES / ( (R1-R0)/1000000000 +1 ) ))
-printf 't=end bytes=%s bytes_s=%s\n' "`$TOTAL_BYTES" "`$TBPS" >> "`$W/out/.progress"
+printf 't=end bytes=%s bytes_s=%s\n' "`$TOTAL_BYTES" "`$TBPS" >> "`$W/out/.progress`$EV_SUF"
 # ADR-0007 缺口 4: readonly 卡的"未越界"载体 —— **与 git 无关**(实测工作区非 git 仓库,
 #   `git diff` 在非仓库上静默返回空 = 假的"未越界") ⇒ marker + `find -newer`, 只列 agent
 #   运行窗口内被改动的**工作区相对路径**(`-printf '%P'`)。
@@ -2040,8 +2136,8 @@ printf 't=end bytes=%s bytes_s=%s\n' "`$TOTAL_BYTES" "`$TBPS" >> "`$W/out/.progr
 ( cd "`$W" && find . -newer .run-marker -type f -printf '%P\n' 2>/dev/null \
     | grep -v -E '^(out|\.golden|\.attach|agent-out|\.agentsync|\.git)/' \
     | grep -v -E '^\.(agent-lock|agent-state\.json|run-marker)$' \
-    | grep -v -E '^agent-runs\.log$' ) > "`$W/out/.workspace-diff.txt" 2>/dev/null || true
-echo "WORKSPACE_DIFF_LINES=`$(wc -l < "`$W/out/.workspace-diff.txt" 2>/dev/null || echo 0)"
+    | grep -v -E '^agent-runs\.log$' ) > "`$W/out/.workspace-diff.txt`$EV_SUF" 2>/dev/null || true
+echo "WORKSPACE_DIFF_LINES=`$(wc -l < "`$W/out/.workspace-diff.txt`$EV_SUF" 2>/dev/null || echo 0)"
 # accept gate (A14): run executable criteria in workspace after agent completes
 # golden gate (O-12, IMPLEMENTATION §3.3 M3): authoritative criteria run BEFORE self accept (inv 2/5)
 # default line: ACCEPT_GOLDEN_OK always present in .meta (derived-requirement, IMPLEMENTATION §9.2)
@@ -2050,18 +2146,18 @@ ACCEPT_B64="$acceptB64"
 ACCEPT_OK=1
 $goldenBlock
 if [ -n "`$ACCEPT_B64" ]; then
-  echo "`$ACCEPT_B64" | base64 -d > "`$W/out/.accept-cmds.txt"
-  : > "`$W/out/.accept-output.txt"
+  echo "`$ACCEPT_B64" | base64 -d > "`$W/out/.accept-cmds.txt`$EV_SUF"
+  : > "`$W/out/.accept-output.txt`$EV_SUF"
   i=0
   while IFS= read -r c || [ -n "`$c" ]; do
     [ -z "`$c" ] && continue
     ((i++))
-    echo "=== ACCEPT_CMD[`$i] >>> `$c" >> "`$W/out/.accept-output.txt"
-    ( cd "`$W" && eval "`$c" ) >> "`$W/out/.accept-output.txt" 2>&1
+    echo "=== ACCEPT_CMD[`$i] >>> `$c" >> "`$W/out/.accept-output.txt`$EV_SUF"
+    ( cd "`$W" && eval "`$c" ) >> "`$W/out/.accept-output.txt`$EV_SUF" 2>&1
     arc=`$?
-    echo "--- ACCEPT_RC[`$i]=`$arc" >> "`$W/out/.accept-output.txt"
+    echo "--- ACCEPT_RC[`$i]=`$arc" >> "`$W/out/.accept-output.txt`$EV_SUF"
     [ "`$arc" -ne 0 ] && ACCEPT_OK=0
-  done < "`$W/out/.accept-cmds.txt"
+  done < "`$W/out/.accept-cmds.txt`$EV_SUF"
   echo "ACCEPT_OK=`$ACCEPT_OK"
 fi
 # G1 C4 guard (2026-09-12, G1-continue-spawn-decision.md): final state must NOT be a silent
@@ -2084,8 +2180,8 @@ if { [ "`$GOLDEN_ACTIVE" -eq 1 ] && [ "`$ACCEPT_GOLDEN_OK" -ne 1 ]; } \
  || { [ -n "`$ACCEPT_B64" ] && [ "`$ACCEPT_OK" -ne 1 ]; }; then FINAL_RC=9; fi
 echo "TASK_RC=`$FINAL_RC"
 echo "ACCEPT_OK=`$ACCEPT_OK"
-echo "OUT_BYTES=`$(wc -c < "`$W/out/.agent-output.txt" 2>/dev/null)"
-printf 'TASK_ID=%s\nQUEUE_S=%s\nRUN_S=%s\nTASK_RC=%s\nRC_DOMAIN=v2\nACCEPT_OK=%s\nACCEPT_GOLDEN_OK=%s\nREVIEW_NEEDED=%s\n' "$ts" "`$QUEUE" "`$RUNS" "`$FINAL_RC" "`$ACCEPT_OK" "`$ACCEPT_GOLDEN_OK" "`$RN" > "`$W/out/.meta"
+echo "OUT_BYTES=`$(wc -c < "`$W/out/.agent-output.txt`$EV_SUF" 2>/dev/null)"
+printf 'TASK_ID=%s\nQUEUE_S=%s\nRUN_S=%s\nTASK_RC=%s\nRC_DOMAIN=v2\nACCEPT_OK=%s\nACCEPT_GOLDEN_OK=%s\nREVIEW_NEEDED=%s\n' "$ts" "`$QUEUE" "`$RUNS" "`$FINAL_RC" "`$ACCEPT_OK" "`$ACCEPT_GOLDEN_OK" "`$RN" > "`$W/out/.meta`$EV_SUF"
 # task succeeds only if agent ok AND (golden active -> golden ok) AND (no accept criteria OR accept all pass)
 # O-12 P3-1: exit 9 reused for BOTH golden-fail and self-accept-fail (deliberate; run.json
 # accept_golden.passed / accept.passed disambiguate at contract layer - IMPLEMENTATION §6.2)
@@ -2120,7 +2216,8 @@ exit `$FINAL_RC
             #   但**不能靠兜底当正常路径**。
             $runStart = [DateTimeOffset]::ParseExact($ts.Substring(0, 14), 'yyyyMMddHHmmss', [Globalization.CultureInfo]::InvariantCulture)
             $sinceMs = $runStart.ToUnixTimeMilliseconds() - 300000
-            & ssh -o BatchMode=yes -o ConnectTimeout=10 $hostName "bash /tmp/_oc_session_meta.sh '$W' $sinceMs '$W/out/.session-meta.txt'" 2>$null | Out-Null
+            # O-68/D5: helper 的目标路径**带 per-run 后缀**（与站上 `EV_SUF` 同值 ⇒ 同文件）。
+            & ssh -o BatchMode=yes -o ConnectTimeout=10 $hostName "bash /tmp/_oc_session_meta.sh '$W' $sinceMs '$W/out/.session-meta.txt$evSuf'" 2>$null | Out-Null
         }
     }
     catch { Write-Host "SESSION_META_WARN: $($_.Exception.Message)" }
@@ -2142,8 +2239,11 @@ exit `$FINAL_RC
     $progressTxt = Join-Path $evDir '.progress'
     $accCmdTxt = Join-Path $evDir '.accept-cmds.txt'
     $goldCmdTxt = Join-Path $evDir '.golden-cmd.txt'
-    scp -q -o BatchMode=yes -o ConnectTimeout=10 "${hostName}:$W/out/.agent-output.txt" "$outTxt" 2>$null
-    if ($accept.Count -gt 0) { scp -q -o BatchMode=yes -o ConnectTimeout=10 "${hostName}:$W/out/.accept-output.txt" "$accTxt" 2>$null }
+    # O-68/D6: 两处**单独 scp** 的远端路径带 per-run 后缀（本地 TEMP 名不变 ⇒ 归档侧零改动）。
+    #   ⚠ 这里用 **PS 变量 `$evSuf`**（不是站上那个 bash 变量 `$EV_SUF`）—— 本行是**主控侧**字符串,
+    #     由 PS 插值后交给 scp。⇒ 两者**同值**（都出自 `Get-EvSuffix`）但**语法域不同**, 别互抄。
+    scp -q -o BatchMode=yes -o ConnectTimeout=10 "${hostName}:$W/out/.agent-output.txt$evSuf" "$outTxt" 2>$null
+    if ($accept.Count -gt 0) { scp -q -o BatchMode=yes -o ConnectTimeout=10 "${hostName}:$W/out/.accept-output.txt$evSuf" "$accTxt" 2>$null }
     try {
         # 逐件 `marker + base64`（**刻意不用 tar**）: Windows 侧 GNU tar 对 `C:\...` 会按 host:path 去连
         #   "C" 主机(需 --force-local), 而 --force-local 又不认反斜杠路径 —— 两坑皆实测踩到。base64
@@ -2156,7 +2256,9 @@ exit `$FINAL_RC
         # O-57-A (2026-09-25): 清单**不在此处手写** —— 与派发前的 reset 共用
         #   `$Script:EV_STAGE_NAMES`（唯一真值；两份枚举漂移是本仓头号失败形态）。
         $evNames = $Script:EV_STAGE_NAMES
-        $evCmd = (($evNames | ForEach-Object { "if [ -f $W/out/$_ ]; then echo FILE:$_ ; base64 -w0 $W/out/$_ ; echo ; fi" }) -join ' ; ')
+        # O-68/D6: 合批的远端路径同样带 per-run 后缀。
+        #   ⚠ marker 仍发**基名**（`FILE:<base>`）⇒ 本地侧按基名映射到 runDir 的归档名（归档接口零改动）。
+        $evCmd = (($evNames | ForEach-Object { "if [ -f $W/out/$($_)$evSuf ]; then echo FILE:$_ ; base64 -w0 $W/out/$($_)$evSuf ; echo ; fi" }) -join ' ; ')
         $evRaw = @(& ssh -o BatchMode=yes -o ConnectTimeout=10 $hostName $evCmd 2>$null)
         $evBuf = @{}; $evCur = ''
         foreach ($ln in $evRaw) {
@@ -2178,7 +2280,7 @@ exit `$FINAL_RC
     # O-12 M4 P2-2: golden output pulled; TAMPERED path does NOT create the file -> scp NativeCommandError under
     # EAP=Stop would pollute exit (V0 real-run finding 2026-09-09) -> silent catch (missing file is expected there)
     if ($goldenActive) {
-        try { scp -q -o BatchMode=yes -o ConnectTimeout=10 "${hostName}:$W/out/.accept-golden-output.txt" "$accGoldTxt" 2>$null }
+        try { scp -q -o BatchMode=yes -o ConnectTimeout=10 "${hostName}:$W/out/.accept-golden-output.txt$evSuf" "$accGoldTxt" 2>$null }
         catch { $accGoldTxt = $null; Write-Host "(golden output absent - expected when TAMPERED/FAIL pre-write)" }
     }
     $queue_s = 0; $run_s = 0; $accept_ok = $null; $accept_golden_ok = $null
@@ -3874,7 +3976,7 @@ echo "REVIEW_B64_END"
                 $raw = (Get-Content -Raw -Path $tf | & $exe run -m $m 2>$errPath) | Out-String
             }
             catch { $raw = "JUDGE_LOCAL_FAIL: $($_.Exception.Message)" }
-            Remove-Item $tf -ErrorAction SilentlyContinue; Remove-Item $errPath -ErrorAction SilentlyContinue
+            Remove-Item $tf -ErrorAction SilentlyContinue | Out-Null; Remove-Item $errPath -ErrorAction SilentlyContinue | Out-Null
             return ($raw.Trim())
         }
         'http-local' {

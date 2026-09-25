@@ -23,6 +23,7 @@
 | 5 | **要脱敏就别用附件** —— 受限输入应**内嵌进卡正文**（只在正文会过 scrub） | 同上 |
 | 6 | 声明 `public`/`sanitized` **且带输入**时，**逐项写 `input-provenance`**，每项须在 `sensitivity.yaml` 有 `tier`，且**卡档位不得宽于该项** | `CROSS-PROJECT-WORK-STANDARD §4`；⚠ **该义务目前未被机判**（2026-09-24 全仓核对：`input-provenance` 在 `ops/` 下**零命中**） |
 | 7 | ★ **卡的射程 = 平台注册的工作区根**（实测 `~/agent-workspaces` **可读**）—— 该根**之外**的站上路径（`~/scripts`、`/proc`、系统目录）**不要指示模型去读** | **一手实测（2026-09-24）+ 一次自我修正**：A2 首跑的 `cd ~/scripts …` 被 `permission requested: external_directory (/home/scott-lau/scripts/*); auto-rejecting` 拒（= O-30 第一条第二实例，`TASK_RC=9`）；**但同一批 A1 的 `ls -1 ~/agent-workspaces` 成功**（工作区**根**可读）⇒ 边界**不是**"工作区内/外"，而是**白名单**（含工作区根；`~/scripts`、`/proc` 均不在）。⇒ 工作区根之外的取证**由主控 ssh 直接做**；agent 可安全依赖的是**可执行命令**（`infer-list`/`free -m`/`ss -ltn`/`hostname` —— A1 正是靠这些成功）。⚠ **白名单的确切边界未定**（`~/.config/opencode/` 下**无显式 `permission` 配置** ⇒ 走默认；待查 opencode 默认规则） |
+| **7b** | ★★ **精度更正（2026-09-25 实测）—— 射程【不是"根"，而是"自己的 proj 目录"】**：根**只可列一层名字**（`ls -1 ..` **成功**），但**根下任何兄弟 proj 的子树【不可进】** | **一手实测（a3 首跑，2026-09-25）**：`ls -1 ..` ⇒ 成功列出 `Cpp_Hub` / `dogfood` / `paper` / `v0probe-a`；但它随后对 `Cpp_Hub` 依次试 `find` / `du -sk` / `stat` / `ls -1A` / `wc` ⇒ **5 条全部**被 `permission requested: external_directory (/home/scott-lau/agent-workspaces/*); auto-rejecting` 拒 ⇒ **产物未生成** ⇒ `TASK_RC=9` / `ACCEPT_OK=0` / `COLLECT_FAIL`。<br>⚠ **与纪律 7 的差别（为什么必须改口径）**：7 说"射程 = 根"，读起来像"根以下均可读" ⇒ **a3 正是按这个理解写的，然后失败了**。| **只采自己的工作目录**（`$W`）。**不要**去 enumerate 兄弟 proj。若确需根层信息，只做 `ls -1 ..` 拿名字，**且别把它写进产物**（产物的兄弟目录名会随归档落盘 ⇒ 属他方项目名的**新披露面**）。★ **另加一条写卡纪律**：卡要**先写一个合格的空骨架产物、再逐项填** ⇒ 中途被拒也留得下产物（a3 v1 的产物**完全没生成**，正因为没这个顺序）。 |
 
 ### ★ 站上环境的五条硬约束（2026-09-24 入册；纪律 8/9/10 = O-30，纪律 11 = O-48，纪律 12 = O-58；均**实测**得出）
 
@@ -70,6 +71,18 @@
 |---|---|---|---|---|
 | [a3-workspace-accumulation.md](a3-workspace-accumulation.md) | 无 | `public` | ✗（出网档） | **站上工作区累计到什么程度** —— 量化 O-57 家族（跨 run 证据错配）的**根源**；**顺带**钉 README 纪律 7 那条未定的**沙箱可读边界** |
 | [b3-gate-newjudges-falsegreen.md](b3-gate-newjudges-falsegreen.md) | `ops/rpc_check.py`（附件，已登记 `public`） | `public` + **`attach-egress: ok`** | ✗ | **B2 之后新增的那几项判据会不会假绿**（`py-tests` · `input-provenance` · `ps1-runstamp` · `stations` orphan 段 · `evidence` 第三态）—— 即 §13.0① 「**改门禁的任务本身要被门禁管**」 |
+
+### 第三批（2026-09-25 起草 · **O-68② 的验收探针**；两张均已跑通）
+
+> **定位**：O-68 修法②（per-run 命名）的**验收件**（判据 V4/V5/V6，见 [DEV-LOG-014 §36.F](../../../docs/DEV-LOG-014-decision-refinement.md)）。
+> 它们**不是**审计卡，而是**仪器卡**：形状刻意压到最小，只为压到被测的那条路径。
+
+| 卡（本目录） | 输入 | 档位 / 开关 | 危险面？ | 它回答什么 |
+|---|---|---|---|---|
+| [v4-attach-golden-probe.md](v4-attach-golden-probe.md) | `ops/rpc_check.py`（附件，已登记 `public`） | `public` + `attach-egress: ok` + `accept-golden` | **是**（有附件 ∨ golden ⇒ 排他） | **V4**：per-run 改名后，**附件清单**与 **golden 产物**两条路径**仍能被正确回收**（`ATTACH_MANIFEST_LINES≥1` · `ACCEPT_GOLDEN_OK=1` · 站上 11 个后缀件齐全） |
+| [v5-shared-readonly-probe.md](v5-shared-readonly-probe.md) | 无 | `public`，**`readonly: true`** | **否**（无附件 ∧ 无 golden ⇒ 共享） | **V5/V6**：这是**唯一**能造出"**同站同 proj 并存**"的形状 —— 探"两份 runDir 证据各自完整"与"6 并发 6/6 `exit=0`、无 `exit 3`" |
+
+> ⚠ `v5` 的卡面**刻意不写 `accept`**：站上 claude 通道在 `readonly` 下可能拒绝落文件，而本卡的判据是**框架证据件**是否各自完整（**不是**产物）⇒ 不落文件也应 `exit=0`。
 
 ### 两张卡的设计要点（不是风格，是依据）
 
