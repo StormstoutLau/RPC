@@ -39,6 +39,9 @@ HELLO_O46
 - ⚠ **故意设计**：本卡 `accept` 第 2 条 `grep 'MUST_NOT_MATCH_THIS'` 在一个只含 `HELLO_O46` 的文件上**必然失败**
   ⇒ **验收必红** ⇒ 用来触发「**agent 成功但 accept 判红**」这条路径（`FINAL_RC=9`）。
 
-> **预期（用于验证 O-46 缓解②）**：`TASK_RC=9` ⇒ collect 归档成功 ⇒ **清理远端残留**：
-> `out/.meta` · `out/.progress` · `out/o46-probe.txt` · `.agent-lock` · `.agent-state.json` **应全部消失**；
+> **预期（用于验证 O-46 缓解② · **O-73 收窄后**）**：`TASK_RC=9` ⇒ collect 归档成功 ⇒ **清理远端声明产物**：
+> `out/o46-probe.txt` **应消失**；且日志应出现 `O46_CLEAN_SCOPE:` 一行（明示射程）。
+> ⚠ **`out/.meta` · `out/.progress` · `.agent-lock` · `.agent-state.json` 这四项【刻意不删】**
+> （依据 [OPEN-ISSUES O-73](../../../spec/d6-agent-standard/OPEN-ISSUES.md)：`.agent-lock` 被 unlink 会让**并存持有者**的排他锁静默失效；
+> 而前两者在 per-run 命名后**已不是本 run 的件**）⇒ **别把"这四项还在"当成清理失败**。
 > 同时 runDir 内**应保留**已拉回的 `o46-probe.txt` 与 `.meta`（**拉取先于清理**）。
