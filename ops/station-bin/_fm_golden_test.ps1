@@ -1160,6 +1160,18 @@ Assert-True "o77②: 并入发生在 Convert-ToExcludeArgs **之前**（否则�
 Assert-True "o77③: 源码里写明了『为什么写在代码而非载体 .agentsync』(版本控制内才是真值源)" (
     $content.Contains('修复必须落在版本控制内的真值源上') -and $content.Contains('file changed as we read it'))
 
+# --- O-79 真根因 (2026-09-26): `Invoke-CappedSsh` 必须给子进程"空且立即关闭的 stdin" ---
+# 一手 A/B/C（后台 job 上下文）: ① stdin 继承 ⇒ TIMEOUT 20s ② redirect+Close ⇒ 179ms ③ 裸 `ssh -n` ⇒ 179ms。
+# ⚠ 这条缺陷能装一天没被发现, 是因为它**只在后台/批处理上下文**触发（交互上下文里 stdin 会 EOF）。
+Assert-True "o79①: helper 重定向 stdin（否则 ssh 等 stdin EOF ⇒ 后台/批处理上下文每次必挂）" (
+    $codeOnlyFull.Contains('$psi.RedirectStandardInput = $true'))
+Assert-True "o79②: 启动后**立即** Close() 子进程 stdin（只设 redirect 不关 = 仍永不 EOF ⇒ 白设）" (
+    $codeOnlyFull.Contains('$p.StandardInput.Close()'))
+Assert-True "o79③: 三条对照证据留在源码里（继承=TIMEOUT / redirect+Close=179ms / 裸 ssh -n=179ms）" (
+    $content.Contains('stdin 继承** ⇒ **TIMEOUT 20s') -and $content.Contains('裸 `ssh -n`'))
+Assert-True "o79④: 写明『为什么单发测不出来』（交互上下文 stdin 会 EOF；后台/批处理才触发）" (
+    $content.Contains('为什么单发时测不出来') -and $content.Contains('每次必挂'))
+
 # --- O-56 (2026-09-25): 基线"**声明无条件 / 产出有条件**"(两处) ---
 # ① 主路: `accept-cmds` 原为**裸列**, 而站上只在 `[ -n "$ACCEPT_B64" ]` 时才写 ⇒ 无 accept 的卡
 #    每个 run 假报一条 missing-artifact gap。⇒ 与 `accept-output` **同条件列**(= O-29 对 golden-cmd 的同法)。
