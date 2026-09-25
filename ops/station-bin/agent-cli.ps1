@@ -1849,6 +1849,16 @@ $evGcCmd
 #       `bash: /tmp/agent-cli-task-xxx.sh: 没有那个文件或目录`(127) = **把成功判成失败**。
 #     ⇒ 按龄清是**不会误伤**的那条路（最长 `timeout_s=1800s` ⇒ 7 天 = **300×** 裕度, 与 D3 同依据）。
 find /tmp -maxdepth 1 -name 'agent-cli-task-*.sh' -mtime +7 -delete 2>/dev/null || true
+# ★★ O-76 (2026-09-25): **私有中转目录**的按龄清（同族、同位置；与上面两条共用"只按龄"这条判据）。
+#   对象: `/tmp/agent-stage-<RUN_TOKEN>` —— 私有中转（附件/golden 的落点；正常路径由锁内 `rm -rf "$STAGE"` 删）。
+#   实测泄漏面（一手）: B 站抓到 2 个残留 —— `agent-stage-fd612392…`（含 `attach/` + `golden.tgz`，
+#     = **O-71 那次 aborted 派发**）与 `agent-stage-46e4996f…`（含 `attach/`）。
+#     为什么现成两道清理都盖不住: ① O-59/T1 的清理在 **body 内**（派发在 body 之前就死了 ⇒ 走不到）；
+#     ② O-46 的失败清理要求"**归档成功**"（此时 runDir 都还没建）⇒ **"scp 了中转件、却在 body 之前死掉"**无人管。
+#   ⚠ **只按龄、禁通配删**: `-mtime +7` 对"在飞的"结构上不可能命中（最长 `timeout_s=1800s` ⇒ 300× 裕度，与 D3 同依据）；
+#     绝**不可**写成"删所有 `agent-stage-*`" —— 那会**误删并发 run 的中转**（O-59/T1 已为此立过纪律）。
+#   ⚠ 用 `-exec rm -rf {} +` 而**不是** `-delete`: 目录**非空**时 `-delete` 会失败（`-delete` 只适合空目录/文件）。
+find /tmp -maxdepth 1 -type d -name 'agent-stage-*' -mtime +7 -exec rm -rf {} + 2>/dev/null || true
 # ★★ O-68/D2 **已落地（2026-09-25）: 此处原为 O-57-A 的"无条件清"，现已移除**。
 #   为什么可以移除: D4 已给所有暂存件加了 per-run 后缀 ⇒ "上一次 run 的残留"在**名字层**不存在
 #     （collect 只按**本 run** 的名字拉回）⇒ 无需在派发前破坏性删除。

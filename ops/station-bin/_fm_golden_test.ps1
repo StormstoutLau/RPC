@@ -1123,6 +1123,30 @@ Assert-True "o67①: SPLIT_WARN **不再**断言『出网档 fan-out 可能不�
 Assert-True "o67②: 改后把条件写成**账户/站粒度**（跨站独立 key ⇒ 可并行）" (
     $content.Contains('并行性取决于**账户/站粒度**') -and $content.Contains('实测 2 片/2 站成立'))
 
+# --- O-76 (2026-09-25): 私有中转目录的**按龄清**（"派发在 body 之前中止"那一格的出口） ---
+# 一手泄漏: B 站 2 个残留（含 attach/ 与 golden.tgz，其中一个是 O-71 那次 aborted 派发）。
+# ⚠ 这条是**破坏性命令** ⇒ 判据必须双向: ①源码只按龄 ②**行为上**老件被删、**新件保留**。
+Assert-True "o76①: 有 `agent-stage-*` 的按龄清(目录形态 + `-mtime +7` + `-exec rm -rf`)" (
+    $content.Contains("find /tmp -maxdepth 1 -type d -name 'agent-stage-*' -mtime +7 -exec rm -rf {} +"))
+# ⚠ 只看代码: O-46 段的**注释**里为警示写了"绝不能用通配 `/tmp/agent-stage-*`" ⇒ 全文子串会假红
+#   （同 o67① 的坑，第三次；见上面 o67 那段的注释）。
+Assert-True "o76②: 代码里**没有**『通配删所有 agent-stage』的危险写法(会误删在飞的)" (
+    -not $codeOnlyFull.Contains('rm -rf /tmp/agent-stage-*') -and
+    -not $codeOnlyFull.Contains("/tmp/agent-stage-*'"))
+# ★★ 行为测试（本地 Git Bash）: 造"8 天前"与"刚刚"各一个 agent-stage-*，跑**同一条 find** ⇒
+#   老件必须被删、**新件必须留下**（后者才是"不误删在飞的"那半个判据；只验"删掉老的"是不够的）。
+$o76Root = (Join-Path $env:TEMP 'fm_o76_stage_probe').Replace('\', '/')
+$log76 = Join-Path $env:TEMP 'fm_o76_find.log'
+Remove-Item $log76 -ErrorAction SilentlyContinue
+$oldStamp = (Get-Date).AddDays(-8).ToString('yyyyMMddHHmm')
+$cmd76 = "rm -rf '$o76Root'; mkdir -p '$o76Root/agent-stage-OLD/a' '$o76Root/agent-stage-NEW/b'; touch -t $oldStamp '$o76Root/agent-stage-OLD'; find '$o76Root' -maxdepth 1 -type d -name 'agent-stage-*' -mtime +7 -exec rm -rf {} + ; ls -1 '$o76Root'"
+$rc76 = Invoke-LocalBashCmd -bashPath $lb -cwd $env:TEMP -logFile $log76 -cmd $cmd76
+$out76 = "$(Get-Content $log76 -Raw -ErrorAction SilentlyContinue)"
+Assert-True "o76③(行为): 8 天前的被删、**刚刚的保留**（= 不误删在飞的；双向）" (
+    $rc76 -eq 0 -and $out76 -match 'agent-stage-NEW' -and -not $out76.Contains('agent-stage-OLD'))
+Remove-Item $log76 -ErrorAction SilentlyContinue
+if (Test-Path ($o76Root -replace '/', '\')) { Remove-Item ($o76Root -replace '/', '\') -Recurse -Force -ErrorAction SilentlyContinue }
+
 # --- O-56 (2026-09-25): 基线"**声明无条件 / 产出有条件**"(两处) ---
 # ① 主路: `accept-cmds` 原为**裸列**, 而站上只在 `[ -n "$ACCEPT_B64" ]` 时才写 ⇒ 无 accept 的卡
 #    每个 run 假报一条 missing-artifact gap。⇒ 与 `accept-output` **同条件列**(= O-29 对 golden-cmd 的同法)。
