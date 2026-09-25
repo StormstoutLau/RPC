@@ -1084,8 +1084,8 @@ def validate_readme_requires(states, readme_text):
     return []
 
 
-# 手册 §2.4 的断言计数声明行（形如 `# 21 项断言 (quick 15 + 三站 6):`）
-MANUAL_COUNT_RE = re.compile(r"#\s*(\d+)\s*项断言\s*\(quick\s*(\d+)\s*\+\s*三站\s*(\d+)\)")
+# 手册 §2.4 的断言计数声明行（形如 `# 24 项断言 (quick 17 + 全量 7):`）
+MANUAL_COUNT_RE = re.compile(r"#\s*(\d+)\s*项断言\s*\(quick\s*(\d+)\s*\+\s*全量\s*(\d+)\)")
 # O-50：手册**不得**再长出"第二份枚举 / 写死计数" —— 这两类句式 = 同一事实两处定义
 _MANUAL_BANNED = (
     (re.compile(r"真实剩余\s*open[^\n]{0,24}?=\s*[0-9]+\s*项"),
@@ -3318,6 +3318,58 @@ def check_inbox(ctx):
 # ── 断言清单 (加校验 = 在此加一条 + 写一个函数) ─────────────────────
 # fix 字段 = 该项失败/警告时的**处置建议** (健康引擎要求"红灯必须给出下一步", 而不是
 # 只报"哪里不对")。main() 在结论区按严重度打印。
+# ── 断言: agent-cli.ps1 离线黄金夹具接线 (D6-P3-2) ────────────────────
+# 为什么: `ops/station-bin/_fm_golden_test.ps1` 是一份**离线单测**（用 AST 从 `agent-cli.ps1` 提取**真函数**
+#   + **真 `ROUTE_TABLE` / `JUDGE_TABLE`**，185 条断言），覆盖出站硬闸与判定面：
+#   `Get-SensitivityBackendReject`（`local-only × 出网 ⇒ REJECT`，**唯一规则**）、`Get-BackendEgress`
+#   （fail-closed：只有 `local/<flavor>` 不出网）、`Get-JudgeEgress` / `Get-JudgeComplianceReject`、
+#   `Test-EvmStatePull`、`Get-FrameworkSubjects` … 共 20+ 纯函数。
+# ⚠ **它此前只靠"人记着跑"**（多份文档称其为铁律）⇒ **不在 `CHECKS` 里** ⇒ 两次重构后**无人发现**
+#   夹具期望值已陈旧：① 模块化把 paramiko 下沉到 `cluster_ssh.py`（旧目标恒 `SSHClient=0`）；
+#   ② O-29 把 `golden-cmd` 从裸列改成条件列（基线 11→10）⇒ **实测 179 pass / 6 fail**（2026-09-25）。
+# ⇒ 本断言把它**接进统一门禁**：退出码 0 = PASS；非 0 ⇒ FAIL 并把尾部 + FAIL 行贴进明细。
+#   **判据在夹具里，本断言只负责"让它每次都被跑"**（判据本体不复制，避免第二份实现）。
+# ✅ **quick**：实测夹具整体 ≈ **1.9s**（一次 pwsh 启动 + 185 条断言 + 一次 python AST 探测）
+#   ⇒ 放进 `--quick`，**由 pre-commit 钩子强制**（否则仍只是"跑全量才判"，等于没接线）。
+# ⚠ 定义必须在本行**之前**（`CHECKS` 在模块级求值）。
+PS1_GOLDEN = ROOT / "ops" / "station-bin" / "_fm_golden_test.ps1"
+
+
+def _decode_out(b: bytes) -> str:
+    """PS 5.1 重定向时的输出编码随控制台（zh-CN 常见 cp936）⇒ 先 utf-8 再 cp936，最后兜底替换。"""
+    for enc in ("utf-8", "cp936"):
+        try:
+            return b.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return b.decode("utf-8", "replace")
+
+
+def check_ps1_golden(ctx):
+    """P3-2: 跑 `_fm_golden_test.ps1`（agent-cli.ps1 的离线黄金夹具）—— **退出码 0 才算过**。"""
+    if not PS1_GOLDEN.is_file():
+        return "WARN", f"{PS1_GOLDEN.name} 不存在（本断言的登记依据）", []
+    try:
+        p = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(PS1_GOLDEN)],
+            cwd=ROOT, capture_output=True, timeout=300)
+    except FileNotFoundError:
+        return "WARN", "本机无 powershell ⇒ 跳过（夹具只能在 Windows 侧跑）", []
+    except subprocess.TimeoutExpired:
+        return "FAIL", "夹具超时（>300s）⇒ 可能挂死", []
+    out = _decode_out(p.stdout or b"") + _decode_out(p.stderr or b"")
+    lines = [ln.rstrip() for ln in out.splitlines() if ln.strip()]
+    summary = next((ln for ln in reversed(lines) if "FM_GOLDEN_TEST" in ln), "").strip()
+    fails = [ln for ln in lines if ln.startswith("FAIL")]
+    note = f"离线黄金夹具：{summary or '（无汇总行）'}"
+    if p.returncode != 0:
+        note += f" · 退出码 {p.returncode}"
+    detail = lines[-12:]
+    if fails:
+        detail += ["── FAIL 行 ──"] + fails[:15]
+    return ("PASS" if p.returncode == 0 else "FAIL"), note, detail
+
+
 CHECKS = [
     {"id": "secrets", "title": "明文扫描", "fn": check_secrets, "quick": True,
      "fix": "删除明文密钥, 或加入 SECRET_ALLOW 并写明原因(不允许静默放行); "
@@ -3363,7 +3415,7 @@ CHECKS = [
             "README §5.3『交付态强判据』行须 == 真值 `manifest` 集 —— "
             "**改状态/必需件只改 `inventory/inbox.yaml` 一处**, 文档跟着改; "
             "④ O-50 手册声明的断言计数须 == 真实 `CHECKS`（**加/删断言后同步手册 §2.4 的 "
-            "`# N 项断言 (quick Q + 三站 S)`**）; 手册**禁**再写『真实剩余 open = N 项』枚举或写死『门禁 N 绿』; "
+            "`# N 项断言 (quick Q + 全量 R)`**）; 手册**禁**再写『真实剩余 open = N 项』枚举或写死『门禁 N 绿』; "
             "⚠ M-2 已被 O-50 判为『不再维护第二份枚举』故不并入"},
     {"id": "ports", "title": "端口分配表自洽", "fn": check_ports, "quick": True,
      "fix": "按明细修 inventory/ports.yaml (缺字段/同组重复/跨组重叠/枚举拼错)"},
@@ -3392,6 +3444,11 @@ CHECKS = [
             "**别去改清单**，走「改源头 → 重跑 → `cluster.py inbox seal <proj-dir> --go`」；"
             "核对用 `cluster.py inbox seal <proj-dir> --check`（与门禁同一实现）；"
             "报『MANIFEST 未校验 N』= 清单头写的项目根**不在本机**（换 clone/换机），不是篡改"},
+    {"id": "ps1-golden", "title": "ps1 离线黄金夹具", "fn": check_ps1_golden, "quick": True,
+     "fix": "P3-2: 跑 `powershell -NoProfile -ExecutionPolicy Bypass -File ops/station-bin/_fm_golden_test.ps1` "
+            "看明细里的 FAIL 行。⚠ **先判「是回归还是夹具期望值陈旧」**："
+            "若代码侧确有语义变更（看 agent-cli.ps1 里的注释/新件/O- 台账）⇒ 改**夹具期望值**并写明理由；"
+            "若代码侧无变更 ⇒ **是回归**，改代码。⚠ 出站硬闸的判据本体在夹具里，本断言只负责让它**每次都被跑**"},
     {"id": "usb4", "title": "USB4 三角环链路", "fn": check_usb4, "quick": False,
      "fix": "地址/路由不符 => 对照 inventory/net.yaml 与归档 §6.3/§6.6; "
             "链路不通 => 先查 BIOS USB4 安全等级与是否冷启动(归档 §6.5)"},
