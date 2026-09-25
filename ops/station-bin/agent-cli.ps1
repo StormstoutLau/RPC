@@ -1840,6 +1840,15 @@ rm -rf "`$STAGE" && mkdir -p "`$STAGE/attach"
 #   形状: **只按龄**（`-mtime +7`）⇒ **没有**"删除活件"这种可能；裕度理由见上面 `$evGcCmd` 定义处。
 #   ⚠ 本 body 仍是**每次派发最早的远端写入点** ⇒ 放这里可保证"不会删掉本次 run 自己刚写的件"。
 $evGcCmd
+# ★★ O-72 (2026-09-25): **站上脚本副本**的按龄清（与上面那条同族、同位置 = 派发前段）。
+#   对象: 主 run body 的副本 `/tmp/agent-cli-task-<ts>.sh`（名字**已是 per-run** ⇒ 不互踩, 但**无出口**）。
+#   实测（2026-09-25）: B 站 **101 个** · A 站 10 · C 站 12 ⇒ "登记无出口 ⇒ 腐化"。
+#   ⚠ **为什么不给主 body 也加 `trap 'rm -f "$0"'`**（T1 那两个中转脚本正是那么做的）:
+#     主 body 走 `Invoke-RemoteScript`，而该函数**带网络级重试**（同一路径**再 `bash` 一次**）
+#     ⇒ 自删会把"远端其实已跑完、只是网络抖了一下"变成
+#       `bash: /tmp/agent-cli-task-xxx.sh: 没有那个文件或目录`(127) = **把成功判成失败**。
+#     ⇒ 按龄清是**不会误伤**的那条路（最长 `timeout_s=1800s` ⇒ 7 天 = **300×** 裕度, 与 D3 同依据）。
+find /tmp -maxdepth 1 -name 'agent-cli-task-*.sh' -mtime +7 -delete 2>/dev/null || true
 # ★★ O-68/D2 **已落地（2026-09-25）: 此处原为 O-57-A 的"无条件清"，现已移除**。
 #   为什么可以移除: D4 已给所有暂存件加了 per-run 后缀 ⇒ "上一次 run 的残留"在**名字层**不存在
 #     （collect 只按**本 run** 的名字拉回）⇒ 无需在派发前破坏性删除。
@@ -2026,6 +2035,24 @@ echo "ACCEPT_GOLDEN_OK=`$ACCEPT_GOLDEN_OK"
     $goldenHint = if ($goldenActive) { '1' } else { '0' }
     $body = @"
 set -u
+# ── ★★ O-72 (2026-09-25): 采样器子壳的**兜底杀**（父壳非正常死亡时 teardown 杀不到它）──────────
+# 机制（读站上脚本体 + 一手取证）: `sample_progress &` 是**子壳** ⇒ 父壳末尾的 `SAMPLE=f`
+#   **到不了它**（fork 后变量是副本）⇒ 唯一出路是 `kill $SPID`；而父壳若在 teardown **之前**死
+#   （ssh 断/被杀）⇒ 那条 kill 永不执行 ⇒ 子壳 `while` **永不停**。
+#   ★ 实测: B 站抓到一条**活了 28.6h** 的孤儿 `bash /tmp/agent-cli-task-*.sh`（PPID=1），
+#     每 5s 往**裸名** `.progress` 追加一行（kill 它之前文件持续增长、kill 后立刻冻结）；
+#     它还**继承了锁 fd**（`/proc/<pid>/fd/9 -> .agent-lock (deleted)`）。
+# 两道防线（**缺一不可**）:
+#   ① 本陷阱: ssh 断开时 bash 会收到 `HUP` ⇒ 立刻杀子壳；`EXIT` 覆盖正常/异常退出路径；
+#   ② 采样器**自身有界**（见下面 `SAMPLE_MAX_S`）—— 这是**唯一**对 `SIGKILL` 也有效的防线
+#      （`SIGKILL` 抓不到，陷阱不会触发）。
+# ⚠ 陷阱体**必须始终返回 0**: 本 body 的退出码是**契约字段**（`$body` 末尾 `exit $FINAL_RC`），
+#   而陷阱里任一条失败的命令都可能把 rc 改掉（本仓 rc 失真属"判据不可信"级）。
+cleanup_sampler() {
+  if [ -n "`${SPID:-}" ]; then kill "`$SPID" 2>/dev/null || true; fi
+  return 0
+}
+trap cleanup_sampler HUP TERM EXIT
 W="$W"
 # O-59/T1: 私有中转路径 —— 与 attach-reset body 里那个**同源**（都由 `$stage` 插值而来）。
 #   ⚠ `set -u` 下**必须**在这里定义: 落盘段要用 `$STAGE`（实测漏定义 ⇒ `STAGE: 未绑定的变量` ⇒ rc=255）。
@@ -2105,6 +2132,12 @@ CONT_B64="Q29udGludWUgdGhlIHVuZmluaXNoZWQgdGFzayBmcm9tIHdoZXJlIGl0IHN0b3BwZWQuIF
 # Pure stdio-driven, zero external dependency. Sampler records its own clock base SP0
 # (R1 is defined only AFTER the run completes, so it must not be referenced here).
 SAMPLE=t
+# ★★ O-72 (2026-09-25): 采样器的**自带上限**（秒）—— 与上面那条 `HUP/TERM/EXIT` 陷阱互为保险。
+#   为什么需要它: 陷阱抓不到 `SIGKILL`（父壳被 `kill -9` / 容器清理时）⇒ 那种情况下只有"自己会停"能救。
+#   取值的依据: 单次预算 `timeout` 的 **4 倍 + 600s**（4 = 首跑 + 3 次续跑的上限；600s = 10min 裕度）。
+#   ⚠ 上限到了只**少一段节拍**（`.progress` 是**遥测**，不参与成败判定 —— 见 collect 段注释），
+#     绝不影响 rc / accept / golden。⇒ 宁可少节拍，不要留一条能活 28h 的孤儿（实测过）。
+SAMPLE_MAX_S=`$(( $timeout * 4 + 600 ))
 SB0=`$(( `$(date +%s%N) / 1000000 ))   # sampler clock base (ms), captured before first run
 : > "`$W/out/.progress`$EV_SUF"
 # O-37 (2026-09-24): **同时清空 agent 输出文件** —— 否则采样器第一个样本(t=0)读到的是**上一轮残留**。
@@ -2114,6 +2147,7 @@ SB0=`$(( `$(date +%s%N) / 1000000 ))   # sampler clock base (ms), captured befor
 #   ⚠ 时序: 本行 → `sample_progress &` → opencode(自己的 `>` 再截断) ⇒ **必须在这里清**, 晚于此即有残留窗口。
 : > "`$W/out/.agent-output.txt`$EV_SUF"
 sample_progress() {
+  SAMPLE_N=0
   while [ "`$SAMPLE" = t ]; do
     # 2026-09-23 (RC4) **必须容忍文件尚未创建**: agent 启动前 `out/.agent-output.txt` 不存在,
     #   而 bash 的**重定向失败消息由 shell 打印, 不受本命令 `2>/dev/null` 抑制** ⇒ 实测每 5s 刷一条
@@ -2124,6 +2158,14 @@ sample_progress() {
     st=`$(( sw / 1000 ))                        # s since sampler start
     bps=`$(( ob*1000/(sw+1) ))
     printf 't=%s bytes=%s bytes_s=%s\n' "`$st" "`$ob" "`$bps" >> "`$W/out/.progress`$EV_SUF"
+    # ★ O-72: **自停**（陷阱抓不到 SIGKILL ⇒ 这一行是最后一道防线）。变量名刻意带 SAMPLE_ 前缀,
+    #   免得与 body 其它单字母名撞（本函数跑在子壳里, 撞了虽不外泄, 但读起来会误导）。
+    #   ⚠ `[` 是**普通 test**, 不是算术上下文 ⇒ 右侧**必须**写 `` `$SAMPLE_MAX_S ``(带 `$`)。
+    #     实测(2026-09-26 首跑): 写成裸名 ⇒ `[: SAMPLE_MAX_S: 需要整数表达式` ⇒ run `exit=255`。
+    #     ⚠⚠ 这条**只有真派发才能发现** —— 静态夹具只验"这段文本在", 验不出"这行跑不跑得起来"
+    #       (DEV-LOG §26.4: 夹具查"串在不", 查不出"这条链现在跑不跑得起来")。
+    SAMPLE_N=`$(( SAMPLE_N + 1 ))
+    [ `$(( SAMPLE_N * 5 )) -ge `$SAMPLE_MAX_S ] && break
     sleep 5
   done
 }

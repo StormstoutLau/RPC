@@ -1066,6 +1066,51 @@ Assert-True "o75③: `Test-RemoteReach` 改走该 helper(它是四条主路 ssh 
 Assert-True "o75④: 源码写明『派发主体刻意不加墙钟』及其理由(防顺手全加 ⇒ 假全覆盖)" (
     $content.Contains('刻意不加') -and $content.Contains('远端任务还在跑 + 本地证据全丢'))
 
+# --- O-72 (2026-09-25): 采样器子壳**必须能自停** + 站上脚本副本**有出口** ---
+# 一手取证: B 站抓到一条**活了 28.6h** 的孤儿 `bash /tmp/agent-cli-task-*.sh`(PPID=1, 继承锁 fd),
+#   每 5s 往裸名 `.progress` 追写(kill 前持续增长 / kill 后立刻冻结) ⇒ 它就是那个写者。
+#   机制: `sample_progress &` 是**子壳**, 父壳末尾 `SAMPLE=f` 到不了它 ⇒ 只能靠 `kill $SPID`。
+Assert-True "o72①: 采样器**自带上限**且有 `break` 自停(SIGKILL 下陷阱不触发 ⇒ 这是最后一道防线)" (
+    $content.Contains('SAMPLE_MAX_S=`$(( $timeout * 4 + 600 ))') -and
+    $content.Contains('[ `$(( SAMPLE_N * 5 )) -ge `$SAMPLE_MAX_S ] && break'))
+$iSampler = $content.IndexOf('sample_progress() {')
+$iBreak = $content.IndexOf('SAMPLE_N * 5', $iSampler)
+$iSleep = $content.IndexOf('sleep 5', $iSampler)
+Assert-True "o72①b: `break` 在采样循环的 `sleep 5` **之前**(位置不变量)" (
+    $iSampler -gt 0 -and $iBreak -gt $iSampler -and $iSleep -gt $iSampler -and $iBreak -lt $iSleep)
+Assert-True "o72②: 有 `HUP/TERM/EXIT` 陷阱兜底杀子壳, 且陷阱体**始终 return 0**(rc 是契约字段)" (
+    $content.Contains('trap cleanup_sampler HUP TERM EXIT') -and
+    $content.Contains('kill "`$SPID" 2>/dev/null || true') -and
+    $content.Contains('return 0'))
+Assert-True "o72③: 站上脚本副本 `/tmp/agent-cli-task-*.sh` **按龄清**(无出口 ⇒ 腐化; 实测 B 站 101 个)" (
+    $content.Contains("find /tmp -maxdepth 1 -name 'agent-cli-task-*.sh' -mtime +7 -delete"))
+# ⚠ 这条是**防倒退**的: T1 那两个中转脚本用 `trap 'rm -f "$0"'` 自删(因为它们**不**走重试链),
+#   而主 body **走** `Invoke-RemoteScript` 的网络重试(同一路径再 bash 一次) ⇒ 自删会把"成功"判成 127。
+Assert-True "o72④: 源码写明【为什么主 body 不自删】(防后来者照抄 T1 的 trap 自删)" (
+    $content.Contains('把成功判成失败') -and $content.Contains('再 `bash` 一次'))
+# ★★ o72⑤/⑥ = **行为测试**（离线, 用本地 Git Bash 跑**同一段结构**）——
+#   为什么非有不可: 静态断言只验"那行文本在"。而**首跑(2026-09-26)实测**抓到的缺陷恰恰是
+#   "文本在、但**跑不起来**": `[ $(( n * 5 )) -ge SAMPLE_MAX_S ]` 少了 `$` ⇒ `[: SAMPLE_MAX_S: 需要整数表达式`
+#   ⇒ 整个 run `exit=255`。⇒ 正是 DEV-LOG §26.4「夹具查'串在不', 查不出'这条链现在跑不跑得起来'」。
+#   (`$lb` = 上面 O-15 段已解析出的本地 Git Bash; 跑命令用 `Invoke-LocalBashCmd` ——
+#    它把 stdout+stderr 落日志并只回 rc ⇒ **不会**因 bash 往 stderr 写字而触发 PS 的 NativeCommandError,
+#    这正是本次第一版踩的坑: 直接 `2>&1` 捕获负例 ⇒ 夹具自己中断(exit 1)而不是报 FAIL)。
+$logLoop = Join-Path $env:TEMP 'fm_o72_loop.log'
+$logPos = Join-Path $env:TEMP 'fm_o72_pos.log'
+$logNeg = Join-Path $env:TEMP 'fm_o72_neg.log'
+foreach ($f in @($logLoop, $logPos, $logNeg)) { Remove-Item $f -ErrorAction SilentlyContinue }
+$rcLoop = Invoke-LocalBashCmd -bashPath $lb -cwd $env:TEMP -logFile $logLoop -cmd 'SAMPLE_MAX_S=12; SAMPLE_N=0; while [ 1 = 1 ]; do SAMPLE_N=$(( SAMPLE_N + 1 )); [ $(( SAMPLE_N * 5 )) -ge $SAMPLE_MAX_S ] && break; sleep 0; done; echo "STOPPED_N=$SAMPLE_N"'
+$rcPos = Invoke-LocalBashCmd -bashPath $lb -cwd $env:TEMP -logFile $logPos -cmd 'SAMPLE_N=3; SAMPLE_MAX_S=12; [ $(( SAMPLE_N * 5 )) -ge $SAMPLE_MAX_S ] && echo CMP_OK'
+$rcNeg = Invoke-LocalBashCmd -bashPath $lb -cwd $env:TEMP -logFile $logNeg -cmd 'SAMPLE_N=3; SAMPLE_MAX_S=12; [ $(( SAMPLE_N * 5 )) -ge SAMPLE_MAX_S ] && echo CMP_OK'
+$outLoop = "$(Get-Content $logLoop -Raw -ErrorAction SilentlyContinue)"
+$outPos = "$(Get-Content $logPos -Raw -ErrorAction SilentlyContinue)"
+$outNeg = "$(Get-Content $logNeg -Raw -ErrorAction SilentlyContinue)"
+Assert-True "o72⑤(行为): 采样循环**真能自停**(上限 12s ⇒ n=3 即 break; 不是'文本在就算过')" (
+    $rcLoop -eq 0 -and $outLoop -match 'STOPPED_N=3')
+Assert-True "o72⑥(行为·先验红): 带 `$` ⇒ 比较成立; **裸名** ⇒ `[` 报错、打不出 CMP_OK" (
+    $rcPos -eq 0 -and $outPos -match 'CMP_OK' -and -not $outNeg.Contains('CMP_OK'))
+foreach ($f in @($logLoop, $logPos, $logNeg)) { Remove-Item $f -ErrorAction SilentlyContinue }
+
 # --- O-56 (2026-09-25): 基线"**声明无条件 / 产出有条件**"(两处) ---
 # ① 主路: `accept-cmds` 原为**裸列**, 而站上只在 `[ -n "$ACCEPT_B64" ]` 时才写 ⇒ 无 accept 的卡
 #    每个 run 假报一条 missing-artifact gap。⇒ 与 `accept-output` **同条件列**(= O-29 对 golden-cmd 的同法)。
