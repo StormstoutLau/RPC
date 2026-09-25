@@ -4312,6 +4312,182 @@ function Invoke-Review {
     return 0   # advisory: score=不合格 does NOT block; exit 0 signals commit (O-16 closed)
 }
 
+# ---------------- O-80 batch dispatcher (2026-09-26) ----------------
+# 批次派发 = "**多张不同卡并发**"（§40.4 的头号瓶颈；落档见 docs/DEV-LOG-014 §42）。
+#
+# ⚠⚠ **三条硬约束（写在最前面，防被后人顺手改掉）**:
+#   ① **不新增脚本**（ADR-0004「统一管理入口为唯一管理面」；ADR-0006 实施记录同口径:
+#      "本 ADR **未新增脚本**, 均为既有资产的改动"）⇒ 本能力做成 agent-cli.ps1 的**新 verb `batch`**,
+#      落进既有 `$Command` 派发链, **不建第二个入口脚本**。
+#   ② **顶层 param() 块在本环境加不了新参数**（见本文件 `task` 分支里那条实测记录）
+#      ⇒ 输入**复用既有 `--card <清单文件>`**；三个开关走 **env 桥**（既有先例: `AGENT_AUTO_FALLBACK`）。
+#      ⇒ ⚠ **这是环境限制下的权宜, 不是设计偏好**: 若将来 param 块可扩, 应把三个 env 升为正式参数。
+#   ③ **本 verb 刻意简单: 每站内部串行 · 站间并行**（并行度 = 站数 ≤ 3）。
+#      为什么: 同站串行 ⇒ **天然零锁冲突、零 `exit 3`**（实测: 排他卡在共享持有者存在时**快速拒**, 见 O-78），
+#      而"跨站各 1"正是**实测过的真并行形态**（跨站独立 key）。⇒ 把"锁语义"整个移出 v1 才换得**可验证性**。
+#
+# ★ **子进程 stdin / 输出（O-79 的教训）**: 本 verb 用 **Start-Job + 原生调用**，**不自己起 `ProcessStartInfo`**
+#   ⇒ 站级 job 内的调用是普通 PS 调用；`agent-cli` 内部的 ssh 已由 `Invoke-CappedSsh` 做
+#   `RedirectStandardInput` + 立即 `Close()`（O-79 修复）⇒ **不在本层重复造一遍**（重复造 = 两处真值）。
+#   真跑判据含 **0 个 `SSH_PROBE_TIMEOUT`**（§42.6 V7）。
+#   另: 输出走 **Start-Job 的内存缓冲 + 落日志文件**，**不用 OS 管道收集** ⇒ 不触发"大输出撑爆缓冲 ⇒ 死锁"。
+$Script:BATCH_PER_STATION = 1      # 每站最多**并发**几张（v1 只支持 1 = 只跨站并行）
+$Script:BATCH_TIMEOUT_S = 2400     # 单卡墙钟上限（超时 ⇒ Stop-Job 并**显式记为未完成**，绝不静默）
+function Invoke-BatchTask {
+    param([string]$proj, [string]$listFile, [string]$model, [string]$sensitive, [string]$type)
+    $perStation = $Script:BATCH_PER_STATION
+    if ($env:AGENT_BATCH_PER_STATION) { $perStation = [int]$env:AGENT_BATCH_PER_STATION }
+    $capS = $Script:BATCH_TIMEOUT_S
+    if ($env:AGENT_BATCH_TIMEOUT_S) { $capS = [int]$env:AGENT_BATCH_TIMEOUT_S }
+    $dry = ($env:AGENT_BATCH_DRYRUN -eq '1')
+    # v1 边界: 每站串行 ⇒ 每站并发恒为 1。>1 **显式拒绝**（不许静默按 1 跑 —— 那才是"把两件事说成一件"）。
+    if ($perStation -ne 1) {
+        Write-Host "BATCH_ABORT: AGENT_BATCH_PER_STATION=$perStation —— v1 只支持 1（每站串行）。"
+        Write-Host "  同站多卡并发虽已实测可行（见 DEV-LOG-014 §41），但会引入锁语义 ⇒ 属 v2，不在本批范围。"
+        return 2
+    }
+    if (-not $listFile -or -not (Test-Path $listFile)) { Write-Host "BATCH_ABORT: 清单文件不存在(未给 --card 或路径错): $listFile"; return 2 }
+    if (-not $Script:PROJECTS.ContainsKey($proj)) { Write-Host "BATCH_ABORT: 未知 proj: $proj"; return 2 }
+
+    # 1) 解析清单（`#` 注释与空行忽略；行内可选 `station=A|B|C` / `model=<别名>`）
+    $items = @(); $ln = 0
+    foreach ($raw in @(Get-Content $listFile)) {
+        $ln++
+        $line = ("$raw").Trim()
+        if (-not $line -or $line.StartsWith('#')) { continue }
+        $tok = @($line -split '\s+')
+        $card = $tok[0]; $st = ''; $md = ''
+        for ($i = 1; $i -lt $tok.Count; $i++) {
+            if ($tok[$i] -match '^(?i)station=(A|B|C)$') { $st = $Matches[1].ToUpper() }
+            elseif ($tok[$i] -match '^(?i)model=(.+)$') { $md = $Matches[1] }
+        }
+        $err = ''
+        if (-not (Test-Path $card)) { $err = 'CARD_NOT_FOUND' }   # ★ 单项 fail-fast: 该行标错, **不整批崩**
+        # ★ 解析成**绝对路径**: job（Start-Job）的 cwd **不是**仓库根 ⇒ 相对路径在子进程里解析不到（实测: 子进程零输出）
+        $abs = ''
+        if (-not $err) { $abs = (Resolve-Path -LiteralPath $card).Path }
+        $items += [pscustomobject]@{ line = $ln; card = $card; cardAbs = $abs; station = $st; model = $md; err = $err; station_used = ''; host = '' }
+    }
+    if ($items.Count -eq 0) { Write-Host "BATCH_ABORT: 清单里没有可解析的行"; return 2 }
+
+    # 2) 分配: 钉站的用它; 未钉站的按"当前最少"轮转（3 张卡 ⇒ A/B/C 各一）
+    $counts = @{ A = 0; B = 0; C = 0 }
+    foreach ($it in $items) {
+        if ($it.err) { continue }
+        if ($it.station) { $it.station_used = $it.station }
+        else {
+            $pick = 'A'; $min = [int]::MaxValue
+            foreach ($s in @('A', 'B', 'C')) { if ($counts[$s] -lt $min) { $min = $counts[$s]; $pick = $s } }
+            $it.station_used = $pick
+        }
+        $counts[$it.station_used]++
+        # ★ 钉站落地方式 = **既有 `--remotehost`**（接受 host 串）⇒ 这里就用既有 `Get-TargetHost` 把站字母
+        #   换成 host 串。**为什么必须真钉**（而不是只做"计划"）: 不钉 ⇒ 每张卡都按默认路由走同一站 ⇒ 计划是
+        #   "跨站各 1"、现实是"全挤一站" ⇒ **计划与现实不一致**（本仓最恨的形态）。钉死后 **plan == reality** 可判。
+        $it.host = Get-TargetHost $it.station_used
+    }
+
+    Write-Host "BATCH_PLAN: 行=$($items.Count) · 可用=$(($items | Where-Object { -not $_.err }).Count) · 站分配 A=$($counts['A']) B=$($counts['B']) C=$($counts['C'])"
+    foreach ($it in $items) {
+        if ($it.err) { Write-Host ("  L{0}  {1}  <{2}>" -f $it.line, $it.card, $it.err) }
+        else { Write-Host ("  L{0}  {1}  -> {2} ({3}){4}" -f $it.line, $it.card, $it.station_used, $it.host, $(if ($it.model) { " model=$($it.model)" } else { '' })) }
+    }
+    if ($dry) { Write-Host "BATCH_DRYRUN: 已打印分配表，未派发任何任务"; return 0 }
+
+    # 3) 派发: 每站一个 job（站间并行）、站内**串行**
+    $exe = Join-Path $Script:REPO_ROOT 'ops\station-bin\agent-cli.ps1'
+    $byStation = @{}
+    foreach ($it in ($items | Where-Object { -not $_.err })) {
+        if (-not $byStation.ContainsKey($it.station_used)) { $byStation[$it.station_used] = @() }
+        $byStation[$it.station_used] += , $it
+    }
+    # 日志目录**先建**：job 内**边跑边追加** ⇒ 站级超时被 Stop-Job 强杀时，已完成卡的部分仍留得下来
+    $batchTs = Get-Date -Format 'yyyyMMddHHmmss'
+    $logDir = Join-Path (Join-Path $Script:PROJECTS[$proj] 'agent-out') "_batch\$batchTs"
+    New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+    Write-Host "BATCH_LOGS: $logDir（本批日志目录；残留位置已登记 §42.6 V8）"
+    $jobs = @()
+    foreach ($st in @($byStation.Keys)) {
+        $logFile = Join-Path $logDir "st-$st.log"
+        $jobs += [pscustomobject]@{ station = $st; cards = $byStation[$st]; logFile = $logFile; job = (Start-Job -ScriptBlock {
+            param($exe, $proj, $cards, $model, $sensitive, $type, $logFile, $repoRoot)
+            Set-Location $repoRoot   # ★ job 的 cwd 不是仓库根 ⇒ 显式设回（否则相对路径/子进程行为都可能偏）
+            $out = @()
+            foreach ($c in $cards) {
+                # ★★ 必须用**哈希表 splat**（按名绑定）而**不是数组 splat**: 数组 splat `& $exe @arr` 只按
+                #   **位置**传参 ⇒ 里面的 `-card` 会被当成"位置参数值" ⇒ 实测报
+                #   `找不到接受实际参数"-card"的位置形式参数`（子进程秒退、0 个 runDir、日志里只有 marker）。
+                #   另一坑（同族，已一并避开）: **`--card` 双横线**也会报同一错 —— PS 把 `--` 当参数解析终止。
+                $h = @{ Command = 'task'; Proj = $proj; Card = $c.cardAbs }
+                if ($c.host) { $h.RemoteHost = $c.host }   # 钉站（父进程已把站字母换成 host 串）
+                if ($c.model) { $h.Model = $c.model } elseif ($model) { $h.Model = $model }
+                if ($sensitive) { $h.Sensitivity = $sensitive }
+                if ($type) { $h.Type = $type }
+                # ★★ `*>&1` 而不是 `2>&1`: `agent-cli` 的进度行多数是 **`Write-Host`**（= 信息流 6），
+                #    `2>&1` 抓不到它们 ⇒ 实测日志里只有 marker、**一行子进程输出都没有**。
+                $o = & $exe @h *>&1
+                $rc = $LASTEXITCODE
+                if ($null -eq $rc) { $rc = 'NA' }   # 子进程没跑起来 ⇒ **不许当成 0**
+                $blk = @("=== CARD $($c.card) rc=$rc ===")
+                foreach ($l in @($o)) { $blk += "$l" }
+                # ★ 边跑边落盘（不是最后一次性写）: 站级超时会 Stop-Job **强杀** ⇒ 只有已写下的救得回来
+                $blk | Add-Content -Path $logFile -Encoding utf8 -ErrorAction SilentlyContinue
+                $out += $blk
+            }
+            $out
+        } -ArgumentList $exe, $proj, $byStation[$st], $model, $sensitive, $type, $logFile, $Script:REPO_ROOT) }
+    }
+    Write-Host "BATCH_DISPATCH: 站数=$($jobs.Count) · 并发度=$($jobs.Count)（每站串行）"
+    foreach ($j in $jobs) {
+        $cap = $capS * @($j.cards).Count + 120
+        if (-not (Wait-Job -Job $j.job -Timeout $cap)) {
+            Write-Host "BATCH_STATION_TIMEOUT: 站 $($j.station) 超 $(($cap))s ⇒ Stop-Job（该站未完成的卡将显式标为未完成）"
+            Stop-Job -Job $j.job 2>$null
+        }
+    }
+    # 4) 汇总（判据**以 runDir 为真值**；子进程输出只作旁证 —— 与本仓"看件不看日志"一致）
+    #   ⚠ 从**日志文件**读，不用 `Receive-Job`：子进程失败会产生 ErrorRecord，而 `Receive-Job` 会把错误流
+    #     重新抛出 ⇒ 在 EAP=Stop 下**一次子进程失败就打断整批汇总**（实测踩到）。★ 这正是"单项 fail-fast、
+    #     不整批崩"的机制层要求。
+    $bad = 0
+    foreach ($j in $jobs) {
+        $txt = @()
+        if (Test-Path $j.logFile) { $txt = @(Get-Content $j.logFile -ErrorAction SilentlyContinue) }
+        foreach ($c in @($j.cards)) {
+            $mark = $txt | Where-Object { "$_" -like "=== CARD $($c.card) rc=*" } | Select-Object -Last 1
+            if (-not $mark) {
+                Write-Host ("  [未完成] {0} st={1} ⇒ 站级超时/中止（**不许当作失败或成功**，需人查）" -f $c.card, $j.station)
+                $bad++; continue
+            }
+            # ⚠ rc 解析必须**不崩**且**不许把"没退出码"当 0**: 子进程没跑起来时 marker 里 rc= 是空的（实测踩到，
+            #   一次强转 `[int]` 就把整批汇总打断了）⇒ 用 TryParse + 走"未完成"分支。
+            $rcTxt = ("$mark" -replace '^.*rc=', '') -replace ' ===\s*$', ''
+            $rc = -1
+            if (-not [int]::TryParse($rcTxt.Trim(), [ref]$rc)) {
+                Write-Host ("  [未完成] {0} st={1} ⇒ 子进程未给出退出码(rc='{2}') —— **不许当作成功**" -f $c.card, $j.station, $rcTxt)
+                $bad++; continue
+            }
+            $done = $txt | Where-Object { "$_" -like '*TASK_DONE dir=*' } | Select-Object -Last 1
+            $runDir = ''; $exitReal = $rc
+            if ($done -and ("$done" -match 'TASK_DONE dir=(\S+)')) {
+                $runDir = $Matches[1]
+                $rj = Join-Path $runDir 'run.json'
+                if (Test-Path $rj) { try { $exitReal = [int]((Get-Content $rj -Raw | ConvertFrom-Json).exit_code) } catch { } }
+            }
+            $stamp = ''
+            $s2 = $txt | Where-Object { "$_" -like '*RUNSTAMP:*' } | Select-Object -Last 1
+            if ("$s2" -match 'RUNSTAMP: (\d+)') { $stamp = $Matches[1] }
+            if ($exitReal -ne 0) { $bad++ }
+            Write-Host ("  {0,-52} st={1} ts={2} exit={3} runDir={4}" -f $c.card, $j.station, $stamp, $exitReal, $runDir)
+        }
+    }
+    foreach ($j in $jobs) { Remove-Job -Job $j.job -Force 2>$null }
+    $errLines = @($items | Where-Object { $_.err }).Count
+    Write-Host "BATCH_DONE: 卡=$($items.Count) · 失败或未完成=$bad · 清单错行=$errLines"
+    if ($bad -gt 0 -or $errLines -gt 0) { return 1 }
+    return 0
+}
+
 # ---------------- entry ----------------
 # ⚠ W2 (2026-09-22): 下面**每一处** `exit` 都必须过 `Resolve-ExitCode` —— 被调函数(Invoke-Task/Review/…)
 #   的返回值可能是**数组**(体内残留管道输出, 实测过一次), 而 `exit $数组` 会让**进程 rc 恒为 0**
@@ -4361,10 +4537,17 @@ try {
         $code = Invoke-Review -proj $Proj -card $Card -runId $RunId -model $Model -overwrite:$Overwrite -sensitive $Sensitivity
         exit (Resolve-ExitCode $code)
     }
+    elseif ($Command -eq 'batch') {
+        # O-80 batch dispatcher（"多张不同卡并发"）。usage: agent-cli batch <proj> --card <清单文件>
+        #   开关走 env 桥（顶层 param 块在本环境加不了新参数）: AGENT_BATCH_DRYRUN / AGENT_BATCH_PER_STATION / AGENT_BATCH_TIMEOUT_S
+        $code = Invoke-BatchTask -proj $Proj -listFile $Card -model $Model -sensitive $Sensitivity -type $Type
+        exit (Resolve-ExitCode $code)
+    }
     else {
         Write-Host "usage:"; Write-Host "  agent-cli workspace <proj> [--create|--sync|--archive] [--type python|cpp|doc|lean4]"
         Write-Host "  agent-cli task <proj> ...  (T3)"
         Write-Host "  agent-cli split <proj> --card <master.md> ...  (O-26 split dispatcher)"
+        Write-Host "  agent-cli batch <proj> --card <清单文件>  (O-80 batch dispatcher; 开关走 env AGENT_BATCH_*)"
         exit 2
     }
 }
