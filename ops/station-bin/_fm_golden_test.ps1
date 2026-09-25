@@ -948,8 +948,13 @@ Assert-True "o68: 派发前**有按龄 GC**(只删 >7 天死件 ⇒ 不可能误
     $content.Contains('$evGcCmd') -and $content.Contains('-mtime +7 -delete'))
 Assert-True "o68: ★ GC 的**裕度理由**写在源码里(7天 vs 最长 timeout_s=1800s ⇒ 300×)" (
     $content.Contains('1800') -and $content.Contains('300'))
-Assert-True "o68: ★★ **已无**'无条件删固定名'(D2 落地 = O-68 修法的**前提条件**)" (
-    -not $content.Contains('$evRmCmd'))
+# ⚠ O-73 (2026-09-25) **就地修判据**: 下面这条原用**全文子串**判"已无该变量" ⇒ 而 O-73 的修复注释里
+#   为说明"与 D2 移除的那处同类"**提到了这个变量名** ⇒ 判据**假红**。
+#   ⇒ 与 O-65 那次"全文子串 ⇒ 可被注释蒙过"是**同一个坑的两个方向**（那次是假绿, 这次是假红）:
+#     判据必须**只看代码**。此处就地做代码/注释分离（去 `#` 之后的部分）。
+$codeOnlyFull = (($content -split "`n") | ForEach-Object { $_ -replace '#.*$', '' }) -join "`n"
+Assert-True "o68: ★★ **已无**'无条件删固定名'(D2 落地 = O-68 修法的**前提条件**; 只看代码)" (
+    -not $codeOnlyFull.Contains('$evRmCmd'))
 Assert-True "o68: ★ 源码**写明**'不要把它加回来'的理由(防有人手滑复原 reset)" (
     $content.Contains('不要加回来'))
 Assert-True "o57: 清理段已接进**派发前**那个 body(与附件中转同段)" (
@@ -1024,6 +1029,21 @@ Assert-True "o71②: `Get-UniqueRunStamp` 尾注**写明**根因与包装器名(
     $content.Contains('__Safe-Remove-Item-Wrapper'))
 Assert-True "o71③: `$ts` 消费点有**形状 fail-closed**(数组 ⇒ exit 13; 绝不静默取一个元素接着跑)" (
     $content.Contains('if ($ts -is [array]) { Write-Host "ABORT: ts 形状异常'))
+
+# --- O-73 (2026-09-25): 失败路径清理的**射程收窄**（`rm` 掉 `.agent-lock` = unlink ⇒ 并发持锁者被静默降级） ---
+# 为什么这条是 P1: `flock` 的互斥**绑在 inode 上**; `rm` 只 unlink 目录项 ⇒ 并存的持有者仍锁着**旧** inode,
+#   后来者却能在**新** inode 上取到 "exclusive" ⇒ 与仍然活着的 shared 持有者并存 = rwlock 语义被破。
+# 旁证(一手): O-72 抓到的孤儿 `fd 9 = .agent-lock (deleted)` —— "持锁者存在而锁文件已被 unlink" 真实发生过。
+# 另一半: `out/.meta` / `out/.progress` 在 D4(per-run 命名)后**已不是本 run 的件** ⇒ 去删它们 = 删别人的件,
+#   与 D2 刚移除的 `$evRmCmd` **完全同类**。⇒ 两项都去掉, **只留 subject-state**（卡的产物不是 per-run 命名的）。
+Assert-True "o73①: 失败清理**不再预置**固定名(旧四项 `out/.meta`+`out/.progress`+lock+state 已删)" (
+    $content.Contains('$del = @()') -and
+    -not $content.Contains("'out/.meta','out/.progress'") -and
+    -not $content.Contains("'.agent-lock','.agent-state.json'"))
+Assert-True "o73②: 声明产物(subject state)仍被清 —— 收窄没有把它一起关掉" (
+    $content.Contains('$del += $st'))
+Assert-True "o73③: 射程打成**可观测行**(`O46_CLEAN_SCOPE:`) —— 否则『刻意不清』与『没清』长得一样" (
+    $content.Contains('O46_CLEAN_SCOPE: 按 O-73 刻意**不删**'))
 
 # --- O-56 (2026-09-25): 基线"**声明无条件 / 产出有条件**"(两处) ---
 # ① 主路: `accept-cmds` 原为**裸列**, 而站上只在 `[ -n "$ACCEPT_B64" ]` 时才写 ⇒ 无 accept 的卡

@@ -2640,26 +2640,40 @@ exit `$FINAL_RC
             }
             # D4a: 合批暂存目录(5 个小件已 Move 走)一并清掉, 不留 TEMP 残留
             if (Test-Path $evDir) { Remove-Item $evDir -Recurse -Force -ErrorAction SilentlyContinue | Out-Null }
-            # O-46 缓解② (2026-09-24, **核心防御**): 失败 run 归档成功 → 主动清理远端残留状态件与声明产物。
-            #   B2 实测失败 run 残留 `out/.meta` / `out/.progress` / `out/<subject state>` / `.agent-lock` /
-            #   `.agent-state.json` 是下一轮 `LOCK_HELD` / `META_STALE` 与 accept&EVM 命中旧产物的假绿外因。
+            # O-46 缓解② (2026-09-24, **核心防御**): 失败 run 归档成功 → 主动清理远端残留**声明产物**。
+            #   B2 实测失败 run 残留 `out/<subject state>` 是下一轮 accept&EVM **命中旧产物**的假绿外因。
             #   此处证该件已入库到 runDir 之后清理远端工作副本 ⇒ 消除源头且不触"collect 失败不得清理"约定。
             #   待删路径全部单引号包裹(bash 内 `''` 转义单引号) + `rm -f -- "$f"` ⇒ 注入面收敛, 非拼接执行。
+            # ★★ O-73 (2026-09-25) —— **清理面就地收窄**（原 `$del` 还有 4 项, 两条理由各自独立成立）:
+            #   ① **去掉 `.agent-lock` / `.agent-state.json`**: 失败方 `rm` = **unlink 目录项**, 而 `flock` 的互斥
+            #      是**绑在 inode 上**的 ⇒ 并存的持有者仍在锁**那个** inode, 后来者却能在**新** inode 上取锁成功
+            #      ⇒ **排他被静默降级**（可达序 = 两个 shared 只读 run 并存 ∧ 其一失败 ⇒ 第三方 "exclusive"
+            #      与两个活着的 shared 并存）。旁证: O-72 抓到的孤儿 `fd 9 = .agent-lock (deleted)`。
+            #   ② **去掉 `out/.meta` / `out/.progress`**: D4(per-run 命名)之后它们**已不是本 run 的件** ——
+            #      去删它们 = 删**别人的**/历史残留 = 与 D2 刚移除的 `$evRmCmd` **完全同类**(破坏性删除+跨 run 语义)。
+            #   ⚠ **保留 `out/<subject state>`**: 卡的产物**不是** per-run 命名的(§36.E①) ⇒ "失败 run 清掉自己的
+            #      产物、免得下轮 accept 命中旧产物"**仍然有意义**。
             if ($code -ne 0) {
-                $del = @('out/.meta','out/.progress','.agent-lock','.agent-state.json')
+                $del = @()
                 foreach ($evmSub in @($fm['evidence-manifest']['subjects'])) {
                     $st = ([string]$evmSub['state']).Trim()
                     if ($st -and $st -like 'out/*') { $del += $st }
                 }
-                $safef = $del | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }
-                $body = "cd `"$W`"`nfor f in $($safef -join ' '); do [ -e `"`$f`" ] && rm -f -- `"`$f`"; done"
+                $body = "cd `"$W`"`n"
+                if ($del.Count -gt 0) {
+                    $safef = $del | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }
+                    $body += "for f in $($safef -join ' '); do [ -e `"`$f`" ] && rm -f -- `"`$f`"; done`n"
+                }
                 # O-59/T1 (2026-09-25): 本 run 的**私有中转目录**也要清 —— 正常路径由锁内落盘段删
                 #   (`rm -rf "$STAGE"`), 但**失败路径可能走不到那一步**(如 LOCK_HELD 早退) ⇒ 在此兜底。
                 # ⚠ **必须用本 run 的 token**, 绝不能用通配 `/tmp/agent-stage-*` —— 那会**误删并发 run 的中转**。
-                $body += "`nrm -rf `"/tmp/agent-stage-$($Script:RUN_TOKEN)`""
+                $body += "rm -rf `"/tmp/agent-stage-$($Script:RUN_TOKEN)`""
                 try { Invoke-RemoteScript -HostName $hostName -ScriptBody $body | Out-Null }
                 catch { Write-Host "O46_CLEAN_WARN: 远端清理失败(非阻断): $($_.Exception.Message)" }
-                Write-Host "O46_CLEAN: 失败 run 已清理远端 $($del.Count) 项 + 私有中转"
+                # 把**射程**也打成可观测行 —— 否则后来者只能从"少了 3 项"推断, 而"没清"与"刻意不清"长得一样
+                # (本仓头号形态: 把两件事说成一件)。
+                Write-Host "O46_CLEAN: 失败 run 已清理远端声明产物 $($del.Count) 项 + 私有中转"
+                Write-Host "O46_CLEAN_SCOPE: 按 O-73 刻意**不删** .agent-lock / .agent-state.json (unlink 会致并发持锁者失效) 与 out/.meta / out/.progress (D4 后非本 run 件)"
             }
             # 2026-09-23 (F-2) **已删除**此处原有的一行:
             #   Remove-Item (Join-Path $projRoot 'agent-out\.agent-run.json') -ErrorAction SilentlyContinue
