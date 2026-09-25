@@ -1111,6 +1111,18 @@ Assert-True "o72⑥(行为·先验红): 带 `$` ⇒ 比较成立; **裸名** ⇒
     $rcPos -eq 0 -and $outPos -match 'CMP_OK' -and -not $outNeg.Contains('CMP_OK'))
 foreach ($f in @($logLoop, $logPos, $logNeg)) { Remove-Item $f -ErrorAction SilentlyContinue }
 
+# --- O-67 (2026-09-25): egress 的 `SPLIT_WARN` 措辞必须与**实测**一致（实测 2 片/2 站 = **真并行**） ---
+# 旧措辞 "egress has single route, fanout may not parallelize" 是**读码推断**，已被 `split` 实测推翻
+#   （`wall_ms=31396` ≈ 单片+开销，远低于串行下界 44s）⇒ 留着它会让读者**放弃一条可用的能力**。
+# ⚠ 判据必须**只看代码**：改动说明里必然要**引用旧措辞**（否则读者不知道改了什么），
+#   而全文子串会让"引用"与"仍在用"混为一谈。⇒ 复用上面 o68 段已建好的 `$codeOnlyFull`（去 `#` 之后的部分）。
+#   ★ 这是同一个坑的**第三次**实例：O-65（假绿：注释能蒙过判据）· O-73（假红：注释里的变量名绊倒判据）· 本条。
+#     ⇒ 凡"判某串在/不在"的断言，**先问一句：它会不会被注释影响？**
+Assert-True "o67①: SPLIT_WARN **不再**断言『出网档 fan-out 可能不并行』(只看代码)" (
+    -not $codeOnlyFull.Contains('fanout may not parallelize'))
+Assert-True "o67②: 改后把条件写成**账户/站粒度**（跨站独立 key ⇒ 可并行）" (
+    $content.Contains('并行性取决于**账户/站粒度**') -and $content.Contains('实测 2 片/2 站成立'))
+
 # --- O-56 (2026-09-25): 基线"**声明无条件 / 产出有条件**"(两处) ---
 # ① 主路: `accept-cmds` 原为**裸列**, 而站上只在 `[ -n "$ACCEPT_B64" ]` 时才写 ⇒ 无 accept 的卡
 #    每个 run 假报一条 missing-artifact gap。⇒ 与 `accept-output` **同条件列**(= O-29 对 golden-cmd 的同法)。

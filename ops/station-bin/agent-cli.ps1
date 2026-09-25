@@ -2879,7 +2879,15 @@ function Invoke-SplitTask {
         if ($rejB) { Write-Host "REJECT $rejB (split, $id) exit 4 - no override channel"; return 4 }
     }
     if (Get-BackendEgress $id) {
-        Write-Host "SPLIT_WARN: model=$id is egress - cross-station each-1 assumes per-station engines; egress has single route, fanout may not parallelize"
+        # ★ O-67 (2026-09-25) **措辞就地收窄**（原话是 "egress has single route, fanout may not parallelize"）。
+        #   为什么改: 那句是**读码时的推断**，已被实测推翻 —— 出网档 2 片 / 2 站（A+B）跑 `split`：
+        #   `SPLIT_DONE all_ok=True wall_ms=31396`，两片 `run_s=16/24s` 且两片 runDir 的 ts **相差 51ms**
+        #   ⇒ 墙钟 ≈ 单片耗时 + 派发开销，**比串行下界 44s 低 12s+**。⇒ **真并行**。
+        #   真正的条件是**账户/站粒度**: 三站 `openrouter.key` **各不相同（独立账户）** ⇒ 跨站并发 = 各自配额、
+        #   互不挤占；而"多片共用同一出网账户 / 挤在同一站"才会排队。
+        #   ⚠ 别退回旧措辞: 它会让读者以为"出网档拆片无效"从而**放弃一条实测可用的能力**（本仓头号形态的镜像：
+        #     "把两件事说成一件" 的反面 —— 把"有条件的并行"说成"不并行"）。
+        Write-Host "SPLIT_WARN: model=$id is egress - 并行性取决于**账户/站粒度**: 跨站（各站独立 key）= 可并行【实测 2 片/2 站成立】; 多片共用同一出网账户或同一站 = 可能排队"
     }
 
     # round-robin target stations A/B/C (cross-station each 1, O-18 physical upper bound 3)
