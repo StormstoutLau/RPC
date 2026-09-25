@@ -1325,8 +1325,8 @@ def _cmd_models_meta(stations) -> int:
             continue
         groups = group_by_model(gguf)
         print(f"\n=== {st} 站 模型元数据 ===")
-        print(f"  {'模型目录':<46} {'原生ctx':>9}  {'量化':<15} {'加载ctx':>9} "
-              f"{'后端':<13} {'port':>6}  conf 参数")
+        print(f"  {_pad('模型目录', 46)} {_pad('原生ctx', 9, True)}  {_pad('量化', 15)} "
+              f"{_pad('加载ctx', 9, True)} {_pad('后端', 13)} {_pad('port', 6, True)}  conf 参数")
         confs = set(params)
         for (repo, model), paths in sorted(groups.items()):
             rep = pick_representative(paths)
@@ -1340,10 +1340,11 @@ def _cmd_models_meta(stations) -> int:
             label = f"{repo}/{model}" if model else f"{repo}/ (仓库级直放)"
             if len(label) > 46:              # 对齐靠列宽, 超长就截断 (否则整表错位)
                 label = label[:45] + "…"
-            print(f"  {label:<46} {str(m.get('ctx') or '-'):>9}  "
-                  f"{(q + '(' + qsrc + ')') if q else '-':<15} "
-                  f"{str(p.get('ctx') or '-'):>9} {str(p.get('backend') or '-'):<13} "
-                  f"{str(p.get('port') or '-'):>6}  {pstr}")
+            # D6-P3-1: `label` 可能是中文(如 `…/ (仓库级直放)`) ⇒ 必须按**显示宽度**填充
+            print(f"  {_pad(label, 46)} {_pad(str(m.get('ctx') or '-'), 9, True)}  "
+                  f"{_pad((q + '(' + qsrc + ')') if q else '-', 15)} "
+                  f"{_pad(str(p.get('ctx') or '-'), 9, True)} {_pad(str(p.get('backend') or '-'), 13)} "
+                  f"{_pad(str(p.get('port') or '-'), 6, True)}  {pstr}")
             confs.discard(alias)
         # conf 有、模型库无: 指向的权重可能已被删 (与 stations 断言的 (e) 子项呼应)
         for a in sorted(confs):
@@ -1599,10 +1600,13 @@ def cmd_reqlog(argv) -> int:
     print(f"\n=== 引擎请求/token 统计 (P2-3, {('近 %d 分钟' % minutes) if minutes else '全部样本'}) ===")
     print(f"  口径: **引擎耗时口径** = ΣΔtoken/ΣΔ引擎耗时 (与 API timings 可比); "
           f"墙钟口径 = ΣΔtoken/ΣΔ采样间隔 (含空闲, 辅助)\n")
-    hdr = (f"  {'站':<3} {'样本':>4} {'跨度':>7} {'prompt tok':>10} {'gen tok':>9} "
-           f"{'pp t/s':>8} {'tg t/s':>8} {'忙占比':>7} {'峰值并发':>8} {'重启':>4}")
+    hdr = (f"  {_pad('站', 3)} {_pad('样本', 4, True)} {_pad('跨度', 7, True)} "
+           f"{_pad('prompt tok', 10, True)} {_pad('gen tok', 9, True)} "
+           f"{_pad('pp t/s', 8, True)} {_pad('tg t/s', 8, True)} {_pad('忙占比', 7, True)} "
+           f"{_pad('峰值并发', 8, True)} {_pad('重启', 4, True)}")
     print(hdr)
-    print("  " + "-" * (len(hdr) - 2))
+    # D6-P3-1: 分隔线长度必须按**显示宽度**算 —— `len(hdr)` 数的是码点, 含 CJK 时会画**短**
+    print("  " + "-" * (_dw(hdr) - 2))
     any_rec = False
     for st in stations:
         r = res.get(st, {})
@@ -2430,16 +2434,11 @@ AGENT_EVIDENCE_FILES = (".agent-run.json", "judgment-record.txt", "agent-output.
 AGENT_MANIFEST_REQUIRED = tuple(f for f in AGENT_EVIDENCE_FILES if f != ".agent-run.json")
 
 
-def _dw(s) -> int:
-    """终端显示宽度 —— CJK 占 2 格。不这样算, 中英混排的表头永远对不上 (实测)。"""
-    import unicodedata
-    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in str(s))
-
-
-def _pad(s, w: int, right: bool = False) -> str:
-    s = str(s)
-    gap = " " * max(0, w - _dw(s))
-    return gap + s if right else s + gap
+# D6-P3-1: 显示宽度 / 填充**下沉到 L0 共用件** `cluster_console`（见其模块注释 —— 为什么不能留在这里：
+#   `cluster_secrets`(L2) / `cluster_egress`(L3) 也要用，从 L4 取是**反向 import** ⇒ 门禁 `deps` 会 FAIL）。
+# **保留同名 alias** ⇒ 本文件内既有调用点**零改动**。
+from cluster_console import disp_width as _dw       # noqa: E402
+from cluster_console import pad as _pad             # noqa: E402
 
 
 def _human_age(sec) -> str:
@@ -4175,10 +4174,13 @@ def cmd_agent(argv) -> int:
         print(f"  judge 引擎: {r['station']}:{r['port']} · 模型={r['judge_model'] or '(未报)'}")
         print(f"  A/A 一致 **{r['aa_agree']}** · 序翻转 **{r['swap_flip']}** · 措辞扰动一致 **{r['paraphrase_agree']}**")
         print(f"  与判据一致 {r['rule_agree']} · UNSURE(r1+r2) {r['unsure_total']}")
-        print(f"  {'#':<3} {'期望':<7} {'第1轮':<8} {'第2轮':<8} {'倒序':<8} {'改写':<8} 事实")
+        print(f"  {_pad('#', 3)} {_pad('期望', 7)} {_pad('第1轮', 8)} {_pad('第2轮', 8)} "
+              f"{_pad('倒序', 8)} {_pad('改写', 8)} 事实")
         for x in r["items"]:
-            print(f"  {x['idx']:<3} {x['expect']:<7} {x['aa_1']:<8} {x['aa_2']:<8} {x['swap']:<8} "
-                  f"{x['para']:<8} {x['fact']}")
+            # D6-P3-1: 这六列的**值**也可能是中文(期望/两轮答案/倒序/改写) ⇒ 一律按显示宽度填充
+            print(f"  {_pad(x['idx'], 3)} {_pad(x['expect'], 7)} {_pad(x['aa_1'], 8)} "
+                  f"{_pad(x['aa_2'], 8)} {_pad(x['swap'], 8)} "
+                  f"{_pad(x['para'], 8)} {x['fact']}")
         print("\n  判读: A/A=确定性(噪声底) · 序翻转=position bias · 措辞扰动=**稳健性**(A/A 测不到的那半) ·")
         print("        与判据一致=是否真按判据判(对照项故意让机器标签与判据相反 ⇒ 可辨'复核'vs'复读')。")
         _cal = r.get("calib") or {}
@@ -4400,7 +4402,7 @@ def _ttl_parallel(stations) -> dict:
 def _ttl_row(st: str, r: dict) -> str:
     s = r.get("state") or {}
     if not r.get("deployed"):
-        return (f"  {st:<3} {'未部署':<6} {'-':<8} {'-':<11} {'-':<16} {'-':<14} "
+        return (f"  {st:<3} {_pad('未部署', 6)} {'-':<8} {'-':<11} {'-':<16} {'-':<14} "
                 f"装: ops/station-bin/cluster-ttl + systemd 单元")
     on = "开" if s.get("enabled") else "关"
     timer = f"{r.get('timer_enabled')}/{r.get('timer_active')}"
@@ -4415,8 +4417,9 @@ def _ttl_row(st: str, r: dict) -> str:
                f" (idle {la.get('idle_s')}s)")
     else:
         act = "无"
-    return (f"  {st:<3} {on:<6} {str(s.get('ttl_s', TTL_DEFAULT_S)) + 's':<8} {timer:<11} "
-            f"{eng:<16} {idle:<14} {act}")
+    # D6-P3-1: `on`(开/关) · `eng`(无 (零自加载)) · `idle`(未比对) 都可能是中文 ⇒ 按显示宽度填充
+    return (f"  {st:<3} {_pad(on, 6)} {str(s.get('ttl_s', TTL_DEFAULT_S)) + 's':<8} {timer:<11} "
+            f"{_pad(eng, 16)} {_pad(idle, 14)} {act}")
 
 
 def cmd_ttl(argv) -> int:
@@ -4448,10 +4451,10 @@ def cmd_ttl(argv) -> int:
     if act == "status":
         res = _ttl_parallel(stations)
         print(f"\n=== TTL 空闲自动卸载 (P2-5) — 默认关; 开启后 idle ≥ 阈值即执行 infer-unload ===\n")
-        hdr = (f"  {'站':<3} {'开关':<6} {'阈值':<8} {'定时器':<11} {'引擎':<16} "
-               f"{'空闲/阈值':<14} {'最近动作'}")
+        hdr = (f"  {_pad('站', 3)} {_pad('开关', 6)} {_pad('阈值', 8)} {_pad('定时器', 11)} "
+               f"{_pad('引擎', 16)} {_pad('空闲/阈值', 14)} {'最近动作'}")
         print(hdr)
-        print("  " + "-" * (len(hdr) - 2))
+        print("  " + "-" * (_dw(hdr) - 2))
         for st in stations:
             print(_ttl_row(st, res.get(st, {})))
         print("\n  定时器列 = is-enabled/is-active; 开关列 = conf 的 TTL_ENABLED (关时检查器只演练, 不卸载)")
@@ -4735,9 +4738,10 @@ def cmd_inbox(argv) -> int:
             except Exception:
                 st = "BAD-JSON"
         rows.append((d.name, st, ts))
-    print(f"  {'目录':<30} {'state':<26} {'updated_at'}")
+    print(f"  {_pad('目录', 30)} {_pad('state', 26)} {'updated_at'}")
     for name, st, ts in rows:
-        print(f"  {name:<30} {st:<26} {ts}")
+        # D6-P3-1: 受理目录名可能是中文 ⇒ 按**显示宽度**填充（`state` 取值在白名单内 ⇒ 恒 ASCII）
+        print(f"  {_pad(name, 30)} {_pad(st, 26)} {ts}")
     return 0
 
 
