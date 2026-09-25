@@ -31,6 +31,24 @@ entry_modules:
   - ops/cluster_secrets.py
   - ops/cluster_egress.py
 
+# cluster 模块**层序**（D6-P2-1，底→顶）：**只允许依赖严格下层**（同层/反向/成环 ⇒ 门禁 `deps` FAIL）。
+# 为什么单列: 拆出 5 个模块后, "谁能 import 谁"原先**无任何约束** ⇒ 反向依赖会悄悄长回来。
+# **新模块必须在此登记层次**（未登记 ⇒ FAIL）—— 登记这个动作就是"声明它站在哪一层"。
+# 判据: `ops/rpc_check.py` 的 `check_cluster_deps`（**AST** 解析, 严格区分模块级 / 函数内懒加载）。
+cluster_layers:
+  - [ops/cluster_const.py]                            # L0 最底: 无内部依赖
+  - [ops/cluster_ssh.py]                              # L1: → const
+  - [ops/cluster_model.py, ops/cluster_secrets.py]    # L2 平面类(互不依赖): → ssh/const
+  - [ops/cluster_egress.py]                           # L3: → secrets/ssh/const
+  - [ops/cluster.py]                                  # L4 入口: 聚合全部下层
+  - [ops/cluster_web.py]                              # L5 顶层 WEB 入口: 复用 cluster
+
+# 已登记的**反向懒加载**（[上游, 下游, 原因]）：懒加载 import **不构成导入环**（它是刻意打破环的手段），
+# 但**反向**（越层）懒加载仍是设计越界 ⇒ 必须登记。⚠ 未命中会自报"已可移除"（同 P0-2 防腐化纪律）。
+cluster_lazy_allow:
+  - [ops/cluster.py, ops/cluster_web.py,
+     "`web` 子命令的入口派发: cluster 在函数内懒加载 cluster_web(避导入环), 而 cluster_web 模块级复用 cluster 的 ssh_run/probe_frames/cmd_load 等 ⇒ 顶层双向; 拆环收益 < 成本"]
+
 # 站上运行时件: 入口/systemd 调用的被调方 (不是并列入口)
 station_runtime:
   - ops/rpc-nodes
