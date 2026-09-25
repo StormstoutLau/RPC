@@ -12,7 +12,11 @@
   （它无写入方 ⇒ 死清理；留着会误导审查，且一旦有人恢复写该名就会变成并发真破坏）。
 - **F-3 / RC④**：远端脚本**必须**保留 `mkdir -p "$W" "$W/out"` ——
   **站侧自建 out/ 是既定事实**（不依赖 tar 携带空目录）；删掉它才会让 RC④ 复现。
-- **O-28 RC②**：`$ts` 生成之后**必须**紧跟并发去重（`while (Test-Path …)`）。
+- **O-28 RC② / O-63**：`$ts` 取号**必须**走**原子抢占**（`Get-UniqueRunStamp` 的 create-or-fail），
+  不得退回"存在性检查"（`while (Test-Path …) { 递增 }` = **TOCTOU**：两个并发进程会**同时**判"不存在"）。
+  ⚠ **2026-09-25 判据改写**：原判据盯的是 check-then-act 的**行文**（`$ts = …ToString(…)` 紧跟 `while (Test-Path …)`）——
+  O-63 换成原子抢占后那段行文**已不存在** ⇒ 旧判据变成"指向已删除实现细节"的**过期断言**（恒红）。
+  ⇒ 改为盯**原子语义**（原语 + 两处调用 + 旧模式已消失 + 抢占物有 GC）。**方向是改写，不是回退代码。**
 - **裁定 A**：`station-ready` 必须**按后端属性分流**（`Get-BackendEgress`），
   不得退回无条件探测（那会把出网档重新锁死在引擎门上）。
 - **O-27**：`.meta` 必须写 `RC_DOMAIN=v2`（TASK_RC 与 run.json 同域的标记）。
@@ -40,6 +44,17 @@ def code_hits(src: str, needle: str):
     return hits
 
 
+def code_only(src: str) -> str:
+    """剥掉**注释**后的代码文本（逐行取 `#` 之前的部分）。与 `code_hits` 同一口径。
+
+    ⚠⚠ 2026-09-25 **实测踩到**：`O-28 RC②/O-63` 那条判据的第一版用的是**全文子串**（`in src`）⇒
+    只要**注释里**出现 `[IO.FileMode]::CreateNew`，断言就会**过**，哪怕代码侧已经退化成
+    `OpenOrCreate`（非原子）。**实测复现**：代码改 `OpenOrCreate` + 注释写上该串 ⇒ 断言仍
+    `ALL PASS`（= **假绿**）。⇒ 这正是本文件 `code_hits` 注释里写的那条纪律，我改写时违反了自己文件里的规矩。
+    """
+    return "\n".join(ln.split('#', 1)[0] for ln in src.splitlines())
+
+
 def main() -> int:
     if not CLI.exists():
         print(f"FAIL: 找不到 {CLI}")
@@ -63,10 +78,20 @@ def main() -> int:
          bool(re.search(r'mkdir -p "`\$W" "`\$W/out"', src)),
          "删掉它会让 RC④（全新工作区无 out/）复现；这是站侧自建、不依赖 tar 的行为")
 
-    # O-28 RC②：ts 之后必须紧跟去重
-    need("O-28 RC② $ts 之后紧跟并发去重",
-         bool(re.search(r"\$ts = \[DateTime\]::Now\.ToString\('yyyyMMddHHmmssffff'\)[\s\S]{0,900}?while \(Test-Path \(Join-Path \$tsOutRoot", src)),
-         "去掉去重 ⇒ 同一时钟滴答内启动的两个进程取到相同 ts ⇒ agent-out/<ts> 与 evidence 临时目录互踩")
+    # O-28 RC② / O-63：`$ts` 取号必须走**原子抢占**（见文件头"2026-09-25 判据改写"）
+    # ⚠ 一律用 **`code_only`**（剥注释）—— 第一版用全文子串，实测被注释蒙过（假绿，见 code_only 的 docstring）。
+    co = code_only(src)
+    ts_atomic = "[IO.FileMode]::CreateNew" in co and "[IO.FileShare]::None" in co
+    ts_def = "function Get-UniqueRunStamp" in co
+    ts_sites = len(re.findall(r"Get-UniqueRunStamp -ProjOutRoot", co))
+    # 旧 check-then-act 必须**消失**。⚠ 只在**代码**里判（注释里留档该模式是刻意的，不算违规）
+    ts_cta = code_hits(src, "while (Test-Path (Join-Path $tsOutRoot")
+    # 抢占物必须有**出口**（对应 runDir 已存在 / 超 7 天 ⇒ 删）—— 防"登记无出口 ⇒ 腐化"
+    ts_gc = "$d.CreationTime -lt $cut" in co
+    need("O-28 RC②/O-63 $ts 走原子抢占（原语 + 两处调用 + 旧 check-then-act 已消失 + 抢占物有 GC）",
+         ts_atomic and ts_def and ts_sites >= 2 and not ts_cta and ts_gc,
+         f"原子原语={ts_atomic} 定义={ts_def} 调用点={ts_sites}/2 旧check-then-act残留={ts_cta} GC={ts_gc} ⇒ "
+         "退回 check-then-act ⇒ 两个并发进程同时判『不存在』⇒ 取到同一 ts ⇒ runDir/scratch 互踩（实测 rc=7）")
 
     # 裁定 A：station-ready 按后端属性分流
     need("裁定 A station-ready 按 Get-BackendEgress 分流",
@@ -108,6 +133,16 @@ def main() -> int:
         "_slot_gate.sh": "同上",
         "_oc_session_meta.sh": "同上(经 $Script:TMP_ROOT 投递, 此处仅列远端名)",
         "_p3_run.sh": "同上(内容恒定 here-string 常量 + 参数传入; O-31 已核实)",
+        # ── 第二类（2026-09-25 新增）：**必须跨进程共享**——共享正是它的功能（与第一类**理由不同**）──
+        #   第一类是"内容恒定 ⇒ 同内容互覆无害"；本类是"**共享是设计目的** ⇒ 加 per-run 身份会**破坏语义**"。
+        #   ⚠ key 用**带引号的字面量**（如 `'agent-cli-claims'`）钉住具体那行 —— 防宽 key 顺带豁免掉将来
+        #     新出现的同类命名（豁免面必须**恰好**等于已知项）。
+        "'agent-cli-claims'": "O-63 的 ts **抢占目录**（`%TEMP%\\agent-cli-claims`）—— 跨进程必须共用"
+                              "**同一个** claim 空间才叫原子抢占；加 `RUN_TOKEN` ⇒ 每 run 各占各的目录 ⇒ "
+                              "抢占**失效**（等于把 O-63 修好的 TOCTOU 洞挖回来）",
+        '"agent-cli-lease-': "O-62/C3+C1 的**工作区租约文件**（`%TEMP%\\agent-cli-lease-<key>.lock`）—— "
+                             "互斥/共享的前提就是**同一个**文件名（key 已含站与 proj）；加 `RUN_TOKEN` ⇒ "
+                             "各锁各的 ⇒ 锁形同虚设（危险序① 复活）",
     }
     temp_names = re.findall(r'Join-Path \$env:TEMP "([^"]+)"', src)
     # ⚠ 字符类必须含 `:` —— 否则 `$Script:RUN_TOKEN` 会在 `:` 处被截断 ⇒ 把"已带身份"误判成"无身份"(假红)。

@@ -757,7 +757,11 @@ function Get-UniqueRunStamp {
     catch { }   # GC 是 best-effort，绝不影响派发
     for ($i = 0; $i -lt $MaxTry; $i++) {
         $cand = [DateTime]::Now.ToString('yyyyMMddHHmmssffff')
-        # **原子原语**: `FileMode::CreateNew` —— 文件已存在即抛 IOException（文档级保证"创建或失败"）。
+        # **原子原语**: `[IO.FileMode]::CreateNew` —— 文件已存在即抛 IOException（文档级保证"创建或失败"）。
+        #   ⚠ **此处刻意写全限定名**：它同时是 `tests/test_cli_concurrency_guards.py` 的**对抗样本** ——
+        #     该判据必须只认**代码**里的原语，**不能被注释蒙过**（2026-09-25 实测：判据第一版用全文子串
+        #     ⇒ 只把代码改成 `OpenOrCreate`、注释保留本串，断言仍报 ALL PASS = **假绿**）。
+        #     **别"顺手"把它改回短名 `FileMode::CreateNew`**，否则这个常驻样本就没了。
         #   ⚠ 曾用 `New-Item -ItemType Directory`（它**也**会在已存在时抛 IOException），但**实测 12 进程
         #   并发下仍出现一对重复**（hammer 报 uniq=11）⇒ 换成语义最明确的 CreateNew，并把该原语**钉进夹具**。
         #   另注: `[IO.Directory]::CreateDirectory()` 在目录已存在时**不抛**（返回对象）⇒ **不可**用于抢占。
