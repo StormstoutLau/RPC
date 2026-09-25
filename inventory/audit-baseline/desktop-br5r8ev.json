@@ -26,6 +26,9 @@
   "2|missing-artifact|dogfood/202609251442181372|judgment-record",
   "2|missing-artifact|dogfood/202609251442181372|prompt",
   "2|missing-artifact|dogfood/202609251442181372|workspace-diff",
+  "2|missing-artifact|dogfood/202609252234570437|workspace-accumulation",
+  "2|missing-artifact|dogfood/202609260001227863|judgment-record",
+  "2|missing-artifact|dogfood/202609260001227863|workspace-diff",
   "2|undeclared|dogfood/202609241608498832|falsegreen.md",
   "accept-cmds-mismatch|paper/202609181751581972|0v1",
   "accept-cmds-mismatch|paper/202609182314143434|0v1",
@@ -57,5 +60,5 @@
   "undeclared|paper/202609221131192690|review.json"
  ],
  "created": "2026-09-19 00:23:13",
- "updated": "2026-09-25 15:07:06"
+ "updated": "2026-09-26 00:17:47"
 }
