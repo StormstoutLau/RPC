@@ -2989,3 +2989,27 @@ spec/d6-agent-standard/dogfood-cards/v5-shared-readonly-probe.md   model=ultra-c
 
 **未做（如实登记）**：同站多卡并行（`PER_STATION>1` 会**显式拒绝**，属 v2）· 逐卡附件 · 失败卡自动换站 · 产物归并。
 
+### 42.10 v1.1（同日）：清单加 `attach=` + **D7-P0 三卡首批实跑**
+
+**为什么加 `attach=`**：D7 的每张卡都要一份**输入摘要**，而 v1 的"只支持无附件卡"会让 D7 的卡**全都只能单张跑** ⇒ 批次的用处归零。
+⇒ 清单新增 key **`attach=<path>`**：解析 + **缺失即 fail-fast**（`ATTACH_NOT_FOUND`）+ 传**绝对路径**进既有 `-Attach`（哈希表 splat）。夹具 **`o80⑧`**。
+> ⚠ 就地更正 §42.4 的"只支持无附件卡"边界：**附件改为"逐卡可选"**；`PER_STATION>1` 仍**显式拒绝**。
+
+**D7-P0 三卡 = 本入口的第一次"合法并发"实跑**（清单 `dogfood-cards/batches/d7-p0.txt`）：
+
+| 卡 | 站 | 产物 | run |
+|---|---|---|---|
+| `d7-p0-1-adr-boundary-draft`（**带附件**） | A | `d7-p0-1-adr-draft.md` **4243 B / 38 行** | `…0755384807` |
+| `d7-p0-2-protocol-freeze`（正文内联摘要） | B | `d7-p0-2-protocol-freeze.md` **3627 B / 59 行** | `…0755382325` |
+| `d7-p0-3-positioning-judgments`（正文内联摘要） | C | `d7-p0-3-positioning-judgments.md` **2702 B / 34 行** | `…0755383437` |
+
+**判读**：`BATCH_EXIT=0` · **3/3 `exit=0`** · 三个 `RUNSTAMP` 差**毫秒级**（…382325/…383437/…384807）⇒ **真并行** ·
+批墙钟 **67s**（串行下界 ≥ 3×单卡 ≈ 180s+）· 站分配 **== 计划**（A/B/C 各 1）· `清单错行=0` · 附件卡（排他）与两张写型卡（共享）**跨站无冲突**。
+
+**新增两份"出站版"摘要**（依据 §40 的 2026-09-25 出站口径裁定；**逐项核过不含"私有 API 凭据 / IP / 用户信息"**；
+⚠ 与旧摘要的差别：旧摘要按**旧口径**还删了"他方仓库路径/内部文件名"，新摘要**保留**机制内容原样 ⇒ 更完整）：
+`inputs/d7-p0-2-protocol-excerpt.md`（§3.1 六相协议）· `inputs/d7-p0-3-positioning-excerpt.md`（§0① 定位 + 两条判据）。
+两者已登记进 `inventory/sensitivity.yaml`（`public`）⇒ 门禁 `sensitivity` 条目 **18 → 20**。
+
+**⇒ 结论**：**"用满 3 站 3 额度"的入口已通，且已被真实任务用掉一次**（D7 阶段门 P0 的三项设计产出）。
+

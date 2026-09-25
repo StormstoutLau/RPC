@@ -1191,6 +1191,10 @@ Assert-True "o80⑥: 三条硬约束写在源码里（ADR-0004 不加脚本 / pa
     $content.Contains('ADR-0004') -and $content.Contains('加不了新参数') -and $content.Contains('权宜, 不是设计偏好'))
 Assert-True "o80⑦: >1 每站并发**显式拒绝**（不许静默按 1 跑）+ 说明『计划==现实』的钉站理由" (
     $codeOnlyFull.Contains('BATCH_ABORT: AGENT_BATCH_PER_STATION=') -and $content.Contains('plan == reality'))
+# v1.1（2026-09-26）：清单新增逐卡附件 `attach=`（D7-P0 三卡都要输入摘要 ⇒ 无它就只能单张跑）
+Assert-True "o80⑧: 清单支持逐卡附件 `attach=`（解析 + 缺失 fail-fast + 传绝对路径进 -Attach）" (
+    $codeOnlyFull.Contains("'^(?i)attach=(.+)$'") -and $codeOnlyFull.Contains("'ATTACH_NOT_FOUND'") -and
+    $codeOnlyFull.Contains('$h.Attach = @($c.attachAbs)'))
 
 # --- O-56 (2026-09-25): 基线"**声明无条件 / 产出有条件**"(两处) ---
 # ① 主路: `accept-cmds` 原为**裸列**, 而站上只在 `[ -n "$ACCEPT_B64" ]` 时才写 ⇒ 无 accept 的卡
