@@ -1065,6 +1065,15 @@ Assert-True "o75③: `Test-RemoteReach` 改走该 helper(它是四条主路 ssh 
 #   否则后来者会"顺手全加"并把那条纪律变成假全覆盖。
 Assert-True "o75④: 源码写明『派发主体刻意不加墙钟』及其理由(防顺手全加 ⇒ 假全覆盖)" (
     $content.Contains('刻意不加') -and $content.Contains('远端任务还在跑 + 本地证据全丢'))
+# --- O-75 残面② 收口 (2026-09-26): 站上 claude 的两条**前置探针**也改走有整体墙钟的执行器 ---
+# 为什么当时没做（原文）: 它们的 argv 里含**双引号**（`test -f "$HOME/…"`），改用原始参数字符串会重开纪律 12 的引号地狱。
+# ⇒ 本轮的做法是**从根上消掉引号**：路径不含空格 ⇒ 那对双引号本来就不需要。
+Assert-True "o75⑤: 两条站上前置探针改走有**整体墙钟**的执行器（残面②收口）" (
+    $codeOnlyFull.Contains('Invoke-CappedSsh -Arguments ("-o ConnectTimeout=8 ${remoteUser}@${hostName} bash /tmp/_station_ready.sh $alias")') -and
+    $codeOnlyFull.Contains('Invoke-CappedSsh -Arguments ("-o ConnectTimeout=8 ${remoteUser}@${hostName} " + $probe)'))
+Assert-True "o75⑥: 探针命令**一个双引号都不含**（`$HOME` 那对引号已去掉 ⇒ 不再有引号地狱可踩）" (
+    $content.Contains("test -f `$HOME/.config/rpc/openrouter.key") -and
+    -not $content.Contains('test -f "$HOME/.config/rpc/openrouter.key"'))
 
 # --- O-72 (2026-09-25): 采样器子壳**必须能自停** + 站上脚本副本**有出口** ---
 # 一手取证: B 站抓到一条**活了 28.6h** 的孤儿 `bash /tmp/agent-cli-task-*.sh`(PPID=1, 继承锁 fd),
