@@ -15,7 +15,7 @@
 
 ## 1. 背景与目标
 
-**现状**（O-24 P0-① 已落地，agent-cli.ps1 $body）：首跑 RC≠0 后，resume loop **无脑 `--continue` ≤2 次**（`continue-timeout-s` 独立预算）。这是"续跑**执行体**"，但缺少"该续还是该重启"的**决策层**：
+**现状**（O-24 P0-① 已落地，agent-cli.ps1 $body）：首跑 RC≠0 后，resume loop **无脑 `--continue` ≤3 次**（`continue-timeout-s` 独立预算）。这是"续跑**执行体**"，但缺少"该续还是该重启"的**决策层**：
 
 - Anthropic §9.6-2 六行决策表被 DESIGN 引证为 G1 续接路由规则，**未展开**；
 - BLINDSCAN BS-4 指出：**决策表必须显式纳入 context-rot 维度**，否则被"continue 方便"误导——`--continue` 只带摘要不带细节，重复续跑在 context 已污染时毫无价值甚至有害；
@@ -87,7 +87,7 @@ opencode 无头 run **不打印 session context 占用**（§3.1 已弃 session-
 
 本表是 **G1 决策层**，落在现有 resume loop 外层（`agent-cli.ps1` $body $CONT_ATTEMPT 循环）。保留既有不变式：
 
-- retry 上限仍 ≤2（`.agent-run.json` 续跑前后各一行 RESUME 日志）；
+- retry 上限仍 ≤3（`.agent-run.json` 续跑前后各一行 RESUME 日志）；
 - 分支仅作用于**第二次续跑**的形态：C0-C1 → `--continue`；C2 → `--fork`；C3/C4 → 终止循环、状态标 `REVIEW_NEEDED`；
 - `--continue`/`--fork` 复用现有 base64 prompt + 独立 `continue-timeout-s` 预算，不新增参数面。
 
@@ -104,7 +104,7 @@ opencode 无头 run **不打印 session context 占用**（§3.1 已弃 session-
 | A1 | C1 分支回归 | context < 50% 时失败续跑走 `--continue`，RESUME 日志在 |
 | A2 | C2 分支 | context 进入 rot 区时续跑形态切 `--fork`（原 session 保留）|
 | A3 | C3/C4 分支 | 不无脑重试；状态标 `REVIEW_NEEDED`，usage 不重复累烧 |
-| A4 | retry 上限守住 | 任一卡续跑总数 ≤2，循环不失控 |
+| A4 | retry 上限守住 | 任一卡续跑总数 ≤3，循环不失控 |
 | A5 | 既有零倒退 | _continue 续接既有实测（dogfood-resume-recovery v3）不回归 |
 
 ---
