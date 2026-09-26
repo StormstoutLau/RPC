@@ -1,0 +1,248 @@
+# 记忆四道门 + 授权边界（结构性约束）真值表（D7-P3-3）
+#
+# ── 这是什么 ────────────────────────────────────────────────────────────────
+# D-47（2026-09-24）已裁：**共享记忆做，但必须带四道门**：write / retrieval / **promotion** / reuse。
+# 依据 = **MAPLE-Guard**（arXiv 2608.00426）原话：
+#   「a poisoned memory can be written once, continuously retrieved in later tasks,
+#     **promoted into shared memory**, and **reused by other agents**. A single poisoned write can
+#     therefore steer many later decisions and contaminate agents that never saw the original attack,
+#     **all while no malicious message crosses a visible communication edge at the moment of harm**.」
+# ⇒ **私有 → 共享的"晋升"是攻击面的关键一跳**。
+#
+# D-48 已裁：**"授权边界"置于"评审智能"之前** ——
+#   依据 arXiv 2609.17648 四 agent 管道实测：**JBR(Judgment Bypass Rate) 100% 但 Unsafe Action Rate 0%**
+#   ⇒ 「structural authorization can contain compromised agent behavior **even when upstream LLM
+#   judgment fails**」⇒ **不要指望"审得更准"，要靠"结构 contain"**。
+#
+# D-40 已裁：**"单人开发者"是 D7 的显式设计前提** ——
+#   本机群两处独立承认自审（`Cpp_Hub` / `Open_Data`）⇒ 授权边界只能写成**结构性约束**，不能靠"换个人来审"。
+#
+# ⚠⚠ **本表的威胁模型必须说清，否则会被读成"防外部攻击者"**：
+#   本仓是**单人开发者的三机集群** ⇒ 主要风险**不是**外部投毒，而是
+#   **跨项目污染**（项目 A 的记忆被项目 B 读到 / 带进 B 的上下文）——
+#   这恰恰摧毁本仓"不信任系统"的设计前提。⇒ 下述"门"按此模型判。
+
+version: 1
+updated: 2026-09-26
+owner: Scott (鹏)
+basis: "D-47 · D-48 · D-40 · 合并稿 §9.1 · M-4"
+
+# ── 记忆面（本仓实际能碰到的东西）──────────────────────────────────────────
+memory_plane:
+  station_home: "~/.local/share/opencode/"
+  artifacts:
+    - "memory.db（SQLite）"
+    - "memories/（MEMORY.md · memory_summary.md · extensions/ad_hoc/notes/*.md）"
+  # **站级**（该站 HOME）⇒ 同一站上**所有**任务/项目共用同一份记忆。
+  scope: station
+  # ⚠ 不是"设计出来的"，是**已有文档的实测**（站上 sqlite 只读直查，2026-09-02）——
+  #   本批**未重新实测**（须 ssh 上站），照实标注来源。
+  scope_evidence: "docs/Agent跨项目调用标准与迁移复用调研.md §4.1（B 站直查：memory_stage1_outputs 含 cwd 列 / ad-hoc 笔记全局平铺）"
+
+# ── 记忆面**路径常量**的护栏（SC-1 的判据口径）─────────────────────────────
+# 口径：从 `agent-cli.ps1` 里**实提取**那条 symlink 的 `(源, 目标)`，然后按下面三条核。
+# ⚠ 源串在 ps1 源码里带反引号（`$HOME` / `$W` 是**站上 bash** 的变量，不是 PS 的）。
+plane_guard:
+  allowed_source_prefixes: ["`$HOME/.local/share/opencode/"]
+  forbidden_source_markers: ["$W", "agent-workspaces", "out/"]
+  allowed_target_suffix: "/opencode/memory.db"
+
+# ── 四道门（D-47 / MAPLE-Guard）────────────────────────────────────────────
+# `judgment.ref` 必须是**已注册的 CHECKS id**（防"挂名假判"：指向一个不存在的判据）；
+# 或 `kind: na` + `object_absent_why`（**"不做"也要写下来** —— 本仓既定纪律）。
+# ★ `not_covers` **必填**：每门都要写清"它**不**覆盖什么"（本仓已登记的假绿形态 = 把部分当全部）。
+gates:
+  - id: write
+    what: 谁能往**记忆面**写入
+    object: >-
+      本仓**没有**往记忆面写的代码 —— 记忆由 opencode 引擎自己写（`memory_stage1_outputs` /
+      `memory_add_note`）。⇒ 本仓这一门的对象是「**不得出现写入通道**」（结构性缺席）。
+    judgment:
+      kind: check
+      ref: memory-gates
+      sub: write-absent
+    on_reject: 源码里出现直写记忆面的调用 ⇒ **红**（那是本仓自己开了一条写门）
+    not_covers: "引擎**自己**的写入（本仓看不到、也管不到）—— 那是「检索 / 晋升」两门的输入，不是本门的对象"
+    evidence: "MAPLE-Guard（arXiv 2608.00426）"
+
+  - id: retrieval
+    what: 什么会被**检索进上下文**（含跨项目污染）
+    object: >-
+      **只有一半**在本仓手上：本仓决定**注入什么**（卡正文 + 附件），
+      由 `input-provenance` + `sensitivity` 管；**引擎的自动检索**（按 cwd 键控）本仓碰不到。
+    judgment:
+      kind: check
+      ref: input-provenance
+      sub: "本仓注入面（卡正文 / 附件）"
+    on_reject: 见 `input-provenance` 的处置（缺 `input-provenance` 字段 ⇒ FAIL）
+    not_covers: "★ 引擎**自动**检索进上下文的记忆（cwd 键控）—— 本仓**无对象**，见 `unverified`"
+    evidence: "MAPLE-Guard（continuously retrieved in later tasks）"
+
+  - id: promotion
+    what: "**私有 → 共享**那一跳（★ MAPLE-Guard 点名的关键一跳）"
+    object: >-
+      准入**形状**已有单一真值源 `inventory/promotion.yaml`（U-5，D-38 统一三处实现）；
+      但**通道**（"记忆怎么从私有变成共享"）另见本表 `bridges`。
+    judgment:
+      kind: check
+      ref: promotion
+      sub: "准入形状（schema 自身 + 三处实现的映射）"
+    on_reject: 见 `promotion` 的处置
+    not_covers: "★ **通道**是否有门 —— 那由本表的 `bridges` 段判（`memory-gates`），**不在** `promotion` 里"
+    evidence: "MAPLE-Guard · D-38"
+
+  - id: reuse
+    what: 一条记忆被**别的 agent / 别的任务**复用
+    object: "同一站上**所有**任务共用 `~/.local/share/opencode/memory.db`（站级，实测见 scope）"
+    judgment:
+      kind: check
+      ref: memory-gates
+      sub: reuse-bridge
+    on_reject: 出现"本仓可关却没关"的共享通道 ⇒ **红**；引擎侧无门通道 ⇒ **点名 + WARN**（不静默）
+    not_covers: "跨**站**复用（三站各自一套 HOME 记忆 ⇒ 默认不跨站；未逐一实测，见 `unverified`）"
+    evidence: "MAPLE-Guard（reused by other agents）· D-40（单人开发者）"
+
+# ── ★★ 私有 → 共享 的通道（"关键一跳"逐条登记）────────────────────────────
+# `isolated` = 这条通道是否**按项目/任务隔离**（实测口径，不是设计意图）。
+# `gate` ∈ {cwd-keyed, by-design-shared, none}：
+#   · `none` + `controllable_by_us: true`  ⇒ **红**（本仓能关却不关）
+#   · `none` + `controllable_by_us: false` ⇒ **点名 + WARN**（本仓关不了；**不许静默**）
+#   · `by-design-shared` ⇒ **必须给 `why`**（"刻意共享"与"忘了关门"必须可区分）
+bridges:
+  - id: stage1-cwd-keyed
+    channel: "memory_stage1_outputs（提取记忆）"
+    isolated: true
+    key: cwd
+    gate: cwd-keyed
+    controllable_by_us: false
+    why: "引擎按工作区 cwd 键控 ⇒ **天然隔离**（实测：表含 `cwd` 列）"
+    evidence: "docs/Agent跨项目调用标准与迁移复用调研.md §4.1"
+
+  - id: adhoc-notes-flat
+    channel: "memories/extensions/ad_hoc/notes/*.md（ad-hoc 笔记）"
+    isolated: false
+    gate: none
+    controllable_by_us: false
+    why: >-
+      ★ **全局平铺、无项目隔离 —— 任何项目可读**（实测：D5 笔记以 /tmp cwd 写入，
+      任何项目都能读到）。这是 MAPLE-Guard 说的"关键一跳"上**敞着的一道门**，
+      而且**本仓关不了**（文件由 opencode 引擎写）。⇒ 只 WARN 点名，但**绝不静默**。
+    evidence: "docs/Agent跨项目调用标准与迁移复用调研.md §4.1"
+
+  - id: memory-db-station-home
+    channel: "agent-cli.ps1 的 XDG 隔离分支里那条 memory.db symlink"
+    isolated: false
+    gate: by-design-shared
+    controllable_by_us: true
+    why: >-
+      **刻意共享**，源码注释已写明理由（"memory.db 独立 symlink 保留跨任务共享记忆"）。
+      ★ 关键理解：`isolate-xdg` **默认关闭** ⇒ 不隔离时本来就是同一个 `$HOME` 库；
+      那条 symlink 的作用是**不把已有的共享拆掉**，而不是**新开**共享。
+      ⇒ 归 `by-design-shared`（有理由），**不是** `none`（忘了关门）。
+    evidence: "ops/station-bin/agent-cli.ps1:2284-2294"
+
+# ── ★ 授权边界 = **结构性约束**（D-48：不靠"审得更准"）─────────────────────
+# 每条都要给 `judged_by`：**"写成结构性约束"的含义 = 有判据**；没判据的仍只是纪律。
+# `why_structural` 必填：为什么它是**结构**而不是"指望写清楚"。
+structural_constraints:
+  - id: sc-memory-plane-is-station-home
+    rule: >-
+      `memory.db` 只允许 symlink 到**该站 `$HOME` 的那一份**；**不得**指向任何工作区 / 项目目录
+      （那等于把"项目记忆"搬进共享层）。且全仓**只允许一处**这样的 symlink。
+    judged_by: memory-gates
+    why_structural: >-
+      共享面是一个**路径常量**，可逐字符核 ⇒ 不依赖任何人"记得不要那样写"。
+    on_violation: "红并点名（新增通道 = 共享面被扩容，必须过审查）"
+
+  - id: sc-memory-never-egress
+    rule: >-
+      **记忆内容不得出网**：跨机搬运（`scp` / `rsync`）不得携带 `memory.db` / `memories/`；
+      备份只允许落在**站内** `$HOME` 下（`backup-memories.sh` 的目标目录必须以 `~` / `$HOME` 开头）。
+    judged_by: memory-gates
+    why_structural: >-
+      出网是本模型里**最贵**的错误（一旦过去，任何门都来不及）；
+      "不得出网"能落成**对传输调用点的清单断言**，不需要判断内容是否"敏感"。
+    on_violation: "红并点名到文件与行"
+
+  - id: sc-isolation-not-by-text-prefix
+    rule: >-
+      项目隔离**不得**以**文本前缀**为判据。`[proj:<name>]` 只是**提示**（源码里注入 prompt 的约定），
+      **不是边界** —— 本仓的**判据实现**里不得出现该前缀。
+    judged_by: memory-gates
+    why_structural: >-
+      D-48 的同一条道理：把命名当边界 = "指望写清楚"，而 MAPLE-Guard 的伤害恰恰发生在
+      "没有任何恶意消息跨过可见通信边"的时刻 ⇒ 前缀**看不见**这种伤害。
+    on_violation: "红（有人把命名升格成了判据）"
+
+# ── ⚠ 如实登记：**今天还不是**结构性约束的授权边界 ──────────────────────────
+# ★ 刻意与 `structural_constraints` **分开** —— 混在一起就是「把两件事说成一件」（本仓头号形态）。
+# 判据会核对：两边**不得**出现同一个 id；且本段非空（"不是结构"这件事也必须写下来）。
+known_non_structural:
+  - id: adhoc-note-project-tag
+    rule: "ad-hoc 笔记的**项目归属**（引擎侧那一道门）"
+    today: "注入 prompt 的文本前缀（**约定**，不是边界）"
+    why_not_structural: >-
+      笔记由 opencode 引擎写、落在站上 `$HOME`，**本仓既不能拦也不能读** ⇒ 本仓**无对象**。
+      真要变成结构，得在**引擎侧**或 **workingdir 契约**上动手 —— 那是本仓范围之外。
+    object_absent_why: >-
+      本仓无对象（同 `D7-P1-5` 四问判据的处置：不适用就登记不适用，**不假装有判据**）。
+
+# ── 记忆面的**接触点封闭集** ────────────────────────────────────────────────
+# "本仓哪些**代码**允许提到记忆路径"。新增接触点 = 必须过审查的事件（同 `conclusion-ledgers` 的做法）。
+# 口径：在 `ops/` 与 `tests/` 下的可执行脚本/代码里，出现 `memory.db` 或 `memories/` 的文件。
+touchpoints:
+  - file: ops/station-bin/agent-cli.ps1
+    why: "XDG 隔离分支里那**一条** symlink —— 全仓**唯一**改记忆面的代码"
+    egress: false
+  - file: ops/cluster_secrets.py
+    why: "`providers` 探针**只读元数据**（db 大小 / MEMORY.md 行数），不读内容、不落盘"
+    egress: false
+  - file: ops/station-bin/backup-memories.sh
+    why: "站内备份（sqlite 在线快照 + tar 到 `~/backups`）—— 目标是**站内** `$HOME`"
+    egress: false
+  - file: ops/station-bin/a5-nextday-verify.sh
+    why: "站上验收（存在性 / 非空）"
+    egress: false
+
+# ── 记忆面**不得出网**：跨机搬运的识别口径（写死在此，不许再含糊）────────────
+# 口径 = **同一行**同时出现【记忆路径】与【跨机搬运令牌】⇒ 命中即红。
+# ⚠ 局限（如实）：跨行构造可逃（如变量拼接）—— 见 `unverified`。
+egress:
+  # ★ 记忆路径的**唯一字面定义点**（角色名就是用途，**不靠顺序**）——
+  #   判据代码**不硬编码**这些路径（从本表取），所以 `ops/rpc_check.py` **不算**记忆面接触点。
+  path_tokens:
+    db: "memory.db"       # SQLite 库文件
+    dir: "memories/"      # 目录（MEMORY.md · memory_summary.md · extensions/ad_hoc/notes/…）
+  carrier_tokens: ["scp", "rsync"]
+  backup_script: ops/station-bin/backup-memories.sh
+  backup_dir_var: "DIR="
+  backup_dir_prefixes: ["~", "$HOME"]
+
+# ── 项目隔离：**不得**把文本前缀当判据 ──────────────────────────────────────
+text_prefix:
+  marker: "[proj:"
+  # 本仓**实现**（判据 + 测试）里不得出现该标记；只有 agent-cli.ps1 注入 prompt 时允许用。
+  forbidden_in: ["ops/rpc_check.py", "tests"]
+  allowed_in: ["ops/station-bin/agent-cli.ps1"]
+
+# ── 如实登记：本项未实测 / 未定的部分 ──────────────────────────────────────
+unverified:
+  - item: "记忆面的三条通道状态**本轮未重新实测**"
+    why: >-
+      `scope` 与三条 bridge 的证据都引自**已有文档**（2026-09-02 站上直查），
+      本批**未 ssh 上站复核** ⇒ 若引擎升级改了 notes 布局，本表会**过期**（同 `linked_state` 的处置：
+      过期但看起来像真值，是本仓最防的形态）⇒ **不得当已定案**。
+  - item: "跨**站**复用是否真的不发生"
+    why: "三站各自一套 `$HOME` 记忆 ⇒ 结构上不跨站；但**未逐一实测**（且 `backup-memories.sh` 可人工搬）。"
+  - item: "「同一行同现」的口径**跨行可逃**"
+    why: >-
+      变量拼接 / 换行构造能绕过本判据（如 `$MEM=memory` + `scp ... $MEM.db`）。
+      之所以不写成 AST/数据流分析：那会把本判据的**误报**抬到不可用（同 `spec-untested` 的取舍）。
+  - item: "`sc-isolation-not-by-text-prefix` 是**缺席判据**（弱形式）"
+    why: >-
+      它判的是"本仓判据实现里**没有**这个标记"，属"证明没有"而非"证明有" ⇒
+      只能防**已知**的退化方式（把命名当边界），不构成"隔离已达标"的结论。
+  - item: "四道门的**效果**未验证（ASR 下降幅度不可测）"
+    why: >-
+      MAPLE-Guard 报的 ASR 38.2%→0.9% / 34.7%→0.2% 是**它自己的实验**；
+      本仓**没有**记忆投毒的实验台 ⇒ 只能验"门在不在"，**验不了"门有没有用"**。
