@@ -1469,6 +1469,10 @@ def decide_invalidation(changed_ids=None, affected=None, affected_is_closure=Fal
     参数（= 判据的**输入契约**；将来的实现只需提供这五个）：
       · `changed_ids`            上游变更集（**派生产物**；受理目录按 D-51 不在其内）
       · `affected`               影响面判定的**结果集**；`None` 表示**无法安全判定**（H-3 的触发条件）
+        ⚠⚠ **`[]` 与 `None` 语义不同，别写成 `[...] or None`**（O-88，2026-09-26）：
+        `[]` = "**已判定为空**"（下游确实为空 ⇒ 无动作，**不是**"判不了"）；
+        `None` = "**判不了**"（⇒ H-3 强制全量）。
+        写成 `affected or None` 会把"已知为空"错误升格成"判不了" ⇒ **白白付一次全量**。
       · `affected_is_closure`    该结果集是否**已传递闭包化**（H-2：必须保守 = 只许扩大）
       · `incremental_equivalent` 增量结果是否**已证**与全量等价；`None` = **未证**（H-1）
       · `build_failed`           本次重算是否失败（H-4）
@@ -1484,6 +1488,16 @@ def decide_invalidation(changed_ids=None, affected=None, affected_is_closure=Fal
     if affected is None:
         # H-3：无法安全判定 ⇒ 强制全量；**可见但不阻断**（WARN），绝不静默 skip
         return "full_rebuild", "WARN", "H-3 影响面无法安全判定 ⇒ 强制全量降级（可见，禁止静默 skip）"
+    if not affected and affected_is_closure:
+        # ★ O-88（2026-09-26）：**有变更、但影响面为空且已闭包化** = 已判定「**确实没有下游**」。
+        #   ⇒ 既不需要增量、也不需要全量 —— **没有任何东西要重算**（DEV-LOG-014 §54）。
+        #   为什么这是"已判定"而不是"判不了"：`affected` 是**列表**（`None` 才是判不了，见上一条），
+        #     且调用方**显式声明**它已闭包化 ⇒ 与 `incremental_equivalent=True` 同族的**调用方断言**。
+        #   ⚠ H-1 在此分支**不适用**：它的语义是"**增量**结果必须与全量等价"，而下游为空 ⇒ **没有增量**
+        #     ⇒ 该维度**不存在**（旧实现把它算作"未证" ⇒ 白白付一次全量；改动前实测见 §54.1）。
+        #   ⚠ 顺序：必须在 H-3（`None`）**之后**（`[]` ≠ `None`）、H-1 **之前**。
+        return "none", "MODE_SKIP", ("有变更但影响面为空且已闭包化（= 已判定：确实无下游）⇒ 无动作"
+                                     "（既不增量也不全量：没有下游要重算）")
     if incremental_equivalent is not True:
         # H-1：增量必须与全量等价；**未证**不等于"等价"（fail-closed）
         return "full_rebuild", "WARN", "H-1 增量等价性未证 ⇒ 不得用增量（付全量代价）"

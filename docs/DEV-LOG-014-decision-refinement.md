@@ -3715,3 +3715,68 @@ O-87 的两次实例（`Macro_Data` "目录未定位" · Open_Data/Auto_Prover �
 ③ 因此 O-87 的闭环依据是「**纪律入册 + 事实可见化 + 证伪留档**」三件套（与 **O-30** / **O-58** 的"纪律已入册"同一形式）。
 
 **验收**：`ops\rpc.ps1 check -Only id-census` ⇒ note 含 10 条 `id@root`；★ **先验红**：从 yaml 摘掉一个 `root` ⇒ note 报"无 root 1 个"且 **FAIL**，恢复 ⇒ PASS。
+
+## 54. O-88（§3.2 序 1）：`affected=[] ∧ 已闭包` **单列一个归宿**（2026-09-26）
+
+### 54.1 取证：**同一个空集，动作取决于一个不相关的入参**
+
+原登记说的是"`changed_ids` 非空 + `affected` 为空且已闭包 ⇒ 四条规则无一认领（落到 H-1 付全量）"。
+逐条对测试时发现**比登记更糟**：
+
+| 输入 | 现动作（改前） | 语义 |
+|---|---|---|
+| `changed=[…] ∧ affected=[] ∧ closure=T ∧ eq=**True**` | **`incremental`** | "对**空集**做一次增量"（无害但**语义含糊**） |
+| `changed=[…] ∧ affected=[] ∧ closure=T ∧ eq=**False/None**` | **`full_rebuild`** | **白白付一次全量**（= O-88 实测的那条路径，`ops/id_storage_census.py:317` 如实传 `eq=False`） |
+
+⇒ ★ **同一个空集，动作取决于 `incremental_equivalent`** —— 而该入参的语义是"**增量**结果是否已证与全量等价"。
+**下游为空 ⇒ 根本没有增量** ⇒ 这个维度**不存在**，它**不该**影响结论（H-1 在此是**空转**）。
+
+### 54.2 改法：给"已判定为空"第三个归宿（**不是**给"判不了"开口子）
+
+`decide_invalidation()` 新增一条，位置**在 H-3（`affected is None`）之后、H-1 之前**：
+
+```
+changed 非空 ∧ affected == [] ∧ affected_is_closure == True
+  ⇒ action="none" · class="MODE_SKIP" · reason="有变更但影响面为空且已闭包化（= 已判定：确实无下游）"
+```
+
+★ **为什么这不算"削弱保守默认"（台账要求先确认的那一点）**：
+- 落 `MODE_SKIP` 的两个前提都是**显式断言**：`affected` 是**列表**（不是 `None` = 判不了）**且**调用方声明它**已闭包化**
+  ⇒ 与 `incremental_equivalent=True` 同族的"调用方断言"，**而 `None`／未闭包化仍一律全量**（下面 54.3 有反例钉住）；
+- H-1/H-2/H-3 三条**一个都没改**（只在其**之前**插入一条更具体的情形）；
+- ★ 与"未证 ⇒ 全量"不冲突：那句管的是"**有下游要重算、但等价性未证**"；这里是"**没有下游**"。
+
+### 54.3 验收（含"不削弱"的**反例**）
+
+| 用例 | 期望 |
+|---|---|
+| `affected=[] ∧ closure=T ∧ eq=False`（O-88 实测形态） | **`none` / `MODE_SKIP`**，理由含"确实无下游" |
+| `affected=[] ∧ closure=T ∧ eq=True`（**既有**用例，原期望 `incremental`） | **改为** `none` / `MODE_SKIP`（★ 见 54.4） |
+| ★ `affected=[] ∧ closure=**F**` | **仍 `full_rebuild`/WARN**（未闭包化 ⇒ 保守） |
+| ★ `affected=**None**` | **仍 `full_rebuild`/WARN**（判不了 ⇒ H-3） |
+| ★ `affected=["a"] ∧ eq=**False**` | **仍 `full_rebuild`/WARN**（有下游而等价性未证 ⇒ 不许 skip） |
+| 穷举 72 组合的**硬不变量** | `MODE_SKIP` **只能**出现在"已判定"两类：`changed 为空` ∨ `affected 空且已闭包`；**判不了/失败一律不许** |
+
+★ **硬不变量的定义随之精确化**（旧式把它写宽了）：
+`undecided = (affected is None) ∨ (closure is False) ∨ failed ∨ (eq is not True ∧ **affected 非空**)`
+—— ⚠ 这个"∧ 非空"**不是**为了让断言变绿，而是因为它就是 H-1 的**射程**；并且**必须**配上第 5 条反例
+（`affected=["a"] ∧ eq=False` 仍不许 skip）来证明它**没有变成恒真**（本仓教训：放宽判据必须自带反例）。
+
+### 54.4 ⚠ 一处**期望值变更**（不是回归，如实标注）
+
+既有用例「H-3 边界：`affected=[]` ⇒ **不触发 H-3**」原期望 `incremental`（理由写"四条规则全过"）。
+本批**改为** `none`/`MODE_SKIP`。**理由 = 54.1 的实测**：对空集做增量，与"付全量"一样都是**把 empty set 当成有活干**；
+而"已判定无下游"的正确归宿是**明确的无动作**（可见、带理由），而不是"跑一个什么都不做的增量"（不可见）。
+⇒ 判据是"**先判是回归还是期望陈旧**"：此处是**期望陈旧**（旧期望建立在一个未被追问的语义上）。
+
+★ **同一批一共触发了 2 个测试文件的 3 处期望变更**（门禁 `py-tests` **当场拦住**了其中一处，见下）：
+
+| 文件 | 处 | 原期望 | 改后 | 判定 |
+|---|---|---|---|---|
+| `tests/test_rpc_check_u4.py` | 1 | `affected=[] ∧ closure=T ∧ eq=T` ⇒ `incremental` | `none`/`MODE_SKIP` | **期望陈旧** |
+| `tests/test_id_storage_census.py` | 2 | `affected=[] ∧ closure=T ∧ eq=F` ⇒ 理由含 `H-1` | 理由含"**确实无下游**" + class=`MODE_SKIP` | **期望陈旧**（该断言**描述的正是 O-88 缺口本身**） |
+| 同上 | 3 | 测试名 `test_empty_changed_is_the_only_mode_skip`（"**唯一**"） | 改名 `..._exactly_two_decided_classes` + **补 2 条反例** | **期望陈旧**（"唯一"随 O-88 作废） |
+
+★★ **过程记一笔（这是"判据在干活"的正面例子）**：我先改代码、再跑门禁 ⇒ `py-tests` **报 29/30 失败并点名 `test_id_storage_census.py`**
+—— 若没有这道门禁，那 3 处**编码了旧语义的断言**会继续存在，而"改断言"这个动作就**不会被逼着做**（也就不会被迫写下"这是期望陈旧还是回归"的判断）。
+⇒ 与本会话 O-64 的结论互为印证：**把测试接进 CHECKS 的价值不在"跑起来"，而在"它逼你对每一次红给出归因"**。
