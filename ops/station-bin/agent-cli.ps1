@@ -2989,7 +2989,8 @@ function Invoke-SplitTask {
         #   互不挤占；而"多片共用同一出网账户 / 挤在同一站"才会排队。
         #   ⚠ 别退回旧措辞: 它会让读者以为"出网档拆片无效"从而**放弃一条实测可用的能力**（本仓头号形态的镜像：
         #     "把两件事说成一件" 的反面 —— 把"有条件的并行"说成"不并行"）。
-        Write-Host "SPLIT_WARN: model=$id is egress - 并行性取决于**账户/站粒度**: 跨站（各站独立 key）= 可并行【实测 2 片/2 站成立】; 多片共用同一出网账户或同一站 = 可能排队"
+        # ⚠ 括号里的"实测"数字**随取证更新**（2026-09-26 扩到 3 片/3 站 = 站池的物理上界，结论一致）。
+        Write-Host "SPLIT_WARN: model=$id is egress - 并行性取决于**账户/站粒度**: 跨站（各站独立 key）= 可并行【实测 2 片/2 站、3 片/3 站均成立】; 多片共用同一出网账户或同一站 = 可能排队"
     }
 
     # round-robin target stations A/B/C (cross-station each 1, O-18 physical upper bound 3)
