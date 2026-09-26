@@ -99,6 +99,7 @@ import datetime
 import subprocess
 import threading
 from pathlib import Path
+from contextlib import contextmanager          # O-95/O-96（2026-09-26）：跨进程互斥用
 
 import paramiko
 
@@ -2906,16 +2907,15 @@ def agent_chain_append(reanchor: bool = False) -> dict:
     roots, note = _agent_proj_roots()
     if not roots:
         return {"added": [], "total": 0, "error": note or "PROJECTS 解析为空"}
-    chain = _chain_load(AGENT_CHAIN)
-    seen = {(e.get("proj"), e.get("run_id")) for e in chain["entries"]}
-    prev = chain["entries"][-1]["digest"] if chain["entries"] else "-"
-    added = []
+    # ★ O-96（2026-09-26）：**写后校验 + 重试** —— 治"两个 `cluster.py agent chain` 并发 ⇒
+    #   整文件「读 → 追加 → 写」的后写覆盖先写（**链丢 run**）"。
+    #   · 为什么在这里重试是安全的：追加**幂等**（按 `(proj, run_id)` 去重）且 prev 串的是
+    #     **入链次序** ⇒ 被覆盖后**带着刚读到的新链重来**，只会得到"两边都在"的链。
+    #   · digest 与并发无关（只读 run 目录）⇒ **先算一次**，循环里只做「读链 → 追加 → 写 → 校验」。
+    #   · 不收敛 ⇒ 如实报 `race: True`（不假装成功）；⚠ 残余窗口（校验通过后、进程退出前又被覆盖）
+    #     **不会静默** —— 锚与链不一致会被 `evidence` 判据抓出来（本条的既有缓解手段）。
+    prepared = {}
     for ts, proj, run_dir in _chain_runs(roots):
-        if (proj, ts) in seen:
-            continue
-        # recipe **自动选择**(ADR-0007 阶段 1): 卡声明了 evidence_manifest.subjects ⇒ v2, 否则 v1。
-        #   自动而非全局默认 ⇒ 未声明 manifest 的卡**链形完全不变**(向后兼容), 且新增证据类型
-        #   不必动全局 recipe ⇒ **无需重建链**。
         _rec = AGENT_DIGEST_RECIPE
         try:
             _j = json.loads((run_dir / ".agent-run.json").read_text(encoding="utf-8-sig", errors="replace"))
@@ -2924,36 +2924,66 @@ def agent_chain_append(reanchor: bool = False) -> dict:
         except Exception:
             pass
         rd = _run_digest(run_dir, _rec)
-        chain["entries"].append({
-            "proj": proj, "run_id": ts, "digest": rd["digest"], "prev": prev,
-            "files": rd["files"], "recipe": _rec,
-            "chained_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        })
-        prev = rd["digest"]
-        added.append({"proj": proj, "run_id": ts, "digest": rd["digest"][:16]})
-    if added:
-        chain["head"] = {"proj": chain["entries"][-1]["proj"],
-                         "run_id": chain["entries"][-1]["run_id"],
-                         "digest": chain["entries"][-1]["digest"]}
-        blob = json.dumps(chain, ensure_ascii=False, indent=1)
-        AGENT_CHAIN.write_text(blob, encoding="utf-8")
+        prepared[(proj, ts)] = {"proj": proj, "run_id": ts, "digest": rd["digest"],
+                                "files": rd["files"], "recipe": _rec,
+                                "chained_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    want = set(prepared)
+
+    def _chain_merge_once():
+        """**一次**"读链 → 追加 → 写(冷热) → 写锚 → 校验"。必须在 `_excl_lock` 内调用。"""
+        chain = _chain_load(AGENT_CHAIN)
+        seen = {(e.get("proj"), e.get("run_id")) for e in chain["entries"]}
+        prev = chain["entries"][-1]["digest"] if chain["entries"] else "-"
+        added = []
+        for key, ent in prepared.items():
+            if key in seen:
+                continue
+            ent = dict(ent)
+            ent["prev"] = prev
+            chain["entries"].append(ent)
+            prev = ent["digest"]
+            added.append({"proj": ent["proj"], "run_id": ent["run_id"], "digest": ent["digest"][:16]})
+        if added:
+            chain["head"] = {"proj": chain["entries"][-1]["proj"],
+                             "run_id": chain["entries"][-1]["run_id"],
+                             "digest": chain["entries"][-1]["digest"]}
+            blob = json.dumps(chain, ensure_ascii=False, indent=1)
+            AGENT_CHAIN.write_text(blob, encoding="utf-8")
+            try:
+                AGENT_CHAIN_COLD.parent.mkdir(parents=True, exist_ok=True)
+                AGENT_CHAIN_COLD.write_text(blob, encoding="utf-8")
+            except OSError as e:
+                added.append({"error": f"冷路径镜像失败: {e.__class__.__name__}"})
+        # 锚写不写 —— 语义要紧: 新增条目必然重写; 锚**缺失**时补建(首次); 其余一律不动。
+        #   锚与链不符 = 篡改信号, 绝不在 `chain` 里静默"修复"它 (要重锚须显式 --reanchor), 否则
+        #   攻击者重写链后跑一次 chain 就把痕迹抹平了。
+        anchor_stale = bool(added) or reanchor or not AGENT_CHAIN_ANCHOR.is_file()
+        if anchor_stale:
+            try:
+                AGENT_CHAIN_ANCHOR.parent.mkdir(parents=True, exist_ok=True)
+                _anchor_write(chain)
+            except OSError as e:
+                added.append({"error": f"锚写入失败: {e.__class__.__name__}"})
+        on_disk = {(e.get("proj"), e.get("run_id")) for e in _chain_load(AGENT_CHAIN)["entries"]}
+        if want <= on_disk:
+            return {"added": added, "total": len(chain["entries"]), "chain": str(AGENT_CHAIN),
+                    "anchor": str(AGENT_CHAIN_ANCHOR), "anchor_written": anchor_stale}
+        return None                      # 校验没通过 ⇒ 交给外层带新链重来
+
+    last = {"added": [], "total": 0, "anchor_written": False}
+    for attempt in range(1, 6):
         try:
-            AGENT_CHAIN_COLD.parent.mkdir(parents=True, exist_ok=True)
-            AGENT_CHAIN_COLD.write_text(blob, encoding="utf-8")
-        except OSError as e:
-            added.append({"error": f"冷路径镜像失败: {e.__class__.__name__}"})
-    # 锚写不写 —— 语义要紧: 新增条目必然重写; 锚**缺失**时补建(首次); 其余一律不动。
-    #   锚与链不符 = 篡改信号, 绝不在 `chain` 里静默"修复"它 (要重锚须显式 --reanchor), 否则
-    #   攻击者重写链后跑一次 chain 就把痕迹抹平了。
-    anchor_stale = bool(added) or reanchor or not AGENT_CHAIN_ANCHOR.is_file()
-    if anchor_stale:
-        try:
-            AGENT_CHAIN_ANCHOR.parent.mkdir(parents=True, exist_ok=True)
-            _anchor_write(chain)
-        except OSError as e:
-            added.append({"error": f"锚写入失败: {e.__class__.__name__}"})
-    return {"added": added, "total": len(chain["entries"]), "chain": str(AGENT_CHAIN),
-            "anchor": str(AGENT_CHAIN_ANCHOR), "anchor_written": anchor_stale}
+            with _excl_lock(AGENT_CHAIN):
+                got = _chain_merge_once()
+        except TimeoutError as e:
+            return {"added": [], "total": 0, "chain": str(AGENT_CHAIN),
+                    "anchor": str(AGENT_CHAIN_ANCHOR), "anchor_written": False,
+                    "attempts": attempt - 1, "race": True, "error": f"{e.__class__.__name__}: {e}"}
+        if got:
+            got["attempts"] = attempt
+            return got
+    last.update({"race": True, "attempts": 5})
+    return {"chain": str(AGENT_CHAIN), "anchor": str(AGENT_CHAIN_ANCHOR), **last}
 
 
 def _p2_committed_chain_assert() -> list:
@@ -3276,6 +3306,54 @@ def _audit_host() -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "_", h).lower()
 
 
+@contextmanager
+def _excl_lock(target: Path, timeout: float = 30.0):
+    """跨进程**互斥**（**只**给"读 → 改 → 写**整文件**"的生产者用）。
+
+    ★ O-95/O-96（2026-09-26）：为什么必须是**锁**而不是"写后校验 + 重试" ——
+      重试的收敛性只在"两方竞争"下成立；**真并发 8 方**时重试会**耗尽**（实测：8 线程 × 20 key
+      ⇒ 160 个 key **丢了 80 个**）⇒ 它是**概率性**修法，而丢更新是**确定性**要治的病。
+    · 锁的**释放**交给内核（POSIX `flock` / Windows `msvcrt`）⇒ **进程崩溃也会释放** ⇒
+      没有"陈旧锁文件"这一类新故障（这正是不用"独占创建锁文件"做法的理由）。
+    · 锁文件放**系统临时目录**（按目标路径哈希命名）⇒ **不污染仓库**（否则会被生成物/扫描类判据看到）。
+    · 拿不到锁 ⇒ 抛 `TimeoutError`（调用方**如实报**，绝不"等不到就直接写"——那正是丢更新的来源）。
+    """
+    import hashlib, tempfile
+    d = Path(tempfile.gettempdir()) / "rpc-locks"
+    d.mkdir(parents=True, exist_ok=True)
+    lk = d / (hashlib.sha256(str(Path(target).resolve()).encode("utf-8")).hexdigest()[:16] + ".lock")
+    f = open(lk, "a+b")
+    deadline = time.time() + timeout
+    try:
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.time() > deadline:
+                    raise TimeoutError(f"取锁超时({timeout}s): {lk.name}")
+                time.sleep(0.05)
+        yield
+    finally:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        f.close()
+
+
 def agent_audit_baseline_load() -> dict:
     """读水印 —— **并集所有机的分片**；缺失/损坏 ⇒ 空基线（**不抛**：缺基线=首跑把存量当新增报一次，自愈）。
 
@@ -3311,19 +3389,37 @@ def agent_audit_baseline_accept(keys) -> dict:
 
     2026-09-23: 写目标由"单一共享文件"改为 **本机分片** `audit-baseline/<host>.json`
       ⇒ 多机并发 `--accept` **不再产生 git 合并冲突**（各写各的文件；读时并集）。
+
+    ★ O-95（2026-09-26）：**写后校验 + 重试** —— 治"**同机**两个 `--accept` 并发 ⇒ 后写覆盖先写"。
+      · 为什么用重试**而不是锁**：水印语义本就是**单调并集**（见上方 2026-09-23 注："并集天然可合并
+        ⇒ 零冲突、零锁"）—— 用**同一语义**收口即可，不必为此引入 flock（少一个可失败的原语）。
+      · 收敛性：写后**重读全部分片的并集**，若本次要写的 key 不在其中 ⇒ 说明被并发覆盖 ⇒
+        带着"刚看到的新并集"重写一次；每次写的内容都是"**并集 ⊇ 自己那部分**" ⇒ **≤2 轮收敛**。
+      · 不收敛时**如实报 `race: True`**（不假装成功）—— 与"宁可显式失败也不静默丢"同纪律。
     """
-    cur = agent_audit_baseline_load()
-    old = set(cur.get("keys") or [])
-    new = sorted(set(str(k) for k in keys) - old)
-    merged = sorted(old | set(str(k) for k in keys))
-    ts = time.strftime("%Y-%m-%d %H:%M:%S")
-    host = _audit_host()
-    AGENT_AUDIT_BASELINE_DIR.mkdir(parents=True, exist_ok=True)
-    out = {"version": 1, "host": host, "keys": merged,
-           "created": (cur.get("created") or ts), "updated": ts}
-    tgt = AGENT_AUDIT_BASELINE_DIR / f"{host}.json"
-    tgt.write_text(json.dumps(out, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
-    return {"added": new, "total": len(merged), "path": str(tgt)}
+    wanted = {str(k) for k in keys}
+    new, merged, tgt = [], [], AGENT_AUDIT_BASELINE_DIR / f"{_audit_host()}.json"
+    try:
+        with _excl_lock(tgt):
+            for attempt in range(1, 11):
+                cur = agent_audit_baseline_load()
+                old = set(cur.get("keys") or [])
+                new = sorted(wanted - old)
+                merged = sorted(old | wanted)
+                ts = time.strftime("%Y-%m-%d %H:%M:%S")
+                host = _audit_host()
+                AGENT_AUDIT_BASELINE_DIR.mkdir(parents=True, exist_ok=True)
+                out = {"version": 1, "host": host, "keys": merged,
+                       "created": (cur.get("created") or ts), "updated": ts}
+                tgt = AGENT_AUDIT_BASELINE_DIR / f"{host}.json"
+                tgt.write_text(json.dumps(out, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+                on_disk = set(agent_audit_baseline_load().get("keys") or [])
+                if wanted <= on_disk:
+                    return {"added": new, "total": len(on_disk), "path": str(tgt), "attempts": attempt}
+    except TimeoutError as e:
+        return {"added": [], "total": 0, "path": str(tgt), "attempts": 0, "race": True,
+                "error": f"{e.__class__.__name__}: {e}"}
+    return {"added": new, "total": len(merged), "path": str(tgt), "attempts": 10, "race": True}
 
 
 def _card_accept_list(card_text: str) -> list:
