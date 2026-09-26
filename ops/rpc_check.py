@@ -1045,17 +1045,22 @@ EDGE_REQUIRED = ("src", "dst", "kind", "provenance")
 #   是**四项取值** ⇒ 两处各写一份 ⇒ 必然漂移（本仓头号形态："同一事实两个定义点"）。
 #   ⇒ 实现与校验**同源**：`edges` 改调 `u1_parse`，`u1-identity` 用它**复算**。
 U1_ALGO = "sha256"
-U1_TRUNC = 16                 # 64 bit。⚠ 与蓝本 Open_Data 的 **32** 不同 —— 这是有意的（spec §2 已登记）。
-                              # ⚠⚠ **2026-09-26 实测更正（自查时发现的）**：这里原写"取 16 的理由：既有 7 处里
-                              #   `factor_pipeline` 同为 16 ⇒ 兼容面最大" —— **该理由被实测削弱**：
-                              #   `F:\Coding\factor_pipeline` 实测 **16 个代码命中站点**，截断**项目内并存 5 种**
-                              #   （`[:8]` / **`[:12]`** / `[:16]` / `[:32]` / md5 **全 64**）⇒ 它**并非"同为 16"**。
-                              #   ⇒ 取值 16 现在的依据只剩两条（都**仍成立**，但比原来弱）：
-                              #     ① 64 bit 在 10⁶–10⁷ 规模下碰撞可忽略（生日阈值 ≈ 2³²）；
-                              #     ② 与 factor_pipeline **部分**用法一致。
-                              #   ⚠⚠ **二次更正（2026-09-26）**：本注释的首稿写"18 个站点 / 4 种"⇒ 逐行复核为 **16 / 5 种**
-                              #     （首稿多算了 `cache.py:36`·`:145` 两处 docstring 字样，漏了 `cache.py:161` 的 `[:12]`）。
-                              #   ⚠ 是否改取 32（对齐蓝本）**属裁定级**，已登记 **O-84**（本条不改取值）。
+U1_TRUNC = 32                 # 128 bit。★ **2026-09-26 Scott 裁定：改 `32`（对齐蓝本）** —— 原为 16。
+                              #   `16` 的原理由（"既有 7 处里 `factor_pipeline` 同为 16 ⇒ 兼容面最大"）
+                              #   **已被两轮自查实测推翻**（见 O-84）：
+                              #     · `factor_pipeline` 实测（口径化后 = **21 行**，见 `ops/id_site_census.py`）
+                              #       截断**项目内并存 5 种**
+                              #       （`[:8]` / `[:12]` / `[:16]` / `[:32]` / md5 **全 64**）⇒ **并非"同为 16"**；
+                              #     · `Auto_Prover` 的 `verdict_id` 根本不是 16（= `v_` + md5 + **12**）
+                              #       ⇒ 原依据的另一半是**把 `case_id` 与 `verdict_id` 读成了一个字段**。
+                              #   ⇒ 剩下的唯一硬依据是**蓝本**：D-23 明裁"蓝本取 `Open_Data`"，而它是 **`[:32]`**
+                              #     （`collectors/{blackmarble,portwatch,eia}/collector.py` 的
+                              #      `sha256("ns|d1|d2")[:32]` —— 3 处逐行核过）
+                              #     ⇒ "与权威蓝本一致"优先于"与某个**待迁移**的下游项目部分一致"。
+                              #   ⚠ 代价（已履行）：本仓已落地的 2 个 `u1:` 声明**一并重算** ——
+                              #     D-23 的"不追溯重算"只针对**历史产物**；这 2 个是**规范自身的元数据**，
+                              #     且**从未被任何外部消费** ⇒ 重算无副作用（若已外发过，就必须另立兼容路径）。
+                              #   128 bit ⇒ 碰撞阈值 ≈ 2⁶⁴，比 16（≈ 2³²）**强**，代价只是 ID 长一倍。
 U1_PREFIX = f"u1:{U1_ALGO}:{U1_TRUNC}"
 U1_DEFAULT_VERSION = "0.0.0"  # 无版本者（spec §1.3）
 
@@ -1077,7 +1082,10 @@ def u1_canonical_bytes(namespace, identifier, version=U1_DEFAULT_VERSION) -> byt
 
 
 def u1_identity(namespace, identifier, version=U1_DEFAULT_VERSION) -> str:
-    """算出一个**合规的 U-1 产物身份**（`u1:sha256:16:<16 位小写 hex>`）。"""
+    """算出一个**合规的 U-1 产物身份**（形态 = `U1_PREFIX` + `:` + `U1_TRUNC` 位小写 hex）。
+
+    ⚠ 取值（算法 / 截断）**只在本文件定义一次** ⇒ 这里**不重抄数字**（抄了就是第二个定义点）。
+    """
     h = hashlib.sha256(u1_canonical_bytes(namespace, identifier, version)).hexdigest()[:U1_TRUNC]
     return f"{U1_PREFIX}:{h}"
 
@@ -1086,11 +1094,11 @@ def u1_parse(s):
     """校验一个 U-1 身份字符串 ⇒ 返回 `(algo, trunc)`；不合规返回 `None`。
 
     ★ 判据里**唯一有信息量**的那部分 = **前缀自描述必须与实现一致**：
-      写 `16` 就得真的是 16 位、写 `sha256` 就得是我们用的算法、hex 必须小写。
+      前缀写的长度就得真的等于 hex 位数、写的算法就得是我们用的那个、hex 必须小写。
       ⇒ 若只判"有个 `u1:` 前缀"，那 D-25 的"前缀必须自描述"就退化成**装饰**。
     ⚠ 哈希**不可逆** ⇒ 本函数**只能**判形态与自描述一致性，**不能**判"这个身份是不是某个
       `(ns,id,ver)` 算出来的" —— 后者**必须**靠"声明 + 复算"（`u1_verify_declaration`）。
-      （把这两件事混起来的后果是：任何人随手编一个 16 位 hex 都能过。）
+      （把这两件事混起来的后果是：任何人随手编一个**合规长度**的 hex 都能过。）
     """
     if not isinstance(s, str):
         return None
@@ -1238,6 +1246,65 @@ def check_edges(ctx):
         return "FAIL", f"inventory/edges.yaml 解析失败: {type(e).__name__}: {e}", []
     bad, notes = validate_edges(doc)
     return ("FAIL" if bad else "PASS"), " · ".join(notes), bad
+
+
+def check_id_census(ctx):
+    """O-85: 让"ID 站点计数"**可复算**（此前那一列没有口径 ⇒ 数字不可复现）。
+
+    ★ 这条判据的对象不是"数字对不对"，而是**数字有没有定义** —— 它比对
+      `inventory/id-site-census.yaml` 与 `ops/id_site_census.py` 的**当场复算**结果。
+    ⚠ **项目目录不可达 ⇒ WARN（不是 FAIL）**：那些项目在**别的盘**（`F:` / `E:`），
+      换一台机器就没有 ⇒ 硬红会把"我的环境"变成"仓库的规则"。
+      但**必须可见**（D-26：降级要有呈现位）—— 所以报 `可达 N/M` + 逐项目标 `--`，
+      **绝不静默通过**。
+    """
+    import importlib.util
+    try:
+        import yaml  # noqa: F401
+    except Exception:
+        return "WARN", "缺 pyyaml, 跳过 id-census 断言", []
+    script = ROOT / "ops" / "id_site_census.py"
+    if not script.is_file():
+        return "FAIL", "ops/id_site_census.py 缺失（本断言的登记依据）", []
+    spec = importlib.util.spec_from_file_location("_id_site_census", script)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    doc = yaml.safe_load(mod.CENSUS.read_text(encoding="utf-8")) or {}
+    m = doc.get("metric") or {}
+    drift = []
+    if m.get("name") != mod.METRIC_NAME:
+        drift.append("name")
+    if m.get("regex") != mod.METRIC_REGEX:
+        drift.append("regex")
+    for k, v in mod.scope().items():
+        if m.get(k) != v:
+            drift.append(k)
+
+    now = {p["id"]: p for p in mod.census()}
+    mism, unreach, ok = [], [], []
+    for p in doc.get("projects") or []:
+        cur = now.get(p["id"])
+        if cur is None:
+            continue
+        if not cur.get("reachable"):
+            unreach.append(p["id"])
+        elif not p.get("reachable") or (p.get("hits"), p.get("files")) != (cur["hits"], cur["files"]):
+            mism.append(f"{p['id']}: 真值 {p.get('hits')}行/{p.get('files')}文件 ≠ 实测 {cur['hits']}行/{cur['files']}文件")
+        else:
+            ok.append(p["id"])
+
+    total = len(doc.get("projects") or [])
+    note = (f"口径 {m.get('name')}（{m.get('unit')}）· 真值一致 {len(ok)} 个 · "
+            f"不符 {len(mism)} 个 · 不可达 {len(unreach)}/{total}")
+    if drift:
+        # 口径漂移比数值漂移严重：口径一变，真值里所有数字立刻失去意义
+        return "FAIL", note, [f"**口径已漂移**（真值是用旧口径生成的）: {drift} ⇒ 重跑 --emit 并复核下游结论"] + mism
+    if mism:
+        return "FAIL", note, mism
+    if unreach:
+        return "WARN", note, [f"不可达（本次无法复算，**不当作通过**）: {', '.join(unreach)}"]
+    return "PASS", note, []
 
 
 def check_u1_identity(ctx):
@@ -4526,16 +4593,27 @@ CHECKS = [
      "fix": "D7-P1 实现侧（U-1 落地）：`inventory/*.yaml` 里声明了 `u1:` 的，**身份必须可复算**。"
             "① 声明四项 `{namespace, identifier, version, identity}` 必须齐（只写 identity **无法复算**）；"
             "② `identity` 必须 **等于** 按 `(namespace, identifier, version)` 复算的结果 —— "
-            "★ 只判格式是**假绿**（随手编一个 16 位 hex 就能过）；'身份'可判的含义只有『能从 (ns,id,ver) 复算』；"
-            "③ 声明了身份 ⇒ 文件**前 5 行内必须有** `# u1:sha256:16` 头部注释行（D-25：前缀进头部注释、"
+            f"★ 只判格式是**假绿**（随手编一个合规长度的 hex 就能过）；'身份'可判的含义只有『能从 (ns,id,ver) 复算』；"
+            f"③ 声明了身份 ⇒ 文件**前 5 行内必须有** `# {U1_PREFIX}` 头部注释行（D-25：前缀进头部注释、"
             "不进哈希行 —— 进了哈希行整份 `sha256sum -c` 会一行都不被验，一手实测见 U1 spec §1.4）；"
             "④ **一个声明都没有 ⇒ FAIL**（本条会静默退化成空判 = 本仓头号失败形态）。"
             "\n\n算法/截断的**唯一真值**在 `ops/rpc_check.py` 的 `u1_identity()`（门禁与产出方同源）；"
             "取值与理由见 `spec/d6-agent-standard/U1-ARTIFACT-IDENTITY.md`。"
             "⚠ 哈希不可逆 ⇒ 本条只能判『声明可复算』，**不能**判『某个文件内容变了 ⇒ 身份该不该变』（那是 U-4 的事）"},
+    {"id": "id-census", "title": "ID 站点计数（口径可复算）", "fn": check_id_census, "quick": True,
+     "fix": "O-85: `inventory/id-site-census.yaml` 是**唯一真值**，口径的**唯一实现**在 `ops/id_site_census.py`。"
+            "① 数值不符 ⇒ 项目变了（正常）⇒ 跑 `py ops/id_site_census.py --emit` 重出真值，"
+            "**并回头复核下游结论**（U4 spec §1 表引用了这些数）；"
+            "② **口径漂移（正则 / glob / 排除目录 / 是否含测试）⇒ 比数值漂移严重** —— "
+            "口径一变，真值里**所有**数字立刻失去意义 ⇒ 必须重出 + 复核；"
+            "③ 项目目录不可达 ⇒ **WARN**（它们在 `F:` / `E:` 等**本机才有**的盘上，换机器就没有）"
+            "—— ⚠ 但**绝不静默通过**：报告里显式写 `可达 N/M` 与逐项目 `--`（D-26）。"
+            "\n\n★ 这条断言的**存在理由**：U4 §1 表原来那一列「计数」**没有口径** —— "
+            "Open_Data 换四种口径实测得 12 / 14 / 117 / 139，而表里写的是 34 ⇒ **数字没有定义**。"
+            "⚠ 它只回答『有多少处哈希用法』，**不回答**『哪些是产物 ID』（那是 U-4 的 `affected`，仍未解）。"},
     {"id": "edges", "title": "U-3 依赖边格式", "fn": check_edges, "quick": True,
      "fix": "D7-P1-3: `inventory/edges.yaml` 的**实例**要满足 `U3-EDGE-FORMAT.md`（形状的单一真值）："
-            "① `src`/`dst` 必须是 **U-1 产物身份**形态 `u1:sha256:16:<16 位小写 hex>`"
+            f"① `src`/`dst` 必须是 **U-1 产物身份**形态 `{U1_PREFIX}:<{U1_TRUNC} 位小写 hex>`"
             "（U-1 与 U-3 咬合：写一条边就得先有一个合规身份）——"
             "★ 判据由 `u1_parse()` 给出，与 U-1 实现**同源**（此前这里另写了一份正则 = 同一事实两个定义点）；"
             "③ `provenance` 必填，形式 `<前缀>:<载荷>`，前缀 ∈ `provenance_prefixes`，"

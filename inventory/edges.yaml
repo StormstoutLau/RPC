@@ -1,4 +1,4 @@
-# u1:sha256:16
+# u1:sha256:32
 # U-3 依赖边清单（D7-P1-3）
 #
 # 形状（字段 / 枚举 / 无效判定）= `spec/d6-agent-standard/U3-EDGE-FORMAT.md`（单一真值，此处不复制规则）。
@@ -24,7 +24,7 @@ u1:
   namespace: rpc
   identifier: inventory/edges.yaml
   version: 0.0.0
-  identity: u1:sha256:16:ec1a214d7de90e1f
+  identity: u1:sha256:32:ec1a214d7de90e1f99387187a349318d   # ⚠ 2026-09-26 重算过（O-84：16→32）
 
 # ── `kind` 封闭枚举（与 schema §2 逐条对应）──────────────────────────────
 # 新增一个 kind ⇒ 必须先在 schema §2 里给出**摘要依据**，否则门禁 `edges` 会判红。
@@ -51,7 +51,7 @@ provenance_prefixes:
   - tool
 
 # ── 边实例 ───────────────────────────────────────────────────────────────
-# 每条：src / dst（U-1 产物身份 `u1:sha256:16:<16hex>`）· kind ∈ kinds · provenance `<前缀>:<载荷>`
+# 每条：src / dst（U-1 产物身份 `u1:sha256:32:<32hex>`）· kind ∈ kinds · provenance `<前缀>:<载荷>`
 #
 # ★ 第一条**真实**实例（2026-09-26）—— 它为什么是**真的**、而不是为填格式编的：
 #   本文件里每条边的 `src`/`dst` 都要求 U-1 身份，而身份的 `namespace` 取值域 = `dialect.yaml`
@@ -59,7 +59,7 @@ provenance_prefixes:
 #   ⇒ **本文件在语义上依赖 `dialect.yaml`**（删掉那个命名空间，本文件的边就全部失去合法取值域）。
 #   `provenance` 记的是这条依赖的**可核来源**（本文件读写了什么），不是"我觉得有关系"。
 edges:
-  - src: u1:sha256:16:ec1a214d7de90e1f          # = 本文件（identifier: inventory/edges.yaml）
-    dst: u1:sha256:16:550da5b166cb60c8          # = inventory/dialect.yaml（namespace 取值域的真值源）
+  - src: u1:sha256:32:ec1a214d7de90e1f99387187a349318d   # = 本文件（identifier: inventory/edges.yaml）
+    dst: u1:sha256:32:550da5b166cb60c817d68a6948a7fe37   # = inventory/dialect.yaml（namespace 取值域的真值源）
     kind: document_level
     provenance: "filetrack:v0.0.0:in=inventory/dialect.yaml,out=inventory/edges.yaml"

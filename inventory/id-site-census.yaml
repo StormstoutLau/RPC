@@ -1,0 +1,72 @@
+# ID 站点普查真值（**可复算**）—— 口径 / 范围 / 数值三件套
+#
+# 生成：`py ops/id_site_census.py --emit`   ·   复算比对（门禁）：`id-census`
+# 口径的**唯一实现**在 `ops/id_site_census.py`；本文件只是它的一次输出快照。
+# ⚠ 读法：`hits` = 命中**行数**，**不等于**「产物 ID 的处数」——
+#   它只回答「有多少处哈希用法」；「哪些是产物 ID」是 U-4 的 `affected`，仍未解。
+metric:
+  name: id_site_hit_lines
+  unit: 命中行数（一行内多个匹配只计 1）
+  regex: hexdigest\(\)|md5\(|sha256\(|sha1\(
+  glob: '*.py'
+  exclude_dirs:
+  - .git
+  - .venv
+  - __pycache__
+  - archive
+  - node_modules
+  - site-packages
+  - tests
+  - venv
+  exclude_tests: true
+projects:
+- id: Open_Data
+  root: F:\Open_Data
+  reachable: true
+  files: 10
+  hits: 22
+- id: factor_pipeline
+  root: F:\Coding\factor_pipeline
+  reachable: true
+  files: 9
+  hits: 21
+- id: Auto_Prover
+  root: F:\Auto_Prover
+  reachable: true
+  files: 7
+  hits: 8
+- id: Textbook
+  root: D:\Textbook
+  reachable: true
+  files: 15
+  hits: 67
+- id: Fin_Agent
+  root: F:\Fin_Agent
+  reachable: true
+  files: 2
+  hits: 2
+- id: Cpp_Hub
+  root: F:\Cpp_Hub
+  reachable: true
+  files: 0
+  hits: 0
+- id: Spec_Workflow
+  root: F:\Spec_Workflow
+  reachable: true
+  files: 0
+  hits: 0
+- id: Full_Weather
+  root: F:\Full_Weather
+  reachable: true
+  files: 0
+  hits: 0
+- id: Macro_Data
+  root: E:\Macro_Data
+  reachable: true
+  files: 14
+  hits: 47
+- id: RPC
+  root: D:\RPC
+  reachable: true
+  files: 20
+  hits: 40
