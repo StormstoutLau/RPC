@@ -5364,6 +5364,422 @@ def check_review_catalog(ctx):
     return ("FAIL" if bad else "PASS"), " · ".join(notes), bad
 
 
+# ── D7-P3-3 (2026-09-26)「记忆四道门」+ 授权边界写成**结构性约束** ────────────────
+#   D-47：共享记忆做，但必须带四道门（write/retrieval/promotion/reuse）；
+#         MAPLE-Guard（arXiv 2608.00426）：**私有→共享的"晋升"是攻击面的关键一跳**。
+#   D-48：**不要指望"审得更准"，要靠"结构 contain"**（arXiv 2609.17648：JBR 100% 但 Unsafe 0%）。
+#   D-40：**单人开发者是常态假设** ⇒ 授权边界只能写成结构性约束。
+#   ⇒ 本判据判四件事：① 四门各有一条**真实存在**的判据（防"挂名假判"）；
+#     ② 私有→共享的**每条通道**都要写明 `gate`（"无门"必须可区分于"刻意共享"）；
+#     ③ 结构性约束**必须有判据**（没判据的仍只是纪律）；
+#     ④ 记忆面的**接触点**是封闭集 + 记忆**不得出网**。
+MEMORY_GATES_INV = ROOT / "inventory" / "memory-gates.yaml"
+MEMORY_GATE_IDS = ("write", "retrieval", "promotion", "reuse")
+MEMORY_CODE_EXTS = (".py", ".ps1", ".psm1", ".sh")
+
+
+def extract_memory_symlinks(text, token):
+    """从 `agent-cli.ps1` 提取**把记忆库文件做 symlink** 的行 → `[(行号, 行文本)]`。
+
+    ★ 口径（写死，不许再含糊）：**该行同时含「记忆库文件名」与 `ln -`，且不是注释** ⇒ 算一条通道。
+      为什么不是"含该文件名的每一行"：那会把**注释**与**只读探测**一起算进来，
+      于是"通道数"这个数就不稳（本仓已因口径含糊连踩三次）。
+    ⚠ `token` **由调用方从真值表传入**（不在本文件里硬编码路径）—— 这既是"单一真值"，
+      也让本判据自己**不成为**记忆面接触点（否则它得把自己也登记进去）。
+    """
+    hits = []
+    for i, ln in enumerate(text.splitlines(), 1):
+        if ln.lstrip().startswith("#"):
+            continue
+        if token and token in ln and re.search(r"\bln\s+-", ln):
+            hits.append((i, ln))
+    return hits
+
+
+def parse_symlink_paths(line):
+    """从 symlink 行取出 `(src, tgt)` —— 取该行**最后两个**双引号串（`ln -sfn SRC TGT` 的实参）。"""
+    qs = re.findall(r'"([^"]*)"', line)
+    if len(qs) < 2:
+        return None, None
+    return qs[-2], qs[-1]
+
+
+def scan_memory_touchpoints(path_tokens, bases=("ops", "tests")):
+    """扫 `ops/` + `tests/` 下**可执行文件**里提到记忆路径的文件 → 相对仓库根的有序路径表。"""
+    hits = []
+    for base in bases:
+        for p in sorted((ROOT / base).rglob("*")):
+            if not p.is_file() or p.suffix.lower() not in MEMORY_CODE_EXTS:
+                continue
+            if any(x in p.parts for x in (".git", "__pycache__", "node_modules")):
+                continue
+            if any(t in _read_text(p) for t in path_tokens):
+                hits.append(p.relative_to(ROOT).as_posix())
+    return hits
+
+
+def scan_memory_egress(files, path_tokens, carriers):
+    """记忆**不得出网**：同一行同时出现【记忆路径】与【跨机搬运令牌】⇒ 命中。
+
+    ⚠ 口径是**同一行**（不跨行）—— 局限（变量拼接/换行可逃）已登记在 yaml 的 `unverified`。
+    """
+    out = []
+    for rel in files:
+        for i, ln in enumerate(_read_text(ROOT / rel).splitlines(), 1):
+            if ln.lstrip().startswith("#"):
+                continue
+            if any(t in ln for t in path_tokens) and any(c in ln for c in carriers):
+                out.append((rel, i, ln.strip()[:160]))
+    return out
+
+
+def scan_isolation_by_text_prefix(marker, rel_files):
+    """项目隔离**不得**以文本前缀为判据 ⇒ 在给定的**判据/测试实现**里找该标记。
+
+    ★ 为什么要裁掉 `CHECKS` 注册表那一段：注册表里的 `fix` 是**给人读的处置说明**，
+      不是判据实现 ⇒ 把它算进来会让本判据**自己触发自己**（口径错一次就永远是假红）。
+      故：只扫 `CHECKS = [` 之前的**函数体**部分。
+    """
+    hits = []
+    for rel in rel_files:
+        p = ROOT / rel
+        if p.is_dir():
+            for f in sorted(p.glob("test_*.py")):
+                t = _read_text(f)
+                for i, ln in enumerate(t.splitlines(), 1):
+                    if marker in ln:
+                        hits.append((f.relative_to(ROOT).as_posix(), i, ln.strip()[:120]))
+            continue
+        t = _read_text(p)
+        head = t.split("\nCHECKS = [")[0]
+        for i, ln in enumerate(head.splitlines(), 1):
+            if marker in ln:
+                hits.append((rel, i, ln.strip()[:120]))
+    return hits
+
+
+def validate_memory_gates(doc, known_checks, touchpoint_hits=None):
+    """**纯函数**（D7-P3-3）：四道门 + 通道 + 结构性约束的结构自洽。
+
+    `known_checks` = 已注册的 `CHECKS` id 集合（由调用方传入；与 `validate_manual_counts` 同形）。
+    ★ 传它是为了堵本仓最典型的一类假绿：**判据指向一个不存在的判据**（挂名）。
+    `touchpoint_hits=None` ⇒ **不判接触点封闭集**（合成样例用）；**绝不**读成"没有接触点"。
+    """
+    bad, notes = [], []
+    if not isinstance(doc, dict):
+        return ["顶层不是映射（yaml 根应是 mapping）"], notes
+
+    # ── ① 四道门：**缺一即红**（这就是退出判据「四门各一条判据」的机判）─────────
+    gates = doc.get("gates")
+    if not isinstance(gates, list) or not gates:
+        bad.append("`gates` 为空 ⇒ 四道门没有对象（退化空判 = 本仓头号形态）")
+        gates = []
+    seen = {}
+    for i, g in enumerate(gates):
+        at = f"gates[{i}]"
+        if not isinstance(g, dict):
+            bad.append(f"{at} 不是映射")
+            continue
+        gid = _s(g.get("id"))
+        if not gid:
+            bad.append(f"{at} 缺 `id`")
+        elif gid in seen:
+            bad.append(f"{at} `id` 重复: {gid}")
+        else:
+            seen[gid] = g
+            at = f"gates[{gid}]"
+        if not _s(g.get("what")):
+            bad.append(f"{at} 缺 `what`（这道门管什么）")
+        if not _s(g.get("object")):
+            bad.append(f"{at} 缺 `object`（本仓的判据对象）")
+        # ★ `not_covers` **必填** —— 本仓已登记的假绿形态 = 把"部分覆盖"当"全覆盖"
+        if not _s(g.get("not_covers")):
+            bad.append(f"{at} 缺 `not_covers` ⇒ **没写清它不覆盖什么**（部分覆盖会被读成全覆盖）")
+        j = g.get("judgment")
+        if not isinstance(j, dict):
+            bad.append(f"{at} 缺 `judgment` 段 ⇒ **这道门没有判据**（「没判」与「判了且通过」必须可区分）")
+            continue
+        kind = j.get("kind")
+        if kind == "check":
+            ref = _s(j.get("ref"))
+            if not ref:
+                bad.append(f"{at}.judgment 缺 `ref`")
+            elif ref not in known_checks:
+                bad.append(f"{at}.judgment.ref={ref!r} **不是已注册的 CHECKS id** ⇒ "
+                           f"挂名假判（判据写了但没人跑）")
+        elif kind == "na":
+            if not _s(j.get("object_absent_why")):
+                bad.append(f"{at}.judgment 是 `na` 但缺 `object_absent_why` ⇒ "
+                           f"**「不做」也要写下来**（不适用必须给理由）")
+        else:
+            bad.append(f"{at}.judgment.kind={kind!r} 不在封闭集 {{check, na}} 里")
+    for gid in MEMORY_GATE_IDS:
+        if gid not in seen:
+            bad.append(f"★ 缺一道门: {gid!r} —— D-47 要求 write/retrieval/promotion/reuse **四门齐**")
+    for gid in seen:
+        if gid not in MEMORY_GATE_IDS:
+            bad.append(f"多出一道门 {gid!r} ⇒ 四门是**封闭集**（多出来的那门有没有判据？）")
+
+    # ── ② 私有 → 共享的通道（"关键一跳"必须逐条写明门）──────────────────────
+    bridges = doc.get("bridges")
+    if not isinstance(bridges, list) or not bridges:
+        bad.append("`bridges` 为空 ⇒ **关键一跳（私有→共享）没有对象**，四门里的 promotion/reuse 判不了")
+        bridges = []
+    ungated_engine, ungated_ours = [], []
+    seen_b = set()
+    for i, b in enumerate(bridges):
+        at = f"bridges[{i}]"
+        if not isinstance(b, dict):
+            bad.append(f"{at} 不是映射")
+            continue
+        bid = _s(b.get("id"))
+        if not bid or bid in seen_b:
+            bad.append(f"{at} 缺 `id` 或 `id` 重复: {bid!r}")
+        seen_b.add(bid)
+        at = f"bridges[{bid or i}]"
+        for k in ("channel", "why", "evidence"):
+            if not _s(b.get(k)):
+                bad.append(f"{at} 缺 `{k}`")
+        if not isinstance(b.get("isolated"), bool):
+            bad.append(f"{at} `isolated` 必须是布尔（「是否按项目/任务隔离」是**实测口径**，不是形容词）")
+        if not isinstance(b.get("controllable_by_us"), bool):
+            bad.append(f"{at} `controllable_by_us` 必须是布尔（决定这条通道该红还是该点名）")
+        gate = b.get("gate")
+        if gate == "none":
+            if b.get("controllable_by_us") is True:
+                ungated_ours.append(bid)
+                bad.append(f"{at} ★ `gate: none` 且**本仓可控** ⇒ **红**：本仓能关却不关，"
+                           f"正是 MAPLE-Guard 说的「关键一跳」敞着")
+            else:
+                ungated_engine.append(bid)
+        elif gate == "by-design-shared":
+            # "刻意共享"与"忘了关门"必须可区分 ⇒ 刻意共享要**给出理由**
+            if not _s(b.get("why")):
+                bad.append(f"{at} `gate: by-design-shared` 但 `why` 为空 ⇒ 与 `none` 无法区分")
+        elif gate == "cwd-keyed":
+            if not _s(b.get("key")):
+                bad.append(f"{at} `gate: cwd-keyed` 但没写 `key`（按什么键控隔离？没键就不叫键控）")
+        else:
+            bad.append(f"{at} `gate`={gate!r} 不在封闭集 {{cwd-keyed, by-design-shared, none}} 里")
+
+    # ── ③ 结构性约束：**每条必须有判据**（没判据的还只是纪律）────────────────
+    scs = doc.get("structural_constraints")
+    if not isinstance(scs, list) or not scs:
+        bad.append("`structural_constraints` 为空 ⇒ **授权边界没有写成结构性约束**（D-48 的核心要求）")
+        scs = []
+    seen_sc = set()
+    for i, s in enumerate(scs):
+        at = f"structural_constraints[{i}]"
+        if not isinstance(s, dict):
+            bad.append(f"{at} 不是映射")
+            continue
+        sid = _s(s.get("id"))
+        if not sid or sid in seen_sc:
+            bad.append(f"{at} 缺 `id` 或 `id` 重复: {sid!r}")
+        seen_sc.add(sid)
+        at = f"structural_constraints[{sid or i}]"
+        if not _s(s.get("rule")):
+            bad.append(f"{at} 缺 `rule`")
+        if not _s(s.get("why_structural")):
+            bad.append(f"{at} 缺 `why_structural` ⇒ 没说明**为什么它是结构而不是「指望写清楚」**")
+        jb = _s(s.get("judged_by"))
+        if jb == "NA_UNIT":
+            bad.append(f"{at} `judged_by: NA_UNIT` ⇒ **它就不是结构性约束** ⇒ "
+                       f"请移到 `known_non_structural` 段并说明为什么"
+                       f"（两段混用 = 把两件事说成一件，本仓头号形态）")
+        elif jb not in known_checks:
+            bad.append(f"{at} `judged_by`={jb!r} 不是已注册的 CHECKS id ⇒ "
+                       f"**没判据的约束仍只是纪律**（「写成结构性约束」的含义就是有判据）")
+
+    # ── ③b 如实登记：**今天还不是**结构性约束的授权边界（两段**不得混用**）────────
+    kns = doc.get("known_non_structural")
+    if not isinstance(kns, list) or not kns:
+        bad.append("`known_non_structural` 为空 ⇒ 「今天还不是结构性约束」的边界没有登记"
+                   "（「不是结构」这件事也必须写下来）")
+        kns = []
+    for i, k in enumerate(kns):
+        at = f"known_non_structural[{i}]"
+        if not isinstance(k, dict):
+            bad.append(f"{at} 不是映射")
+            continue
+        kid = _s(k.get("id"))
+        at = f"known_non_structural[{kid or i}]"
+        for fld in ("rule", "today", "why_not_structural", "object_absent_why"):
+            if not _s(k.get(fld)):
+                bad.append(f"{at} 缺 `{fld}`")
+        if kid and kid in seen_sc:
+            bad.append(f"{at} 与 `structural_constraints` **出现同一个 id** {kid!r} ⇒ "
+                       f"同一条边界被同时说成「是结构」和「不是结构」")
+
+    # ── ④ 接触点封闭集（`None` ⇒ **不判**，而不是判过）──────────────────────
+    tps = doc.get("touchpoints")
+    if not isinstance(tps, list) or not tps:
+        bad.append("`touchpoints` 为空 ⇒ 「记忆面接触点」没有封闭集 ⇒ 新开一条通道不会被发现")
+        tps = []
+    reg = []
+    for i, t in enumerate(tps):
+        if not isinstance(t, dict) or not _s(t.get("file")):
+            bad.append(f"touchpoints[{i}] 缺 `file`")
+            continue
+        if not _s(t.get("why")):
+            bad.append(f"touchpoints[{i}]({_s(t.get('file'))}) 缺 `why`")
+        if not isinstance(t.get("egress"), bool):
+            bad.append(f"touchpoints[{i}]({_s(t.get('file'))}) 的 `egress` 必须是布尔")
+        reg.append(_s(t.get("file")))
+    if touchpoint_hits is not None:
+        for h in touchpoint_hits:
+            if h not in reg:
+                bad.append(f"★**未登记的记忆面接触点**: {h} ⇒ 要么登记进 `touchpoints`（含理由），"
+                           f"要么把记忆路径从该文件里去掉")
+        # ⚠「登记的接触点不存在」**不在这里判** —— 那是**盘上存在性**，属 `check_memory_gates`
+        #   （本函数是纯函数：纯函数不碰盘）。放这儿会让合成样例悄悄跳过它。
+
+    # ── ⑤ 出网口径 / 前缀口径 必填 ─────────────────────────────────────────
+    eg = doc.get("egress")
+    if not isinstance(eg, dict):
+        bad.append("缺 `egress` 段 ⇒ 记忆「不得出网」没有口径")
+    else:
+        ptk = eg.get("path_tokens")
+        if not isinstance(ptk, dict) or not ptk or not all(_s(v) for v in ptk.values()):
+            bad.append("`egress.path_tokens` 必须是非空映射、且值非空 —— 角色名就是用途，"
+                       "**不靠顺序**（顺序口径本仓已吃过亏）")
+        if not [x for x in (eg.get("carrier_tokens") or []) if _s(x)]:
+            bad.append("`egress.carrier_tokens` 为空 ⇒ 不知道什么算「跨机搬运」")
+    tp = doc.get("text_prefix")
+    if not isinstance(tp, dict) or not _s(tp.get("marker")) \
+            or not [x for x in (tp.get("forbidden_in") or []) if _s(x)]:
+        bad.append("`text_prefix` 段缺 `marker` / `forbidden_in`（缺席判据要点名它扫哪里）")
+
+    unv = doc.get("unverified")
+    if not isinstance(unv, list) or not unv:
+        bad.append("`unverified` 为空 ⇒ 本项自己未实测 / 未定的部分没登记")
+
+    if not bad:
+        n_na = sum(1 for g in seen.values()
+                   if isinstance(g.get("judgment"), dict) and g["judgment"].get("kind") == "na")
+        notes.append(f"四门齐（{len(seen)}/4，其中判据 NA {n_na} 道）· 通道 {len(bridges)} 条 · "
+                     f"结构性约束 {len(scs)} 条 · 非结构性（如实登记）{len(kns)} 条 · 接触点 {len(reg)} 个")
+        notes.append(f"无门通道：本仓可控 {len(ungated_ours)} 条 / 引擎侧 {len(ungated_engine)} 条"
+                     f"{'（点名: ' + ', '.join(ungated_engine) + '）' if ungated_engine else ''}")
+        if touchpoint_hits is None:
+            notes.append("接触点扫描：**未接扫描输入（不判，不算通过）**")
+        else:
+            notes.append(f"接触点扫描命中 {len(touchpoint_hits)} 个文件 · 全部已登记")
+    return bad, notes
+
+
+def check_memory_gates(ctx, doc=None):
+    """D7-P3-3: 记忆四道门 + 授权边界（结构性约束）+ 接触点封闭集 + 不得出网。
+
+    ★ `doc` 是可注入缝（测试用）：`None` ⇒ 从 `inventory/memory-gates.yaml` 读。
+      为什么需要它：「**登记的接触点不存在**」与「备份落点」这类判断要吃**盘上实况**，
+      而 `validate_memory_gates` 是纯函数 —— 没有这个缝，那两条只能靠合成样例"假装验过"。
+    """
+    try:
+        import yaml
+    except Exception:
+        return "WARN", "缺 pyyaml, 跳过 memory-gates 断言", []
+    if doc is None:
+        if not MEMORY_GATES_INV.exists():
+            return "FAIL", "inventory/memory-gates.yaml 缺失（本断言的登记依据）", []
+        try:
+            doc = yaml.safe_load(_read_text(MEMORY_GATES_INV)) or {}
+        except Exception as e:
+            return "FAIL", f"inventory/memory-gates.yaml 解析失败: {type(e).__name__}: {e}", []
+
+    # 0) 记忆路径的**唯一字面定义点**在真值表里 ⇒ 本文件**不硬编码**它们
+    eg = doc.get("egress") if isinstance(doc.get("egress"), dict) else {}
+    ptk = eg.get("path_tokens") if isinstance(eg.get("path_tokens"), dict) else {}
+    ptokens = [v for v in ptk.values() if _s(v)]
+    db_token = _s(ptk.get("db"))
+    if not db_token:
+        return "FAIL", "`egress.path_tokens.db` 缺失 ⇒ SC-1（记忆库 symlink）不可判；**不可判 ≠ 通过**", []
+
+    # 1) 记忆面：接触点扫盘（扫不到 ≠ 通过 ⇒ 异常要报出来）
+    try:
+        tp_hits = scan_memory_touchpoints(ptokens)
+    except Exception as e:
+        return "FAIL", f"接触点扫描失败（不可判 ⇒ 不许当通过）: {type(e).__name__}: {e}", []
+
+    bad, notes = validate_memory_gates(doc, known_checks={c["id"] for c in CHECKS},
+                                      touchpoint_hits=tp_hits)
+    # 1b) **盘上存在性**：登记的接触点必须真在（纯函数判不了这条 —— 它要碰盘）
+    for t in (doc.get("touchpoints") or []):
+        if isinstance(t, dict) and _s(t.get("file")) and not (ROOT / _s(t["file"])).exists():
+            bad.append(f"登记的接触点不存在: {_s(t['file'])} ⇒ "
+                       f"登记腐化（文件被删 / 改名 / 换机器）")
+
+    # 2) SC-1：`agent-cli.ps1` 里**恰好一条**记忆库 symlink，且源必须在站级 $HOME 下
+    if AGENT_CLI.exists():
+        syms = extract_memory_symlinks(_read_text(AGENT_CLI), db_token)
+        if len(syms) != 1:
+            bad.append(f"★ 记忆面 symlink 实测 **{len(syms)} 处**（要求恰 1 处）⇒ "
+                       f"共享面被扩容或判据没对象；行号 {[n for n, _ in syms]}")
+        else:
+            ln_no, ln_txt = syms[0]
+            src, tgt = parse_symlink_paths(ln_txt)
+            plane = doc.get("memory_plane") or {}
+            guard = doc.get("plane_guard") or {}
+            ok_pre = [p for p in (guard.get("allowed_source_prefixes") or []) if src and src.startswith(p)]
+            forbid = [m for m in (guard.get("forbidden_source_markers") or []) if src and m in src]
+            ok_suf = tgt and _s(guard.get("allowed_target_suffix")) and tgt.endswith(_s(guard["allowed_target_suffix"]))
+            if not ok_pre:
+                bad.append(f"{AGENT_CLI.name}:{ln_no} symlink 源 {src!r} 不在允许前缀 "
+                           f"{guard.get('allowed_source_prefixes')} 里 ⇒ 共享面可能被指到工作区/项目目录")
+            if forbid:
+                bad.append(f"{AGENT_CLI.name}:{ln_no} symlink 源含禁止标记 {forbid} ⇒ "
+                           f"记忆被搬进项目目录（= 把项目记忆写进共享层）")
+            if not ok_suf:
+                bad.append(f"{AGENT_CLI.name}:{ln_no} symlink 目标 {tgt!r} 不以 "
+                           f"{guard.get('allowed_target_suffix')!r} 结尾")
+            if not isinstance(plane.get("scope"), str) or not _s(plane.get("scope")):
+                bad.append("`memory_plane.scope` 为空 ⇒ 记忆面的**共享面**没写下来")
+            if not _s(plane.get("scope_evidence")):
+                bad.append("`memory_plane.scope_evidence` 为空 ⇒ 共享面的**出处**没写（实测还是推断？）")
+    else:
+        bad.append("缺 agent-cli.ps1 ⇒ SC-1（记忆面路径常量）不可判；**不可判 ≠ 通过**")
+
+    # 3) SC-2：记忆不得出网（同一行同现）+ 备份只落**站内** $HOME
+    carriers = [t for t in (eg.get("carrier_tokens") or []) if _s(t)]
+    eg_hits = scan_memory_egress(tp_hits, ptokens, carriers)
+    for rel, ln_no, txt in eg_hits:
+        bad.append(f"★ 记忆**出网**嫌疑: {rel}:{ln_no} ⇒ `{txt}`（同一行同现记忆路径与跨机搬运）")
+    bscript = _s(eg.get("backup_script"))
+    if bscript:
+        if not (ROOT / bscript).exists():
+            bad.append(f"`egress.backup_script` 指向的 {bscript} 不存在 ⇒ 登记腐化")
+        else:
+            var = _s(eg.get("backup_dir_var"))
+            prefs = tuple(_s(x) for x in (eg.get("backup_dir_prefixes") or []) if _s(x))
+            vals = [ln.split(var, 1)[1].strip() for ln in _read_text(ROOT / bscript).splitlines()
+                    if ln.startswith(var) and not ln.lstrip().startswith("#")]
+            if not vals:
+                bad.append(f"{bscript} 找不到 `{var}` 赋值 ⇒ 备份落点不可判（不可判 ≠ 通过）")
+            elif not any(v.startswith(prefs) for v in vals):
+                bad.append(f"{bscript} 的 `{var}`={vals[0]!r} 不在站内前缀 {prefs} 里 ⇒ "
+                           f"备份可能落到站外（记忆出网）")
+
+    # 4) SC-3：项目隔离**不得**以文本前缀为判据（缺席判据）
+    tp = doc.get("text_prefix") or {}
+    marker = _s(tp.get("marker"))
+    if marker:
+        pref_hits = scan_isolation_by_text_prefix(marker, [x for x in (tp.get("forbidden_in") or []) if _s(x)])
+        for rel, ln_no, txt in pref_hits:
+            bad.append(f"★ 隔离**靠文本前缀**: {rel}:{ln_no} ⇒ `{txt}` —— "
+                       f"把命名当边界（D-48：要靠结构 contain，不是「指望写清楚」）")
+
+    if bad:
+        return "FAIL", " · ".join(notes) if notes else "见明细", bad
+    eng = [_s(b.get("id")) for b in (doc.get("bridges") or [])
+           if isinstance(b, dict) and b.get("gate") == "none"]
+    if eng:
+        # 引擎侧无门通道：**点名 + WARN**（本仓关不了；但绝不静默 —— 明细里必须**逐个报名字**，
+        #   ★ 只说"见 yaml"不算点名：那等于让读者自己去猜是哪一条）
+        return "WARN", " · ".join(notes), [
+            f"引擎侧无门通道 {len(eng)} 条（本仓关不了 ⇒ 只登记 + 点名）: " + ", ".join(eng)]
+    return "PASS", " · ".join(notes), []
+
+
 CHECKS = [
     {"id": "secrets", "title": "明文扫描", "fn": check_secrets, "quick": True,
      "fix": "删除明文密钥, 或加入 SECRET_ALLOW 并写明原因(不允许静默放行); "
@@ -5578,6 +5994,23 @@ CHECKS = [
             "也**不判**『该不该引入豁免』（D-48 要求先证它与结构 contain 不冲突）。"
             "⚠ 当前 `entries` **实测 0 条**（理由在 `empty_reason`，两条独立实测）——"
             "**别把本项读成『已有免终裁通道』**"},
+    {"id": "memory-gates", "title": "记忆四道门 + 授权边界", "fn": check_memory_gates, "quick": True,
+     "fix": "D7-P3-3 / D-47 / D-48：`inventory/memory-gates.yaml` 是**四道门**"
+            "（write/retrieval/promotion/reuse）与**授权边界（结构性约束）**的单一真值。"
+            "① 报『缺一道门』= D-47 要求四门齐；"
+            "② 报『挂名假判』= 某门的 `judgment.ref` 指向一个**不存在**的 CHECKS id"
+            "（判据写了但没人跑 —— 本仓最典型的一类假绿）；"
+            "③ 报『`gate: none` 且本仓可控 ⇒ 红』= **私有→共享那一跳敞着**"
+            "（MAPLE-Guard 点名的关键一跳）；**引擎侧**关不掉的无门通道只**点名 + WARN**（绝不静默）；"
+            "④ 报『未登记的记忆面接触点』= 有代码新碰了记忆路径 ⇒ **要么登记**（写清为什么）**要么去掉**；"
+            "⑤ 报『记忆出网嫌疑』= 同一行同现【记忆路径】与【跨机搬运令牌】（本模型里最贵的错误）；"
+            "⑥ 报『隔离靠文本前缀』= 有人把**命名**升格成了**判据**（D-48：要靠结构 contain）；"
+            "⑦ 报『登记的接触点不存在』= 登记腐化。"
+            "⚠ 记忆路径的**唯一字面定义点**在 yaml 的 `egress.path_tokens`（角色名 → 路径）；"
+            "改路径**只改那里**，不要在代码里再抄一份（本仓头号失败形态）。"
+            "⚠ **它不判什么**：不判记忆**内容**，也**验不了门的效力** —— "
+            "MAPLE-Guard 的 ASR 下降是**它自己的实验**，本仓没有投毒实验台 ⇒ "
+            "**别把本项读成「记忆已安全」**"},
     # O-63 (2026-09-25): 取号并发夹具。**刻意 quick:False**（要起 8 个独立进程 + 两次 2.5s 共同释放时刻 ⇒ 约 6s）。
     {"id": "ps1-runstamp", "title": "ts 取号并发夹具", "fn": check_ps1_runstamp, "quick": False,
      "fix": "O-63: 跑 `powershell -NoProfile -ExecutionPolicy Bypass -File ops/station-bin/_runstamp_hammer.ps1 -N 8 -SelfTest`。"
