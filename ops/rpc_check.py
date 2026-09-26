@@ -2696,6 +2696,60 @@ def parse_ledger_rows(text):
     return rows
 
 
+def check_model_families(ctx):
+    """`D7-P3-1` 前置：模型**家族**表 ↔ `models.yaml` **双向对账**（2026-09-26）。
+
+    判什么：① 本表可解析且族非空（防空判）；② `members` 里的 alias **必须**在 `models.yaml` 存在
+            （否则 = **孤儿引用**）；③ **`models.yaml` 的每个 alias 恰属 1 族**（**漏项与重复都红** ——
+            只做单向包含会漏掉「新模型没归类」，而那正是本表最容易腐化的方向）；
+            ④ 每族必须有**非空 `basis`**（族划分依据）⇒ 堵「看着像就填」（与 `dialect.yaml` 同纪律）。
+    ⚠ **不判什么**：**不判族分得对不对**（那要人读权重血统）。本判据只保证「**没有一个 alias 没被归类**」
+       与「引用不悬空」。
+    ⚠ **不提供什么**：它**不提供**「站↔**已加载**模型」—— 那是 `D7-P0-3` 判据 J-1 的**第二个输入**，
+       与 `models.yaml` 的 `stations`（库中有）/ `conf`（配过实例）**不是一回事**（见 yaml 的 `linked_state`）。
+    """
+    try:
+        import yaml
+    except Exception as e:                                   # noqa: BLE001
+        return ("WARN", f"缺 pyyaml（{type(e).__name__}）⇒ 本项不判", [])
+    fam_p = ROOT / "inventory" / "model-families.yaml"
+    mod_p = ROOT / "inventory" / "models.yaml"
+    try:
+        F = yaml.safe_load(fam_p.read_text(encoding="utf-8")) or {}
+        M = yaml.safe_load(mod_p.read_text(encoding="utf-8")) or {}
+    except Exception as e:                                   # noqa: BLE001
+        return ("FAIL", f"yaml 不可解析: {type(e).__name__}: {e}", [])
+    fams = F.get("families") or []
+    aliases = [str(m.get("alias")) for m in (M.get("models") or []) if m.get("alias")]
+    if not fams:
+        return ("FAIL", "`families` 为空 ⇒ 空判（防『什么都没判』）", [])
+    if not aliases:
+        return ("FAIL", "`models.yaml` 无 alias ⇒ 空判", [])
+    bad, owner = [], {}
+    for f in fams:
+        fid = str(f.get("id") or "?")
+        if len(str(f.get("basis") or "").strip()) < 4:
+            bad.append(f"族 `{fid}` 缺 `basis`（族划分依据）⇒ 堵『看着像就填』")
+        mem = [str(x) for x in (f.get("members") or [])]
+        if not mem:
+            bad.append(f"族 `{fid}` 无成员 ⇒ 空族")
+        for a in mem:
+            if a not in aliases:
+                bad.append(f"族 `{fid}` 的成员 `{a}` **不在 `models.yaml`**（孤儿引用）")
+            elif a in owner:
+                bad.append(f"`{a}` 同时属 `{owner[a]}` 与 `{fid}`（**重复归类**）")
+            owner[a] = fid
+    miss = [a for a in aliases if a not in owner]
+    if miss:
+        bad.append(f"**未归类**的 alias {len(miss)} 个：{', '.join(miss)} ⇒ 新模型必须归类")
+    note = (f"族 {len(fams)} · 成员覆盖 {len(owner)}/{len(aliases)} · "
+            f"未归类 {len(miss)} · 问题 {len(bad)}")
+    detail = list(bad)
+    if detail:
+        return ("FAIL", note, detail)
+    return ("PASS", note, [f"族: {', '.join(str(f.get('id')) for f in fams)}"])
+
+
 def check_ledger_status(ctx):
     """O-93: 台账每行**状态可机读**（格首标记自证）—— 并报出「仍开着 N 条 + 清单」。
 
@@ -4851,6 +4905,14 @@ CHECKS = [
             " —— 要写「考虑过/否决了什么」，不是只写标题; **恰 1 个**（改名后别留旧节）; "
             "旧名 `否决/比较对象` / `被否的方案` 一律换规范名; "
             "⚠ 范围只含 adr/ADR-*.md —— DECISIONS.md 是表格载体（列在结构上已保证槽位、值可为 `—`），不在范围"},
+    {"id": "model-families", "title": "模型家族表（双向对账）", "fn": check_model_families, "quick": True,
+     "fix": "D7-P3-1 前置：`inventory/model-families.yaml` 的成员必须与 `inventory/models.yaml` 的 alias "
+            "**双向对上** —— ① 成员不在 `models.yaml` ⇒ **孤儿引用**（删掉或改 alias）; "
+            "② `models.yaml` 里的 alias **没被任何族收** ⇒ 按**权重血统**归族"
+            "（蒸馏/微调**归基座族**，微调者记 `note`，**不改族**）; ③ 一族缺 `basis` ⇒ 补划分依据。"
+            "⚠ 本判据**不判族分得对不对**（那要人读血统），只判「**没有一个 alias 没被归类**」与「引用不悬空」。"
+            "⚠⚠ 它也**不提供**「站↔**已加载**模型」—— 那**不是** `models.yaml` 的 `stations`（库中有）"
+            "或 `conf`（配过实例）; 见 yaml 的 `linked_state`（**未实测**）"},
     {"id": "ledger-status", "title": "台账状态可机读", "fn": check_ledger_status, "quick": True,
      "fix": "O-93: `spec/d6-agent-standard/OPEN-ISSUES.md` 的**每行**状态格必须**以标记开头**"
             "（`✅`=已闭环 · `◐`=已登记未处置 · `⏳`=待触发或待裁 · `🔵`=部分收口）——**允许加粗包裹**"
