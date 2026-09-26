@@ -27,7 +27,7 @@ Invoke-Expression $fn.Extent.Text   # 定义函数到当前会话
 # 它们是**纯函数**(只吃 $accept/$goldenActive/卡 subjects, 不碰站、不碰文件系统)
 # ⇒ 可离线单测; 这正是"派发路径改动"能被验证而不用每次都真派发的关键。
 # O-15/AUDIT (2026-09-21): 追加提取 claude 按路基线(Get-ClaudeFrameworkSubjects) 与 fallback 判定 (Test-FallbackEligible)。
-foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-EvmStatePull', 'Test-FallbackEligible', 'Test-CtxOverflowError', 'Resolve-CtxOverflowCode', 'Resolve-ClaudeStationCandidates', 'Get-SensitivityBackendReject', 'Get-BackendEgress', 'Get-JudgeEgress', 'Get-JudgeComplianceReject', 'Get-AttachEgressReject', 'Get-ScrubRules', 'Invoke-Scrubber', 'Get-ScrubBlockReason', 'Resolve-ReviewPrompt', 'Resolve-ClaudeBudget', 'Resolve-LocalBash', 'Invoke-LocalBashCmd', 'Resolve-ExitCode')) {
+foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-EvmStatePull', 'Test-FallbackEligible', 'Test-CtxOverflowError', 'Resolve-CtxOverflowCode', 'Resolve-ClaudeStationCandidates', 'Get-SensitivityBackendReject', 'Get-BackendEgress', 'Get-JudgeEgress', 'Get-JudgeComplianceReject', 'Get-AttachEgressReject', 'Get-ScrubRules', 'Invoke-Scrubber', 'Get-ScrubBlockReason', 'Resolve-ReviewPrompt', 'Resolve-ClaudeBudget', 'Resolve-LocalBash', 'Invoke-LocalBashCmd', 'Resolve-ExitCode', 'Test-GateSummaryOk', 'Resolve-GateCommand')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -53,6 +53,19 @@ $jtAst = @($ast.FindAll({ param($n)
 if (-not $jtAst) { throw '$Script:JUDGE_TABLE assignment not found in agent-cli.ps1' }
 Invoke-Expression $jtAst.Extent.Text
 Write-Host "DEBUG JUDGE_TABLE keys=$(@($Script:JUDGE_TABLE.Keys).Count)"
+
+# --- O-90 (2026-09-26): 一并提取**真实门禁表 + 汇总行正则 + 复用表**（同为赋值语句） ---
+# 为什么必须测真表: `Resolve-GateCommand` 是**纯查表**函数 ⇒ 表空了它就"恒不命中"
+#   ⇒ 断言会变成"**判据什么都没判**"（本仓头号形态）。故必须验**真表非空**且值真的是命令。
+# `$Script:GATE_SUMMARY_RE` 也必须提取 —— `Test-GateSummaryOk` 依赖它（漏了它会整段抛错）。
+foreach ($asn in @('$Script:GATE_TABLE', '$Script:GATE_SUMMARY_RE', '$Script:GATE_CACHE')) {
+    $a = @($ast.FindAll({ param($n)
+        $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+        $n.Left.Extent.Text -eq $asn }, $true)) | Select-Object -First 1
+    if (-not $a) { throw "$asn assignment not found in agent-cli.ps1" }
+    Invoke-Expression $a.Extent.Text
+}
+Write-Host "DEBUG GATE_TABLE keys=$(@($Script:GATE_TABLE.Keys).Count)"
 
 $pass = 0; $fail = 0
 function Assert-True($name, $cond) {
@@ -1380,6 +1393,55 @@ Assert-True "o62⑧(回归): 备路两处租约都按危险面取模式(非硬�
 Assert-True "o62⑨(根因): 危险面判据在 `if ($useStation)` **之前**(否则无附件站上 golden run 会漏挡)" (
     $content.IndexOf('$leaseX = (($attach.Count -gt 0) -or $goldenActive)') -gt 0 -and
     $content.IndexOf('$leaseX = (($attach.Count -gt 0) -or $goldenActive)') -lt $content.IndexOf('if ($useStation)'))
+
+# --- O-90（2026-09-26）: **流程前置** —— 门禁未过 ⇒ 拒绝派发 ---
+# 为什么必须在这里测: 派发路径改动的**唯一离线验证面**是本夹具（真派发要站）。
+# 判据本体刻意拆成纯函数（Test-GateSummaryOk / Resolve-GateCommand）正是为了能在这里跑。
+
+# ① 真表非空 + 值真的是命令（防"表空了 ⇒ 判据恒不命中"= 判据什么都没判）
+Assert-True "o90①: GATE_TABLE 非空且 rpc-check 映射到真命令（实测 $(@($Script:GATE_TABLE.Keys) -join '|')）" (
+    @($Script:GATE_TABLE.Keys).Count -ge 2 -and (Resolve-GateCommand 'rpc-check') -match 'rpc_check\.py')
+
+# ② 未登记 / 空名 ⇒ **fail-closed 返回 $null**（不猜、不放过）
+Assert-True "o90②: 未登记门禁名 ⇒ `$null（fail-closed，不猜）" (
+    $null -eq (Resolve-GateCommand 'no-such-gate') -and $null -eq (Resolve-GateCommand ''))
+
+# ③ 汇总行判据（正例）
+$gOk = Test-GateSummaryOk "扫描 239 个 md`n结论: PASS · 绿灯 31 · 黄灯 2 · 红灯 0"
+Assert-True "o90③: 有汇总行 ⇒ ok（line=$($gOk.line)）" ($gOk.ok -and $gOk.line -match '结论: PASS')
+
+# ④ ★★ **exit 0 但无汇总行 ⇒ 必须不 ok** —— 这就是 O-89 的判据化，
+#    也正是本机制与参考实现（Spec_Runner 只看 exit code）的**分野**。
+$gNo = Test-GateSummaryOk "  ok   test_a`n  ok   test_b"
+Assert-True "o90④: **无汇总行 ⇒ 不 ok**（exit 0 也可能一条断言都没跑）" (
+    (-not $gNo.ok) -and $gNo.reason -match '无汇总行')
+
+# ⑤ 空 / 纯空白输出 ⇒ 不 ok（防"空输出被当成通过"）
+Assert-True "o90⑤: 空输出与纯空白 ⇒ 不 ok" (
+    (-not (Test-GateSummaryOk '').ok) -and (-not (Test-GateSummaryOk "  `n `t ").ok))
+
+# ⑥ ★ **先验红**：一个"只看 exit code"的桩会放过 ④ 那条 ⇒ 证明真判据不是恒真
+$naiveGate = { param($text, $code) ($code -eq 0) }
+Assert-True "o90⑥(先验红): 只看 exit code 的桩放过 ④ ⇒ 真判据不是恒真" (
+    (& $naiveGate "  ok   test_a" 0) -and (-not (Test-GateSummaryOk "  ok   test_a").ok))
+
+# ⑦ ★★ **白名单护栏（行为级）**：卡写 `require-gate:` 必须**真被解析出来**。
+#    ⚠ `Get-FrontMatter` 是**白名单解析**（未知键静默丢弃）⇒ 漏登记会让这条纪律
+#      "**看起来写了、其实没人读**"（= 假防线，O-81 同族）⇒ 故这里**真跑解析**，不是扫文本。
+$rgCard = Join-Path $tmpCards 'o90-require-gate.md'
+[System.IO.File]::WriteAllText($rgCard, "---`nproj: dogfood`ntask: t`nrequire-gate: rpc-check`n---`n`nbody`n", [System.Text.UTF8Encoding]::new($false))
+$rgFm = Get-FrontMatter $rgCard
+Assert-True "o90⑦: 卡的 require-gate **真被解析**（白名单已登记）" ([string]$rgFm['require-gate'] -eq 'rpc-check')
+$rgCard2 = Join-Path $tmpCards 'o90-no-gate.md'
+[System.IO.File]::WriteAllText($rgCard2, "---`nproj: dogfood`ntask: t`n---`n`nbody`n", [System.Text.UTF8Encoding]::new($false))
+$rgFm2 = Get-FrontMatter $rgCard2
+Assert-True "o90⑦b(反向): 未声明 ⇒ 空串 = **不要求**（存量卡行为不变，向后兼容）" ([string]$rgFm2['require-gate'] -eq '')
+
+# ⑧ 接线：派发入口必须**真的调用**它，且失败**真的拒发**
+Assert-True "o90⑧: Invoke-Task 接线（调 Invoke-GateCheck 且失败 return 3）" (
+    $content -match 'Invoke-GateCheck -Name \$reqGate' -and $content -match 'return 3 \}\s+# 3 = GATE_BLOCK')
+Assert-True "o90⑨: 批量侧逐项接线（fail-fast ⇒ 该行标 GATE_BLOCK，不整批崩）" (
+    $content -match '\$rgB -and -not \(Invoke-GateCheck' -and $content -match "\`$err = 'GATE_BLOCK'")
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
