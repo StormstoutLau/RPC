@@ -2696,6 +2696,84 @@ def parse_ledger_rows(text):
     return rows
 
 
+def normalize_model_id(raw) -> str:
+    """把产物里的 `model` 取值**归一到模型短名**（`D7-P3-1` 前置，2026-09-26）。
+
+    ★★ **为什么必须归一（实测取的口径，不是设计出来的）**：取样 6 个真实 runDir，
+      `run.json` 的 `model` 字段有**四种前缀形态** ——
+        `local/gpt-oss-20b` · `cluster-litellm/gpt-oss-20b` ·
+        `station:A/thinkingmachines/inkling:free` · `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`
+      ⇒ 不归一就**没法和 `inventory/models.yaml` 的 `alias` 对上**。
+    ★ 规则（**只剥外壳，不猜语义**）：① 取**最后一个 `/` 之后**的段；
+      ② **再**去掉 `:` 之后的**尾参**。
+    ⚠⚠ **顺序不能反（本批实测踩到）**：`station:A/thinkingmachines/inkling:free` 里 `:` 出现在
+      **前缀中间**，若"先去尾参再取末段"会得到 `station`（整段被腰斩）⇒ 必须**先定位末段、再剥尾参**。
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    return s.split("/")[-1].split(":", 1)[0].strip()
+
+
+def load_family_index():
+    """读 `inventory/model-families.yaml` ⇒ `{alias: family_id}`（供 J-1 用）。
+
+    ⚠ **覆盖边界（如实）**：本表当前**只覆盖本地模型库的 12 个 alias**
+      （来源 = `models.yaml`）⇒ **出网模型**（`openrouter/...` / `station:X/...`）**不在表里**
+      ⇒ `cross_family_verdict` 对它们会返回 **`unknown`**（**不可判**，fail-closed）。
+    """
+    import yaml
+    F = yaml.safe_load((ROOT / "inventory" / "model-families.yaml").read_text(encoding="utf-8")) or {}
+    idx = {}
+    for fam in (F.get("families") or []):
+        fid = str(fam.get("id") or "")
+        for a in (fam.get("members") or []):
+            idx[str(a)] = fid
+    return idx
+
+
+def cross_family_verdict(producer_raw, judge_raw, index) -> dict:
+    """**J-1（跨族）** 的判定本体（`D7-P0-3` 的判据之一 ⇒ `D7-P3-1` 落地）。
+
+    判据原式：`lookup_family(judge.model) != lookup_family(producer.model)`。
+    三态（**禁止"基本通过"**）：
+      · `cross`   ⇒ 跨族 ✅（异构成立）
+      · `same`    ⇒ **同族 ⇒ 判据红**（"同族多实例"不构成认知多样性 —— Courtroom-MAD 的实测）
+      · `unknown` ⇒ **任一模型不在族表里 ⇒ 不可判**；★ **fail-closed：绝不默认算"跨族"**
+        （默认放行 = 把"没判"读成"通过"，本仓最防的形态）。
+    """
+    p, j = normalize_model_id(producer_raw), normalize_model_id(judge_raw)
+    miss = [x for x in (p, j) if x and x not in index]
+    if not p or not j:
+        return {"verdict": "unknown", "reason": "缺 producer/judge 的 model", "unknown": miss}
+    if miss:
+        return {"verdict": "unknown",
+                "reason": f"未入族表: {', '.join(sorted(set(miss)))}（族表当前只覆盖本地库 alias）",
+                "unknown": sorted(set(miss))}
+    fp, fj = index[p], index[j]
+    if fp == fj:
+        return {"verdict": "same", "reason": f"producer={p}({fp}) · judge={j}({fj}) **同族**",
+                "producer": p, "judge": j, "family": fp}
+    return {"verdict": "cross", "reason": f"{fp} vs {fj}", "producer": p, "judge": j,
+            "families": [fp, fj]}
+
+
+def cross_input_verdict(producer_sha, judge_sha) -> dict:
+    """**J-2（输入独立）** 的判定本体：`hash(judge.input) != hash(producer.input)`。
+
+    原料 = `run.json.prompt_sha256`（产出者输入）与 `review.json.metadata.prompt_hash`（判官输入）
+    —— ★ 两者**都已在产物里**（2026-09-26 实测），故 J-2 **不需要新登记**。
+    ⚠ **诚实边界**：摘要**不等**只能证明"送入的载荷不同"，**不能**证明"信息独立"
+      （判官可能收到同一份内容的不同包装）⇒ 本判据是**下界**，如实登记。
+    """
+    p, j = str(producer_sha or "").strip(), str(judge_sha or "").strip()
+    if not p or not j:
+        return {"verdict": "unknown", "reason": "缺 producer/judge 的输入摘要"}
+    if p == j:
+        return {"verdict": "same", "reason": "**两侧输入摘要相同** ⇒ 判官看到的就是产出者看到的（不独立）"}
+    return {"verdict": "cross", "reason": "两侧输入摘要不同（**下界证据**，不等于信息独立）"}
+
+
 def check_model_families(ctx):
     """`D7-P3-1` 前置：模型**家族**表 ↔ `models.yaml` **双向对账**（2026-09-26）。
 
