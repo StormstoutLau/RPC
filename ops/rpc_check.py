@@ -6299,6 +6299,172 @@ def check_interruption(ctx, doc=None):
     return "PASS", " · ".join(notes), []
 
 
+# ── D7-P4-3 (2026-09-26)「rubric + 自环盲区」────────────────────────────────────
+#   Ds 简报 15（§4.10④）：rubric **只管本次引入的问题**（防意见被历史债务淹没）。
+#   Ds 简报 12（§4.7）：**自环盲区显式登记** —— 「自环永远走我方两端的善意实现；
+#     异构第三方 A2A server 的真实差异未测」⇒ ds 的做法就是**登记**，本机群照做。
+#   Ds 简报 21（§4.13）：派生边表 ⇒ ⚠ 路线总表 §4.5 已列**非范围** ⇒ 只登记**触发条件**。
+RUBRIC_INV = ROOT / "inventory" / "rubric-and-blindspots.yaml"
+BLINDSPOT_KINDS = ("implementation", "dispatch", "external")
+GUARD_KINDS = ("check", "test", "na")
+
+
+def validate_rubric_blindspot(doc, known_checks):
+    """**纯函数**（D7-P4-3）：rubric 必含条 + 自环盲区 + 派生边条件。"""
+    bad, notes = [], []
+    if not isinstance(doc, dict):
+        return ["顶层不是映射（yaml 根应是 mapping）"], notes
+
+    # ── ① rubric：**已落盘**，把它关键的几句变成**可机核的存在性** ──────────────
+    #   ★ 为什么核"必须含哪几条"：rubric 是**纯文本资源**，删掉一句没人会知道 ——
+    #     而这几句正是它防住的偏差（历史债务 / 自证 / verbosity / 翻案 / 不可信输入）。
+    rb = doc.get("rubric")
+    if not isinstance(rb, dict) or not _s(rb.get("file")):
+        bad.append("缺 `rubric.file` ⇒ rubric 落点没写（退出判据第 1 条就是「rubric 落盘」）")
+        rb = {}
+    mc = rb.get("must_contain")
+    if not isinstance(mc, list) or not mc:
+        bad.append("`rubric.must_contain` 为空 ⇒ **关键纪律被删掉也没人知道**")
+        mc = []
+    seen_mc = set()
+    for i, m in enumerate(mc):
+        at = f"rubric.must_contain[{i}]"
+        if not isinstance(m, dict):
+            bad.append(f"{at} 不是映射")
+            continue
+        mid = _s(m.get("id"))
+        if not mid or mid in seen_mc:
+            bad.append(f"{at} 缺 `id` 或 `id` 重复: {mid!r}")
+        seen_mc.add(mid)
+        at = f"rubric.must_contain[{mid or i}]"
+        for k in ("marker", "why"):
+            if not _s(m.get(k)):
+                bad.append(f"{at} 缺 `{k}`")
+    # ★ 读取方式必须**显式编码**（否则 PS 5.1 下中文资源会乱码）—— 这条是"防改回去"
+    rd = rb.get("reader")
+    if isinstance(rd, dict):
+        if not _s(rd.get("file")) or not _s(rd.get("marker")):
+            bad.append("`rubric.reader` 缺 `file` / `marker`")
+        elif not _s(rd.get("why")):
+            bad.append("`rubric.reader` 缺 `why` ⇒ 没说清为什么要显式编码")
+
+    # ── ② 自环盲区：**显式登记**（第 12 条）────────────────────────────────
+    bs = doc.get("blindspots")
+    if not isinstance(bs, list) or not bs:
+        bad.append("`blindspots` 为空 ⇒ **自环盲区没有登记**（第 12 条明写要显式登记）")
+        bs = []
+    seen_bs, na_guards = set(), []
+    for i, b in enumerate(bs):
+        at = f"blindspots[{i}]"
+        if not isinstance(b, dict):
+            bad.append(f"{at} 不是映射")
+            continue
+        bid = _s(b.get("id"))
+        if not bid or bid in seen_bs:
+            bad.append(f"{at} 缺 `id` 或 `id` 重复: {bid!r}")
+        seen_bs.add(bid)
+        at = f"blindspots[{bid or i}]"
+        for k in ("what", "why_blind", "evidence"):
+            if not _s(b.get(k)):
+                bad.append(f"{at} 缺 `{k}` ⇒ "
+                           + ("**盲区必须写清为什么互审看不见**" if k == "why_blind" else "字段没写"))
+        if b.get("kind") not in BLINDSPOT_KINDS:
+            bad.append(f"{at} `kind`={b.get('kind')!r} 不在封闭集 {BLINDSPOT_KINDS}")
+        g = b.get("other_guard")
+        if not isinstance(g, dict):
+            bad.append(f"{at} 缺 `other_guard` ⇒ **本仓用什么别的机制覆盖它**必须写（没有就写 `na`）")
+        else:
+            gk, ref = _s(g.get("kind")), _s(g.get("ref"))
+            if gk not in GUARD_KINDS:
+                bad.append(f"{at}.other_guard.kind={gk!r} 不在封闭集 {GUARD_KINDS}")
+            elif gk == "check":
+                if ref not in known_checks:
+                    bad.append(f"{at}.other_guard 指的判据 {ref!r} **不是已注册的 CHECKS id** ⇒ 挂名")
+            elif gk == "test":
+                if not ref or not (ROOT / "tests" / ref).exists():
+                    bad.append(f"{at}.other_guard 指的测试 {ref!r} 不存在")
+            elif not _s(g.get("why")):
+                bad.append(f"{at}.other_guard 是 `na` 但缺 `why` ⇒ **「没有替代机制」也要给理由**")
+            if gk == "na":
+                na_guards.append(bid)
+    # ★★ 本仓**最实质**的盲区：三站互审走**同一份实现** ⇒ 同源代码缺陷两侧同时出现
+    if "impl-same-source" not in seen_bs:
+        bad.append("★ 缺 `impl-same-source` 盲区 ⇒ **本仓最实质的那条没登记**："
+                   "三站互审走**同一份 `agent-cli.ps1`** ⇒ 实现层缺陷会在两侧**同时**出现，"
+                   "互审在结构上**不可能**发现它（与「跨站≠跨族」是**正交**的两件事）")
+
+    # ── ③ 派生边表：**条件触发**（第 21 条 + §4.5 非范围）────────────────────
+    de = doc.get("derived_edges")
+    if not isinstance(de, dict):
+        bad.append("缺 `derived_edges` 段 ⇒ 第 21 条**连登记都没有**（非范围不等于不写）")
+    else:
+        if de.get("status") not in ("deferred", "done"):
+            bad.append(f"`derived_edges.status`={de.get('status')!r} 不在封闭集 {{deferred, done}}")
+        elif de.get("status") == "deferred" and not _s(de.get("condition")):
+            bad.append("`derived_edges` 是 `deferred` 但缺 `condition` ⇒ "
+                       "**触发条件没写死 ⇒ 它会永远挂着或悄悄做掉**")
+        if not _s(de.get("why")):
+            bad.append("`derived_edges` 缺 `why`")
+
+    unv = doc.get("unverified")
+    if not isinstance(unv, list) or not unv:
+        bad.append("`unverified` 为空 ⇒ 本项自己未实测 / 未定的部分没登记")
+
+    if not bad:
+        notes.append(f"rubric 必含 {len(seen_mc)} 条 · 自环盲区 {len(seen_bs)} 条"
+                     f"（无替代机制的 {len(na_guards)}"
+                     f"{'：' + ', '.join(na_guards) if na_guards else ''}）· "
+                     f"派生边 status={de.get('status') if isinstance(de, dict) else '?'}")
+    return bad, notes
+
+
+def check_rubric_blindspot(ctx, doc=None):
+    """D7-P4-3: rubric（含"只报本次引入的问题"）+ 自环盲区显式登记 + 派生边条件。"""
+    try:
+        import yaml
+    except Exception:
+        return "WARN", "缺 pyyaml, 跳过 rubric-blindspot 断言", []
+    if doc is None:
+        if not RUBRIC_INV.exists():
+            return "FAIL", "inventory/rubric-and-blindspots.yaml 缺失（本断言的登记依据）", []
+        try:
+            doc = yaml.safe_load(_read_text(RUBRIC_INV)) or {}
+        except Exception as e:
+            return "FAIL", f"inventory/rubric-and-blindspots.yaml 解析失败: {type(e).__name__}: {e}", []
+
+    bad, notes = validate_rubric_blindspot(doc, known_checks={c["id"] for c in CHECKS})
+
+    # 1) ★★ rubric 必含条：**去那个文件里真找**（不是自报"我写了"）
+    rb = doc.get("rubric") if isinstance(doc.get("rubric"), dict) else {}
+    rel = _s(rb.get("file"))
+    if rel:
+        if not (ROOT / rel).exists():
+            bad.append(f"`rubric.file`={rel!r} 不存在 ⇒ **返回内容是个错误串**（`RUBRIC_UNAVAILABLE`），"
+                       f"判官拿不到 rubric（**不可判 ≠ 通过**）")
+        else:
+            txt = _read_text(ROOT / rel)
+            for m in [x for x in (rb.get("must_contain") or []) if isinstance(x, dict)]:
+                mk = _s(m.get("marker"))
+                if mk and mk not in txt:
+                    bad.append(f"★ rubric 里**找不到**必含句 {mk!r}"
+                               f"（id={_s(m.get('id'))}）⇒ 那条纪律被删了/改了措辞；"
+                               f"改措辞请**同步改真值表**（别让它悄悄失守）")
+
+    # 2) ★ rubric/tmpl 的读取必须**显式编码**（否则 PS 5.1 下中文资源乱码）
+    rd = rb.get("reader")
+    if isinstance(rd, dict) and _s(rd.get("file")) and _s(rd.get("marker")):
+        rf = _s(rd["file"])
+        if not (ROOT / rf).exists():
+            bad.append(f"`rubric.reader.file`={rf!r} 不存在 ⇒ 读取方式不可判")
+        elif _s(rd["marker"]) not in _read_text(ROOT / rf):
+            bad.append(f"★ `{rf}` 里找不到 `{_s(rd['marker'])}` ⇒ "
+                       f"**读取可能退回裸 `Get-Content`**（PS 5.1 默认 ANSI ⇒ 中文资源乱码）")
+
+    if bad:
+        return "FAIL", " · ".join(notes) if notes else "见明细", bad
+    return "PASS", " · ".join(notes), []
+
+
 CHECKS = [
     {"id": "secrets", "title": "明文扫描", "fn": check_secrets, "quick": True,
      "fix": "删除明文密钥, 或加入 SECRET_ALLOW 并写明原因(不允许静默放行); "
@@ -6567,6 +6733,22 @@ CHECKS = [
             "⚠ **它不判什么**：只能核那句声明**在不在**，**判不了模型是否真遵守**；"
             "也**不做注入实验**（本仓没有实验台）⇒ **别读成「注入已防住」**。"
             "⚠ `interruptions` 只有 3 条 —— **不是穷举**（ssh 不可达 / 站断电等未登记）"},
+    {"id": "rubric-blindspot", "title": "rubric 纪律 + 自环盲区登记",
+     "fn": check_rubric_blindspot, "quick": True,
+     "fix": "D7-P4-3（Ds 简报 15 / 12 / 21）：`inventory/rubric-and-blindspots.yaml` 是单一真值。"
+            "① 报『rubric 里**找不到**必含句』= 某条**裁判纪律被人删了/改了措辞**"
+            "（rubric 是纯文本资源，删一句没人知道）⇒ 补回来，或**同步改真值表**；"
+            "② ★ 报『找不到 `ReadAllText`』= rubric/tmpl 的**读取退回了裸 `Get-Content`** —— "
+            "PS 5.1 默认按 ANSI 读 ⇒ **中文资源会乱码**（本仓那条『UTF-8(BOM) 铁律』"
+            "实际是靠**显式编码**兜住的）；"
+            "③ 报『缺 `impl-same-source`』= **本仓最实质的盲区没登记**：三站互审走**同一份 "
+            "`agent-cli.ps1`** ⇒ 实现层缺陷两侧同时出现，互审**结构上发现不了**；"
+            "④ 报『缺 `why_blind`』= 没说清**为什么互审看不见**（那就不叫盲区登记，叫感想）；"
+            "⑤ 报『`other_guard` 是 `na` 但缺 `why`』= **「没有替代机制」也要给理由**；"
+            "⑥ 报『`derived_edges` 是 `deferred` 但缺 `condition`』= 触发条件没写死 ⇒ "
+            "它会**永远挂着或悄悄做掉**。"
+            "⚠ **它不判什么**：只核那几句**在不在**，**不判 rubric 全文写得好不好**（纯文本，语义不可机判）；"
+            "盲区清单**不是穷举**；`derived_edges` 的触发条件是**跨仓事件**，本仓判不了"},
     # O-63 (2026-09-25): 取号并发夹具。**刻意 quick:False**（要起 8 个独立进程 + 两次 2.5s 共同释放时刻 ⇒ 约 6s）。
     {"id": "ps1-runstamp", "title": "ts 取号并发夹具", "fn": check_ps1_runstamp, "quick": False,
      "fix": "O-63: 跑 `powershell -NoProfile -ExecutionPolicy Bypass -File ops/station-bin/_runstamp_hammer.ps1 -N 8 -SelfTest`。"

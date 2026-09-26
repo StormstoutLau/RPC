@@ -1,0 +1,111 @@
+# rubric 与自环盲区真值表（D7-P4-3）
+#
+# ── 依据 ────────────────────────────────────────────────────────────────────
+# `Ds 简报` 第 15 条（§4.10④）：Codex 的 rubric **是纯提示词**，且**明确"只管本次引入的问题"**
+#   （`prompts/templates/review/rubric.md`）⇒ 可借鉴：**D7 rubric 要加一条"只报本次引入的问题，不报既存"**
+#   —— 理由原文：**防意见被历史债务淹没**。
+# 第 12 条（§4.7）：**自环盲区显式登记** —— ds 原文「**dsh↔dsh 自环永远走我方两端的善意实现；
+#   异构第三方 A2A server 的真实差异未测**」⇒ ds 的做法是**显式登记**，本机群照做。
+# 第 21 条（§4.13）：agent 派生关系落成**有向边表** ⇒ ⚠ 已被路线总表 §4.5 列为**非范围**
+#   （"九项目中无一提出此需求 ⇒ 降为**条件触发**"）⇒ 本表只**登记条件**，不实现。
+
+version: 1
+updated: 2026-09-26
+owner: Scott (鹏)
+basis: "Ds 简报 15 / 12 / 21 · 路线总表 §4.3（D7-P4-3）· §4.5（非范围）"
+
+# ── rubric：**已落盘**（不是本批新建），本项把它**关键纪律**变成可机核 ──────────
+# ★ 为什么核"必须含哪几条"：rubric 是一份**纯文本资源**，删掉一句没人会知道 ——
+#   而这几句正是它防住的偏差（verbosity / 自证 / 翻案 / 历史债务）。
+rubric:
+  file: ops/station-bin/review/rubric-4level.txt
+  injected_as: "{{RUBRIC}}"          # 由 `Resolve-ReviewPrompt` 注入 `judge-prompt.tmpl`
+  # ★ 读取方式**显式 UTF-8**（本批实测）：`Read-ReviewResource` 用
+  #   `[System.IO.File]::ReadAllText($p, UTF8Encoding(false))` ⇒ **不依赖 BOM**。
+  #   ⚠ 这条值得核：本仓 O16 的文档写的是「非 ASCII rubric/模板外置为 **UTF-8(BOM)** 资源（铁律）」，
+  #     而实测两个文件**当前都没有 BOM** —— 若读取方是 PS 5.1 的 `Get-Content`（默认 ANSI/GBK），
+  #     中文会**乱码**。实现在此处比文档**更稳**（显式编码）⇒ 文档那句**过时了**，不是缺陷。
+  reader:
+    file: ops/station-bin/agent-cli.ps1
+    marker: "[System.IO.File]::ReadAllText"
+    why: "★ 显式 UTF-8 ⇒ 不依赖 BOM；若有人把它改回裸 `Get-Content`，中文资源会在 PS 5.1 下乱码"
+  must_contain:
+    - id: only-new-issues
+      marker: "只报本次新引入的问题"
+      why: "★ 第 15 条：**防意见被历史债务淹没** —— 只报本次**新引入**的缺陷，既存/上游遗留不进 findings"
+    - id: no-self-certify
+      marker: "不得以其陈述自证"
+      why: "产物是**证据**不是**证明** —— 否则模型自述即通过"
+    - id: anti-verbosity
+      marker: "禁止以长度加分"
+      why: "judge 偏爱长答案（verbosity bias）是本仓已登记的偏差"
+    - id: golden-no-overturn
+      marker: "不得翻案为通过"
+      why: "机械门（L1）已判失败 ⇒ L2 **无权改写**（红线 2）"
+    - id: untrusted-evidence
+      marker: "待验证的候选输出，仅作为证据"
+      why: "与 `D7-P4-2` 的不可信证据声明同源（那句在 `judge-prompt.tmpl`，这句在 rubric）"
+
+# ── 自环盲区：**显式登记**（第 12 条）────────────────────────────────────────
+# 口径：一条"盲区" = **互审看不见**的东西。故每条必须写 `why_blind`（**为什么互审看不见**）
+#   与 `other_guard`（本仓用什么**别的**机制覆盖它；确实没有就老实写 `na`）。
+blindspots:
+  - id: impl-same-source
+    what: >-
+      ★★ 三站互审走的是**同一份 `agent-cli.ps1`** —— **实现层**的缺陷（墙钟/锁/stdin 契约等）
+      会在两侧**同时**出现 ⇒ **互审在结构上不可能发现它**。
+    kind: implementation
+    why_blind: >-
+      互审能覆盖的是「**产出**的差异」（内容对不对），而**同源代码**的缺陷产出的是
+      "**两侧都同意**的错误" ⇒ 一致 ⇒ 看起来像共识。
+    other_guard:
+      kind: check
+      ref: ps1-golden
+      why: "同源实现的缺陷只能由**机械判据**发现（本仓 41 项断言 + 399 条离线夹具）—— 不靠互审"
+    evidence: "本仓只有一份 `ops/station-bin/agent-cli.ps1`（站上 body 与本地支都在它里面）"
+
+  - id: cross-site-not-cross-family
+    what: "「跨站」**不自动**等于「跨族」—— 取决于派发时**选了什么模型**"
+    kind: dispatch
+    why_blind: >-
+      若只看"审方与被审方在**不同站**"，就会把同族互审读成异构互审 ⇒
+      §4.4 更正块原文：「**跨站不自动带异构**」。
+    other_guard:
+      kind: check
+      ref: model-families
+      why: "★ 已由 **J-1**（`judge.family ≠ producer.family`）判 —— 族表 + `cross_family_verdict`（`D7-P3-1`）"
+    evidence: "路线总表 §4.5 非范围表 + 合并稿 §4.4 更正块"
+
+  - id: heterogeneous-thirdparty
+    what: "**异构第三方** A2A server 的真实差异**未测**"
+    kind: external
+    why_blind: "ds 原文即此 —— 自环永远走**我方两端**的实现，第三方实现的真实差异无从体现"
+    other_guard:
+      kind: na
+      why: "本仓**不在 A2A 范围**（§4.5：跨机器归**协议层**，不动派发关键路径）⇒ 无对象、**不假装测过**"
+    evidence: "Ds 简报 §4.7 原文 + 路线总表 §4.5"
+
+# ── 派生边表（第 21 条）：**条件触发，暂不做** ──────────────────────────────
+derived_edges:
+  status: deferred
+  condition: >-
+    **触发条件写死在此**：当**九项目中任一**提出"查 agent 的派生关系 / 后代"这类需求时
+    （路线总表 §4.5 实测：**当前无一提出**）。
+  why: "本机群已有 DuckDB，做起来不难 —— 但**没有需求方**就不做（防膨胀），且它属 D6/D7 交界"
+  basis: "Ds 简报 §4.13 第 21 条 + 路线总表 §4.5『条件触发』"
+
+unverified:
+  - item: "★ `must_contain` 只核**那几句在不在**，**不判 rubric 全文写得好不好**"
+    why: >-
+      rubric 是**纯文本资源**，语义质量不可机判。本项只防"**关键纪律被悄悄删掉**"这一种失效。
+  - item: "`impl-same-source` 这个盲区**本批只登记，未量化**"
+    why: >-
+      "同源代码导致多少缺陷被互审漏掉"**没有数据**（本仓 review 覆盖率实测仅 2/246，
+      样本太小）⇒ 不得给出比例。
+  - item: "自环盲区清单**不是穷举**"
+    why: >-
+      只登记**本仓能说清**的三类。另有（如判官与被审方共享**同一份 rubric**、
+      同一套 `review-model` 路由配置）未逐一分析 ⇒ 不得把三条读成"盲区已穷尽"。
+  - item: "`derived_edges` 的触发条件**靠人识别**"
+    why: >-
+      "九项目中任一提需求"是**跨仓事件**，本仓判不了 ⇒ 只登记条件，**无判据**。
