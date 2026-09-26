@@ -99,6 +99,12 @@ frozen_ops_scripts:
   #   ③ 它**跑子进程**（每条判据 2 次）⇒ 会明显拉长门禁时间 ⇒ 亦不适合挂 quick。
   #   ⚠ 它是**工具**而非入口：用法见其 docstring（`--list` / `--sample N` / `--all` / `--id X`）。
   - ops/judge_selfcheck.py
+  # 2026-09-26 (D7-P3-1): **producer↔judge 配对审计** —— J-1/J-2 的**最小消费者**。
+  #   ① **只读**且**不判灯**（本仓纪律"先量后定档"，同 O-69/O-97）;
+  #   ② 它存在的理由：两条判据的被判对象在**站上 runDir**（`run.json` + `review.json`）
+  #      ⇒ 本仓门禁读不到 ⇒ 不加这个消费者，它们就一直是"判据库、没人用";
+  #   ③ 不挂门禁的另一条：它要遍历**可达项目**（跨机器、几百个 runDir）⇒ 属审计级而非 committing 级。
+  - ops/agent_pair_audit.py
   - ops/llama-serve-instance
   - ops/lm-download/speedtest_asset.sh
   - ops/lm-download/speedtest_codeload.sh
