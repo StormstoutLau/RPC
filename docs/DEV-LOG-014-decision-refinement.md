@@ -3013,3 +3013,18 @@ spec/d6-agent-standard/dogfood-cards/v5-shared-readonly-probe.md   model=ultra-c
 
 **⇒ 结论**：**"用满 3 站 3 额度"的入口已通，且已被真实任务用掉一次**（D7 阶段门 P0 的三项设计产出）。
 
+### 42.11 检查上一轮时发现的**一处自伤**：真值源文件名写错 ⇒ 静默回落（O-81）
+
+**现象**：汇总声称"**以 runDir 为真值**（读 `run.json`）"，而 runDir 里**根本没有 `run.json`** —— 归档件的真名是
+**`.agent-run.json`（有点前缀）**（字段：`exit_code` / `status` / `accept` / `content_digest` …）。
+⇒ `Test-Path` **恒假** ⇒ **每次都实际用日志里解析的 rc**，却被我说成"runDir 真值"。
+
+**为什么结论仍然对**：三卡 `.agent-run.json` 的 `exit_code=0 / status=completed` 与日志（末行 `--- ACCEPT_RC[8]=0`）**一致**
+⇒ **判定没错，错的是"真值源的声明"**。（顺带确认：`ACCEPT_RC[8]` = 本卡的 8 条 accept 判据全过 ✓）
+
+★ 仍属本仓头号形态的变体：**"看起来更硬的判据其实没读到"**（静默回落 = 假绿的近亲）；
+与 O-79 的"判据判了别的东西"、以及更早的 input-provenance `yaml.safe_load` 静默跳过**同族**。
+
+**修**：读 **`.agent-run.json`**；**回落时显式标 `src=log`**（不再静默）；汇总行加 **`src=`** 列（一眼看出用了哪个源）；
+夹具 **`o80⑨`**（含**反向断言**：不许再出现 `Join-Path $runDir 'run.json'`）⇒ **287/287**。
+
