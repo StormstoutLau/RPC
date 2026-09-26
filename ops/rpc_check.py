@@ -1257,6 +1257,17 @@ def check_id_census(ctx):
       换一台机器就没有 ⇒ 硬红会把"我的环境"变成"仓库的规则"。
       但**必须可见**（D-26：降级要有呈现位）—— 所以报 `可达 N/M` + 逐项目标 `--`，
       **绝不静默通过**。
+    ★★ **O-87（2026-09-26 补）：note 里列出"可达项目根清单"（`id@root`）** —— 理由：
+      本仓两次"假缺口"（把"我没搜到"写成"它不存在"）都是**关于外部世界的存在性否定**，
+      而**答案本来就在这张表里**（`Macro_Data` 一直在 `E:` 盘；Open_Data / Auto_Prover 的库一直在 `F:` 盘）。
+      只报计数（"可达 10/10"）**不列名** ⇒ 写结论的人看不到 ⇒ 于是继续写假缺口。
+      ⇒ 把清单**摆进每轮门禁输出**，让"它其实在 `F:`/`E:`"当场可见（把"我没搜到"从**隐性推论**
+      变成**可见事实**的对账）。
+    ⚠⚠ **射程（不许读过头）**：本判据**不判**"文档里的存在性结论是否为真" —— 那一半**不可能干净地文本机判**：
+      「不存在」在规范文档里**有歧义** = **本仓没有实现/判据**（合法，且"未实测登记"节**必须**能这么写）
+      vs **外部世界没有那个东西**（危险推论）⇒ 实测三次收窄**仍出假阳性**（13 → 2 → 仍含 1 条误报）
+      ⇒ **已放弃文本扫描**，见 `DEV-LOG-014` §53.1。本判据只保证：**事实可见**，
+      且**清单本身不会静默缺项**（某项目缺 `root` ⇒ FAIL）。
     """
     import importlib.util
     try:
@@ -1295,11 +1306,22 @@ def check_id_census(ctx):
             ok.append(p["id"])
 
     total = len(doc.get("projects") or [])
+    # O-87：**可达项目根清单** —— 让"本机到底有什么"每轮可见（理由见 docstring）。
+    #   缺 `root` 的项目会被**静默漏出**清单 ⇒ 可见性降级 ⇒ 故下面 fail-closed（不是只报数）。
+    projs = doc.get("projects") or []
+    missing_root = [str(p.get("id")) for p in projs if not p.get("root")]
+    reach_roots = [f"{p['id']}@{p.get('root')}" for p in projs if p.get("reachable") and p.get("root")]
     note = (f"口径 {m.get('name')}（{m.get('unit')}）· 真值一致 {len(ok)} 个 · "
-            f"不符 {len(mism)} 个 · 不可达 {len(unreach)}/{total}")
+            f"不符 {len(mism)} 个 · 不可达 {len(unreach)}/{total} · "
+            f"可达项目根 {len(reach_roots)} 个: " + " · ".join(reach_roots))
+    if missing_root:
+        note += f" · ⚠ 无 root {len(missing_root)} 个"
     if drift:
         # 口径漂移比数值漂移严重：口径一变，真值里所有数字立刻失去意义
         return "FAIL", note, [f"**口径已漂移**（真值是用旧口径生成的）: {drift} ⇒ 重跑 --emit 并复核下游结论"] + mism
+    if missing_root:
+        return "FAIL", note, [f"**项目根清单缺项**（`root` 缺失 ⇒ 该项**读不出可达性** ⇒ O-87 的可见化"
+                              f"**静默降级**）: {', '.join(missing_root)} ⇒ 在 `inventory/id-site-census.yaml` 补 `root:`"]
     if mism:
         return "FAIL", note, mism
     if unreach:
