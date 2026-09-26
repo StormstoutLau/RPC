@@ -20,6 +20,10 @@
 - **裁定 A**：`station-ready` 必须**按后端属性分流**（`Get-BackendEgress`），
   不得退回无条件探测（那会把出网档重新锁死在引擎门上）。
 - **O-27**：`.meta` 必须写 `RC_DOMAIN=v2`（TASK_RC 与 run.json 同域的标记）。
+- **O-28 RC①**（2026-09-26 补）：**站覆盖必须自洽** —— `-RemoteHost` 传入后**由 hostName 反推 `$station`**，
+  且反推必须**早于** `$station` 被用于 slot-gate。退回"半覆盖"⇒ 同步/执行去 A 站而记账/加锁仍按 route 的站。
+- **F-4**（2026-09-26 补）：ledger 追加必须走**真互斥**（`FileMode::Append` + `FileAccess::Write` +
+  **`FileShare::Read`** + 退避）。只判"没有裸 `Add-Content`" 不够 —— **函数名留着、实现退化成裸追加照样绿**。
 """
 import re
 import sys
@@ -115,6 +119,26 @@ def main() -> int:
          "退回共享固定名 agent-cli-sync-<proj>.tar ⇒ **sync 在远端 flock 之前** ⇒ 同 proj 并发互删"
          "（实测 sync failed: Cannot find path '…Temp\\agent-cli-sync-dogfood.tar'）")
 
+    # O-28 RC①：**站覆盖必须自洽**（`-RemoteHost` ⇒ 由 hostName **反推** `$station`），不得退回"半覆盖"。
+    #   退回的症状（实测）：`$hostName` 变了而 `$station` 没变 ⇒ 同步/执行去了 A 站，而
+    #   slot-gate / 记账 / 显示**仍按 route 的站** ⇒ **三张卡被当成同站** ⇒ 撞 per-(proj,站) 锁
+    #   （`LOCK_HELD owner_pid=… mode=exclusive` 同一 owner）。
+    #   ★ **位置断言是语义的一部分**：反推必须在 `$station` 被用于 slot-gate **之前** ——
+    #     否则"自洽"只是一句注释（站定得太晚 ⇒ 早先那几步仍按错站走）。
+    rc1_param = "[string]$RemoteHost" in src
+    rc1_forward = bool(re.search(r"Invoke-Task[^\n]*-hostName \$RemoteHost", src))
+    rc1_derive = ("foreach ($s in @('A', 'B', 'C')) {" in co
+                  and "if ((Get-TargetHost $s) -eq $hostName) { $station = $s; break }" in co)
+    _dl = [i for i, ln in enumerate(src.splitlines(), 1)
+           if "if ((Get-TargetHost $s) -eq $hostName) { $station = $s; break }" in ln.split('#', 1)[0]]
+    _sg = [i for i, ln in enumerate(src.splitlines(), 1)
+           if "Invoke-SlotGate" in ln.split('#', 1)[0] and "function" not in ln.split('#', 1)[0]]
+    rc1_order = bool(_dl) and bool(_sg) and min(_dl) < min(_sg)
+    need("O-28 RC① 站覆盖自洽（-RemoteHost ⇒ 反推 station，且反推早于 slot-gate）",
+         rc1_param and rc1_forward and rc1_derive and rc1_order,
+         f"入参={rc1_param} dispatch 传参={rc1_forward} 反推结构={rc1_derive} 位置(反推<slot-gate)={rc1_order} ⇒ "
+         "半覆盖 ⇒ 三张卡被当成同站 ⇒ 撞 per-(proj,站) 锁（实测 LOCK_HELD 同一 owner）")
+
     # ── ★ 纪律断言化（2026-09-23）─────────────────────────────────────────────
     # BLINDSCAN-v3 §3 的跨条目纪律: **凡"共享路径", 要么带 per-invocation 身份
     #   (`$Script:RUN_TOKEN` / `$ts`), 要么走真锁(`flock`)。**
@@ -202,6 +226,23 @@ def main() -> int:
     need("F-4 ledger 走 Add-LedgerLine（ledger 上无裸 Add-Content）",
          (not naked) and len(ledger_calls) >= 3,
          f"ledger 上的裸 Add-Content 命中={naked}；Add-LedgerLine 出现数={len(ledger_calls)}（应为 定义1 + 两路各1 = 3）")
+
+    # F-4 **互斥原语**（2026-09-26 补）：上面那条只判"**名字**"（函数在不在、有没有裸 Add-Content）
+    #   ⇒ **函数名留着、实现退化成裸追加也行**（例如把 `FileShare::Read` 改成 `ReadWrite`、
+    #     或去掉退避）⇒ 属本会话反复抓到的**假绿面**（判据判了名字，没判语义）。
+    #   为什么 `FileShare::Read` 就是互斥：Windows 共享检查下，第一个句柄只允许他人 `Read`
+    #   ⇒ 第二个以 `Write` 打开的进程**被拒** ⇒ 抛 IOException ⇒ 走退避重试。
+    #   （裸 `Add-Content` 没有这个保证 —— 实测"两行都完整"只是**单行短于缓冲的偶然性**。）
+    _lm = re.search(r"function Add-LedgerLine \{([\s\S]*?)\n\}", co)
+    lbody = _lm.group(1) if _lm else ""
+    f4_open = ("[IO.File]::Open($Path, [IO.FileMode]::Append, [IO.FileAccess]::Write, "
+               "[IO.FileShare]::Read)") in lbody
+    f4_backoff = "Start-Sleep" in lbody
+    f4_once = lbody.count("[IO.File]::Open(") == 1
+    need("F-4 追加走**真互斥**（Append+Write+FileShare::Read 且带退避；函数体内只此一处打开）",
+         f4_open and f4_backoff and f4_once,
+         f"互斥原语={f4_open} 退避={f4_backoff} 单点={f4_once} ⇒ 退化成裸追加 / ReadWrite ⇒ "
+         "同行追加会交错 ⇒ 证据链的 run 记录被损坏（比『漏一行』更难查）")
 
     # O-29：`golden-cmd` 必须**条件列**（与 accept-* 同纪律），不得裸列进 subjects 基线。
     #   裸列 ⇒ 无 golden 的卡每 run 记一条 missing-artifact 可重放 gap（实测连续 3 个 run 命中）。
@@ -313,7 +354,7 @@ def main() -> int:
          "加 `-k` 后 KILL 生效时 timeout 返回 137（非 124）⇒ 不归并会让「超时」落成**未映射失败**，"
          "丢掉续跑/备路（且 137 与 OOM 同码，已在注释里留痕说明）")
 
-    print(f"\n静态护栏 {18} 条")
+    print(f"\n静态护栏 {20} 条")
     if fails:
         print("FAIL:")
         for x in fails:
