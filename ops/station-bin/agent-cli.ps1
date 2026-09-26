@@ -4640,6 +4640,55 @@ function Resolve-SelfReviewGuard {
     return @{ ok = $true; verdict = 'ok'; reason = ''; facts = $facts }
 }
 
+function Select-Reviewer {
+    # ── D7-P3-2（2026-09-26）：**编排层最小可用形态 —— 谁审谁**（自动避让，而非只拒）──────
+    # 为什么需要它：`D7-P3-1` 的"不得自审"门会把**同名**判官**拒**掉；但"拒"只是说明
+    #   "这一次没审成"，**没有解决"该谁审"** —— 实测 `review` 覆盖率 **2/246**，其中一部分
+    #   正是"默认判官可能与产出者同名/同档 ⇒ 干脆没审"。⇒ 编排层的第一件事 = **自动选一个能审的**。
+    # ★★ 站上只做**粗筛**（归一不同名 + **跨传输档优先**）；**族级细判在本仓**
+    #   （`ops/agent_pair_audit.py` 的 J-1/J-2）—— 族表不在站上 ⇒ **不假装能判族**（同 `D7-P3-1`）。
+    # ★ **跨传输档优先的理由**（信息独立的下界）：本机档 vs 出网档 = **不同的权重来源**，
+    #   比"同档换个名字"更接近"信息独立"（J-2 要的是输入独立，传输档不同是**必要条件**之一）。
+    # ⚠ **fail-closed**：一个候选都选不出 ⇒ `ok=false` + 理由（**不默认放行**）。
+    param(
+        [string]$ProducerModel,
+        [object]$Table,               # $Script:JUDGE_TABLE
+        [string]$PreferAlias,         # 原选中（命令行/卡面/默认）的 alias
+        [string]$Sensitivity          # 用于沿用既有的 compliance 语义（此处只记，不判）
+    )
+    $key = {
+        param($s)
+        $t = [string]$s
+        if (-not $t) { return '' }
+        ($t -split '/')[-1] -split ':' | Select-Object -First 1 | ForEach-Object { $_.Trim().ToLower() }
+    }
+    $pk = & $key $ProducerModel
+    $prodEgress = $false
+    $prodIsEgress = ($ProducerModel -match '^(openrouter|station:)')
+    $rejected = @(); $cands = @()
+    foreach ($al in @($Table.Keys)) {
+        $j = $Table[$al]
+        $jk = & $key ([string]$j['id'])
+        if (-not $jk) { $rejected += "$al(judge id 读不出)"; continue }
+        if ($pk -and $jk -eq $pk) { $rejected += "$al(与产出者同名)"; continue }
+        $je = [bool]$j['egress']
+        # 跨档加分：producer 是出网档 ⇒ 优选本机判官；producer 是本机 ⇒ 优选出网判官
+        $crossTier = ($prodIsEgress -and -not $je) -or ((-not $prodIsEgress) -and $je)
+        $cands += [pscustomobject]@{ alias = $al; id = [string]$j['id']; egress = $je
+                                     cross_tier = $crossTier; prefer = ($al -eq $PreferAlias) }
+    }
+    if ($cands.Count -eq 0) {
+        return @{ ok = $false; alias = ''; id = '';
+                  reason = ("无可选判官（全部被排除: " + ($rejected -join ' · ') + ")"); rejected = $rejected }
+    }
+    # 排序：① 原选中的优先（尊重人/卡的显式选择）· ② 跨档优先 · ③ alias 稳定序（可复现）
+    $pick = @($cands | Sort-Object @{Expression={-1 * [int]$_.prefer}},
+                                     @{Expression={-1 * [int]$_.cross_tier}},
+                                     @{Expression={$_.alias}}) | Select-Object -First 1
+    return @{ ok = $true; alias = $pick.alias; id = $pick.id; cross_tier = $pick.cross_tier
+              prefer = $pick.prefer; rejected = $rejected; sensitivity = [string]$Sensitivity }
+}
+
 function Invoke-Review {
     param(
         [string]$proj,
@@ -4728,6 +4777,32 @@ function Invoke-Review {
     #   因为族表不在站上 ⇒ **站上不假装能判族**。
     # ⚠ fail-closed：`model` 读不出 ⇒ 拒（读不到 ≠ 不同）。
     $sg = Resolve-SelfReviewGuard -ProducerModel ([string]$l1Record.model) -JudgeId ([string]$judge['id']) -JudgeAlias ([string]$judgeAlias) -Allow:$allowSelfReview
+    # ── D7-P3-2（2026-09-26）：**编排层 —— 先自动避让，再决定拒还是放行** ──────────────
+    # 为什么顺序必须是"先换后拒"：只拒 = 说明"这一次没审成"，**没解决"该谁审"**（实测 review 覆盖 2/246）。
+    # ★ 只换一次、且只换**确实不同名**的；换不到 ⇒ 保持原样 ⇒ **仍走下面的拒绝**（绝不偷偷放行）。
+    $switchedFrom = ''
+    if ($sg['verdict'] -eq 'self') {
+        $sel = Select-Reviewer -ProducerModel ([string]$l1Record.model) -Table $Script:JUDGE_TABLE `
+                               -PreferAlias ([string]$judgeAlias) -Sensitivity $sens
+        if ($sel['ok'] -and $sel['alias'] -ne [string]$judgeAlias) {
+            $newJudge = Resolve-Judge $sel['alias']
+            if ($newJudge) {
+                $sg2 = Resolve-SelfReviewGuard -ProducerModel ([string]$l1Record.model) -JudgeId ([string]$newJudge['id']) `
+                                               -JudgeAlias ([string]$sel['alias']) -Allow:$allowSelfReview
+                if ($sg2['ok']) {
+                    Write-Host ("REVIEWER_SWITCHED: 判官 " + [string]$judgeAlias + " 与产出者同名 ⇒ 自动改选 " +
+                                [string]$sel['alias'] + " (" + [string]$sel['id'] + ")" +
+                                $(if ($sel['cross_tier']) { " [跨传输档]" } else { "" }))
+                    $switchedFrom = [string]$judgeAlias
+                    $judgeAlias = $sel['alias']; $judge = $newJudge; $sg = $sg2
+                } else {
+                    Write-Host ("REVIEWER_SWITCH_FAILED: 改选 " + [string]$sel['alias'] + " 仍不可用（" + $sg2['reason'] + "）")
+                }
+            }
+        } elseif (-not $sel['ok']) {
+            Write-Host ("REVIEWER_SELECT_NONE: " + $sel['reason'])
+        }
+    }
     if (-not $sg['ok']) {
         Write-Host ("REJECT SELF_REVIEW_BLOCK (" + $sg['verdict'] + ": " + $sg['reason'] + ") exit 8 - " +
                     "产出者与判官须为不同模型；诊断用可加 --allow-self-review")
@@ -4743,6 +4818,7 @@ function Invoke-Review {
         judge_id = $sg['facts']['judge_id']
         judge_alias = $sg['facts']['judge_alias']
         allowed = [bool]$allowSelfReview
+        switched_from = $switchedFrom        # D7-P3-2：自动避让留痕（空串 = 未换）
     }
 
     $runName = Split-Path $runDir -Leaf
