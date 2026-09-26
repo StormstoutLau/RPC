@@ -36,7 +36,9 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 # D7-P2-2 (2026-09-26): **结论契约** —— 三个纯函数（校验器 + 综合器）。
 'Test-FindingShape', 'Test-ConclusionContract', 'Merge-JudgeFindings', 'Resolve-L1Gate',
 # D7-P3-1 (2026-09-26): **不得自审**的判定本体（纯函数）。
-'Resolve-SelfReviewGuard')) {
+'Resolve-SelfReviewGuard',
+# D7-P3-2 (2026-09-26): **编排层 —— 谁审谁** 的选择器（纯函数）。
+'Select-Reviewer')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -1739,6 +1741,41 @@ Assert-True "sr-12 两处写点都留 self_review_guard" (
     ([regex]::Matches($content, "\`$review\['self_review_guard'\] = \`$sgSection")).Count -ge 2)
 Assert-True "sr-13 有显式放行通道（不是偷偷放行）" (
     $content -match '\[switch\]\$allowSelfReview' -and $content -match '--allow-self-review')
+
+# ⑬ D7-P3-2（2026-09-26）：**编排层 —— 谁审谁**（自动避让，而非只拒）
+# 为什么要有：`D7-P3-1` 的门只"拒"，**没解决"该谁审"**（实测 review 覆盖 2/246）⇒ 本组守"换得对"。
+$jT = [ordered]@{
+    'ultra'       = @{ egress = $true;  id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free' }
+    'main'        = @{ egress = $false; id = 'main-opencode-cli' }
+    'm27'         = @{ egress = $false; id = 'local/m27-q4ks' }
+    'rpc-v4flash' = @{ egress = $false; id = 'cluster-v4flash' }
+}
+$s1 = Select-Reviewer -ProducerModel 'local/m27-q4ks' -Table $jT -PreferAlias 'm27' -Sensitivity 'public'
+Assert-True "sel-1 ★原选中与产出者同名 ⇒ **被排除**，自动改选" ($s1['ok'] -and $s1['alias'] -ne 'm27', $s1['alias'])
+Assert-True "sel-2 ★改选**跨传输档优先**（产出者本机 ⇒ 优选出网判官）" ($s1['alias'] -eq 'ultra' -and $s1['cross_tier'])
+Assert-True "sel-3 被排除者**点名**（可追溯，不静默）" (@($s1['rejected']) -join ' ') -match 'm27\(与产出者同名\)'
+$s2 = Select-Reviewer -ProducerModel 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free' -Table $jT -PreferAlias 'ultra' -Sensitivity 'public'
+Assert-True "sel-4 产出者是出网档 ⇒ 优选**本机判官**（即 cross_tier 为真，且原选中被排除）" (
+    $s2['ok'] -and $s2['cross_tier'] -and $s2['alias'] -ne 'ultra')
+# ⚠ **期望不钉死具体 alias**：并列时的次序键是 `alias` 升序，而 `m27` < `main`
+#   （**数字 '2'(50) 先于字母 'a'(97)**）—— 我先按"字典直觉"写成 `main` ⇒ 假红。
+#   ⇒ 断言**性质**（跨档 + 非同名）比钉死一个名字更耐用；名字本身由 `sel-8` 的可复现性守。
+$s3 = Select-Reviewer -ProducerModel 'local/gpt-oss-20b' -Table $jT -PreferAlias 'm27' -Sensitivity 'public'
+Assert-True "sel-5 ★原选中**可用时保持不变**（尊重卡/命令行的显式选择）" ($s3['alias'] -eq 'm27')
+$s4 = Select-Reviewer -ProducerModel 'local/gpt-oss-20b' -Table $jT -PreferAlias 'nope' -Sensitivity 'public'
+Assert-True "sel-6 prefer 是无效 alias ⇒ 仍能选出（不因 prefer 错而失败）" ($s4['ok'] -and $s4['alias'])
+$onlySelf = [ordered]@{ 'a' = @{ egress = $false; id = 'local/x' }; 'b' = @{ egress = $true; id = 'openrouter/y/x' } }
+$s5 = Select-Reviewer -ProducerModel 'local/x' -Table $onlySelf -PreferAlias 'a' -Sensitivity 'public'
+Assert-True "sel-7 ★全部候选都被排除 ⇒ **ok=false**（fail-closed，不偷偷放行）" (-not $s5['ok'], $s5['reason'])
+$s6 = Select-Reviewer -ProducerModel 'local/m27-q4ks' -Table $jT -PreferAlias 'm27' -Sensitivity 'public'
+Assert-True "sel-8 **可复现**（同输入两次同结果）" ($s6['alias'] -eq $s1['alias'])
+# 接线（防"写了但没跑"）
+Assert-True "sel-9 接线：**先换后拒**（换在前面，拒在后面）" (
+    $content.IndexOf('Select-Reviewer -ProducerModel') -lt $content.IndexOf('REJECT SELF_REVIEW_BLOCK'))
+Assert-True "sel-10 接线：换过之后**重新过一遍**门（不是换完就算）" (
+    $content -match '\$sg2 = Resolve-SelfReviewGuard' -and $content -match "if \(\`$sg2\['ok'\]\)")
+Assert-True "sel-11 留痕：review.json 记 `switched_from`（未换 = 空串）" (
+    $content -match "switched_from = \`$switchedFrom")
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
