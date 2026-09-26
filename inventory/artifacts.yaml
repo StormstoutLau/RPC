@@ -39,6 +39,12 @@ items:
   - path: inventory/dialect.yaml
     authority: "合并稿 §11.1 原文切片 + 出站版摘要（两层输入；重抽=人/agent 在环，见文件内 regeneration 段）"
     check: dialect
+  # D7-P1-3 (2026-09-26): U-3 边清单 —— 边的真值在**各项目**（谁依赖谁），本文件是它的投影。
+  #   ⚠ 当前**实例为空**（前置缺失：`src`/`dst` 要 U-1 身份，而 U-1 未落地）⇒
+  #     门禁 `edges` 会把「0 条」**显式报出来**（不静默通过），并要求 `empty_reason` 非空。
+  - path: inventory/edges.yaml
+    authority: "各项目的真实依赖边（人手工搬 + 逐步改为确定性机制产生）；形状真值 = U3-EDGE-FORMAT.md"
+    check: edges
 
   # ── 受理交付物：**按项目一份**（不是仓库里的静态路径）─────────────────────
   # D6-P1-1 §11.1-C 纪律 1/2/3：登记为生成物 · `--check` 等价物（重算→比对）· freshness 决定能否结案。
