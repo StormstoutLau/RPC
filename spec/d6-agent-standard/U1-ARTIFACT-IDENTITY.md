@@ -31,7 +31,19 @@ Textbook · 本仓 inbox），是绝对多数；MD5 已知碰撞脆弱，只有 
 **取值**：`[:16]`。
 
 **为什么是它**：64 bit 空间下生日碰撞阈值约 `2^32`（≈4.3×10⁹），预估产物量级（<10⁹）下可忽略；
-factor_pipeline 与 Auto_Prover 的 `verdict_id` 已在用 16 字符（**有在用先例，非纸面**）；
+**有在用先例（非纸面）** —— ⚠ **本条已于 2026-09-26 按实测更正**：
+原文写"factor_pipeline 与 **Auto_Prover 的 `verdict_id`** 已在用 16 字符"⇒ **说错了两处**：
+  - **Auto_Prover 的 `verdict_id` 是 `v_` + **md5 + **12** 字符**（`proof_pipeline/kg/verdict_writer.py:65` ·
+    `kg/verdict_store.py:111` · `pipeline.py:203` —— **三处已逐行核过，取值一致**）—— **既不是 sha256、也不是 16**；
+  - 真正"16 字符"的是它的 **`case_id`** = `u_` + **md5** + **16**（实现 `proof_pipeline/kg/unified_cases.py:68`；
+    `tests/test_s2_unified_cases.py:79` 有 `len == 2 + 16` 的断言 ⇒ 是**被测试钉住的**，不是口头约定）
+    ⇒ 原文把 **两个字段混成了一件事**（本仓头号形态，而这次发生在**规范**里）。
+  - `factor_pipeline` 侧仍有 `[:16]` 用例（`cache.py:148` · `cache_manager.py:83/156/157/174/175`）✓ ——
+    ⚠ 但那是**缓存键 / 头尾哈希**，**未核实**其是否为"产物 ID"。
+  - ⚠ **复核时又发现同项目内还有两个更短的 ID 方案**（原文与首稿**均未提**）：`case_` + md5 + **8**
+    （`atlas_bridge/agent_runner.py:189`）· `thm_` + md5 + **8**（`stages/stage1_5_sketching.py:142`）
+    ⇒ Auto_Prover 的 ID 长度**项目内至少 4 种**（`u_`16 · `v_`12 · `case_`8 · `thm_`8）⇒ 进一步支持 §2 的"不兼容"。
+⇒ 先例依据**仍存在但更窄**（且**不涉及** `verdict_id`）。⚠ 截断取值本身的取舍见 **O-84**。
 短于 32/64 ⇒ 便于人工阅读、日志检索、URL 嵌入。
 
 **否掉了什么**：12 字符（余量不足）· 32 字符（对 ID 用途冗余）· 全 64 字符（过长）·
@@ -91,8 +103,8 @@ factor_pipeline 与 Auto_Prover 的 `verdict_id` 已在用 16 字符（**有在�
 |---|---|---|
 | Open_Data | **不兼容** | 算法同为 sha256，但取值维度不同（三段竖线 vs 规范化 JSON 数组）· 截断 32 → 16 · 无前缀 |
 | Macro_Data | **不兼容** | 算法同为 sha256，但输入是单一 URL · 全 64 → 16 · 无前缀 |
-| factor_pipeline | **兼容** | 算法同 · 截断同为 16 · `ns__id__ver` 可无损映射进三列 |
-| Auto_Prover | **不兼容** | md5 → sha256 · `u_` 前缀 → `# u1:sha256:16` · 截断 16 不变 |
+| factor_pipeline | **不兼容**（⚠ **本行已于 2026-09-26 按实测更正**，计数经**二次逐行复核**再修） | 算法同；但 ⚠ 原文写"**截断同为 16**" **不成立** —— 实测 `F:\Coding\factor_pipeline` 的 **16 个代码命中站点**（命中 `hexdigest()[...]` / `md5(`）里截断**项目内并存 5 种**：`[:8]`（`pre_registration.py:45` · `spec_log.py:68` · `factor_cache.py:219` · `price_cache.py:199`）· **`[:12]`**（`cache.py:161`）· `[:16]`（`cache.py:148` · `cache_manager.py:83/156/157/174/175`）· `[:32]`（`FactorNeutralizer.py:277`）· **md5 全 64**（`factor_type_aware_imputer.py:170` · `FactorNeutralizer.py:676/677`）⇒ 既不"同为 16"、也不止一种算法 · 无前缀<br>⚠ **计数更正（二次实测）**：首稿写"**18 个站点 / 并存 4 种 / cache_manager ×4**" ⇒ 逐行复核为 **16 个代码站点 / 并存 5 种 / cache_manager ×5** —— 首稿**把 `cache.py` 里 2 处 docstring 字样算成了站点**（`cache.py:36` · `:145` 是文字描述，不是赋值），又**漏了 `[:12]`**。⇒ **结论方向不变**（更不兼容），但**首稿计数本身即"比事实硬"** |
+| Auto_Prover | **不兼容**（⚠ **本行已于 2026-09-26 按实测拆分**） | ⚠ 原文写"md5 → sha256 · `u_` 前缀 → `# u1:sha256:16` · 截断 16 不变" —— **把两个字段混成一件事**了。实测拆分：**`case_id`** = `u_` + **md5** + **16** hex（`proof_pipeline/kg/unified_cases.py:68`；`u_` 前缀与 16 都属它）· **`verdict_id`** = `v_` + **md5** + **12**（`proof_pipeline/kg/verdict_writer.py:65`）⇒ 两者**都**不兼容 U-1（**算法同为 md5、且都不是 sha256**），但**理由不同**（12 vs 16） |
 | Fin_Agent | **不兼容** | md5 → sha256 · 全 32 → 16 · 无前缀 |
 | Textbook | **不兼容** | 算法同为 sha256，但取值维度不同（四列竖线）· 全 64 → 16 · 无前缀 |
 | 本仓 inbox | **兼容（仅算法）** | 算法同为 sha256；`MANIFEST.sha256` **维持全 64、无前缀**以保 `sha256sum -c`；新产物另行生成带前缀的 16 字符 ID，**不改写现有清单** |
