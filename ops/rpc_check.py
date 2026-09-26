@@ -2584,6 +2584,72 @@ def validate_spec_untested(text):
     return bad, f"列表项 {n_item} · 表格行 {n_row}"
 
 
+# ── O-93 (2026-09-26)：台账（`OPEN-ISSUES.md`）的「状态」必须**可机读** ────────────
+# 为什么要有：本台账是**单一真值**，但它的状态列是**叙述文** ⇒ 无论按「列」还是按「整行有没有 ✅」
+#   解析都会错。实测（同日三轮只读探针，同一棵树）**三种口径三个结果**：
+#   按列 **27**（O-90/91/92 已闭环却被判成开着）· 按格首标记 **10** · 按整行含 ✅ **9**（把已关的判成开/反之）
+#   ⇒ ★★ **两个方向都错**（既有假开、也有假关）；假关更危险（"看起来都没事了"）。
+# ⇒ **规则：格首标记自证** —— 状态 = **第一个**格首是 `✅`/`◐`/`⏳`/`🔵` 的格，**与它落在第几格无关**。
+#   ⚠ 为什么"与位置无关"而不是"第 N 格"：本表**列数不齐**（表头声明 8 列；老行 8 格、新行 6 格；
+#     另有若干行含裸竖线被拆开）——**同一个第 5 格，老行是状态、新行是证据** ⇒ 位置取法根本不成立。
+#   ⚠ 必须先**剥掉前导空白与加粗**（`**`/`_`）再判：实测 **22 行**的状态写成 `**✅ …**`，
+#     直接写 `^✅` 会把它们判成"无状态" ⇒ **假开**（我最初的探针就是这么错的）。
+#   ⚠ 取**第一个**而不是"恰一个"：老行的「归属批次」列会**复述** ✅（如 `✅ 已修`）—— 那是允许的。
+LEDGER = ROOT / "spec" / "d6-agent-standard" / "OPEN-ISSUES.md"
+LEDGER_ROW_RE = re.compile(r"^\|\s*(O-\d+)\s*\|")
+LEDGER_LEAD_RE = re.compile(r"^[\s*_]*(✅|◐|⏳|🔵)")
+LEDGER_CLOSED_MARK = "✅"
+
+
+def parse_ledger_rows(text):
+    """**纯函数**：解析台账行 ⇒ `[{id, line, status, cells}]`。`status` = 第一个格首带标记的格。
+
+    ⚠⚠ **`status` 存的是「归一后」的文本**（剥掉前导 `**`/`_`/空白）—— 否则 `startswith('✅')` 对
+      `**✅ …**` 会返回 False ⇒ **15 行被算成「仍开着」**（= 又一次假开；本批实测踩到，
+      是靠"判据报数与独立探针报数不一致"抓出来的：判据 57/35 vs 探针 72/20）。
+      ⇒ **教训：归一必须同时用于"匹配"和"比较"**，只对匹配归一照样会错。
+    """
+    rows = []
+    for i, ln in enumerate(text.splitlines(), 1):
+        m = LEDGER_ROW_RE.match(ln)
+        if not m:
+            continue
+        cells = ln.split("|")[1:-1]
+        status = ""
+        for c in cells:
+            if LEDGER_LEAD_RE.match(c.strip()):
+                status = LEDGER_LEAD_RE.sub(r"\1", c.strip())   # 归一：只留标记开头
+                break
+        rows.append({"id": m.group(1), "line": i, "status": status, "cells": cells})
+    return rows
+
+
+def check_ledger_status(ctx):
+    """O-93: 台账每行**状态可机读**（格首标记自证）—— 并报出「仍开着 N 条 + 清单」。
+
+    ★ 判什么：① 每行都要有状态格（缺 ⇒ FAIL = 该行状态**读不出来**）；② 数据行 ≥1（防空判）。
+    📊 **报数（不判）**：`✅ 闭环 X · 仍开着 Y` + 仍开着的 ID 清单 ⇒ **排优先级不再依赖人读**。
+    ⚠⚠ **不判什么**：「应该闭环多少」**不判** —— 「开着」**不是错误**；本判据只保证「**读得到**」。
+      也**不判**状态写得对不对（那仍要人读）—— 别把本判据读成"台账已被审计"。
+    """
+    if not LEDGER.is_file():
+        return "WARN", f"{LEDGER.name} 不存在（本断言的登记依据）", []
+    rows = parse_ledger_rows(_read_text(LEDGER))
+    if not rows:
+        return "FAIL", "**台账数据行 0 条** ⇒ 判据没有对象（表头/格式被改动过？防退化成空判）", []
+    bad = [f"{r['id']}(L{r['line']})" for r in rows if not r["status"]]
+    closed = [r["id"] for r in rows if r["status"].startswith(LEDGER_CLOSED_MARK)]
+    opened = [r["id"] for r in rows if r["status"] and not r["status"].startswith(LEDGER_CLOSED_MARK)]
+    note = (f"数据行 {len(rows)} · 状态可机读 {len(rows) - len(bad)} · "
+            f"✅ 闭环 {len(closed)} · **仍开着 {len(opened)}**")
+    detail = []
+    if opened:
+        detail.append("仍开着：" + " ".join(opened))
+    if bad:
+        detail.append("状态不可机读（缺格首标记 ⇒ 补 `✅`/`◐`/`⏳`/`🔵`）：" + " ".join(bad))
+    return ("FAIL" if bad else "PASS"), note, detail
+
+
 def check_spec_untested(ctx):
     """O-91: 规范类文档（`U[0-9]-*.md` / `D7-PROTOCOL-*.md`）必须带**非空**的 `## 未实测登记` 节。
 
@@ -4713,6 +4779,18 @@ CHECKS = [
             " —— 要写「考虑过/否决了什么」，不是只写标题; **恰 1 个**（改名后别留旧节）; "
             "旧名 `否决/比较对象` / `被否的方案` 一律换规范名; "
             "⚠ 范围只含 adr/ADR-*.md —— DECISIONS.md 是表格载体（列在结构上已保证槽位、值可为 `—`），不在范围"},
+    {"id": "ledger-status", "title": "台账状态可机读", "fn": check_ledger_status, "quick": True,
+     "fix": "O-93: `spec/d6-agent-standard/OPEN-ISSUES.md` 的**每行**状态格必须**以标记开头**"
+            "（`✅`=已闭环 · `◐`=已登记未处置 · `⏳`=待触发或待裁 · `🔵`=部分收口）——**允许加粗包裹**"
+            "（如 `**✅ …**`，判据会先剥 `**`/`_`/空白）。"
+            "\n\n⚠ **只认格首** ⇒ **引文里的 ✅ 不会被误当状态**（这正是「按整行找 ✅」那种口径会错的地方）。"
+             "⚠ 状态格子**不在固定第几格**：本表列数不齐（表头声明 8 列、行有 6/8 格、另有行含裸竖线被拆），"
+             "同一列在老行是状态、新行是证据 ⇒ 判据取「**第一个**格首带标记的格」。"
+             "\n📊 note 里报出「数据行 N · 状态可机读 M · ✅ 闭环 X · **仍开着 Y**」，明细含**仍开着的 ID 清单** "
+             "⇒ 排优先级**不再依赖人读**。"
+             "\n⚠⚠ **它不判什么**：「应该闭环多少」**不判** —— 「开着」**不是错误**；也**不判**状态写得对不对"
+             "（那仍要人读）。别把本判据读成「台账已被审计」。"
+             "\n⚠ 若明细指出某行「状态不可机读」⇒ 给那行补一个格首标记即可（**不要**只改文案）。"},
     {"id": "spec-untested", "title": "规范类文档的未实测登记节", "fn": check_spec_untested, "quick": True,
      "fix": "O-91: **规范类文档**（`spec/d6-agent-standard/U[0-9]-*.md` 与 `D7-PROTOCOL-*.md`）必须带"
             "**非空**的 `## 未实测登记` 节 —— 形状与判据 `adr` 同源（锚精确节名 · **恰 1 个** · "
