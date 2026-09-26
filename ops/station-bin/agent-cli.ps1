@@ -2404,7 +2404,7 @@ echo "ATTACH_MANIFEST_LINES=`$(wc -l < "`$W/out/.attach-manifest.txt`$EV_SUF" 2>
 #   ⇒ opencode 挂死时**永不返回**、留孤儿占槽(B 站实测孤儿曾活 17.2h)。
 timeout -k 10 $timeout opencode run -m "$id" < "`$W/out/.prompt.txt`$EV_SUF" > "`$W/out/.agent-output.txt`$EV_SUF" 2>&1
 RC=`$?
-# O-24 P0-① resume loop: on failure retry <=2 via `--continue` (opencode isolates sessions
+# O-24 P0-① resume loop: on failure retry <=3 via `--continue` (opencode isolates sessions
 # per workspace path -> in $W it resumes THIS run's session, verified 2026-09-09 on A station;
 # no session-id parsing needed; base64 prompt keeps ASCII discipline)
 CONT_ATTEMPT=0
@@ -4863,7 +4863,7 @@ function Invoke-Review {
 
     $t0 = [DateTime]::UtcNow
     $raw = $null; $callCode = 0; $callError = ''; $retries = 0
-    # G3: retry<=2 (theneuralbase: timeout+health+fast-degrade on a retry budget)
+    # G3: retry<=3 (theneuralbase: timeout+health+fast-degrade on a retry budget)
     for ($try = 1; $try -le 3; $try++) {
         try { $raw = Invoke-Judge -judge $judge -prompt $prompt -timeoutS $rt; break }
         catch {
