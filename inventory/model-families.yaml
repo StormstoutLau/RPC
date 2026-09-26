@@ -93,3 +93,43 @@ linked_state:
     若要把 J-1（跨族）真正判起来，需要的是"**某次派发时 judge 与 producer 各自在跑什么**"，
     而那是**每次派发的运行时事实**（应当由派发链路自己记进 run.json，而不是由本表提供）。
     ⇒ 本表**只留口径与基线**；`D7-P3-1` 的实现侧应把这两个字段写进 run.json 的判据输入。
+
+# ── 出网 / 其它传输档的模型（`D7-P3-1`，2026-09-26 · 依据 = **实测 246 个真实 run 的 model 取值**）──
+# ★ 为什么必须有这一段：`members` 只覆盖**本地库**的 12 个 alias，而真实派发里 **出网档占多数** ——
+#   实测前缀分布：`openrouter` **103** · `cluster-litellm` 59 · `local` 46 · `thinkingmachines` 9 ·
+#   `station:A/B/C` 9/8/6 · `opencode` 3 · 裸 `claude-sonnet-4-5` 3。
+# ⇒ 不登记这一段，J-1 在**真实组合**上会大面积落 `unknown`（不可判）—— 那等于**判据没生效**。
+#
+# ★ 键形态 = 归一后的候选键（见 `rpc_check.model_key_variants`）：
+#   剥掉**已知传输前缀**（`local`/`cluster-litellm`/`opencode`/`openrouter`/`station:<X>`）后，
+#   优先取 `vendor/model`，其次取末段。⇒ 同一血统**跨本地/出网**会被判**同族**（见 `same_as_local`）。
+#
+# ⚠ **口径诚实**：族按**权重血统**判（同 members 段），但出网串只能看到 `<vendor>/<model>`
+#   ⇒ 本段的 `family` 是**按 vendor 前缀 + 已知血统判**的，**未逐一实测权重来源**
+#   ⇒ 标 `basis_from: vendor-prefix`（**不是**"已定案"）。★ 只登记**实测出现过的具体名**，
+#      **不写通配**（`nemotron-*` 这类推断容易把别家模型也吞进来）。
+outbound_models:
+  - {keys: [nvidia/nemotron-3-ultra-550b-a55b], family: nvidia, basis_from: vendor-prefix,
+     note: "判官默认档 `ultra` 走的就是它（JUDGE_TABLE）"}
+  - {keys: [nvidia/nemotron-3-super-120b-a12b], family: nvidia, basis_from: vendor-prefix,
+     same_as_local: nvidia-nemotron-3-super-120b-a12b}
+  - {keys: [poolside/laguna-s-2.1], family: poolside, basis_from: vendor-prefix, note: "新族（本地库无同类）"}
+  - {keys: [thinkingmachines/inkling], family: thinkingmachines, basis_from: vendor-prefix,
+     note: "三站 `station:A/B/C` 档的实际模型名"}
+  - {keys: [nemotron-3.5-lightning-free], family: nvidia, basis_from: vendor-prefix,
+     note: "`opencode/…` 档；血统仍 Nemotron"}
+  - {keys: [gpt-oss], family: gpt-oss, basis_from: vendor-prefix,
+     note: "`cluster-litellm/gpt-oss` 的端点名（该档把系列名当模型名）"}
+  - {keys: [nemotron], family: nvidia, basis_from: vendor-prefix,
+     note: "`cluster-litellm/nemotron` 同上"}
+  - {keys: [claude-sonnet-4-5], family: anthropic, basis_from: vendor-prefix,
+     note: "**裸名档**（无传输前缀）"}
+
+# ── 端点别名（**不是模型，是端点**）⇒ J-1 **不适用**，**永远 `unknown`** ──────────────────
+# ★ 单列的理由：它们看起来"没登记"，其实**根本不该登记** —— 若被当成"漏登记"去补，
+#   会造出一个**假的族**（把"端点"当"模型"）⇒ 那正是"把两件事说成一件"。
+#   实测出现：`main`（= `main-opencode-cli`，本机 opencode 端点）· `commercial`（ENV 注入的外部 /v1）·
+#   `cluster-v4flash`（站上端点）· `station:B/main`。
+endpoint_aliases_na:
+  keys: [main, commercial, cluster-v4flash]
+  why: "端点的**后端模型由调用方/环境决定**，不在本表可判范围内 ⇒ J-1 对它们返回 `unknown`（不可判，不是通过）"
