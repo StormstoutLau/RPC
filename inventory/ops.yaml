@@ -92,6 +92,13 @@ frozen_ops_scripts:
   #   ③ 被门禁以 `importlib` 全路径加载 ⇒ 同属**受治理的夹具**。
   #   ⚠ 它**只读**打开别的项目的生产库（`mode=ro` / `read_only=True`）—— 这一点写进了脚本 docstring。
   - ops/id_storage_census.py
+  # 2026-09-26 (D7-P2-3): **审判据自身** —— 恒真检测（变异法）+ 覆盖率对账。三条理由：
+  #   ① 它**只读**（不写盘、不改真值）;
+  #   ② **刻意不是**门禁项：实测"变异**包装**（`check_*`）"会产出 **41/43 噪声**（本仓测试测的是
+  #      **本体纯函数**，包装是薄壳）⇒ **先量后定档**（本仓既定纪律）⇒ 不进 `CHECKS`、不挂 quick;
+  #   ③ 它**跑子进程**（每条判据 2 次）⇒ 会明显拉长门禁时间 ⇒ 亦不适合挂 quick。
+  #   ⚠ 它是**工具**而非入口：用法见其 docstring（`--list` / `--sample N` / `--all` / `--id X`）。
+  - ops/judge_selfcheck.py
   - ops/llama-serve-instance
   - ops/lm-download/speedtest_asset.sh
   - ops/lm-download/speedtest_codeload.sh
