@@ -27,6 +27,12 @@ golden 判据(若有)：{{GOLDEN}}
 ===== 输出契约 =====
 只输出一个严格 JSON 对象，禁止输出任何 JSON 之外的文字。schema：
 {
+  "verdict": "accept|revise|reject|uncertain",
+  "findings": [
+    { "id": "F1", "statement": "一句话（可被逐条核验）", "hit": true 或 false,
+      "priority": 3, "confidence": 0.8, "path": "相对路径", "line_range": "L120-L134",
+      "note": "可选：证据链/推理" }
+  ],
   "score": "优秀|良好|合格|不合格",
   "pass": true 或 false,
   "evidence": [ { "anchor": "维度名", "hit": true 或 false, "reasoning": "一句可追溯证据链" } ],
@@ -34,3 +40,12 @@ golden 判据(若有)：{{GOLDEN}}
   "conclusion": "一段结论"
 }
 score 取四者之一；pass 表示是否达到可接受（良好及以上为 true）。
+── D7-P2-2 结论契约（详见 spec/d6-agent-standard/D7-PROTOCOL-CONCLUSION-CONTRACT.md）──
+- `verdict` **只能**取上面四个词之一（**不许自造**）。
+- `findings`：逐条意见。`priority` **整数**（≥0，越大越优先）；`confidence` **浮点** 0.0~1.0；
+  `hit` = 该锚点**是否达标**（与 `evidence[].hit` 同义）；`path` 与 `line_range`（形如 `L120-L134`）
+  **必填** —— 落不到行的意见**不可核验**，会被判为不合契约。
+- ⚠⚠ **禁止输出 `agreement` / `consensus` / `disagreement` / `unique` 任何字段**：
+  "这条意见是多家共识还是孤例"**不由你判断**（那是综合阶段在多判官之间对齐后算出来的）。
+  你只对自己看到的东西负责 —— 自报分类会被**直接判为不合契约**。
+- `findings` 可以为空数组（确实无意见时），但**不要**用空数组去凑"通过"。

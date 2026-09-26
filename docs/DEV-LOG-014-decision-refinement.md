@@ -4156,3 +4156,78 @@ F-11/F-12 拆出。⇒ **一个原语，两处调用**，不为第二条另造�
 - **`D7-P2-2`（结论契约）**：把"L2 的意见"结构化为"受限判定 + priority + confidence + 每条带 `path:line_range` +
   **显式分类 consensus/disagreement/unique**" ⇒ 与本批的 `l1` 段同处一个 schema（**一次改完，别分两次**）。
 
+## 63. `D7-P2-2` 站上侧落地：**结论契约**（2026-09-26）
+
+紧接 §62（`D7-P2-1`）。之所以**连着做**：P2-1 已经往 `review.json` 里放了 **`l1` 段（机械事实）**，
+而 P2-2 是"**L2 自己的意见**"的结构化 —— 两者**同处一份产物**才让"机械面已过"与"语义面这么认为"
+可被一眼区分（那是本仓头号形态的**正面用法**）。分两次改会各写一半。
+
+### 63.1 改动前的契约（实测）
+
+`review/judge-prompt.tmpl` 的输出契约 =
+`{score, pass, evidence[{anchor,hit,reasoning}], flags_hit[], conclusion}`
+⇒ 三条后果：**不可数**（几条意见 · 各自多重数不出来）· **不可定位**（没有 `path:line_range`）·
+★★ **不可区分"共识"与"孤例"**。
+
+### 63.2 契约（`spec/d6-agent-standard/D7-PROTOCOL-CONCLUSION-CONTRACT.md`）
+
+- **受限判定** `verdict` ∈ **封闭枚举** `accept|revise|reject|uncertain`（**不许自造词**）；
+- **`findings[]`**：`statement` · ★**`hit`（布尔）** · `priority`（**整数** ≥0）· `confidence`（**浮点** 0~1）·
+  ★**`path` + `line_range` 必填**（落不到行的意见**不可核验**）；
+- ★★ **`agreement` 单判官【不得】输出** —— 它由**综合阶段**算；判官自报 = **自证**（本仓禁止）⇒ **见到即拒**。
+
+### 63.3 综合（N 判官 ⇒ 三分类）：锚点里的取舍
+
+依据 = **Council Mode**（合并稿 §406：三阶段 `Triage → Parallel Expert Generation → Consensus Synthesis`，
+综合阶段**显式分类 consensus / disagreement / unique**，而**不是**多数投票）。
+
+★★ **锚点 = `path` + `line_range`（不含 `statement`）** —— 这是本轮唯一一处**改了设计稿**的地方，
+理由是实测推出来的：不同判官对同一件事的**表述必然不同**，把措辞并入键 ⇒ **共识几乎永不出现**
+（分类随即退化成噪声）。**位置是客观的，措辞不是。**
+⇒ 三分类因此可判：`unique`（1 家）· `consensus`（≥2 家且 `hit` 一致）· `disagreement`（≥2 家且 `hit` 相反）。
+★ **`hit` 这个字段是为 `disagreement` 才有意义的** —— 没有极性位，"两个判官结论相反"**根本无法表达**
+（既有 rubric 的 `evidence[].hit` 正是同义概念 ⇒ 沿用，不新造）。
+
+### 63.4 落地物（3 个纯函数 + 接线 + 模板）
+
+| 件 | 内容 |
+|---|---|
+| `Test-FindingShape` | 单条意见的字段/类型/越界校验（**含 `AGREEMENT_SELF_REPORTED`**） |
+| `Test-ConclusionContract` | 整体校验（`verdict` 枚举 + 逐条 + **坏条目点名序位**） |
+| `Merge-JudgeFindings` | N 判官 ⇒ 三分类 + ★**显式报规模**（`judges`/`opinions`） |
+| `Invoke-Review` 接线 | `review.json.contract` 段（**两处写点都带**：正常 + 判官失败） |
+| `judge-prompt.tmpl` | 输出契约增补 `verdict`/`findings`，并**显式禁止**判官自报分类 |
+
+### 63.5 ★★ 两条"不许读过头"的纪律（写死了，且有反例守着）
+
+1. **单判官 ⇒ 分类只能是 `unique`**，且**必须**同时报 `judges=1` ——
+   **不把"只有一个判官"渲染成"多家共识"**（站上当前只跑 1 个判官 ⇒ 如实标注；
+   **多判官编排属 `D7-P3-2`**）。
+2. **空集不产共识**：`findings` 为空 ⇒ `opinions=0` 且分类为空 —— **`0/0` 不许读成"没问题"**
+   （本仓已登记过的假绿形态，这里**在综合器里就挡掉**）。
+
+### 63.6 验收（`_fm_golden_test.ps1` **348 → 375**，`cc-1`~`cc-27` 全绿）
+
+| 组 | 内容 |
+|---|---|
+| cc-1~cc-3 | 合法形态（含单行 `L7` / 开放区间 `L7-`） |
+| cc-4~cc-12 | ★**每一条判据都配了能把它打红的反例**：缺 path / 形态错 / priority 小数 / priority 负 / confidence 越界 1.5 / confidence 非数 / `hit` 非布尔 / **自报 `agreement`** / 空 statement |
+| cc-13~cc-16 | 整体校验（含**自造 verdict** ⇒ 拒 · **空 findings 合法但被显式报数** · 坏条目**点名序位**） |
+| cc-17~cc-23 | 综合：单判官 ⇒ `unique`+`judges=1` · 同锚点同向 ⇒ `consensus` · **同锚点反向 ⇒ `disagreement`** · 不同锚点 ⇒ 各 `unique` · ★**空集不产共识** · `null` 输入 ⇒ `judges=0` · 规模字段齐 |
+| cc-24~cc-27 | 接线 + 模板（模板读取**必须显式 UTF-8**，否则 GBK 乱码会**假红**） |
+
+### 63.7 本批自己踩到的一个坑（同族第三次，值得记）
+
+`cc-26`/`cc-27` 第一版用 `Get-Content -Raw` 读模板 ⇒ **两条全红**。真因不是模板缺内容，而是
+**PS 5.1 的 `Get-Content` 默认按系统 ANSI(GBK) 解码** ⇒ 中文乱码 ⇒ 对中文关键字做正则不中。
+⇒ 改成 `[IO.File]::ReadAllText(..., UTF8)` 即过。
+★ **本仓夹具顶部早就写着这条坑**（`ParseFile` 按 GBK 解码致假解析错误）—— **它写在注释里，没人在读**。
+⇒ 与 §57 的 O-87 同族：**"纪律写在注释里"不等于"下次不会被绊"**。
+
+### 63.8 边界（4 条，详见契约文档的「未实测登记」6 条）
+
+1. **多判官编排未做**（属 `D7-P3-2`）⇒ 站上路径**必然** `judges=1`/`unique`；
+2. **判官是否真按新契约输出未实测**（提示词写了 ≠ 模型遵守）⇒ 校验器**宁拒不错**；
+3. ★ **`path` 的相对根未定义**（相对 runDir / 项目根 / 仓根？）—— 契约**最大的未定项**；
+4. **`line_range` 越界不校验**（只判形态）⇒ "指到第 99999 行"形态上合法。
+
