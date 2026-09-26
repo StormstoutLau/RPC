@@ -61,8 +61,8 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
 | O-21 | 性能/超时 | P1   | specaudit 卡 900s 硬超时/`exit1`——**三重返证后真根因尘埃落定**：①外层层 `timeout 900` 强杀正常推进 agent；②曾误判 opencode 对本地 passthrough 模型 64k 硬默认（根因实错）；③**决定性返证**：`/props` 运行时 `n_ctx=65536` 而 `/v1/models` 仅通告 `n_ctx_train=131072` → **服务端 llama-server 实以** **`-c 65536`** **加载**，那条 `exceeds the available context size` 是**服务端 400**，opencode 任何配置都无法抬升。修复=conf `CTX 65536→131072` 重载 A 站 gpt-oss；实机复验 `n_ctx=131072`、specaudit 卡重跑 `RUN_S=502/TASK_RC=0/ACCEPT=1` **全程无 65536 错误** | ✅ 已闭环（服务端 ctx 修复 2026-09-06） | 服务端 `-c 131072` 重载       | <br /> | <br /> |
 | O-22 | 运维缺陷 | P1   | `.meta` 残留误导：只在 run 结束写、无 task_id → 二次 run 时读到上次终态（RUN_S=900/RC=124 误判"又超时"，实为残留） | ✅ 已收口（2026-09-12） | 契约修复 + 观测判据订正 | 2026-09-07 | <br /> |
 | O-23 | 架构/超时 | P1   | **复杂度路由 ctx 解耦**：profile.context(code=8192/reason=32768/long=262144) 只是元数据、从未传给引擎；opencoe 用 opencode.jsonc 固定 limit.context=131072，引擎 ctx 由手动 flavor 预设决定 → 三者解耦。**凌晨 refdedupe timeout 真根因**=`request exceeds available context size (8192)`：nothink 档引擎 `-c 8192` < refdedupe 请求 12536 tokens → 服务端 400 → agent 永久挂死 → 900s timeout | ✅ 已修复+实机验证（引擎 ctx=唯一真相） | 2026-09-07 radical fix B | <br /> | <br /> |
-| O-24 | 架构/闭环 | P1   | **单机 agent CLI 工作流闭环断点（分析定案）**：单机形态（无第二站分摊/换站/互审）存在 4 类断点——①review --peer 缺（产出→ledger 后无机器复核门）②超时续接 --continue 缺（长卡单机唯一韧性出路）③claude 备通道缺（单引擎死锁=停摆）④单机排队/上下文治理缺。P0=review 单机版 + continue 续接 | ⏳ **P0-① 已落地实证**（续跑循环入 $body，RESUME 出线+超时卡全链+零回归）；P0-② ✅（被 O-16 覆盖闭环） | O-24 实施记录 | <br /> | <br /> |
-| O-25 | 演进/可观测 | P2   | **agent 任务执行进度可观测性（派发前预估 + 派发中节拍）**：派发后黑盒——ledger/.meta/.agent-run 均为 run-end 快照，无运行中采样 → 长卡状态不可观测、无吞吐、无 ETA；预算估算用单一 wall-clock 而非分相 | 🔵 P0 完成 + 判据③已落地：①吞吐基准表✓（THROUGHPUT-BASELINE.md+metrics-log Phase 6.2）；②`.progress` 打点✓（远端5s采样+teardown终值+collect拉取+parse回填）；③派发前预估✓（Get-ThroughputEstimate 分相估算，HIT才给/MISS不打荒，TIMEOUT-WARN预警；实证 gpt-oss 682s、回归9/9）；**P1槽位门✓（并入O-08/F1：`_slot_gate.sh`+`Invoke-SlotGate`+task接入，busy默认reject exit 24，`--slot-allow-busy`放行，slot记入run.json）**；**P2看板✓（2026-09-12 落地，L3 单文件 HTML：`make-dashboard.ps1` 生成器→内联 ledger+run.json→self-contained `dashboard.html`，**📌 2026-09-24 注：该生成器与产物已按 ADR-0004 D5 脚本清减移除（`3712f06`），能力由 [`ops/cluster_web.py`](../../ops/cluster_web.py) 统一管理页承接（在线）；同日"补做"落为 [`cluster.py agent dashboard`](../../ops/cluster.py) 的**自包含离线快照** —— 见 O-38**，file:// 直开零网络请求；已完成总览 22 行+run 详情展开；正在跑/Live tab 由 `-Live` 拉远端 .progress，无则 no-live-data；见 O-25 详情节）** | 🔵 **O-25 已全收口（①-④+P1/P2 全落地 + 2026-09-12 实机在线实测全通，见详情节）** | 一期 | <br /> |
+| O-24 | 架构/闭环 | P1   | **单机 agent CLI 工作流闭环断点（分析定案）**：单机形态（无第二站分摊/换站/互审）存在 4 类断点——①review --peer 缺（产出→ledger 后无机器复核门）②超时续接 --continue 缺（长卡单机唯一韧性出路）③claude 备通道缺（单引擎死锁=停摆）④单机排队/上下文治理缺。P0=review 单机版 + continue 续接 | **✅ 已闭环（2026-09-26 逐项核对四条断点）** —— ★ **核对方式 = 查"每条断点有没有落地物"**（**不是转述行内自述**）：① **review 单机版** ⇒ `review.json` 的生产/回收在 `agent-cli.ps1` · ② **`--continue` 续接** ⇒ `opencode run --continue` 命令位存在 + `RESUME` 出线 · ③ **claude 备通道** ⇒ `Invoke-Task-Claude` 存在（O-15/O-42/O-55 均已闭环）· ④ **单机排队 / 上下文治理** ⇒ `_slot_gate.sh` + `Invoke-SlotGate`（接线在 `Invoke-Task` 内）+ ctx 修复（O-21/O-23）⇒ **四条齐全**。<br>⚠ **诚实边界**：本核对是**结构层**（"每条断点都有机制"），**不是**"单机形态端到端复跑过"；⚠ 且行内原文只写了 P0-①②，**③④ 的落地物是本轮补核的**。<br>◐ **原阶段记录**：**P0-① 已落地实证**（续跑循环入 $body，RESUME 出线+超时卡全链+零回归）；P0-② ✅（被 O-16 覆盖闭环） | O-24 实施记录 | <br /> | <br /> |
+| O-25 | 演进/可观测 | P2   | **agent 任务执行进度可观测性（派发前预估 + 派发中节拍）**：派发后黑盒——ledger/.meta/.agent-run 均为 run-end 快照，无运行中采样 → 长卡状态不可观测、无吞吐、无 ETA；预算估算用单一 wall-clock 而非分相 | **✅ 已闭环（2026-09-26 逐项核对五项）** —— ★ **核对方式 = 查每项的落地物在不在仓内**（**不是转述行内自述**）：① 吞吐基准表 ⇒ `spec/d6-agent-standard/THROUGHPUT-BASELINE.md` **存在**（`$TpBench` 的 `src` 全指向它）· ② `.progress` 打点 ⇒ `sample_progress` 采样段在 `agent-cli.ps1` · ③ 派发前预估 ⇒ `Get-ThroughputEstimate` · **P1 槽位门** ⇒ `_slot_gate.sh` + `Invoke-SlotGate -HostName` 接线 · **P2 看板** ⇒ `cluster.py agent dashboard`（**O-38 已闭环**：原 `make-dashboard.ps1` 按 ADR-0004 D5 移除，能力由统一入口承接）⇒ **五项齐全**。<br>⚠ **诚实边界**：① 的"实证 gpt-oss 682s / 回归 9/9"是**当时**的实测；后续暴露的两个面**已在各自条目闭环**（**O-39** 出网档预估恒 MISS ⇒ 已改三态 · **O-74** 节拍视图只认裸名 ⇒ 已修但**无护栏**，如实登记）⇒ 不影响"五项已落地"。<br>◐ **原阶段记录**：P0 完成 + 判据③已落地：①吞吐基准表✓（THROUGHPUT-BASELINE.md+metrics-log Phase 6.2）；②`.progress` 打点✓（远端5s采样+teardown终值+collect拉取+parse回填）；③派发前预估✓（Get-ThroughputEstimate 分相估算，HIT才给/MISS不打荒，TIMEOUT-WARN预警；实证 gpt-oss 682s、回归9/9）；**P1槽位门✓（并入O-08/F1：`_slot_gate.sh`+`Invoke-SlotGate`+task接入，busy默认reject exit 24，`--slot-allow-busy`放行，slot记入run.json）**；**P2看板✓（2026-09-12 落地，L3 单文件 HTML：`make-dashboard.ps1` 生成器→内联 ledger+run.json→self-contained `dashboard.html`，**📌 2026-09-24 注：该生成器与产物已按 ADR-0004 D5 脚本清减移除（`3712f06`），能力由 [`ops/cluster_web.py`](../../ops/cluster_web.py) 统一管理页承接（在线）；同日"补做"落为 [`cluster.py agent dashboard`](../../ops/cluster.py) 的**自包含离线快照** —— 见 O-38**，file:// 直开零网络请求；已完成总览 22 行+run 详情展开；正在跑/Live tab 由 `-Live` 拉远端 .progress，无则 no-live-data；见 O-25 详情节）** | ✅ **已全收口（①-④+P1/P2 全落地 + 2026-09-12 实机在线实测全通，见详情节）** —— ⚠ 原格首 `🔵` **2026-09-26 更正为 `✅`**（本条的**状态格与结论格现在一致**） | 一期 | <br /> |
 | O-26 | 演进/编排 | P2   | **单任务分解派发并行（Split-Dispatcher）**：现派发=单卡→单站；一张可切分 readonly 大任务卡在单节点（物理上界 3：A/B/C 各1 并发，O-18）无法利用多站。缺口=任务卡无 `decompose` 声明、编排层无拆/并、无 Merge | ✅ **已闭环（2026-09-12）**：decompose 拆 2 分片 A/B 双站并行，全子卡 accept，Merge 正确，并行 465.1s ≪ 串行 720.8s（ratio 0.645）；落地修复 2 bug | V2 fan-out L2.5（schema 冻结前加 decompose 键） | <br /> | <br /> |
 
 | O-27 | 验证/判据 | P1 | 证据链 `_VERDICT_RC_MAP` 未覆盖"远端 0 ⇄ 整体 1"（验收失败路径）⇒ **任何 accept 失败的 run 都阻断提交** | ✅ 已闭环（裁定 b **治同源** + 12 条正反注入） | ✅ 已修 |
@@ -1709,8 +1709,6 @@ limit: { context: J.context_length ?? Y?.limit.context ?? 0,
 | id | 格首 | 人行核对后的定性 |
 |---|---|---|
 | `O-07` | ⏳ | **真开 · 事件驱动**（zen 429 未真实触发） |
-| `O-24` | ⏳ | ⚠ **需人判**：行内写"P0-① 已落地实证 · P0-② ✅（被 O-16 覆盖）"，但 ③④ 两类断点**未在行内结清** |
-| `O-25` | 🔵 | ⚠ **需人判**：行内自述"已全收口（①-④+P1/P2 全落地）"，格首仍 `🔵`（部分收口） |
 | `O-29` | ◐ | **真开**（"期望件集"两处定义 ⇒ **已并入路线 D6-P1-1**） |
 | `O-86` | ◐ | **真开 · 最低**（下游 repo 的 ID 两套互不通） |
 | `O-95` | ◐ | **真开 · P3**（同机两个 `--accept` 并发 ⇒ 水印 `lost update`）★ **由 O-28 结算时从 BLINDSCAN-v3 的 F-11 拆出** |
@@ -1738,13 +1736,13 @@ limit: { context: J.context_length ?? Y?.limit.context ?? 0,
 > **其结局与本表的排序习惯有关，值得记**：它**不是**被"补上一个机判"关掉的，而是**先证明了那条纪律在文本层不能干净机判**
 > （三次收窄仍出假阳性）⇒ 改做「**事实可见化**」（`id-census` 每轮印出可达项目根清单）+ **证伪留档**。
 
+> ★★ **第五次（2026-09-26，本轮）：序 2 也已结清** —— `O-24` / `O-25` 两条原标「⚠ 需人判」（行内自述都已到「落地/收口」，缺的只是把最新状态提到格首）。本轮**不是**转述行内自述，而是**逐条核对落地物在不在仓内**（O-24 四条断点：`review.json` / `run --continue`+`RESUME` / `Invoke-Task-Claude` / `_slot_gate.sh`+`Invoke-SlotGate`；O-25 五项：`THROUGHPUT-BASELINE.md` / `sample_progress` / `Get-ThroughputEstimate` / 槽位门 / `cluster.py agent dashboard`）⇒ **两条均 ✅**，见 DEV-LOG-014 §60。⇒ 下表**再顺延一格**。
 | 序 | 项 | 为什么是它 |
 |---|---|---|
 | **1** | **`O-29`**（"期望件集"两处定义） | **已并入路线 D6-P1-1** ⇒ 由路线总表决定，不是独立项 |
-| **2** | **一次人判即可**：`O-24` · `O-25` | 行内自述都已到"落地/收口"，缺的只是**把最新状态提到格首**（成因④欠的就是这一步）⇒ **零代码** |
-| **3** | **`O-95` · `O-96`**（由 O-28 拆出） | **P3 · 后果可恢复 · 不在任何自动路径上** ⇒ 最低；两条**同一族**（整文件"读→改→写" ⇒ 套锁，或改追加式）⇒ **可一次性收**，修法已写进各自行内 |
-| **4** | **`O-75` · `O-78` 的末尾重复**（由 O-94 拆出） | **内容层**残面（同一行两格重叠）⇒ 需读条目上下文判"哪一份对" ⇒ **零代码但需人判** |
-| **5** | **`O-86`**（Auto_Prover 的 ID 两套互不通） | 属**下游 repo**，且输出口径已裁定"只走本仓" ⇒ **最低**；等迁移面真推进再动 |
+| **2** | **`O-95` · `O-96`**（由 O-28 拆出） | **P3 · 后果可恢复 · 不在任何自动路径上** ⇒ 最低；两条**同一族**（整文件"读→改→写" ⇒ 套锁，或改追加式）⇒ **可一次性收**，修法已写进各自行内 |
+| **3** | **`O-75` · `O-78` 的末尾重复**（由 O-94 拆出） | **内容层**残面（同一行两格重叠）⇒ 需读条目上下文判"哪一份对" ⇒ **零代码但需人判** |
+| **4** | **`O-86`**（Auto_Prover 的 ID 两套互不通） | 属**下游 repo**，且输出口径已裁定"只走本仓" ⇒ **最低**；等迁移面真推进再动 |
 | **—** | `O-07`（zen 真 429） | **事件驱动**，**当下无动作可做** |
 
 ### 3.3 ⚠ 本节自身的局限（如实写）
