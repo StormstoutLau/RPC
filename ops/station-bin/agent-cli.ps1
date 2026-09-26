@@ -3820,10 +3820,19 @@ function Test-StationEngineReady {
     try {
         $scpArgs = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', "$Script:REPO_ROOT/ops/station-bin/_station_ready.sh", "${remoteUser}@${hostName}:/tmp/_station_ready.sh")
         Start-Process -FilePath 'scp' -ArgumentList $scpArgs -NoNewWindow -Wait -ErrorAction Stop | Out-Null
-        $out = & ssh -o BatchMode=yes -o ConnectTimeout=8 "${remoteUser}@${hostName}" "bash /tmp/_station_ready.sh $alias" 2>&1
-        $rc = $LASTEXITCODE
-        foreach ($l in @($out)) { Write-Host "  [station-ready $hostName] $l" }
-        return ($rc -eq 0)
+        # ★ O-75② 收口（2026-09-26）: ssh 改走 `Invoke-CappedSsh`（**整体墙钟**）。
+        #   ⚠ 原写法 `& ssh …` **没有时限** ⇒ 解析/建连层停滞会让**整次派发无限挂起**
+        #     （O-75 一手实测: `ConnectTimeout` **不覆盖**名字解析；6 并发时 A/B 两条 probe 挂 ~10 分钟）。
+        #   ⚠ 该 helper 的参数是**原始字符串**（`ProcessStartInfo.Arguments`）⇒ 本行**刻意让远端命令不含任何引号**
+        #     （`bash /tmp/_station_ready.sh main` 全是不含空格的词）⇒ 从根上避开纪律 12 的引号地狱。
+        $res = Invoke-CappedSsh -Arguments ("-o ConnectTimeout=8 ${remoteUser}@${hostName} bash /tmp/_station_ready.sh $alias")
+        foreach ($x in (("$($res.out)" + "`n" + "$($res.err)") -split "`n")) {
+            if ($x) { Write-Host "  [station-ready $hostName] $x" }
+        }
+        return [bool]$res.ok
+        #  ⚠ **未覆盖的残面（如实登记，别当本函数已全覆盖）**: 上面那条 `scp`（`Start-Process -Wait`）**仍无墙钟**。
+        #    O-75 的实测卡点是 **ssh 探针**，scp 不在其射程；但它同族（本地解析/建连停滞即无限挂）
+        #    ⇒ 真要收口需一个有墙钟的 scp 执行器（与 `Invoke-CappedSsh` 同形）；本批**不做**，登记在此。
     } catch {
         Write-Host "  [station-ready $hostName] EXC: $($_.Exception.Message)"
         return $false
@@ -3842,11 +3851,16 @@ function Test-StationClaudeEgressReady {
     param([string]$hostName, [string]$remoteUser)
     try {
         # 单引号串 ⇒ `$HOME` 保持字面量交给远端 shell 展开(不在本机展开)。
-        $probe = 'command -v claude >/dev/null 2>&1 && test -f "$HOME/.config/rpc/openrouter.key" && echo EGRESS_READY'
-        $out = & ssh -o BatchMode=yes -o ConnectTimeout=8 "${remoteUser}@${hostName}" $probe 2>&1
-        $rc = $LASTEXITCODE
-        foreach ($l in @($out)) { Write-Host "  [station-claude-egress $hostName] $l" }
-        return ($rc -eq 0 -and (($out | Out-String) -match 'EGRESS_READY'))
+        # ★ O-75② 收口（2026-09-26）: 原来为 `$HOME` 外层加的那对双引号**已去掉** ——
+        #   路径不含空格 ⇒ **不需要引号**，而这正好把 O-75 残面里那句"改道会重开纪律 12 的引号地狱"
+        #   **从根上消掉**：远端命令**一个引号都不含** ⇒ 可以安全地直接进 `ProcessStartInfo.Arguments`（原始字符串）。
+        #   然后 ssh 改走 `Invoke-CappedSsh`（整体墙钟）—— 与 `Test-StationEngineReady` 同一处收口。
+        $probe = 'command -v claude >/dev/null 2>&1 && test -f $HOME/.config/rpc/openrouter.key && echo EGRESS_READY'
+        $res = Invoke-CappedSsh -Arguments ("-o ConnectTimeout=8 ${remoteUser}@${hostName} " + $probe)
+        foreach ($x in (("$($res.out)" + "`n" + "$($res.err)") -split "`n")) {
+            if ($x) { Write-Host "  [station-claude-egress $hostName] $x" }
+        }
+        return [bool]($res.ok -and ("$($res.out)" -match 'EGRESS_READY'))
     } catch {
         Write-Host "  [station-claude-egress $hostName] EXC: $($_.Exception.Message)"
         return $false
