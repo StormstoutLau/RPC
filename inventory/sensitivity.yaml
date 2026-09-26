@@ -91,7 +91,7 @@
 # ⚠ 2026-09-24: 本表此前**从未被任何工具解析过**(门禁 `syntax` 不覆盖 yaml) ⇒ 首次 `yaml.safe_load`
 #   即报 `ScannerError`（多处 `why:` 纯量里含 `: `）⇒ 已按合法 YAML 重写(改折叠块)并验证通过。
 
-updated: 2026-09-24
+updated: 2026-09-26
 owner: Scott (鹏)
 rule_version: 1
 default_tier: local-only        # fail-closed: 未登记 = local-only
@@ -169,6 +169,23 @@ documents:
       含七条关键发现 (受理副本 / 手册过期 / impact.yaml 未使用) 与撤回记录。
       ★ 主因 = **C2（受理链与他方材料相关）**；C3 = ②本仓指纹（受理机制/门禁状态的内部节点）
       —— 2026-09-25 补准: 原文未点明 C3 具体是什么（见 DEV-LOG-014 §33.7）
+  # ── 2026-09-26: D7-P0 收口的两份新载体（ADR-0009 + 协议契约）──
+  - path: adr/ADR-0009-D6与D7分界判据.md
+    tier: public
+    fails: []
+    why: >-
+      D7-P0-1 的产出: 分界判据 B-1/B-2/B-3 + 8 项灰色地带归属表（**状态 proposed**）。
+      定档依据 = **内容全部来自已登记为 public 的出站版摘要** `spec/d6-agent-standard/dogfood-cards/inputs/d7-p0-boundary-excerpt.md`
+      ⇒ 不含**超出该摘要**的新披露（无 IP / 主机名 / 用户名 / 凭据形态；无他方仓库路径与内部文件名）。
+      ⚠ 该行**带扩张条件**: 若日后内容扩张到摘要之外（例：补入九项目逐项细节）⇒ **须重裁**，不得沿用本行
+  - path: spec/d6-agent-standard/D7-PROTOCOL-CONTRACT.md
+    tier: public
+    fails: []
+    why: >-
+      D7-P0-2 的产出: 六相状态机 + 三信封（字段级） + 三条红线 + `未实测登记`。
+      定档依据同 ADR-0009 —— 内容来自已登记为 public 的出站版摘要
+      `spec/d6-agent-standard/dogfood-cards/inputs/d7-p0-2-protocol-excerpt.md` ⇒ 无超出摘要的新披露。
+      ⚠ 同样带扩张条件（超出摘要即须重裁）
 
 # ── 常被卡引用的契约/载体文档 ──
 contracts:
