@@ -1154,6 +1154,66 @@ def check_edges(ctx):
     return ("FAIL" if bad else "PASS"), " · ".join(notes), bad
 
 
+# ── D7-P1-4 (2026-09-26)：U-4 失效规则 H-1~H-4（**判据库**，不是门禁项）────────
+# ⚠⚠ **本节不是 `CHECKS` 项** —— 它不判本仓的任何状态（本仓没有失效传播实现，九项目 **0/9**）。
+#   它是**参考实现**：把四条 MUST 级规则写成**可执行判据**，供将来的失效传播实现调用/对照。
+#   ⇒ 因此**它当前没有任何生产消费者**（这件事已如实登记在
+#     `spec/d6-agent-standard/U4-INVALIDATION-RULES.md` 的末节，不假装已接）。
+#   ⇒ 但 D7-P1 的批级判据要求"**通过先验红**"（方案 §7）⇒ 必须有可执行的判据 + 注入用例，
+#     纯纸面表达式过不了那一条（`tests/test_rpc_check_u4.py`）。
+#
+# 依据（原文，Ontoly RFC-0002，RFC 2119 措辞）：
+#   H-1 "Incremental builds MUST be clean-build equivalent."
+#   H-2 "Dependency invalidation MUST be conservative."
+#   H-3 "If affected regions cannot be determined safely, the compiler MUST broaden
+#        invalidation or fall back to a clean build."   ← ★ 本批的核心
+#   H-4 "A failed build MUST NOT partially overwrite the last valid canonical graph artifact."
+# 已裁（台账）：D-26 四条全采（照 MUST 语义）· **只适用派生产物** · H-3 的"降级"必须有机判
+#   呈现位（落进 D6-P0-1「非执行三分」，**禁止静默 skip**）；D-27 结构性事实须**可复算**才准入；
+#   D-51 受理目录**不纳入**失效传播。
+#
+# ★ 与「非执行三分」的映射（这是 D-26 那句"必须有呈现位"的落地）：
+#     · 确实**无变更** ⇒ `action=none` + **MODE_SKIP**（"调用方不给" —— 这是**真的没事**）
+#     · **无法安全判定影响面** ⇒ `action=full_rebuild` + **WARN**（能力降级：保守全量，**可见、不阻断**）
+#     · 增量等价性**未能证明** ⇒ `action=full_rebuild` + **WARN**（同上）
+#     · 重算**失败** ⇒ `action=none` + **SKIP_FAILED**（**算失败**；不得部分覆盖 ⇒ 不落盘）
+#   ⇒ **硬不变量**：任何"**判不了**"的情形都**不得**落到 `MODE_SKIP` ——
+#     那正是"静默 skip"的形态（把"判不了"悄悄变成"没事"）。用例 `u4⑦` 专门钉这一条。
+U4_ACTIONS = ("none", "incremental", "full_rebuild")
+U4_CLASSES = (None, "MODE_SKIP", "SKIP_FAILED", "WARN")
+
+
+def decide_invalidation(changed_ids=None, affected=None, affected_is_closure=False,
+                        incremental_equivalent=None, build_failed=False):
+    """U-4 的四条规则 → `(action, class, reason)`。
+
+    参数（= 判据的**输入契约**；将来的实现只需提供这五个）：
+      · `changed_ids`            上游变更集（**派生产物**；受理目录按 D-51 不在其内）
+      · `affected`               影响面判定的**结果集**；`None` 表示**无法安全判定**（H-3 的触发条件）
+      · `affected_is_closure`    该结果集是否**已传递闭包化**（H-2：必须保守 = 只许扩大）
+      · `incremental_equivalent` 增量结果是否**已证**与全量等价；`None` = **未证**（H-1）
+      · `build_failed`           本次重算是否失败（H-4）
+
+    返回 `(action, class, reason)`；`class` 只在"未执行/降级"时给值（正常路径为 `None`）。
+    """
+    if not changed_ids:
+        # 真的没有变更 ⇒ 这是**唯一**允许落到 MODE_SKIP 的情形
+        return "none", "MODE_SKIP", "变更集为空：确实无需动作（不是「判不了」）"
+    if build_failed:
+        # H-4：失败不得部分覆盖 ⇒ 不落盘、不动上一份有效产物；且**算失败**
+        return "none", "SKIP_FAILED", "H-4 重算失败 ⇒ 不得部分覆盖，保留上一份有效产物（算失败）"
+    if affected is None:
+        # H-3：无法安全判定 ⇒ 强制全量；**可见但不阻断**（WARN），绝不静默 skip
+        return "full_rebuild", "WARN", "H-3 影响面无法安全判定 ⇒ 强制全量降级（可见，禁止静默 skip）"
+    if incremental_equivalent is not True:
+        # H-1：增量必须与全量等价；**未证**不等于"等价"（fail-closed）
+        return "full_rebuild", "WARN", "H-1 增量等价性未证 ⇒ 不得用增量（付全量代价）"
+    if not affected_is_closure:
+        # H-2：失效必须保守 ⇒ 未闭包化的结果集只许扩大
+        return "full_rebuild", "WARN", "H-2 影响面未闭包化 ⇒ 保守起见取全量（宁可多算）"
+    return "incremental", None, "四条规则全过：可安全增量"
+
+
 # ── O-66 (2026-09-25)：卡面 `input-provenance` 义务（`CROSS-PROJECT-WORK-STANDARD §4` 的**机判**）──
 # 义务原文：卡声明 `public`/`sanitized` **且带输入** ⇒ ① `input-provenance` 必填（逐项本仓相对路径）
 #   ② 每项须在 `sensitivity.yaml` 有 `tier` ③ 卡的 `sensitivity` **不得宽于**该项的 `tier`。
