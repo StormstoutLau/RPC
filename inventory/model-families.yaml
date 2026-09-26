@@ -58,12 +58,38 @@ families:
     members: [all-minilm-l6-v2-embedding]
     kind: embedding
 
-# ── 站↔**已加载**模型（J-1 的第二个输入）—— **本表不提供，如实登记"未实测"** ──────────
-# ★ 为什么单列：`models.yaml` 的 `stations`（库中有）与 `conf`（配过实例）**都不等于"已加载"**。
-#   把前者当后者用 = **把两件事说成一件**（本仓头号形态）—— 那会让 J-1 在"库里有但没跑"时
-#   **仍然判成"跨族成立"**（假绿）。
+# ── 站↔**已加载**模型（J-1 的第二个输入）—— ★ **2026-09-26 已实测；结论 = 它是【运行时状态】** ──
+#
+# ★★ 实测结论（只读探测，三站均可达）：
+#   · 站 A `scott-lau-NEX` / 站 B `scott-lau-GTR-Pro` / 站 C `seaviv` —— **均可达**；
+#   · `ps -eo args | grep -E 'llama-server|llama_server|lmstudio|vllm|opencode'` ⇒ **三站全空**
+#     ⇒ ★ **当前没有任何模型实例在服务**（⇒ "已加载" = **空集**）。
+#     ⚠ 措辞要精确：**不是"三站没有模型"** —— 权重都在盘上（`models.yaml` 的 12 个 alias），
+#       只是**没在跑**。
+#   · `ls /etc/llama-instances/*.env` ⇒ A **3** 个 / B **10** 个 / C **5** 个
+#     ⇒ 那是 **`conf`（配过实例）**的真值源，**不是"已加载"**。
+#
+# ★★ 所以本轮**刻意不登记静态表**：`loaded` 是**运行时状态**（随启停变），登记成真值表**会立刻过期**，
+#   而"过期但看起来像真值"的登记正是本仓最防的形态。⇒ 只登记**口径 + 实测基线**（可复算）。
+#
+# ★ 顺带取得一条**独立验证**（正面结果）：站上 `*.env` 与 `models.yaml` 的 `conf` 字段**对得上** ——
+#   · A 站 env: gpt-oss-120b / m27-q4ks / qwen3.8-flash-next ⇒ 与 `conf` 含 A 的三条**正好一致**；
+#   · C 站 env: gpt-oss-120b / m27-q4ks / qwen3.8-27b-mtp / qwen3.8-flash-next / nvidia-nemotron-3-super-120b-a12b
+#     ⇒ 与 `conf` 含 C 的四条（+gpt-oss-120b）**正好一致**。
+#   ⇒ `conf` 字段**被三站实测独立验证**（不是自洽）。
+#   ⚠ 过滤项：`ttl.env` / `nodes.env` / `chat-templates` **不是模型** ⇒ 计数与对账时必须排除
+#     （`models.yaml` 的 `known_issues` 已单列 `nodes` 为 non_model_conf）。
 linked_state:
-  status: unverified
-  why: "`D7-P0-3` 原文即写『站↔已加载模型真值表**尚未登记**』；本轮**只接管了【模型→家族】**这一半，未凭空造另一半"
-  candidate_source: "站上 `:8080/v1/models`（各实例的引擎自报已服务模型）+ 实例进程表 —— ★ **未实测**，未取数"
-  next: "实测口径确定后，把 `site_id → {loaded_model_names}` 登记为 `loaded_state.stations`；在此之前 J-1 **仍不可判**"
+  status: runtime-not-truth-table        # ★ 不是 unverified 了：**已实测**，结论是"它属运行时"
+  measured_at: "2026-09-26"
+  baseline:
+    stations_reachable: [A, B, C]
+    serving_instances: []                # 三站进程表全空 ⇒ 当前**无实例在服务**
+    conf_env_counts: {A: 3, B: 10, C: 5}
+  probe:                                 # ★ 可复算口径（下次直接跑这条即可）
+    loaded: "ps -eo args | grep -E 'llama-server|llama_server' | grep -v grep"
+    conf: "ls /etc/llama-instances/*.env   # ⚠ 排除 ttl.env / nodes.env / chat-templates 等非模型项"
+  next: |
+    若要把 J-1（跨族）真正判起来，需要的是"**某次派发时 judge 与 producer 各自在跑什么**"，
+    而那是**每次派发的运行时事实**（应当由派发链路自己记进 run.json，而不是由本表提供）。
+    ⇒ 本表**只留口径与基线**；`D7-P3-1` 的实现侧应把这两个字段写进 run.json 的判据输入。

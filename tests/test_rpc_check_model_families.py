@@ -74,8 +74,18 @@ ids = [c["id"] for c in R.CHECKS]
 chk("C1 判据已登记进 CHECKS", "model-families" in ids)
 chk("C2 且 **quick = True**（真在门禁里跑）",
     next(c.get("quick", False) for c in R.CHECKS if c["id"] == "model-families") is True)
-chk("C3 `linked_state` 明写 **unverified**（不假装拿到『已加载』）",
-    "status: unverified" in GOOD)
+_ls = GOOD[GOOD.index("linked_state:"):] if "linked_state:" in GOOD else ""
+_st = ""
+for _ln in _ls.splitlines()[1:6]:
+    if _ln.strip().startswith("status:"):
+        _st = _ln.split(":", 1)[1].strip()
+        break
+# ★ 2026-09-26 实测后 `status` 由 `unverified` 改为更精确的 `runtime-not-truth-table`
+#   ⇒ **改断言（不是回退代码）**：本条的**意图**是"**不许假装拿到了『已加载』**" ⇒
+#   断言写成"**必须在允许集内** + **不得是任何『已定案/已验证』语义**"，比钉死一个字更耐用。
+chk("C3 `linked_state.status` 明示【未当作已加载真值】",
+    _st in ("unverified", "runtime-not-truth-table") and "verif" not in _st.replace("unverified", ""),
+    f"status={_st}")
 chk("C4 且说清「≠ stations / conf」（防把两件事说成一件）",
     "stations" in GOOD and "conf" in GOOD and "linked_state" in GOOD)
 
