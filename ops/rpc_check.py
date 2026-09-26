@@ -2527,6 +2527,105 @@ def validate_adr(text):
     return bad, notes
 
 
+# ── O-91 (2026-09-26)：规范类文档必须带 **非空** 的 `## 未实测登记` 节 ──────────────
+# 为什么要有：我们有"未实测登记"节（≈假设区），但**没有任何机制**保证它存在
+#   ⇒ "写了规范、却没有任何未验证清单"可以**静默通过**。
+# ★ 形状**直接复用** `validate_adr`（先例）：锚精确节名 · 恰 1 个 · 节体非空 · 扫描**只到下一个 H2**。
+# ⚠⚠ **射程按文件名 glob 划**（本仓门禁的既有做法：`ADR-*.md` / `inventory/*.yaml` …）——
+#   实测 `spec/d6-agent-standard/*.md` 共 **26 份**，含该节的只有 **5 份**；其余（ARCHITECTURE / DESIGN /
+#   CHECKLIST / OPEN-ISSUES / DECISIONS …）**多数不是"规范"** ⇒ 一刀切会**当场红 21 份且大部分不该罚**。
+# ⚠ **逃逸（如实写明，不假装没有）**：新规范若取名不带 `U\d-` 前缀，**本判据看不到它**。
+#   实测 spec 与 adr **全部无 YAML front-matter**（没有 `type:` 之类的自描述锚可用）
+#   ⇒ 只能靠"**命中集在门禁输出里可见**"缓解（改了名字时看得见）。
+# ⚠⚠ **它不判什么（必须与 fix 文案同时读）**：**不判**"正文里有没有无证据断言" ——
+#   那**不可机判**，**仍然是纪律**。省略这句，读者会以为"本判据绿了 = 断言已受控"（本仓头号形态）。
+SPEC_DIR = ROOT / "spec" / "d6-agent-standard"
+SPEC_UNTESTED_GLOBS = ("U[0-9]-*.md", "D7-PROTOCOL-*.md")
+SPEC_UNTESTED_HEAD = "未实测登记"
+# E 级**内联标注**（用于**报数**，不用于判）：`（E1）` = 裸；`（E1，<命令/文件>）` = 带具体取证。
+# ⚠ 报数射程**刻意大于**判据射程：断言实际写在 `spec/d6-agent-standard/*.md` 与 `adr/ADR-*.md` 两处；
+#   若只报那 5 份规范，会得到 `0 / 0` —— 而 `0 / 0` **会被读成「没问题」**（假绿）。
+#   ⇒ 报数须覆盖"**放断言的地方**"，并在 note 里**写明射程**。
+SPEC_EMARK_DIRS = (SPEC_DIR, ROOT / "adr")
+SPEC_EMARK_RE = re.compile(r"（(E[1-5])([^）]*)）")
+
+
+def validate_spec_untested(text):
+    """**纯函数**：一份规范类文档是否满足"恰 1 个 `## 未实测登记` ∧ 节体非空"⇒ 返回 (bad, note)。
+
+    ⚠ 节体扫描**只到下一个二级标题**为止（`### …` 是子节、**属节体**）—— 与 `validate_adr` 同规则；
+      按"任意标题"截断会把子节判成空节。
+    """
+    lines = text.splitlines()
+    heads = [(i, ln.strip()) for i, ln in enumerate(lines)
+             if ln.startswith("## ") and not ln.startswith("### ")]
+    canon = [(i, raw) for i, raw in heads if _norm_head(raw[3:]) == _norm_head(SPEC_UNTESTED_HEAD)]
+    if not canon:
+        return ([f"**缺** `## {SPEC_UNTESTED_HEAD}` 节 ⇒ 新规范必须给出「尚未被真实运行验证」的清单"
+                 f"（⚠ 它**只**保证这一节存在，**不**保证「正文里没有无证据断言」）"], "")
+    bad = []
+    if len(canon) > 1:
+        bad.append(f"有 **{len(canon)}** 个 `## {SPEC_UNTESTED_HEAD}` 节"
+                   f"（行 {[i + 1 for i, _ in canon]}）⇒ 只允许 1 个")
+    i0 = canon[0][0]
+    body = []
+    for ln in lines[i0 + 1:]:
+        if ln.startswith("# ") or (ln.startswith("## ") and not ln.startswith("### ")):
+            break
+        body.append(ln)
+    n_item = sum(1 for b in body if re.match(r"^\s*(?:[-*+]|\d+\.)\s+\S", b))
+    n_row = sum(1 for b in body
+                if b.strip().startswith("|") and not re.match(r"^\s*\|[\s:|-]+\|\s*$", b))
+    if n_item == 0 and n_row < 2:
+        bad.append(f"第 {i0 + 1} 行 `## {SPEC_UNTESTED_HEAD}` 节**是空的**"
+                   f"（列表项 {n_item} · 表格行 {n_row}）⇒ 只写了标题没写内容"
+                   f"（需 ≥1 列表项 **或** ≥2 表格行 = 表头+数据）")
+        return bad, ""
+    return bad, f"列表项 {n_item} · 表格行 {n_row}"
+
+
+def check_spec_untested(ctx):
+    """O-91: 规范类文档（`U[0-9]-*.md` / `D7-PROTOCOL-*.md`）必须带**非空**的 `## 未实测登记` 节。
+
+    ★ 判什么：① **命中集 ≥1**（否则判据**没有对象** ⇒ FAIL，防退化成空判）；
+      ② 每份**恰 1 个**该节；③ 节体**非空**。
+    ⚠⚠ **不判**：正文里有没有**无证据断言** —— 那不可机判、**仍是纪律**（见上方那段注释）。
+    📊 **附一条报数（不判）**：E 级内联标注里"带具体取证 vs 裸"的分布。
+      ⚠ 为什么是**报数而不是判据**：实测 ADR 侧 **57% 是裸标**（`（E1）`），而"裸"**不等于"错"**
+        （有的结论句本身不必带命令，命令写在同段别处）；且**连计数都口径敏感** ——
+        同一棵树、两个正则（`（E[1-5]` vs 完整括号对）在 spec 侧数出 **4 vs 8**。
+        ⇒ 做成 FAIL 会立刻造一批**假红**，而假红的结局是**被加进例外名单**（判据失效，O-70 同族）。
+      ⚠ 也**不新开一个恒 PASS 的报数断言** —— 那正是"**判据什么都没判**"。
+    """
+    files = sorted({p for g in SPEC_UNTESTED_GLOBS for p in SPEC_DIR.glob(g)})
+    if not files:
+        return ("FAIL",
+                f"spec/{SPEC_DIR.name} 下无匹配（{' / '.join(SPEC_UNTESTED_GLOBS)}）—— **判据无对象**", [])
+    bad, summ, em_detail, em_bare, em_files = [], [], 0, 0, 0
+    for p in files:
+        text = _read_text(p)
+        b, note = validate_spec_untested(text)
+        bad += [f"{p.name}: {x}" for x in b]
+        if note:
+            summ.append(f"{p.stem}: {note}")
+    # 📊 报数（**不判**）：射程 = "放断言的两个地方"（见 SPEC_EMARK_DIRS 的注释）
+    for d in SPEC_EMARK_DIRS:
+        for p in sorted(d.glob("*.md")):
+            em_files += 1
+            for m in SPEC_EMARK_RE.finditer(_read_text(p)):
+                if m.group(2).strip(" ，,;；:："):
+                    em_detail += 1
+                else:
+                    em_bare += 1
+    n_bad_file = len({x.split(":", 1)[0] for x in bad})
+    note = (f"规范 {len(files)} 份 · 违规 {n_bad_file} 份 · "
+            f"E 标报数 带取证 {em_detail} / 裸 {em_bare}"
+            f"（**报数，不判**；射程 = spec/d6-agent-standard/*.md + adr/ADR-*.md 共 {em_files} 份）")
+    if not bad:
+        note += f"（全部含 `## {SPEC_UNTESTED_HEAD}` 且非空）"
+    return ("FAIL" if bad else "PASS"), note, summ + bad
+
+
 def check_adr(ctx):
     """P2-2: `adr/ADR-*.md` 必须有"考虑的替代方案"节（恰 1 个 · 非空 · 不留旧节名）。"""
     files = sorted(ADR_DIR.glob(ADR_GLOB))
@@ -4614,6 +4713,19 @@ CHECKS = [
             " —— 要写「考虑过/否决了什么」，不是只写标题; **恰 1 个**（改名后别留旧节）; "
             "旧名 `否决/比较对象` / `被否的方案` 一律换规范名; "
             "⚠ 范围只含 adr/ADR-*.md —— DECISIONS.md 是表格载体（列在结构上已保证槽位、值可为 `—`），不在范围"},
+    {"id": "spec-untested", "title": "规范类文档的未实测登记节", "fn": check_spec_untested, "quick": True,
+     "fix": "O-91: **规范类文档**（`spec/d6-agent-standard/U[0-9]-*.md` 与 `D7-PROTOCOL-*.md`）必须带"
+            "**非空**的 `## 未实测登记` 节 —— 形状与判据 `adr` 同源（锚精确节名 · **恰 1 个** · "
+            "节体 **≥1 列表项 或 ≥2 表格行** · 扫描**只到下一个 H2**，故 `### 子节` 属节体）。"
+            "① 缺节 ⇒ FAIL；② 多于 1 个 ⇒ FAIL；③ 只写标题没写内容 ⇒ FAIL；"
+            "④ **命中集为 0 ⇒ FAIL**（判据**没有对象** = 退化空判，本仓头号形态）。"
+            "\n\n⚠⚠ **它不判什么（别读过头）**：**不判**「正文里有没有无证据断言」—— 那**不可机判**，"
+            "**仍然是纪律**。本判据只保证「**那一节在、且非空**」。"
+            "\n📊 note 里附一条 **报数（不判）**：E 级内联标注的「带具体取证 / 裸」分布 —— "
+            "实测 ADR 侧 **57% 是裸标**，而「裸」**不等于「错」**，且**连计数都口径敏感**"
+            "（同一棵树两个正则数出 4 vs 8）⇒ 做成 FAIL 会造假红，假红 → 例外名单 → 判据失效。"
+            "\n⚠ **逃逸（如实记）**：新规范若取名不带 `U\\d-` 前缀，本判据**看不到它** —— "
+            "spec 与 adr 实测**全部无 front-matter**（无 `type:` 可锚）⇒ 靠「命中集在输出里可见」缓解。"},
     {"id": "doclinks", "title": "文档链接可达", "fn": check_doclinks, "quick": True,
      "fix": "资源移动/改名后, 文档里的相对链接要跟着改 (注意别写重前缀: spec/<x>/ 里是 "
             "`../y` 不是 `../spec/y`, 引 docs/ 是 `../../docs/z`); 确有不可修的登记 DOCLINK_ALLOW; "
