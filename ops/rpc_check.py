@@ -20,6 +20,7 @@
 import argparse
 import ast
 import concurrent.futures
+import fnmatch
 import hashlib
 import json
 import os
@@ -5037,6 +5038,332 @@ def check_ps1_golden(ctx):
     return ("PASS" if p.returncode == 0 else "FAIL"), note, detail
 
 
+# ── D7-P3-2 (2026-09-26)「结论收束记账」: 结论进**既有**追加式账本, **不新造账本** ────
+#   合并稿 §13.3 原话：「D7 的结论留痕应**复用 `inbox` 的 `40_state/LOG.md` 追加式纪律**，
+#   **不新造账本**。」下面的函数把「本仓有哪些账本」变成**封闭集** ⇒
+#   「有人新造了第二本账本」从「靠人记得」变成**可机判**。
+LEDGERS_INV = ROOT / "inventory" / "conclusion-ledgers.yaml"
+LEDGER_SCAN_EXCLUDE_DIRS = (".git", "node_modules", ".venv", "tmp")
+
+
+def _s(v):
+    """取字符串（非字符串一律当空）—— 避免 `42.strip()` 这类调用把判据打崩。"""
+    return v.strip() if isinstance(v, str) else ""
+
+
+def _fnmatch_any(rel, globs):
+    """相对仓库根的 posix 路径 是否命中任一 glob。
+
+    ★ 口径 = **fnmatch 语义**（`*` **跨** `/`）—— 这是**显式选择**：本表要的是
+      「**形状覆盖**」（防的是「新造一本长得像的」），不是「精确路径」（后者归 `doclinks`）。
+      ⚠ 用 `PurePath.match` 会**不同**（它的 `*` 不跨分隔符）⇒ 两处口径会悄悄分叉。
+    """
+    return any(fnmatch.fnmatchcase(rel, g) for g in (globs or []) if g)
+
+
+def validate_conclusion_ledgers(doc, scan_hits=None):
+    """**纯函数**（D7-P3-2）：账本真值表自洽 + 「扫描命中 ⊆ 登记集」。
+
+    ⚠ `scan_hits` = 相对仓库根的 posix 路径列表（由 `check_conclusion_ledger` 去扫）。
+      `None` = **不判扫描**（单测合成样例时用）—— 它**绝不**表示「0 命中 ⇒ 通过」。
+      「读不到 ≠ 通过」在本函数里的落法：`None` 时**不产出扫描结论**，
+      而不是产出「扫描过了，没问题」。
+    """
+    bad, notes = [], []
+    if not isinstance(doc, dict):
+        return ["顶层不是映射（yaml 根应是 mapping）"], notes
+
+    disciplines = doc.get("disciplines")
+    if not isinstance(disciplines, list) or not disciplines:
+        bad.append("`disciplines` 为空 ⇒ 没有封闭枚举就没有纪律（『缺锚点不得登记』同源）")
+        disciplines = []
+    elif any(not _s(d) for d in disciplines):
+        bad.append("`disciplines` 里有非字符串 / 空串项")
+
+    ledgers = doc.get("ledgers")
+    if not isinstance(ledgers, list) or not ledgers:
+        bad.append("`ledgers` 为空 ⇒ 本表**没有对象**（退化空判 = 本仓头号形态）")
+        ledgers = []
+
+    seen_ids, used_disc, ledger_globs = set(), set(), []
+    for i, lg in enumerate(ledgers):
+        at = f"ledgers[{i}]"
+        if not isinstance(lg, dict):
+            bad.append(f"{at} 不是映射")
+            continue
+        lid = _s(lg.get("id"))
+        if not lid:
+            bad.append(f"{at} 缺 `id`")
+        elif lid in seen_ids:
+            bad.append(f"{at} `id` 重复: {lid}（账本 id 是标识，不得复用）")
+        else:
+            seen_ids.add(lid)
+            at = f"ledgers[{lid}]"
+        # 账本三要素：唯一写入者 / 纪律出处 / 独立校验 —— 缺一即不可判
+        for k in ("what", "writer", "truth_doc", "verify"):
+            if not _s(lg.get(k)):
+                bad.append(f"{at} 缺 `{k}` —— 账本三要素（唯一写入者 / 纪律出处 / 独立校验）缺一即不可判")
+        disc = lg.get("discipline")
+        if disc not in disciplines:
+            bad.append(f"{at} 的 `discipline`={disc!r} 不在声明集 {disciplines} 里")
+        else:
+            used_disc.add(disc)
+        gl = [g for g in (lg.get("globs") or []) if _s(g)]
+        pa = [p for p in (lg.get("paths") or []) if _s(p)]
+        if not gl and not pa:
+            bad.append(f"{at} 既无 `globs` 也无 `paths` ⇒ 无法判它指的是哪个文件")
+        ledger_globs += gl + pa
+
+    # 孤儿纪律：声明了却没有任何账本用 ⇒ 装饰（同 promotion 的『孤儿字段』）
+    for d in disciplines:
+        if d not in used_disc:
+            bad.append(f"孤儿纪律: `disciplines` 声明了 {d!r} 但**没有任何账本**用它 ⇒ 形同虚设")
+
+    # ── ★★「不新造账本」的**正面表述**必须写下来（空 = 没写 ⇒ FAIL）─────────
+    nal = doc.get("not_a_ledger")
+    if not isinstance(nal, list) or not nal:
+        bad.append("`not_a_ledger` 为空 ⇒ **没有写下「什么不算账本」** ⇒ 下一个人会按『看着像』再建一本")
+        nal = []
+    for i, it in enumerate(nal):
+        if not isinstance(it, dict) or not _s(it.get("glob")) or not _s(it.get("why")):
+            bad.append(f"not_a_ledger[{i}] 缺 `glob` 或 `why`（『什么不算账本』必须给理由）")
+            continue
+        # ── 交叉：同一形态**不能既登记为账本、又声明不是账本**（自相矛盾）──
+        g = _s(it["glob"])
+        clashed = [x for x in ledger_globs if fnmatch.fnmatchcase(x, g) or fnmatch.fnmatchcase(g, x)]
+        if clashed:
+            bad.append(f"`not_a_ledger` 的 {g!r} 与登记的账本形态 {clashed} **相撞**"
+                       f"（既说是账本、又声明不是 ⇒ 两处口径矛盾）")
+
+    scan = doc.get("scan") if isinstance(doc.get("scan"), dict) else {}
+    if not [g for g in (scan.get("globs") or []) if _s(g)]:
+        bad.append("`scan.globs` 为空 ⇒ 没有扫描口径就没有『未登记账本』这条判据")
+    if not [d for d in (scan.get("exclude_dirs") or []) if _s(d)]:
+        bad.append("`scan.exclude_dirs` 为空 ⇒ 会把 .git / 依赖目录一起扫进来（口径不完整）")
+
+    # ── 扫描侧（`scan_hits is None` ⇒ **不判**，而不是判过）─────────────────
+    if scan_hits is not None:
+        for rel in scan_hits:
+            if not _fnmatch_any(rel, ledger_globs):
+                bad.append(f"★**未登记的账本**: {rel} —— 它在扫描口径内却不属于任何已登记账本 ⇒ "
+                           f"要么登记进 `inventory/conclusion-ledgers.yaml`，要么把扫描口径说清")
+        # 反向防腐化：登记了 globs 的账本**必须**有条目命中（登记了却扫不到 = 登记已腐化）
+        for lg in ledgers:
+            if not isinstance(lg, dict):
+                continue
+            gl = [g for g in (lg.get("globs") or []) if _s(g)]
+            if gl and not any(_fnmatch_any(h, gl) for h in scan_hits):
+                bad.append(f"账本 {_s(lg.get('id'))!r} 登记了 globs {gl} 却**一条也没命中** ⇒ "
+                           f"登记腐化（账本被删 / 改名，或 glob 写错）")
+
+    unv = doc.get("unverified")
+    if not isinstance(unv, list) or not unv:
+        bad.append("`unverified` 为空 ⇒ 本项自己未实测 / 未定的部分没登记")
+
+    if not bad:
+        notes.append(f"账本 {len(ledgers)} 本 · 纪律 {sorted(used_disc)} · 非账本点名 {len(nal)} 项")
+        if scan_hits is None:
+            notes.append("扫描：**未接扫描输入（不判，不算通过）**")
+        else:
+            notes.append(f"扫描命中 {len(scan_hits)} 处 · 全部已登记")
+    return bad, notes
+
+
+def _scan_ledger_hits():
+    """按 `scan` 段扫盘，返回**相对仓库根**的 posix 路径（排序去重）。"""
+    import yaml
+    doc = yaml.safe_load(_read_text(LEDGERS_INV)) or {}
+    scan = doc.get("scan") if isinstance(doc.get("scan"), dict) else {}
+    exclude = set(scan.get("exclude_dirs") or []) | set(LEDGER_SCAN_EXCLUDE_DIRS)
+    hits = []
+    for g in (scan.get("globs") or []):
+        if not _s(g):
+            continue
+        for p in ROOT.glob(g):
+            if not p.is_file():
+                continue
+            rel = p.relative_to(ROOT).as_posix()
+            if any(part in exclude for part in rel.split("/")):
+                continue
+            hits.append(rel)
+    return sorted(set(hits))
+
+
+def check_conclusion_ledger(ctx):
+    """D7-P3-2: 「结论收束记账」—— 结论进**既有**追加式账本，**不新造账本**。"""
+    try:
+        import yaml
+    except Exception:
+        return "WARN", "缺 pyyaml, 跳过 conclusion-ledger 断言", []
+    if not LEDGERS_INV.exists():
+        return "FAIL", "inventory/conclusion-ledgers.yaml 缺失（本断言的登记依据）", []
+    try:
+        doc = yaml.safe_load(_read_text(LEDGERS_INV)) or {}
+    except Exception as e:
+        return "FAIL", f"inventory/conclusion-ledgers.yaml 解析失败: {type(e).__name__}: {e}", []
+    try:
+        hits = _scan_ledger_hits()
+    except Exception as e:
+        # ⚠ **读不到 ≠ 通过**：扫描失败必须报出来，**不许**回落到「不判扫描」。
+        return "FAIL", f"账本扫描失败（不可判 ⇒ 不许当通过）: {type(e).__name__}: {e}", []
+    bad, notes = validate_conclusion_ledgers(doc, scan_hits=hits)
+    # 盘上存在性：登记了 `paths` 的账本，文件必须真在（「登记腐化」的另一半）
+    for lg in (doc.get("ledgers") or []):
+        if not isinstance(lg, dict):
+            continue
+        for p in (lg.get("paths") or []):
+            if not _s(p):
+                continue
+            if not (ROOT / p).exists():
+                bad.append(f"账本 {_s(lg.get('id'))!r} 登记的路径不存在: {p} ⇒ "
+                           f"登记腐化（换机器 / 被删 / 改名）")
+    return ("FAIL" if bad else "PASS"), " · ".join(notes), bad
+
+
+# ── D7-P3-2 (2026-09-26)「标准复核目录」: 免终裁类目清单（D-43 的退出判据之一）────────
+REVIEW_CATALOG_INV = ROOT / "inventory" / "review-catalog.yaml"
+
+
+def validate_review_catalog(doc):
+    """**纯函数**（D7-P3-2）：标准复核目录的自洽（免终裁类目清单）。
+
+    ★ 守的是 **D-43 的准入门槛**「同一类被批准两次」（ITIL 原话）。它最容易被绕开的方式是
+      「把 `approvals` 填成 2 但**拿不出那两次的锚点**」⇒ 故
+      `len(approval_anchors) == approvals` 是硬条件（只填数字 = 自说自话）。
+    """
+    bad, notes = [], []
+    if not isinstance(doc, dict):
+        return ["顶层不是映射（yaml 根应是 mapping）"], notes
+
+    adm = doc.get("admission") if isinstance(doc.get("admission"), dict) else {}
+    if not adm:
+        bad.append("缺 `admission` 段 ⇒ 没有准入门槛，『类目』就退化成『我觉得安全』")
+    if not _s(adm.get("rule")):
+        bad.append("`admission.rule` 为空 ⇒ 门槛没有出处")
+    ma = adm.get("min_approvals")
+    if not isinstance(ma, int) or isinstance(ma, bool) or ma < 2:
+        bad.append(f"`admission.min_approvals`={ma!r} 必须 ≥ 2 —— 门槛设成 1 或 0 ⇒ "
+                   f"**每一类都是标准复核** = 判据恒真（本仓头号形态）")
+        ma = 2
+    if not isinstance(adm.get("type_axis"), str):
+        bad.append("`admission.type_axis` 必须是字符串（未定义 ⇒ 置空串，**不是**省略该键）")
+    if not _s(adm.get("type_axis_note")):
+        bad.append("`admission.type_axis_note` 为空 ⇒ 类型轴的现状（有 / 无 / 为什么）没写下来")
+    rt = adm.get("ratio_target")
+    if not isinstance(rt, dict):
+        bad.append("缺 `admission.ratio_target`（ITIL 的比例目标 —— 只报数，但必须登记）")
+        rt = {}
+    else:
+        lo, hi, judged = rt.get("low"), rt.get("high"), rt.get("judged")
+        if not (isinstance(lo, int) and isinstance(hi, int) and not isinstance(lo, bool)
+                and not isinstance(hi, bool) and 0 < lo < hi <= 100):
+            bad.append(f"`ratio_target` 的 low/high 非法: {lo}/{hi}（须 0 < low < high ≤ 100）")
+        if not isinstance(judged, bool):
+            bad.append("`ratio_target.judged` 必须是布尔 —— 它标明这条目标是**判**还是**只报数**")
+
+    sch = doc.get("entry_schema") if isinstance(doc.get("entry_schema"), dict) else {}
+    if not sch:
+        bad.append("缺 `entry_schema` 段 ⇒ 类目的形状没定义 ⇒ 登进来的东西无法核对")
+    stages = sch.get("exempt_stages")
+    if not isinstance(stages, list) or not stages or any(not _s(s) for s in stages):
+        bad.append("`entry_schema.exempt_stages` 必须是非空字符串列表（免哪一层 = 封闭枚举）")
+        stages = []
+    fields = sch.get("fields")
+    fids = []
+    if not isinstance(fields, list) or not fields:
+        bad.append("`entry_schema.fields` 为空")
+        fields = []
+    for i, f in enumerate(fields):
+        if not isinstance(f, dict) or not _s(f.get("id")):
+            bad.append(f"entry_schema.fields[{i}] 缺 `id`")
+            continue
+        if not _s(f.get("note")):
+            bad.append(f"entry_schema.fields[{i}]({_s(f.get('id'))}) 缺 `note` ⇒ 字段含义靠猜")
+        fids.append(_s(f.get("id")))
+    if len(fids) != len(set(fids)):
+        bad.append("`entry_schema.fields` 的 `id` 有重复")
+    req = sch.get("required")
+    if not isinstance(req, list) or not req:
+        bad.append("`entry_schema.required` 为空 ⇒ 没有必填就没有门")
+        req = []
+    for r in req:
+        if r not in fids:
+            bad.append(f"`entry_schema.required` 引用了不存在的字段 {r!r}")
+    for fid in fids:
+        if fid not in req:
+            bad.append(f"孤儿字段: `entry_schema.fields` 有 {fid!r} 但 `required` 没用它 ⇒ 装饰")
+
+    entries = doc.get("entries")
+    if not isinstance(entries, list):
+        bad.append("缺 `entries` 字段（『不存在』与『为空』必须可区分）")
+        entries = []
+    seen = set()
+    for i, e in enumerate(entries):
+        at = f"entries[{i}]"
+        if not isinstance(e, dict):
+            bad.append(f"{at} 不是映射")
+            continue
+        eid = _s(e.get("id"))
+        if eid and eid in seen:
+            bad.append(f"{at} `id` 重复: {eid}")
+        seen.add(eid)
+        at = f"entries[{eid or i}]"
+        for k in req:
+            v = e.get(k)
+            if v is None or (isinstance(v, (str, list)) and not v):
+                bad.append(f"{at} 缺必填 `{k}`")
+        if e.get("exempt_from") and e["exempt_from"] not in stages:
+            bad.append(f"{at} `exempt_from`={e['exempt_from']!r} 不在封闭枚举 {stages} 里")
+        ap = e.get("approvals")
+        if not isinstance(ap, int) or isinstance(ap, bool) or ap < ma:
+            bad.append(f"{at} `approvals`={ap!r} 未达准入门槛 {ma}（D-43：同一类被批准两次）")
+        anchors = e.get("approval_anchors")
+        if not isinstance(anchors, list) or not anchors or any(not _s(a) for a in anchors):
+            bad.append(f"{at} `approval_anchors` 必须是非空字符串列表")
+        elif isinstance(ap, int) and not isinstance(ap, bool) and len(anchors) != ap:
+            bad.append(f"{at} `approval_anchors` 有 {len(anchors)} 条但 `approvals`={ap} ⇒ "
+                       f"**只填数字拿不出锚点** = 自说自话（D-43 的门槛没被真满足）")
+        rv = e.get("review_every")
+        if not isinstance(rv, int) or isinstance(rv, bool) or rv <= 0:
+            bad.append(f"{at} `review_every` 必须是正整数（天）")
+
+    # ★ 交叉：有类目却**没有类型轴** ⇒ 那些类目凭什么浮出来的？
+    if entries and not _s(adm.get("type_axis")):
+        bad.append("★ 有类目（`entries` 非空）但 `admission.type_axis` 为空 ⇒ "
+                   "**类目没有浮出依据**（门槛是『同一类』，没有轴就没有『类』）")
+    if not entries and not _s(doc.get("empty_reason")):
+        bad.append("`entries` 为空却没有 `empty_reason` ⇒ **空不许当『没事』**（本仓已登记的假绿形态）")
+
+    unv = doc.get("unverified")
+    if not isinstance(unv, list) or not unv:
+        bad.append("`unverified` 为空 ⇒ 本项自己未实测 / 未定的部分没登记")
+
+    if not bad:
+        notes.append(f"免终裁类目 {len(entries)} 条 · 准入门槛 min_approvals={ma} · "
+                     f"类型轴 {'已定义' if _s(adm.get('type_axis')) else '**未定义**'}")
+        if rt:
+            notes.append(f"比例目标 {rt.get('low')}–{rt.get('high')}%"
+                         f"（{'判' if rt.get('judged') else '**只报数、不判**'}）")
+        notes.append(f"可豁免层 {stages}")
+    return bad, notes
+
+
+def check_review_catalog(ctx):
+    """D7-P3-2: 标准复核目录（D-43 退出判据『免终裁类目有清单』）。"""
+    try:
+        import yaml
+    except Exception:
+        return "WARN", "缺 pyyaml, 跳过 review-catalog 断言", []
+    if not REVIEW_CATALOG_INV.exists():
+        return "FAIL", "inventory/review-catalog.yaml 缺失（本断言的登记依据）", []
+    try:
+        doc = yaml.safe_load(_read_text(REVIEW_CATALOG_INV)) or {}
+    except Exception as e:
+        return "FAIL", f"inventory/review-catalog.yaml 解析失败: {type(e).__name__}: {e}", []
+    bad, notes = validate_review_catalog(doc)
+    return ("FAIL" if bad else "PASS"), " · ".join(notes), bad
+
+
 CHECKS = [
     {"id": "secrets", "title": "明文扫描", "fn": check_secrets, "quick": True,
      "fix": "删除明文密钥, 或加入 SECRET_ALLOW 并写明原因(不允许静默放行); "
@@ -5225,6 +5552,32 @@ CHECKS = [
             "看明细里的 FAIL 行。⚠ **先判「是回归还是夹具期望值陈旧」**："
             "若代码侧确有语义变更（看 agent-cli.ps1 里的注释/新件/O- 台账）⇒ 改**夹具期望值**并写明理由；"
             "若代码侧无变更 ⇒ **是回归**，改代码。⚠ 出站硬闸的判据本体在夹具里，本断言只负责让它**每次都被跑**"},
+    # ── D7-P3-2 (2026-09-26): 编排层的两条判据（防 D7 变瓶颈 / 不新造账本）────────
+    {"id": "conclusion-ledger", "title": "账本唯一性（不新造账本）", "fn": check_conclusion_ledger, "quick": True,
+     "fix": "D7-P3-2『结论收束记账』：合并稿 §13.3 要求 D7 的结论留痕**复用既有追加式纪律、不新造账本**。"
+            "`inventory/conclusion-ledgers.yaml` 是**账本的封闭集**（口径 = 只追加 ∧ 唯一写入者 ∧ 有独立校验）。"
+            "① 报『**未登记的账本** <路径>』⇒ 有人在扫描口径内新造了一本 ⇒ **要么登记**，"
+            "**要么把 `scan.globs` 口径说清**（口径不先定就量 = 本仓已吃过三次亏）；"
+            "② 报『登记了 globs 却一条也没命中』= **登记腐化**（账本被删 / 改名 / glob 写错）；"
+            "③ 报『登记的路径不存在』同②（`paths` 那一半）；"
+            "④ 报『`not_a_ledger` 为空』= **没写下「什么不算账本」** ⇒ 下一个人会按『看着像』再建一本；"
+            "⑤ 报『相撞』= 同一形态既登记为账本、又被声明不是账本（两处口径矛盾）；"
+            "⑥ 报『扫描失败 ⇒ 不可判』= **要修**，不是通过。"
+            "⚠ **它不判什么**：**不判账本内容**对不对，也**不判**『结论该不该进账本』（后者是纪律）。"
+            "⚠ 扫描口径**窄**（只 `inbox/*/40_state/LOG.md`）⇒ **别名账本看不到**，"
+            "这点已如实写在 yaml 的 `unverified` 里 —— 别把本项读成『账本已全覆盖』"},
+    {"id": "review-catalog", "title": "标准复核目录（免终裁类目）", "fn": check_review_catalog, "quick": True,
+     "fix": "D7-P3-2 / D-43：`inventory/review-catalog.yaml` 是**免终裁类目的清单**。"
+            "① 准入门槛照抄 ITIL（**同一类被批准两次**）—— 报『`approvals` 未达门槛』或"
+            "『`approval_anchors` 条数 ≠ `approvals`』= **只填数字拿不出锚点**（门槛没被真满足）；"
+            "② 报『有类目但 `type_axis` 为空』= **类目没有浮出依据**（没有轴就没有『类』）；"
+            "③ 报『孤儿字段』= `fields` 里有 `required` 没用的字段（装饰）；"
+            "④ `entries` 为空**必须**给 `empty_reason` —— **空 ≠ 没事**，门禁会把「0 条」报出来；"
+            "⑤ `ratio_target.judged` 标明这条目标是**判**还是**只报数**。"
+            "⚠ **它不判什么**：**不判**类目选得对不对（那是人读血统 / 风险），"
+            "也**不判**『该不该引入豁免』（D-48 要求先证它与结构 contain 不冲突）。"
+            "⚠ 当前 `entries` **实测 0 条**（理由在 `empty_reason`，两条独立实测）——"
+            "**别把本项读成『已有免终裁通道』**"},
     # O-63 (2026-09-25): 取号并发夹具。**刻意 quick:False**（要起 8 个独立进程 + 两次 2.5s 共同释放时刻 ⇒ 约 6s）。
     {"id": "ps1-runstamp", "title": "ts 取号并发夹具", "fn": check_ps1_runstamp, "quick": False,
      "fix": "O-63: 跑 `powershell -NoProfile -ExecutionPolicy Bypass -File ops/station-bin/_runstamp_hammer.ps1 -N 8 -SelfTest`。"

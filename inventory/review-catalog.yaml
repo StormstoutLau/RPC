@@ -1,0 +1,88 @@
+# 标准复核目录（D7-P3-2 · M-10「EASE 早停 + 标准复核目录」的一半）
+#
+# ── 这是什么 ────────────────────────────────────────────────────────────────
+# 已裁 **D-43 = 引入**（2026-09-24），其退出判据原话 = 「编排可判 + **免终裁类目有清单**」。
+# 本表就是那份**清单**。它要解决的问题（合并稿 §4.3，ITIL 4）：
+#   「每一次小复核都走全套终裁」会把 D7 自己变成瓶颈 ⇒ 允许**预授权的复核类型**免终裁。
+#
+# ── 准入门槛：照抄 ITIL 的原话，不自己发明 ─────────────────────────────────
+#   「Every time the CAB approves the same type of change twice,
+#     someone should ask: 'Should this be a standard change?'」
+# ⇒ 门槛 = **同一类被批准两次** —— 这才是「类目」，而不是「我觉得这个挺安全的」。
+# ⚠ ITIL 另给的 **40–60% 比例目标**在本表**只报数、不判**：它是**中型团队经验值**，
+#   本仓是单人工作流，拿它当判据会造**假红**（同 `spec-untested` 里「E 标报数」的处置）。
+#
+# ── ⚠ 当前状态：**类目 0 条**（不是「已达标」，也不是「没做」）──────────────
+# 见 `empty_reason`：0 是**两条独立的实测结论**。且门禁 `review-catalog` 会把
+# 「0 条」**显式报出来**（空 ≠ 没事；`0/0` 不许读成「没问题」）。
+
+version: 1
+updated: 2026-09-26
+owner: Scott (鹏)
+basis: "D-43（引入）· 合并稿 §4.3（ITIL 标准变更目录）· §4.4（EASE）· M-10"
+
+admission:
+  rule: 同一类复核被批准两次 ⇒ 才该问「它能不能成为标准复核」
+  min_approvals: 2
+  # 类目要能「浮出来」，得先有**类型轴**（按什么把复核归类）。
+  # 本仓当前**没有**这个轴 ⇒ 置空（**实测结论**，不是漏填），理由见 type_axis_note。
+  type_axis: ""
+  type_axis_note: >-
+    实测：本仓的复核记录（`review.json` / run 记录）里**没有任何可作类型轴的字段** ——
+    只有 subject / model / verdict，**没有「复核类型」**。⇒ 类目**无法由数据浮出**；
+    要建这个轴，得先设计**分层受理**（路线总表 §11.2-b 已登记：它会改受理机制）。
+  ratio_target: {low: 40, high: 60, unit: percent, judged: false,
+                 note: "ITIL 的中型团队经验值；本仓单人工作流 ⇒ 只报数不判"}
+
+# ── 一条「标准复核」必须写清什么（`entries` 里每条的必填字段）────────────────
+# ★ 关键在于 `still_required` 与 `revoke_if`：**免终裁 ≠ 免一切** ——
+#   豁免只对 `exempt_from` 指定的那一层生效，其余照旧；且**必须有撤销条件**。
+entry_schema:
+  # 可豁免的复核层（封闭枚举）。本仓实测**只有** `l2-semantic` 是对得上号的：
+  #   站上复核链 = `L1 机械门`（`Resolve-L1Gate`，不是「复核」）→ `L2 语义判官`（`Invoke-Review`）。
+  #   `final-adjudication` 是为「分层受理」预留的一级 ⇒ **本仓无对象**（见 `unverified`）。
+  exempt_stages: [l2-semantic, final-adjudication]
+  required: [id, scope, exempt_from, still_required, risk_basis, approvals,
+             approval_anchors, revoke_if, review_every]
+  fields:
+    - {id: id,               type: str,  note: "类目名（稳定标识，不复用）"}
+    - {id: scope,            type: str,  note: "「什么算这一类」—— 边界写不清，类目迟早越长越宽"}
+    - {id: exempt_from,      type: str,  note: "免哪一层的复核（取值 ∈ exempt_stages）"}
+    - {id: still_required,   type: list, note: "★ 豁免后**仍然必须**跑的（**非空** —— 免终裁 ≠ 免一切）"}
+    - {id: risk_basis,       type: str,  note: "凭什么算低风险（须可核，不是形容词）"}
+    - {id: approvals,        type: int,  note: "该类被批准过的次数（≥ admission.min_approvals）"}
+    - {id: approval_anchors, type: list, note: "★ 那 `approvals` 次的**锚点**；条数必须相等（只填数字 = 自说自话）"}
+    - {id: revoke_if,        type: str,  note: "什么情况下本豁免**作废**"}
+    - {id: review_every,     type: int,  note: "再评审周期（天，> 0）"}
+
+entries: []
+
+empty_reason: >-
+  **类目 0 条**，两条独立的实测理由（不是「没来得及」）：
+  · ① **够不上准入门槛**：门槛是「同一类被批准两次」（`min_approvals=2`），
+    而本仓复核记录里**没有类型轴**（见 `admission.type_axis_note`）⇒「同一类」**数不出来**,
+    候选**无法由数据浮出**（这是实测结论，不是估计）。
+  · ② **「层」未定义**：免终裁的对象是「**哪一层**」，而本仓今天只有 `l2-semantic` **一层**
+    语义复核（`final-adjudication` 尚不存在）⇒ 即便列出类目，也**无处生效**。
+  ⇒ 处置同本仓既定纪律「**先量后定档**」（同 O-69 / O-97 / O-99）：
+     **先把准入规则与字段**变成可查真值（本表），**类目等有了类型轴与实测频次再登**。
+     ⚠ 空 ≠ 没事：门禁 `review-catalog` 会把「0 条」报出来，不静默通过。
+
+unverified:
+  - item: "`exempt_stages` 的第二级 `final-adjudication`"
+    why: "本仓**无对象** —— 当前只有 L2 一层语义复核；该级是为「分层受理」预留的名字，尚未设计"
+  - item: "`ratio_target` 40–60% 是否适用本仓"
+    why: "来自 ITIL 的中型团队经验值；单人工作流下**无实测** ⇒ 故 `judged: false`（只报数）"
+  - item: "`review_every`（再评审周期）的具体天数"
+    why: "ITIL 未给统一值；本仓**不预设** —— 由将来第一条类目自定并登记"
+  - item: "免终裁与 D7「结构 contain」是否冲突（D-48 / D-40）"
+    why: >-
+      **未验证**：ITIL 是变更管理实践，而 D7 的前提是「授权边界优先于审得更准」
+      （JBR 100% 但 Unsafe Action Rate 0%）⇒ **引入豁免前必须先证两者不冲突**；
+      本表只是把结构备好，**不构成已经可以豁免**的结论。
+  - item: "本项与 EASE 早停的关系"
+    why: >-
+      M-10 把两者并列（都属「防 D7 变瓶颈」），但**不是一件事**：
+      本表管「**哪些类不必审**」，EASE 管「**审几轮够**」。EASE 未落地，
+      理由与其前置条件**另处登记**（见 `docs/DEV-LOG-014-decision-refinement.md` §78），
+      **刻意不写在这张表里**（避免「把两件事说成一件」—— 本仓头号失败形态）。
