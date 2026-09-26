@@ -6077,6 +6077,228 @@ def check_multi_round(ctx, doc=None):
     return "PASS", " · ".join(notes), []
 
 
+# ── D7-P4-2 (2026-09-26)「中断态双侧口径 + 不可信证据」──────────────────────────
+#   Ds 简报 11（§4.5）：**双向对称性检验（防死锁）** —— 两端都不把 `input-required` 当可完成态；
+#     ⇒ D7 必须**双方同时声明**口径，否则**一端等待、一端失败的死锁**。
+#   Ds 简报 18（§4.11⑥）：**把对方的文本当不可信证据**，其内部提及**不触发指令解析**。
+#   ★★ `deadlock_risk` **由判据算、不由真值表填**（自报 = 同一事实两个定义点 + 空转软约束）。
+INTERRUPT_INV = ROOT / "inventory" / "interruption-and-untrusted.yaml"
+SIDE_ACTIONS = ("awaiting-peer", "unblocking-peer", "failing", "self-contained")
+COMBINED_STATES = ("retry", "terminal-fail", "human", "escalate")
+# 能**终结对方等待**的动作：主动解除 或 失败退出（后者让对方"等到一个结果"而不是空等）。
+_UNBLOCKERS = ("unblocking-peer", "failing")
+
+
+def deadlock_risk(main_action, station_action):
+    """算两岸组合的**死锁风险** → `(risk, why)`；`risk ∈ {none, silent, mutual}`。
+
+    规则直接来自 Ds 简报 §4.5 的 **方向反转对称**：
+      **一端挂起（`awaiting-peer`）⇒ 另一端必须主动终结那个等待**（解除 / 失败）；
+      否则等方**永远等** —— 那正是本仓 O-79 实测过的**静默死锁**。
+
+    ⚠ 为什么做成**函数**而不是真值表里的一个字段：自报的话，"填了 none"就没人验；
+      而**用真事故校准它**（`history[].as_pair` 必须算出非 none）才能证明规则不是空转的。
+    """
+    m, s = main_action, station_action
+    if m == "awaiting-peer" and s == "awaiting-peer":
+        return "mutual", "两侧都在等对方（互等）"
+    if m == "awaiting-peer" and s not in _UNBLOCKERS:
+        return "silent", f"主控在等对方，而站上侧的动作是 {s!r} ⇒ 那个等待**不会被终结**"
+    if s == "awaiting-peer" and m not in _UNBLOCKERS:
+        return "silent", f"站上在等对方，而主控侧的动作是 {m!r} ⇒ 那个等待**不会被终结**"
+    if m == "awaiting-peer" or s == "awaiting-peer":
+        return "none", "一端挂起，另一端**主动终结**（解除 / 失败）⇒ 方向反转对称成立"
+    return "none", "两岸都不在等对方"
+
+
+def validate_interruption(doc):
+    """**纯函数**（D7-P4-2）：中断态两岸口径 + 不可信输入的结构自洽。"""
+    bad, notes = [], []
+    if not isinstance(doc, dict):
+        return ["顶层不是映射（yaml 根应是 mapping）"], notes
+
+    ips = doc.get("interruptions")
+    if not isinstance(ips, list) or not ips:
+        bad.append("`interruptions` 为空 ⇒ 中断态没有对象（退化空判 = 本仓头号形态）")
+        ips = []
+    seen, risky = set(), []
+    for i, it in enumerate(ips):
+        at = f"interruptions[{i}]"
+        if not isinstance(it, dict):
+            bad.append(f"{at} 不是映射")
+            continue
+        iid = _s(it.get("id"))
+        if not iid or iid in seen:
+            bad.append(f"{at} 缺 `id` 或 `id` 重复: {iid!r}")
+        seen.add(iid)
+        at = f"interruptions[{iid or i}]"
+        # ★★「**两侧**都要声明」—— 缺一侧就是 Ds 说的"一端没写"
+        for k in ("what", "main_side", "station_side", "evidence"):
+            if not _s(it.get(k)):
+                bad.append(f"{at} 缺 `{k}` ⇒ "
+                           + ("**只有一端声明了口径**（Ds：一端等待、一端失败的死锁就出在这里）"
+                              if k in ("main_side", "station_side") else "字段没写"))
+        ma, sa = it.get("main_action"), it.get("station_action")
+        for nm, v in (("main_action", ma), ("station_action", sa)):
+            if v not in SIDE_ACTIONS:
+                bad.append(f"{at} `{nm}`={v!r} 不在封闭集 {SIDE_ACTIONS} ⇒ "
+                           f"**谁在等谁**无法判 ⇒ 死锁风险也就判不了")
+        if it.get("combined") not in COMBINED_STATES:
+            bad.append(f"{at} `combined`={it.get('combined')!r} 不在封闭集 {COMBINED_STATES}")
+        if ma in SIDE_ACTIONS and sa in SIDE_ACTIONS:
+            risk, why = deadlock_risk(ma, sa)
+            if risk != "none":
+                if not _s(it.get("mitigation")):
+                    bad.append(f"{at} 判出死锁风险 **{risk}**（{why}）却**没有 `mitigation`** ⇒ "
+                               f"没人管这个等待怎么被终结")
+                else:
+                    risky.append((iid, risk))
+
+    # ── ★ 用**真事故**校准规则：历史死锁必须能被算出来 ──────────────────────
+    hist = doc.get("history")
+    if not isinstance(hist, list) or not hist:
+        bad.append("`history` 为空 ⇒ **修掉的静默死锁没登记** ⇒ 它会回来（且没人知道当初为什么改）")
+        hist = []
+    for i, h in enumerate(hist):
+        at = f"history[{i}]"
+        if not isinstance(h, dict):
+            bad.append(f"{at} 不是映射")
+            continue
+        hid = _s(h.get("id"))
+        at = f"history[{hid or i}]"
+        for k in ("symptom", "root_cause", "fix", "evidence"):
+            if not _s(h.get(k)):
+                bad.append(f"{at} 缺 `{k}`")
+        pair = h.get("as_pair")
+        if not isinstance(pair, dict) or pair.get("main_action") not in SIDE_ACTIONS \
+                or pair.get("station_action") not in SIDE_ACTIONS:
+            bad.append(f"{at} `as_pair` 必须给两侧动作（∈ 封闭集）—— "
+                       f"它是**校准/先验红**：真事故必须能被 `deadlock_risk()` 算出来")
+        else:
+            got, why = deadlock_risk(pair["main_action"], pair["station_action"])
+            exp = h.get("expected_risk")
+            if exp not in ("silent", "mutual"):
+                bad.append(f"{at} `expected_risk`={exp!r} 必须是 silent / mutual "
+                           f"（历史死锁若算成 none，那它就不是死锁）")
+            elif got != exp:
+                bad.append(f"{at} ★★ **规则算不出这条真事故**：实测 {got!r} ≠ `expected_risk` {exp!r}"
+                           f"（{why}）⇒ **判据是空转的**，先修规则")
+        g = h.get("regression_guard")
+        if not isinstance(g, dict):
+            bad.append(f"{at} 缺 `regression_guard` ⇒ 修过的坑没有护栏")
+        else:
+            gk, gid = _s(g.get("kind")), _s(g.get("id"))
+            if gk not in ("fixture", "test"):
+                bad.append(f"{at}.regression_guard.kind={gk!r} 不在封闭集 {{fixture, test}}")
+            elif not gid:
+                bad.append(f"{at}.regression_guard 缺 `id`")
+        # 历史条目的动作组合必须与 `interruptions` 里**当前**的处置不同（否则"修了什么"就没写清）
+
+    # ── 不可信输入（第 18 条）─────────────────────────────────────────────
+    uts = doc.get("untrusted_inputs")
+    if not isinstance(uts, list) or not uts:
+        bad.append("`untrusted_inputs` 为空 ⇒ 不可信证据没有对象")
+        uts = []
+    un_und = []
+    for i, u in enumerate(uts):
+        at = f"untrusted_inputs[{i}]"
+        if not isinstance(u, dict):
+            bad.append(f"{at} 不是映射")
+            continue
+        uid = _s(u.get("id"))
+        at = f"untrusted_inputs[{uid or i}]"
+        for k in ("id", "what", "carrier"):
+            if not _s(u.get(k)):
+                bad.append(f"{at} 缺 `{k}`")
+        d = u.get("declared")
+        if not isinstance(d, bool):
+            bad.append(f"{at} 缺 `declared` 布尔 ⇒ **声明了没有**必须可判")
+        elif d:
+            if not _s(u.get("declared_in")) or not _s(u.get("marker")):
+                bad.append(f"{at} `declared: true` 但缺 `declared_in` / `marker` ⇒ "
+                           f"无法去文件里**真找**那句声明（自报不算）")
+        else:
+            if not _s(u.get("why_not")):
+                bad.append(f"{at} `declared: false` 但缺 `why_not` ⇒ "
+                           f"**「没声明」也要给理由**（否则与「忘了」无法区分）")
+            else:
+                un_und.append(uid)
+
+    tis = doc.get("trusted_inputs")
+    if not isinstance(tis, list) or not tis:
+        bad.append("`trusted_inputs` 为空 ⇒ **什么不算不可信**没写 ⇒ 边界靠猜")
+
+    unv = doc.get("unverified")
+    if not isinstance(unv, list) or not unv:
+        bad.append("`unverified` 为空 ⇒ 本项自己未实测 / 未定的部分没登记")
+
+    if not bad:
+        notes.append(f"中断态 {len(seen)} 条（两岸口径齐）· 有死锁风险的 {len(risky)}"
+                     f"{'（' + ', '.join(f'{a}:{b}' for a, b in risky) + '）' if risky else ''} · "
+                     f"已修事故 {len(hist)} 条 · 不可信输入 {len(uts)} 条（未声明的 {len(un_und)}"
+                     f"{'：' + ', '.join(un_und) if un_und else ''}）· 不算不可信 {len(tis)} 类")
+    return bad, notes
+
+
+def check_interruption(ctx, doc=None):
+    """D7-P4-2: 中断态两岸口径（防死锁）+ 不可信证据规则 + 已修死锁的回归护栏。
+
+    ★ `doc` 可注入（测试用）；`None` ⇒ 读 `inventory/interruption-and-untrusted.yaml`。
+      签名与 `check_memory_gates` / `check_multi_round` 同形 —— **第一参数必须是 `ctx`**
+      （harness 以 `c["fn"]({})` 调用 ⇒ 少写 `ctx` 会把 `{}` 当成 `doc`，判据静默判错对象）。
+    """
+    try:
+        import yaml
+    except Exception:
+        return "WARN", "缺 pyyaml, 跳过 interruption 断言", []
+    if doc is None:
+        if not INTERRUPT_INV.exists():
+            return "FAIL", "inventory/interruption-and-untrusted.yaml 缺失（本断言的登记依据）", []
+        try:
+            doc = yaml.safe_load(_read_text(INTERRUPT_INV)) or {}
+        except Exception as e:
+            return "FAIL", f"inventory/interruption-and-untrusted.yaml 解析失败: {type(e).__name__}: {e}", []
+
+    bad, notes = validate_interruption(doc)
+
+    # 1) ★★ `declared: true` ⇒ **去文件里真找**那句声明（自报不算）
+    for u in (doc.get("untrusted_inputs") or []):
+        if not isinstance(u, dict) or u.get("declared") is not True:
+            continue
+        rel, mk = _s(u.get("declared_in")), _s(u.get("marker"))
+        if not rel or not mk:
+            continue
+        if not (ROOT / rel).exists():
+            bad.append(f"untrusted_inputs[{_s(u.get('id'))}] 的 `declared_in`={rel!r} 不存在 ⇒ "
+                       f"声明无处可查（**不可判 ≠ 已声明**）")
+            continue
+        if mk not in _read_text(ROOT / rel):
+            bad.append(f"★ untrusted_inputs[{_s(u.get('id'))}] 声称已在 {rel} 里声明不可信，"
+                       f"但**该文件里找不到** {mk!r} ⇒ **自报不算声明**（第 18 条落空）")
+
+    # 2) ★★ 已修事故的**回归护栏必须真实存在**
+    for h in (doc.get("history") or []):
+        if not isinstance(h, dict):
+            continue
+        g = h.get("regression_guard")
+        if not isinstance(g, dict):
+            continue
+        gk, gid = _s(g.get("kind")), _s(g.get("id"))
+        if not gid:
+            continue
+        if gk == "fixture":
+            if gid not in _read_text(ROOT / "ops" / "station-bin" / "_fm_golden_test.ps1"):
+                bad.append(f"history[{_s(h.get('id'))}] 的回归护栏夹具 **{gid}** 在 "
+                           f"`_fm_golden_test.ps1` 里找不到 ⇒ 护栏是空头的")
+        elif gk == "test":
+            if not (ROOT / "tests" / gid).exists():
+                bad.append(f"history[{_s(h.get('id'))}] 的回归护栏测试 {gid} 不存在 ⇒ 护栏是空头的")
+
+    if bad:
+        return "FAIL", " · ".join(notes) if notes else "见明细", bad
+    return "PASS", " · ".join(notes), []
+
+
 CHECKS = [
     {"id": "secrets", "title": "明文扫描", "fn": check_secrets, "quick": True,
      "fix": "删除明文密钥, 或加入 SECRET_ALLOW 并写明原因(不允许静默放行); "
@@ -6328,6 +6550,23 @@ CHECKS = [
             "已如实登记、等裁定 ⇒ 但**点名在案，不许静默**。"
             "⚠ **它不判什么**：不判「多轮**跑通**了没有」—— 只验**上限与终止条件被写明**；"
             "`agent-resume` 的续接链与受理侧回环**本轮均未端到端实跑**（见 yaml 的 `unverified`）"},
+    {"id": "interruption-untrusted", "title": "中断态两岸口径 + 不可信证据",
+     "fn": check_interruption, "quick": True,
+     "fix": "D7-P4-2（Ds 简报 11 / 18）：`inventory/interruption-and-untrusted.yaml` 是单一真值。"
+            "① 报『缺 `main_side` / `station_side`』= **只有一端声明了口径** —— "
+            "Ds 实测的死锁就出在「一端等待、一端失败」；两岸**都要**写；"
+            "② 报『判出死锁风险却**没有 `mitigation`**』= 那个等待**没人管怎么终结** —— "
+            "★ 注意：**风险由门禁算，不由你填**（自报 = 同一事实两个定义点）；"
+            "③ ★★ 报『**规则算不出这条真事故**』= `history` 里那条已修死锁，按当前两岸动作"
+            "**算不出非 none** ⇒ **判据是空转的**，先修 `deadlock_risk()` 的规则；"
+            "④ 报『护栏是空头的』= 已修事故写的 `regression_guard` 在夹具/测试里**找不到**；"
+            "⑤ ★★ 报『**自报不算声明**』= 某条不可信输入声称已在某文件里声明，"
+            "但**那个文件里真找不到**该 marker（第 18 条落空）；"
+            "⑥ 报『`declared: false` 却缺 `why_not`』= **「没声明」也要给理由**；"
+            "⑦ 报『`trusted_inputs` 为空』= **什么不算不可信**没写，边界靠猜。"
+            "⚠ **它不判什么**：只能核那句声明**在不在**，**判不了模型是否真遵守**；"
+            "也**不做注入实验**（本仓没有实验台）⇒ **别读成「注入已防住」**。"
+            "⚠ `interruptions` 只有 3 条 —— **不是穷举**（ssh 不可达 / 站断电等未登记）"},
     # O-63 (2026-09-25): 取号并发夹具。**刻意 quick:False**（要起 8 个独立进程 + 两次 2.5s 共同释放时刻 ⇒ 约 6s）。
     {"id": "ps1-runstamp", "title": "ts 取号并发夹具", "fn": check_ps1_runstamp, "quick": False,
      "fix": "O-63: 跑 `powershell -NoProfile -ExecutionPolicy Bypass -File ops/station-bin/_runstamp_hammer.ps1 -N 8 -SelfTest`。"
