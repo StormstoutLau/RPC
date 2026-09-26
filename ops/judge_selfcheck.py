@@ -113,29 +113,44 @@ def judge_units(fn_name: str) -> list:
 
 
 
+def _called_names(path: Path) -> set:
+    """AST 取测试文件里**真正被调用**的函数名集合（`Call(func=Name)`）。
+
+    ★★ 为什么必须用 **AST** 而不是文本匹配（O-99 口径收紧的核心）：
+      文本匹配会把**字符串/注释里的字面**也算成"调用" —— 本仓有一类**结构护栏**测试
+      （`src.count("check_x(")` 那种对源码做文本扫描的断言）⇒ 于是那份测试被算作"测了 check_x"
+      ⇒ 变异后当然照样绿 ⇒ **假 `DEFENSE_EMPTY`**。
+      ★ 本会话已因"文本层当语义"吃过两次亏（O-87 · §64 的口径），**这次不用文本**。
+    """
+    import ast
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+    except SyntaxError:
+        return set()
+    return {n.func.id for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)} | \
+           {n.func.attr for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+
+
 def covering_tests(check_id: str, fn_name: str) -> list:
-    """哪些测试文件**真的测了**这条判据。
+    """哪些测试文件**真的调用了**这条判据（= 其包装函数）。
 
     ★★ **口径两轮收紧（2026-09-26 实测教训，必须留档）**：
-      第一版口径 = "文件里出现该 id 或函数名" ⇒ 抽样 4 条判据得到 **12/12 全 `DEFENSE_EMPTY`**。
-      ★ 但**那不是"假防线"的证据**，而是**候选集选错**：一个测试文件**提到** `evidence` 这个词
-      （注释/别的用途）就被当成"测了 evidence 判据" ⇒ 把判据换成恒绿桩，它当然照样绿。
-      ⇒ **口径错会让判据"看起来在报警"，而报的是它自己选错了对象**（本会话第三次踩同族）。
-      收紧后只认两条通道（都要能"打到判据本体"）：
-        ① **直接调用判据函数**：`check_<fn>(` —— 这才叫"测了这条判据"；
-        ② **按 `CHECKS` 表驱动**：文件里同时出现 `CHECKS` 与该 id（`test_rpc_check_three_classes.py`
-           那类注入用例走的就是这条）。
+      第一版 = "文件里出现该 id 或函数名" ⇒ 抽样得 **12/12 全 `DEFENSE_EMPTY`** ——
+      **不是"假防线"，而是候选集错**（测试**提到**某个词就被算作"测了那条判据"）。
+      第二版（文本）仍有假阳性：**结构护栏**对源码做文本扫描，字面里含 `check_x(` ⇒ 又被算进来。
+      第三版（**本版**）= **AST 调用集**，并**去掉**"按 `CHECKS` 表驱动"那条通道 ——
+      那条通道命中的是 `test_rpc_check_three_classes.py` 这类**测调度器**的文件（注入假断言），
+      **它们不跑真判据** ⇒ 变异后必然照样绿 ⇒ 是**交叉噪声**的来源。
     """
-    import re
-    call_re = re.compile(r"\b" + re.escape(fn_name) + r"\s*\(")
-    out = []
-    for p in sorted(TESTS.glob("test_*.py")):
-        t = p.read_text(encoding="utf-8", errors="replace")
-        if call_re.search(t):
-            out.append(p)
-        elif "CHECKS" in t and check_id in t:
-            out.append(p)
-    return out
+    return [p for p in sorted(TESTS.glob("test_*.py")) if fn_name in _called_names(p)]
+
+
+def tests_calling_units(units: list) -> list:
+    """哪些测试文件**真的调用了**这些"本体"函数（O-99：本体模式的候选集）。"""
+    us = set(units)
+    return [p for p in sorted(TESTS.glob("test_*.py")) if us & _called_names(p)]
 
 
 def run_one(path: Path) -> tuple:
@@ -215,6 +230,14 @@ def main():
 
     if a.id:
         target = [r for r in rows if r["id"] in a.id]
+    elif a.units:
+        # ★★ O-99（2026-09-26 实测）：**本体模式的候选必须是【全部判据】** ——
+        #   因为实测 **"调用包装"的测试文件 = 0/35**（本仓测试全测本体）⇒
+        #   若沿用"有测试引用包装"来选候选，本模式会**一条都不跑**（正是本批第一次实测踩到的）。
+        target = rows if a.all else ([rows[0]] if a.sample else rows)
+        if a.sample:
+            step = max(1, len(rows) // a.sample)
+            target = rows[::step][:a.sample]
     elif a.all:
         target = [r for r in rows if r["tests"]]
     elif a.sample:
@@ -241,28 +264,35 @@ def main():
         print("  无测试引用: " + ", ".join(untested))
 
     # ── O-99：**变异本体**（对比上面的"变异包装"）──
+    # ★ 口径：候选 = **真的调用了该判据本体**的测试文件（AST）—— 不是"调用了包装"的文件。
     if a.units:
         print(f"[本体变异] 选中 {len(target)} 条（AST 提取同模块直接调用 + 记忆化桩）")
-        tally, bad, nounit = {}, [], []
+        tally, bad, nounit, notest = {}, [], [], []
         for r in target:
             us = judge_units(r["fn"])
             if not us:
                 nounit.append(r["id"])
                 tally["NO_UNIT"] = tally.get("NO_UNIT", 0) + 1
                 continue
-            for tname in r["tests"]:
-                res = mutate_units(next(x for x in R.CHECKS if x["id"] == r["id"]),
-                                   TESTS / tname, us)
+            utests = tests_calling_units(us)
+            if not utests:
+                notest.append(r["id"])
+                tally["NO_TEST_UNIT"] = tally.get("NO_TEST_UNIT", 0) + 1
+                continue
+            for tp in utests:
+                res = mutate_units(next(x for x in R.CHECKS if x["id"] == r["id"]), tp, us)
                 v = res["verdict"]
                 tally[v] = tally.get(v, 0) + 1
                 mark = "  " if v == "EFFECTIVE" else "★ "
-                print(f"  {mark}{r['id']:<18} × {tname:<40} {v}"
+                print(f"  {mark}{r['id']:<18} × {tp.name:<40} {v}"
                       f"  (base={res['rc_base']} mut={res['rc_mut']}) units={','.join(us)[:60]}")
                 if v != "EFFECTIVE":
-                    bad.append({"id": r["id"], "test": tname, **res})
+                    bad.append({"id": r["id"], "test": tp.name, **res})
         print(f"[汇总·本体变异] " + " · ".join(f"{k}={v}" for k, v in sorted(tally.items())))
         if nounit:
             print("[NO_UNIT] AST 未找到同模块直接调用（待人工登记本体）: " + ", ".join(nounit))
+        if notest:
+            print("[NO_TEST_UNIT] 有本体但**无测试直接调用本体**（点名）: " + ", ".join(notest))
         if bad:
             print("[需处置]")
             for x in bad:
