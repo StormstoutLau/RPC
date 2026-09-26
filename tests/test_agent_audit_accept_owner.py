@@ -98,4 +98,7 @@ print("--------------------------------")
 print(f"ACCEPT_OWNER_TEST pass={total - len(fails)}/{total} fail={len(fails)}")
 if fails:
     print("FAILED: " + ", ".join(fails))
+# ★ O-89（2026-09-26）：门禁 `py-tests` 只认退出码 ⇒ 必须有 `RESULT:` 汇总行，
+#   否则"被 import 后正常退出 0"会**静默通过**而一条断言都不跑。
+print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAILED -> {fails}")
 sys.exit(1 if fails else 0)

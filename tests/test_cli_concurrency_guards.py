@@ -320,6 +320,9 @@ def main() -> int:
             print("  ✗ " + x)
         return 1
     print("ALL PASS")
+    # ★ O-89（2026-09-26）：门禁 `py-tests` 只认退出码 ⇒ 若本文件**没有汇总行**，
+    #   "被 import 后正常退出 0" 会**静默通过**而一条断言都不跑。故显式打汇总。
+    print("RESULT: ALL PASS")
     return 0
 
 

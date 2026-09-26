@@ -66,6 +66,9 @@ def main() -> int:
             print("  ✗ " + x)
         return 1
     print("ALL PASS")
+    # ★ O-89（2026-09-26）：门禁 `py-tests` 只认退出码 ⇒ 必须有汇总行，
+    #   否则"被 import 后正常退出 0"会**静默通过**而一条断言都不跑。
+    print("RESULT: ALL PASS")
     return 0
 
 
