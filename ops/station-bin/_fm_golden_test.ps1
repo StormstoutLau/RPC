@@ -33,7 +33,8 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 #   ⇒ "盲判模板里不得有 `{{PRODUCT}}`"这条能变成**行为断言**（真跑一遍看输出），而不是扫文本。
 'Read-ReviewResource', 'Get-AssertionBlock', 'Build-BlindPrompt', 'Compare-AssertionChains',
 # D7-P2-1 (2026-09-26): **机械门先行** 的判定本体（纯函数：只吃已解析的 run 记录 ⇒ 可离线单测）。
-'Resolve-L1Gate')) {
+# D7-P2-2 (2026-09-26): **结论契约** —— 三个纯函数（校验器 + 综合器）。
+'Test-FindingShape', 'Test-ConclusionContract', 'Merge-JudgeFindings', 'Resolve-L1Gate')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -1616,6 +1617,92 @@ Assert-True "l1-16 ★**结构护栏**：`Invoke-Review` 函数体内**没有**�
     $null -ne $fnRev -and -not ($fnRev.Extent.Text -match 'Set-Content[^\r\n]*\.agent-run\.json'))
 Assert-True "l1-17 卡面/命令行有**显式放行通道**（不是偷偷放行）" (
     $content -match '\[switch\]\$allowL1Red' -and $content -match '--allow-l1-red')
+
+# ⑪ D7-P2-2（2026-09-26）：**结论契约** —— `Test-FindingShape` / `Test-ConclusionContract` / `Merge-JudgeFindings`
+# ★ 每条判据都配一个**能把它打红的反例**（防"恒真判据"= D7-P2-3 的最小可用形态）。
+$fOK = @{ id = 'F1'; statement = 'x'; hit = $true; priority = 3; confidence = 0.8;
+          path = 'ops/a.py'; line_range = 'L10-L20' }
+Assert-True "cc-1 合法 finding ⇒ ok" ((Test-FindingShape -Finding $fOK)['ok'])
+Assert-True "cc-2 单行 `L7` 合法" (
+    (Test-FindingShape -Finding (@{ statement = 's'; hit = $false; priority = 0; confidence = 0.0;
+                                    path = 'a'; line_range = 'L7' }))['ok'])
+Assert-True "cc-3 `L7-`（开放区间）合法" (
+    (Test-FindingShape -Finding (@{ statement = 's'; hit = $false; priority = 1; confidence = 1.0;
+                                    path = 'a'; line_range = 'L7-' }))['ok'])
+Assert-True "cc-4 缺 path ⇒ NO_PATH" (
+    (Test-FindingShape -Finding (@{ statement = 's'; hit = $true; priority = 1; confidence = 0.5;
+                                    path = ''; line_range = 'L1' }))['reasons'] -contains 'NO_PATH')
+Assert-True "cc-5 `line_range` 形态错（120-134）⇒ BAD_LINE_RANGE" (
+    (Test-FindingShape -Finding (@{ statement = 's'; hit = $true; priority = 1; confidence = 0.5;
+                                    path = 'a'; line_range = '120-134' }))['reasons'] -match 'BAD_LINE_RANGE')
+Assert-True "cc-6 priority 小数 ⇒ PRIORITY_NOT_INT（浮点 priority 会让排序'看起来有区别'）" (
+    (Test-FindingShape -Finding (@{ statement = 's'; hit = $true; priority = 3.5; confidence = 0.5;
+                                    path = 'a'; line_range = 'L1' }))['reasons'] -contains 'PRIORITY_NOT_INT')
+Assert-True "cc-7 priority 负 ⇒ PRIORITY_NEGATIVE" (
+    (Test-FindingShape -Finding (@{ statement = 's'; hit = $true; priority = -1; confidence = 0.5;
+                                    path = 'a'; line_range = 'L1' }))['reasons'] -match 'PRIORITY_NEGATIVE')
+Assert-True "cc-8 confidence 越界 1.5 ⇒ OUT_OF_RANGE" (
+    (Test-FindingShape -Finding (@{ statement = 's'; hit = $true; priority = 1; confidence = 1.5;
+                                    path = 'a'; line_range = 'L1' }))['reasons'] -match 'CONFIDENCE_OUT_OF_RANGE')
+Assert-True "cc-9 confidence 不是数（'high'）⇒ NOT_NUMBER" (
+    (Test-FindingShape -Finding (@{ statement = 's'; hit = $true; priority = 1; confidence = 'high';
+                                    path = 'a'; line_range = 'L1' }))['reasons'] -contains 'CONFIDENCE_NOT_NUMBER')
+Assert-True "cc-10 hit 不是布尔（'yes'）⇒ HIT_NOT_BOOL" (
+    (Test-FindingShape -Finding (@{ statement = 's'; hit = 'yes'; priority = 1; confidence = 0.5;
+                                    path = 'a'; line_range = 'L1' }))['reasons'] -contains 'HIT_NOT_BOOL')
+Assert-True "cc-11 ★**判官自报 agreement ⇒ 拒**（自证；分类只能由综合器算）" (
+    (Test-FindingShape -Finding (@{ statement = 's'; hit = $true; priority = 1; confidence = 0.5;
+                                    path = 'a'; line_range = 'L1'; agreement = 'consensus' }))['reasons'] -contains 'AGREEMENT_SELF_REPORTED')
+Assert-True "cc-12 statement 空 ⇒ NO_STATEMENT" (
+    (Test-FindingShape -Finding (@{ statement = ' '; hit = $true; priority = 1; confidence = 0.5;
+                                    path = 'a'; line_range = 'L1' }))['reasons'] -contains 'NO_STATEMENT')
+$ccGood = Test-ConclusionContract -Verdict 'revise' -Findings @($fOK)
+Assert-True "cc-13 整体：合法 verdict + 合法 findings ⇒ ok" ($ccGood['ok'] -and $ccGood['count'] -eq 1)
+Assert-True "cc-14 自造 verdict（looks-good）⇒ BAD_VERDICT" (
+    (Test-ConclusionContract -Verdict 'looks-good' -Findings @())['reasons'] -match 'BAD_VERDICT')
+Assert-True "cc-15 findings 空 ⇒ **合法**（但 count=0 被显式报出，不是'没问题'）" (
+    (Test-ConclusionContract -Verdict 'accept' -Findings @())['ok'] -and
+    (Test-ConclusionContract -Verdict 'accept' -Findings @())['count'] -eq 0)
+Assert-True "cc-16 一条坏 ⇒ 整体 reason **点名序位**" (
+    (Test-ConclusionContract -Verdict 'accept' -Findings @($fOK, @{ statement = ''; hit = $true;
+        priority = 1; confidence = 0.5; path = 'a'; line_range = 'L1' }))['reasons'] -match '#1:')
+# ── 综合（N 判官 ⇒ 三分类）──
+$jA = @{ findings = @(@{ statement = 'a'; hit = $true; priority = 1; confidence = 0.5; path = 'p'; line_range = 'L1' }) }
+$jB = @{ findings = @(@{ statement = 'b'; hit = $true; priority = 2; confidence = 0.6; path = 'p'; line_range = 'L1' }) }
+$jC = @{ findings = @(@{ statement = 'c'; hit = $false; priority = 3; confidence = 0.7; path = 'p'; line_range = 'L1' }) }
+$m1 = Merge-JudgeFindings -Verdicts @($jA)
+Assert-True "cc-17 ★单判官 ⇒ **只可能 unique** 且显式报 judges=1" (
+    $m1['judges'] -eq 1 -and $m1['findings'].Count -eq 1 -and $m1['findings'][0]['agreement'] -eq 'unique')
+$m2 = Merge-JudgeFindings -Verdicts @($jA, $jB)
+Assert-True "cc-18 两判官 · 同锚点 · 同 hit ⇒ consensus（措辞不同不影响对齐）" (
+    $m2['findings'][0]['agreement'] -eq 'consensus' -and $m2['findings'][0]['judges'] -eq 2)
+$m3 = Merge-JudgeFindings -Verdicts @($jA, $jC)
+Assert-True "cc-19 两判官 · 同锚点 · hit 相反 ⇒ disagreement" (
+    $m3['findings'][0]['agreement'] -eq 'disagreement')
+$jD = @{ findings = @(@{ statement = 'd'; hit = $true; priority = 1; confidence = 0.5; path = 'q'; line_range = 'L9' }) }
+$m4 = Merge-JudgeFindings -Verdicts @($jA, $jD)
+Assert-True "cc-20 两判官 · 不同锚点 ⇒ 两条各自 unique" (
+    @($m4['findings'] | Where-Object { $_['agreement'] -eq 'unique' }).Count -eq 2)
+$m5 = Merge-JudgeFindings -Verdicts @(@{ findings = @() }, @{ findings = @() })
+Assert-True "cc-21 ★**空集不产共识**：opinions=0 且 findings 空（0/0 不许读成'没问题'）" (
+    $m5['opinions'] -eq 0 -and @($m5['findings']).Count -eq 0)
+Assert-True "cc-22 判官数为 0（null 输入）⇒ judges=0（规模显式）" (
+    (Merge-JudgeFindings -Verdicts @($null))['judges'] -eq 0)
+Assert-True "cc-23 综合结果**带规模**（judges 与 opinions 都在）" (
+    ($m2.Contains('judges')) -and ($m2.Contains('opinions')))
+# ── 接线（防"写了但没跑"）──
+Assert-True "cc-24 接线：review.json 写契约段（**两处**写点都带）" (
+    ([regex]::Matches($content, "\`$review\['contract'\] = \`$ccSection")).Count -ge 2)
+Assert-True "cc-25 接线：契约段由**校验器 + 综合器**共同产出" (
+    $content -match 'Test-ConclusionContract -Verdict \(\[string\]\$judgeObj\.verdict\)' -and
+    $content -match 'merged = \(Merge-JudgeFindings -Verdicts @\(\$judgeObj\)\)')
+# ⚠ 必须用 UTF-8 **显式**读模板：PS 5.1 的 `Get-Content` 默认按系统 ANSI(GBK) 解码 ⇒ 中文会乱码
+#   ⇒ 对中文关键字做正则会**假红**（本夹具顶部记过同族坑）。
+$ccTmpl = [System.IO.File]::ReadAllText((Join-Path (Split-Path $cli) 'review\judge-prompt.tmpl'),
+                                        [System.Text.UTF8Encoding]::new($false))
+Assert-True "cc-26 提示词模板**明确禁止**判官自报分类" ($ccTmpl -match '禁止输出 `agreement`')
+Assert-True "cc-27 提示词模板要求 `path`/`line_range` 必填" (
+    $ccTmpl -match 'line_range' -and $ccTmpl -match '必填')
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"

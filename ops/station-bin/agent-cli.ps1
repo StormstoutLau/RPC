@@ -4498,6 +4498,106 @@ function Resolve-L1Gate {
     return @{ ok = [bool]$AllowRed; verdict = 'red'; reason = ($red -join ' · '); facts = $facts }
 }
 
+function Test-FindingShape {
+    # ── D7-P2-2（2026-09-26）：**结论契约**的单条意见校验（纯函数）──────────────
+    # 契约本体见 `spec/d6-agent-standard/D7-PROTOCOL-CONCLUSION-CONTRACT.md`。
+    # ★ 为什么 `agreement` **必须缺席**：它是**综合阶段**（多判官对齐后）算出来的；
+    #   判官自报分类 = **自证**（本仓禁止）⇒ 见到就拒（`AGREEMENT_SELF_REPORTED`）。
+    # ★ `hit`（bool）= 该锚点**是否达标**（与既有 rubric 的 `evidence[].hit` 同义，不新造语义）
+    #   —— 有它才使"**同一锚点、两个判官结论相反**"可判（= `disagreement`）。
+    param([object]$Finding)
+    $r = @()
+    if ($null -eq $Finding) { return @{ ok = $false; reasons = @('EMPTY_FINDING') } }
+    if ([string]::IsNullOrWhiteSpace([string]$Finding.statement)) { $r += 'NO_STATEMENT' }
+    if ([string]::IsNullOrWhiteSpace([string]$Finding.path)) { $r += 'NO_PATH' }
+    $lr = [string]$Finding.line_range
+    # 形态：`L<起>` / `L<起>-L<止>` / `L<起>-`（起点必须有；**不读文件核对行数** —— 见契约 §未实测登记 4）
+    if (-not $lr -or $lr -notmatch '^L\d+(-(L\d+)?)?$') { $r += "BAD_LINE_RANGE[$lr]" }
+    if ($null -eq $Finding.hit -or $Finding.hit -isnot [bool]) { $r += 'HIT_NOT_BOOL' }
+    $pr = $Finding.priority
+    if ($null -eq $pr -or ($pr -isnot [int] -and $pr -isnot [long])) { $r += 'PRIORITY_NOT_INT' }
+    elseif ([int64]$pr -lt 0) { $r += "PRIORITY_NEGATIVE[$pr]" }
+    $cf = $Finding.confidence
+    if ($null -eq $cf -or ($cf -isnot [double] -and $cf -isnot [int] -and $cf -isnot [decimal] -and $cf -isnot [single])) {
+        $r += 'CONFIDENCE_NOT_NUMBER'
+    } else {
+        $c = [double]$cf
+        # ⚠ `[bool]$true` 在 PS 里能转成 1.0 ⇒ 必须在**类型**上就拒（上面那条），这里再挡越界。
+        if ($c -lt 0.0 -or $c -gt 1.0) { $r += "CONFIDENCE_OUT_OF_RANGE[$c]" }
+    }
+    if ($null -ne $Finding.agreement) { $r += 'AGREEMENT_SELF_REPORTED' }
+    return @{ ok = ($r.Count -eq 0); reasons = $r }
+}
+
+function Test-ConclusionContract {
+    # ── D7-P2-2：整体校验（受限判定枚举 + 逐条 findings）────────────────────
+    # ★ **`findings` 允许为空**（没什么可说的合法情形）—— 但"空"必须被**显式报出来**，
+    #   见 `Merge-JudgeFindings` 的规模字段（`0/0` 读成"没问题"是本仓已登记的假绿形态）。
+    param([string]$Verdict, [object]$Findings)
+    $r = @()
+    $enum = @('accept', 'revise', 'reject', 'uncertain')
+    if ($enum -notcontains ([string]$Verdict)) { $r += "BAD_VERDICT[$Verdict]" }
+    $arr = @($Findings)
+    $bad = @()
+    for ($i = 0; $i -lt $arr.Count; $i++) {
+        $one = Test-FindingShape -Finding $arr[$i]
+        if (-not $one['ok']) { $bad += ("#{0}:{1}" -f $i, ($one['reasons'] -join ',')) }
+    }
+    if ($bad.Count -gt 0) { $r += ("BAD_FINDINGS[" + ($bad -join ' | ') + "]") }
+    return @{ ok = ($r.Count -eq 0); reasons = $r; count = $arr.Count }
+}
+
+function Merge-JudgeFindings {
+    # ── D7-P2-2：**综合阶段**（N 判官 ⇒ consensus / disagreement / unique）────
+    # 依据 = Council Mode（合并稿 §406）：**显式分类**而非多数投票。
+    # ★★ **锚点 = `path` + `line_range`**（**不含 `statement`**）——
+    #   措辞在不同判官间必然不同，用措辞做键会让"共识"**几乎永不出现**（那会把分类变成噪声）。
+    #   位置是客观的，措辞不是 ⇒ 用位置对齐。
+    # ⚠⚠ **两条硬纪律**（契约 §3）：① 单判官 ⇒ **只可能是 unique**，且**必须**同时报 `judges=1`；
+    #   ② 空 findings ⇒ `consensus` 必须为空（`0/0` 不许读成"没问题"）。
+    param([object]$Verdicts)
+    $judges = @($Verdicts)
+    $nj = 0
+    foreach ($j in $judges) { if ($null -ne $j) { $nj++ } }
+    $map = @{}     # anchor -> @{ hits = @(); statements = @(); sample = <finding> }
+    $opinions = 0
+    foreach ($j in $judges) {
+        if ($null -eq $j) { continue }
+        foreach ($f in @($j.findings)) {
+            if ($null -eq $f) { continue }
+            $opinions++
+            $key = ("{0}|{1}" -f ([string]$f.path).Trim(), ([string]$f.line_range).Trim())
+            if (-not $map.ContainsKey($key)) {
+                $map[$key] = @{ hits = @(); statements = @(); sample = $f }
+            }
+            $map[$key]['hits'] += , ([bool]$f.hit)
+            $map[$key]['statements'] += , ([string]$f.statement)
+        }
+    }
+    $out = @()
+    foreach ($k in ($map.Keys | Sort-Object)) {
+        $e = $map[$k]
+        $hits = @($e['hits'])
+        $n = $hits.Count
+        $agree = if ($n -le 1) { 'unique' } elseif (($hits | Select-Object -Unique).Count -gt 1) { 'disagreement' } else { 'consensus' }
+        $f = $e['sample']
+        $out += [ordered]@{
+            anchor = $k
+            agreement = $agree
+            judges = $n                 # 提到该锚点的**判官数**（不是总判官数）
+            hit = $hits[0]
+            priority = $f.priority
+            confidence = $f.confidence
+            statement = ([string]$f.statement)
+        }
+    }
+    return [ordered]@{
+        judges = $nj                    # ★ 输入规模**显式报出**（单判官时分类只能是 unique）
+        opinions = $opinions
+        findings = @($out)
+    }
+}
+
 function Invoke-Review {
     param(
         [string]$proj,
@@ -4648,6 +4748,23 @@ function Invoke-Review {
     $elapsed = [int]([DateTime]::UtcNow - $t0).TotalSeconds
 
     $judgeObj = ConvertFrom-JudgeOutput -raw $raw
+    # ── D7-P2-2（2026-09-26）：**结论契约**校验 + 综合（站上当前是**单判官**路径）──────────
+    # 契约本体见 `spec/d6-agent-standard/D7-PROTOCOL-CONCLUSION-CONTRACT.md`（`D7-P2-2` 的 schema 半）。
+    # ★★ **如实**：站上只跑 **1 个判官** ⇒ `merged.judges = 1`、分类**必然是 `unique`**
+    #   —— **不假装做过 Council**（**多判官编排**属 `D7-P3-2`）。契约与校验器先就位，是因为
+    #   `D7-P2-3`（审判据自身）与 P3-2 都要在**同一个 schema** 上继续，分两次改会各写一半。
+    # ⚠ `$judgeObj` 不可解析（$null）⇒ `verdict` 为空 ⇒ `BAD_VERDICT` ⇒ `ok=false`；
+    #   综合器此时 `judges=0` ⇒ **分类为空**（不是"全 unique"）—— 空集不许被读成"没问题"。
+    $ccFindings = @()
+    if ($judgeObj) { $ccFindings = @($judgeObj.findings) }
+    $ccCheck = Test-ConclusionContract -Verdict ([string]$judgeObj.verdict) -Findings $ccFindings
+    $ccSection = [ordered]@{
+        ok = [bool]$ccCheck['ok']
+        reasons = @($ccCheck['reasons'])
+        verdict = [string]$judgeObj.verdict
+        findings_count = $ccFindings.Count
+        merged = (Merge-JudgeFindings -Verdicts @($judgeObj))
+    }
     $seed = (Get-Random -Maximum 2147483647).ToString()   # recorded for reproducibility audit (arXiv 2606.26185)
     $promptHash = Get-Sha256Text $prompt
 
@@ -4671,6 +4788,7 @@ function Invoke-Review {
         # D7-P2-1: 判官调用失败也**必须**带上 L1 事实（否则这份 review.json 无法自证它是在什么
         #   机械面上写的，而"失败"恰恰是最需要知道 L1 状态的场合）。
         $review['l1'] = $l1Section
+        $review['contract'] = $ccSection        # D7-P2-2：判官调用失败也留契约校验结果（多半 ok=false）
         $review | ConvertTo-Json -Depth 8 | Set-Content $reviewPath -Encoding utf8
         Write-Host "REVIEW_WRITTEN(advisory,error) $reviewPath"
         if ($callCode -ge 5) { return $callCode }   # NETFAIL(5)/timeout(6)/unparseable(7) surfaced, non-blocking
@@ -4752,6 +4870,9 @@ function Invoke-Review {
     # D7-P2-1（2026-09-26）：**L1 事实随 L2 产物留档** —— 让"这个语义结论是在什么机械面上得到的"
     #   可被机器读到（而不是只有 exit code）。`record_sha256` 同时是"L2 未改写 L1 记录"的可判凭据。
     $review['l1'] = $l1Section
+    # D7-P2-2（2026-09-26）：**结论契约**随产物留档 —— 让"判官说了什么、是否合契约、意见落在哪一行"
+    #   机器可读（`merged.judges` 同时暴露**输入规模** ⇒ 单判官不会被误读成"多家共识"）。
+    $review['contract'] = $ccSection
     $review | ConvertTo-Json -Depth 8 | Set-Content $reviewPath -Encoding utf8
     Write-Host "REVIEW_WRITTEN(advisory) $reviewPath"
     Write-Host ("REVIEW score=" + $review.output.score + " pass=" + $review.output.pass + " judge=" + $judge['id'] + " elapsed_s=" + $elapsed)
