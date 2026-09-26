@@ -3348,7 +3348,13 @@ def check_stations(ctx):
             f"/port{checked_ports}(豁免临时段 {ignored_eph})/plugin{plugin_checked}"
             f"/weight{sum(1 for st in reach for _ in (live[st].get('mpath') or '').splitlines())}"
             f"/orph{orphan_checked}"
-            f"/orphx{orph2_checked}")
+            f"/orphx{orph2_checked}"
+            # ★ O-70 (2026-09-26): 把**第二类的 stale 条数**也放进 note —— 此前 note 只有 `orphx`
+            #   （= 探针**见到几行**，与年龄无关），而"有几条超阈值"只在 >0 时才出现在 info 里
+            #   ⇒ 采样时无法**直接读**这个数（只能靠"info 里有没有那行"，脆弱）。
+            #   ⚠ 加这个数**不改灯的语义**（第二类仍只报告、不进 WARN/FAIL）；它只是让 O-70 的
+            #     "先看几轮噪声水平再裁"这一步**有数据可读**。
+            f"/orphxstale{len(orph2_stale)}")
     if detail:
         return "FAIL", note, info + detail + [f"(WARN) {w}" for w in warn]
     if warn:
