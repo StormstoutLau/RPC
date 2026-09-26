@@ -56,6 +56,62 @@ for _c in R.CHECKS:
 runpy.run_path(r"{test}", run_name="__main__")
 '''
 
+# ── O-99：**变异【本体】** 而非包装 ─────────────────────────────────────────────
+# ★ 难点：本体的返回形状**各不相同**（`(bad, notes)` / `bool` / `str` / `dict`）⇒
+#   手写"恒绿桩"必须知道类型，**自动构造不出来**。
+# ★★ 解法 = **记忆化变异（memoization mutation）** —— **不依赖类型**：
+#   把本体换成一个"**第一次真跑并记住结果，之后恒返回第一次的结果**"的桩。
+#   ⇒ 含义 = "**该函数退化成了一个常量**"。若该测试**真的在断言它的行为**（正反例都喂），
+#     第二个用例必然对不上 ⇒ **红**。若照样绿 ⇒ 这份测试**没在断言本体**。
+#   ⚠ **已知的假阴性（如实写在 docstring 里）**：若测试**只调用一次**本体，记忆化桩与原函数
+#     **完全等价** ⇒ 不会红 ⇒ 会被误判成 `DEFENSE_EMPTY`。⇒ 故本模式的结果**只作线索**，
+#     并且**必须**与"该测试含正反例"的常识一起读（不单独当缺陷清单）。
+DRIVER_UNITS = r'''
+import sys, runpy
+sys.path.insert(0, r"{ops}")
+sys.path.insert(0, r"{root}")
+import rpc_check as R
+for _u in {units!r}:
+    _orig = getattr(R, _u, None)
+    if _orig is None:
+        continue
+    _cache = {{}}
+    def _mk(o, c):
+        def _memo(*a, **k):
+            if "v" not in c:
+                c["v"] = o(*a, **k)
+            return c["v"]
+        return _memo
+    setattr(R, _u, _mk(_orig, _cache))
+runpy.run_path(r"{test}", run_name="__main__")
+'''
+
+
+def judge_units(fn_name: str) -> list:
+    """用 **AST** 找 `check_x` 函数体里**直接调用**的**同模块函数**（= 它的"本体"）。
+
+    ★ 为什么需要它：本仓的测试纪律测的是**本体**（`validate_*`/`decide_*`/`parse_*`），
+      而 `check_*` 只是把本体拼成 `(status, note, detail)` 的**薄包装** ⇒
+      变异包装**测不出东西**（实测 `DEFENSE_EMPTY = 41/43`）。⇒ 变异对象必须换成**本体**。
+    ⚠ 只取**直接调用**的一层（不做传递闭包）：传递闭包会把"整个模块"拉进来 ⇒ 变异面过大、
+      红的原因不可归因（那正是"看起来更硬其实没读到"的反面：**看起来更硬其实读太多**）。
+    """
+    import ast
+    src = (OPS / "rpc_check.py").read_text(encoding="utf-8", errors="replace")
+    tree = ast.parse(src)
+    defined = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
+    for n in tree.body:
+        if isinstance(n, ast.FunctionDef) and n.name == fn_name:
+            called = []
+            for sub in ast.walk(n):
+                if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
+                    nm = sub.func.id
+                    if nm in defined and nm != fn_name and nm not in called:
+                        called.append(nm)
+            return called
+    return []
+
+
 
 def covering_tests(check_id: str, fn_name: str) -> list:
     """哪些测试文件**真的测了**这条判据。
@@ -117,12 +173,34 @@ def mutate_one(check: dict, test: Path) -> dict:
             "rc_base": rc0, "rc_mut": rc1}
 
 
+def mutate_units(check: dict, test: Path, units: list) -> dict:
+    """**变异本体**（O-99）：对照 + 记忆化变异 ⇒ 四态。"""
+    rc0, _ = run_one(test)
+    if rc0 != 0:
+        return {"verdict": "BASELINE_RED", "rc_base": rc0, "rc_mut": None, "units": units}
+    driver = DRIVER_UNITS.format(ops=str(OPS), root=str(ROOT), units=units, test=str(test))
+    try:
+        p = subprocess.run([sys.executable, "-c", driver], cwd=str(ROOT),
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=300)
+        rc1 = p.returncode
+    except subprocess.TimeoutExpired:
+        return {"verdict": "ERROR", "rc_base": rc0, "rc_mut": 124, "units": units}
+    except Exception as e:                               # noqa: BLE001
+        return {"verdict": "ERROR", "rc_base": rc0, "rc_mut": None, "units": units,
+                "err": type(e).__name__}
+    return {"verdict": "EFFECTIVE" if rc1 != 0 else "DEFENSE_EMPTY",
+            "rc_base": rc0, "rc_mut": rc1, "units": units}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--id", action="append", default=[])
     ap.add_argument("--sample", type=int, default=0)
+    ap.add_argument("--units", action="store_true",
+                    help="O-99：变异【本体】（AST 提取同模块直接调用 + 记忆化桩）而非包装")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
 
@@ -161,6 +239,36 @@ def main():
     print(f"[覆盖率] 判据 {len(rows)} 条 · 有测试引用 {len(covered)} · 无测试引用 {len(untested)}")
     if untested:
         print("  无测试引用: " + ", ".join(untested))
+
+    # ── O-99：**变异本体**（对比上面的"变异包装"）──
+    if a.units:
+        print(f"[本体变异] 选中 {len(target)} 条（AST 提取同模块直接调用 + 记忆化桩）")
+        tally, bad, nounit = {}, [], []
+        for r in target:
+            us = judge_units(r["fn"])
+            if not us:
+                nounit.append(r["id"])
+                tally["NO_UNIT"] = tally.get("NO_UNIT", 0) + 1
+                continue
+            for tname in r["tests"]:
+                res = mutate_units(next(x for x in R.CHECKS if x["id"] == r["id"]),
+                                   TESTS / tname, us)
+                v = res["verdict"]
+                tally[v] = tally.get(v, 0) + 1
+                mark = "  " if v == "EFFECTIVE" else "★ "
+                print(f"  {mark}{r['id']:<18} × {tname:<40} {v}"
+                      f"  (base={res['rc_base']} mut={res['rc_mut']}) units={','.join(us)[:60]}")
+                if v != "EFFECTIVE":
+                    bad.append({"id": r["id"], "test": tname, **res})
+        print(f"[汇总·本体变异] " + " · ".join(f"{k}={v}" for k, v in sorted(tally.items())))
+        if nounit:
+            print("[NO_UNIT] AST 未找到同模块直接调用（待人工登记本体）: " + ", ".join(nounit))
+        if bad:
+            print("[需处置]")
+            for x in bad:
+                print(f"  · {x['id']} × {x['test']} ⇒ {x['verdict']}")
+        return 0
+
     print(f"[变异] 选中 {len(target)} 条（每条 = 对照 + 变异，各一次子进程）")
     tally = {}
     bad = []
