@@ -1149,16 +1149,39 @@ if (Test-Path ($o76Root -replace '/', '\')) { Remove-Item ($o76Root -replace '/'
 
 # --- O-77 (2026-09-26): 框架保留目录必须永远从 sync 排除（同站并发 tar race 的根因） ---
 # 一手实测: 同站 3 张 readonly 卡并发 ⇒ 3/3 死在 sync（`tar: ./agent-out: file changed as we read it`）。
-Assert-True "o77①: sync 分支把框架保留目录 `agent-out` 并入排除清单" (
-    $codeOnlyFull.Contains("`$excl = @(`$excl) + @('agent-out')"))
+# ⚠ O-78② 把"补一个字面量"改成"取唯一真值常量" ⇒ 本组断言**随之改形**（旧断言查 `@('agent-out')`，已不存在）。
+Assert-True "o77①: 唯一真值常量含 agent-out（框架保留目录不再散落各写一份）" (
+    $codeOnlyFull.Contains("`$Script:FRAMEWORK_RESERVED_DIRS = @('out', '.golden', '.attach', 'agent-out', '.agentsync', '.git')"))
 # ⚠ 顺序判据: 并入必须**发生在** Convert-ToExcludeArgs **之前** —— 否则清单算出来也不会进 tar 的 --exclude
 #   （同族先例: D4 的"后缀定义必须早于第一个写点"）。
-Assert-True "o77②: 并入发生在 Convert-ToExcludeArgs **之前**（否则不生效）" (
-    $codeOnlyFull.IndexOf("`$excl = @(`$excl) + @('agent-out')") -lt
+Assert-True "o77②: sync 并入的是**该常量**，且发生在 Convert-ToExcludeArgs 之前（否则不生效）" (
+    $codeOnlyFull.Contains('$excl = @($excl) + $Script:FRAMEWORK_RESERVED_DIRS') -and
+    $codeOnlyFull.IndexOf('$excl = @($excl) + $Script:FRAMEWORK_RESERVED_DIRS') -lt
     $codeOnlyFull.IndexOf('$exArgs = Convert-ToExcludeArgs $excl'))
 # ⚠ 只看代码会漏掉这条: 本条要的正是**源码注释里必须存留的理由**（为什么写在代码而非各 proj 的 .agentsync）。
 Assert-True "o77③: 源码里写明了『为什么写在代码而非载体 .agentsync』(版本控制内才是真值源)" (
     $content.Contains('修复必须落在版本控制内的真值源上') -and $content.Contains('file changed as we read it'))
+
+# --- O-78 (2026-09-26): 并行面两处"说了等于没说" ---
+# ① 排他拒绝的**文案**：实测（DEV-LOG-014 §40.6）3 个 **shared** run 在跑时，一张想取 exclusive 的卡被拒，
+#    文案却写「已有**排他**派发在跑」⇒ 把持有者说错、把排障方向指反。修法 = 按事实说话 + 明说不可得。
+Assert-True "o78①: 源码**不再**断言『已有排他派发在跑』（实测会说错持有者）" (
+    -not $codeOnlyFull.Contains('已有**排他**派发在跑'))
+Assert-True "o78①b: 拒绝分支改报**实际持有者**，且读不到时明确说不可得（不退回去猜）" (
+    $codeOnlyFull.Contains('Format-WorkspaceLeaseHolder') -and
+    $content.Contains('持有者**不可得**') -and
+    $content.Contains('绝不退回去猜'))
+Assert-True "o78①c: 租约获取时写 who 旁路（Windows 文件锁**没有元数据** ⇒ 只能靠旁路文件）" (
+    $codeOnlyFull.Contains('Get-LeaseWhoPath') -and $codeOnlyFull.Contains('agent-cli-lease-') -and
+    $codeOnlyFull.Contains('mode=$(if ($Exclusive) { ''exclusive'' } else { ''shared'' })'))
+# ② 框架保留清单**合流为单一真值**：此前 sync 排除与站上 diff 过滤各写一份 ⇒ 各自漂移（O-77 就是这么踩的）。
+Assert-True "o78②: 站上 diff 过滤的正则**从常量派生**，源码里不再留第二份字面量" (
+    $codeOnlyFull.Contains('Get-FrameworkReservedDirRegex') -and
+    $codeOnlyFull.Contains('Get-FrameworkReservedFileRegex') -and
+    -not $codeOnlyFull.Contains("grep -v -E '^(out|"))
+Assert-True "o78②b: 两条派生正则**确被站上 body 调用**（常量存在 ≠ 真用上了）" (
+    $codeOnlyFull.Contains("grep -v -E '`$(Get-FrameworkReservedDirRegex)'") -and
+    $codeOnlyFull.Contains("grep -v -E '`$(Get-FrameworkReservedFileRegex)'"))
 
 # --- O-79 真根因 (2026-09-26): `Invoke-CappedSsh` 必须给子进程"空且立即关闭的 stdin" ---
 # 一手 A/B/C（后台 job 上下文）: ① stdin 继承 ⇒ TIMEOUT 20s ② redirect+Close ⇒ 179ms ③ 裸 `ssh -n` ⇒ 179ms。
