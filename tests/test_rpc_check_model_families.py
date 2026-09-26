@@ -69,6 +69,12 @@ st, note, det = judge_on("version: 1\nfamilies: []\n")
 _msg = note + " ".join(det)
 chk("B5 `families` 为空 ⇒ FAIL（防『什么都没判』）", st == "FAIL" and "空判" in _msg, f"{st} · {note}")
 
+st, note, det = judge_on(GOOD.replace(
+    "{keys: [poolside/laguna-s-2.1], family: poolside, basis_from: vendor-prefix,",
+    "{keys: [poolside/laguna-s-2.1], family: poolside, basis_from: ,"))
+chk("B6 出网条目缺 `basis_from` ⇒ FAIL（口径来源必须写）",
+    st == "FAIL" and any("basis_from" in d for d in det), f"{st} · {[d[:46] for d in det]}")
+
 # ── C. 接线与语义边界（防"写了但没接" / 防后人读过头）──
 ids = [c["id"] for c in R.CHECKS]
 chk("C1 判据已登记进 CHECKS", "model-families" in ids)

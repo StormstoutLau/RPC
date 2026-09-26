@@ -4641,3 +4641,52 @@ J-1 要的**不是**"某台站上装着什么"，而是"**某次派发时，judg
 （登记了也是空判 ⇒ 会假绿）。消费者属**编排层 `D7-P3-2`**。
 ⚠ **J-2 的射程**：摘要不同只证明"载荷不同"，**不证明"信息独立"** ⇒ 它是**下界**（已写进 docstring）。
 
+## 74. `D7-P3-1` 续：**登记出网模型的家族** ⇒ J-1 在真实组合上可判（2026-09-26）
+
+### 74.1 为什么必须做（实测 246 个真实 run）
+
+**出网档占多数** —— 实测 `model` 前缀分布：
+`openrouter` **103** · `cluster-litellm` 59 · `local` 46 · `thinkingmachines` 9 · `station:A/B/C` 9/8/6 ·
+`opencode` 3 · 裸 `claude-sonnet-4-5` 3。
+⇒ 族表只覆盖**本地库 12 个 alias** ⇒ 不补这一段，**J-1 在真实组合上会大面积落 `unknown`** = **判据等于没生效**。
+
+### 74.2 ★★ 一个由实测逼出来的设计修正：**单键不够**
+
+真实取值既有 `local/gpt-oss-20b` 也有 `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`：
+· **只取末段** ⇒ 丢掉 **vendor** —— 而"谁家的"**正是族判定的依据**；
+· **只取全串** ⇒ 本地 alias 与出网串**不同形**，一边对不上。
+⇒ 新增 `model_key_variants()`：剥掉**已知传输前缀**（`local`/`cluster-litellm`/`opencode`/`openrouter`/`station:<X>`）
+后，按 ① `vendor/model` → ② 末段 → ③ 原串 依次查，**首个命中者胜**；**全不命中 ⇒ 不可判**。
+★ **只剥已知前缀、不猜**别的前缀语义（猜会把 `nvidia/…` 的 vendor 一起剥掉）。
+
+### 74.3 登记内容（**只登记实测出现过的具体名，不写通配**）
+
+8 条：`nvidia/nemotron-3-ultra-550b-a55b`（判官默认档 `ultra` 走的就是它）· `nvidia/nemotron-3-super-120b-a12b`
+（**与本地同名血统 ⇒ 互相印证**）· `poolside/laguna-s-2.1`（新族）· `thinkingmachines/inkling`（三站档实际名）·
+`nemotron-3.5-lightning-free` · `gpt-oss` / `nemotron`（`cluster-litellm` 档把**系列名**当模型名）· `claude-sonnet-4-5`（裸名档）。
+
+★★ **单列 `endpoint_aliases_na`**：`main` / `commercial` / `cluster-v4flash` **不是模型、是端点**
+（后端模型由调用方/环境决定）⇒ **J-1 不适用、永远 `unknown`**。
+★ 单列的理由：它们**看起来像"漏登记"** —— 若被当成漏项去补，就会造出一个**假的族**（把端点当模型）。
+
+### 74.4 实测（本批最关键的一条断言）
+
+`cross_family_verdict("local/nvidia-nemotron-3-super-120b-a12b", "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free")`
+⇒ **`same`** ⇒ ★ **族判定穿透了传输档**（同一血统跨本地/出网会被认出来）。
+⇒ 这正是 J-1 要的能力：**不是"两个串不同就算异构"**。
+
+### 74.5 对账（登记必须有判据查，否则"存在但无人读"）
+
+`model-families` 判据**扩展到出网段**：每条必须有 `keys` / `family` / **`basis_from`**（口径来源）；
+★ 且 **`keys` 与本地 alias 同名 ⇒ 键冲突红**（同一模型两处定义，查表结果取决于顺序）。
+现输出：`族 6 · 成员覆盖 12/12 · 未归类 0 · 出网 8/8键 · 问题 0`。
+测试：`test_rpc_check_model_families.py` **15/15**（新增 **B6 先验红**：出网条目缺 `basis_from` ⇒ FAIL）·
+`test_rpc_check_cross_family.py` **20/20**。
+
+### 74.6 边界（如实）
+
+1. 出网段的 `family` 按 **vendor 前缀 + 已知血统**判，**未逐一实测权重来源** ⇒ 标 `basis_from: vendor-prefix`
+   （**不是**"已定案"）。
+2. 仍未覆盖：**未出现过的出网模型**（新模型 ⇒ 仍 `unknown`，fail-closed ✅ 这是设计而非缺陷）。
+3. J-1/J-2 **仍无本仓消费者**（对象在站上 runDir）⇒ 未进 `CHECKS`；消费者属 `D7-P3-2`。
+

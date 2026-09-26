@@ -49,14 +49,19 @@ chk("B3 微调模型**归基座族** ⇒ same（血统口径生效）", v["verdi
 v = R.cross_family_verdict(None, "local/m27-q4ks", IDX)
 chk("B4 缺 producer ⇒ unknown（不可判）", v["verdict"] == "unknown")
 
-# ── C. ★ 真实数据回归：**出网模型不在族表** ⇒ 必须 unknown 且点名（fail-closed）──
+# ── C. ★ 真实数据回归：出网档**已登记** ⇒ 可判；**端点别名** ⇒ unknown（fail-closed）──
 v = R.cross_family_verdict("local/gpt-oss-20b",
                            "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free", IDX)
-chk("C1 出网判官（真值串）⇒ **unknown**，绝不默认算跨族", v["verdict"] == "unknown", v["reason"])
-chk("C2 且**点名**未入表的那个模型", v.get("unknown") == ["nemotron-3-ultra-550b-a55b"], str(v.get("unknown")))
+chk("C1 出网判官（真值串 · 已登记）⇒ **cross**（gpt-oss vs nvidia）", v["verdict"] == "cross", v["reason"])
+v = R.cross_family_verdict("local/nvidia-nemotron-3-super-120b-a12b",
+                           "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free", IDX)
+chk("C2 ★**同一血统跨本地/出网 ⇒ same**（族判定穿透传输档）", v["verdict"] == "same", v["reason"])
 v = R.cross_family_verdict("local/gpt-oss-20b", "station:A/thinkingmachines/inkling:free", IDX)
-chk("C3 站上出网档同样 ⇒ unknown", v["verdict"] == "unknown")
-chk("C4 族表当前覆盖 **12** 个 alias（本地库全集）", len(IDX) == 12, f"len={len(IDX)}")
+chk("C3 站上出网档（thinkingmachines）⇒ cross", v["verdict"] == "cross", v["reason"])
+v = R.cross_family_verdict("local/gpt-oss-20b", "commercial", IDX)
+chk("C4 ★**端点别名** ⇒ unknown 且点名（不可判，**不是通过**）",
+    v["verdict"] == "unknown" and v.get("unknown") == ["commercial"], f"{v['verdict']} · {v.get('unknown')}")
+chk("C5 族索引含本地 12 + 出网登记（≥20 键）", len(IDX) >= 20, f"len={len(IDX)}")
 
 # ── D. J-2 三态（原料：run.json.prompt_sha256 vs review.json.metadata.prompt_hash）──
 v = R.cross_input_verdict("sha256:aaa", "sha256:bbb")

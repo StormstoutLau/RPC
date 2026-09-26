@@ -2715,6 +2715,54 @@ def normalize_model_id(raw) -> str:
     return s.split("/")[-1].split(":", 1)[0].strip()
 
 
+def model_key_variants(raw) -> list:
+    """把 `model` 串展开成**候选键**（按优先级），供族表查询（`D7-P3-1`，2026-09-26）。
+
+    ★★ **为什么不能只用一个键（实测 246 个真实 run 后得出）**：真实取值里既有
+      `local/gpt-oss-20b`（本机档）也有 `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`（出网档）。
+      · 只取**末段** ⇒ 丢掉 **vendor** ⇒ 而"谁家的"**正是族判定的依据**；
+      · 只取全串 ⇒ 本地 alias（`m27-q4ks`）与出网串**不同形** ⇒ 一边对不上。
+      ⇒ 展开成**多候选**、按"信息量从多到少"依次查，**首个命中者胜**；**全不命中 ⇒ 不可判**。
+    候选顺序：① 剥掉已知**传输前缀**后的剩余路径（`nvidia/nemotron-…`）· ② 末段 · ③ 原串。
+    ★ 只剥**已知**前缀（`local`/`cluster-litellm`/`opencode`/`openrouter`/`station:<X>`），
+      **不猜**别的前缀语义（猜会把 `nvidia/…` 的 vendor 一起剥掉）。
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return []
+    parts = [x for x in s.split("/") if x]
+    if not parts:
+        return []
+    known = {"local", "cluster-litellm", "opencode", "openrouter"}
+    if parts[0] == "station" and len(parts) >= 2:
+        rest = parts[2:]
+    elif parts[0] in known:
+        rest = parts[1:]
+    else:
+        rest = parts
+    rest = [r.split(":", 1)[0] for r in rest]
+    out = []
+    if len(rest) >= 2:
+        out.append("/".join(rest[-2:]))
+    if rest:
+        out.append(rest[-1])
+    out.append(s)
+    seen, res = set(), []
+    for x in out:
+        if x and x not in seen:
+            seen.add(x)
+            res.append(x)
+    return res
+
+
+def family_of(raw, index):
+    """按**候选键**查族 ⇒ `(family_id | None, 命中的键)`。全不命中 ⇒ `(None, '')`。"""
+    for k in model_key_variants(raw):
+        if k in index:
+            return index[k], k
+    return None, ""
+
+
 def load_family_index():
     """读 `inventory/model-families.yaml` ⇒ `{alias: family_id}`（供 J-1 用）。
 
@@ -2729,6 +2777,12 @@ def load_family_index():
         fid = str(fam.get("id") or "")
         for a in (fam.get("members") or []):
             idx[str(a)] = fid
+    for ob in (F.get("outbound_models") or []):
+        fid = str(ob.get("family") or "")
+        if not fid:
+            continue
+        for k in (ob.get("keys") or []):
+            idx[str(k)] = fid
     return idx
 
 
@@ -2742,15 +2796,17 @@ def cross_family_verdict(producer_raw, judge_raw, index) -> dict:
       · `unknown` ⇒ **任一模型不在族表里 ⇒ 不可判**；★ **fail-closed：绝不默认算"跨族"**
         （默认放行 = 把"没判"读成"通过"，本仓最防的形态）。
     """
-    p, j = normalize_model_id(producer_raw), normalize_model_id(judge_raw)
-    miss = [x for x in (p, j) if x and x not in index]
+    p, j = str(producer_raw or "").strip(), str(judge_raw or "").strip()
     if not p or not j:
-        return {"verdict": "unknown", "reason": "缺 producer/judge 的 model", "unknown": miss}
-    if miss:
+        return {"verdict": "unknown", "reason": "缺 producer/judge 的 model", "unknown": []}
+    fp, kp = family_of(p, index)
+    fj, kj = family_of(j, index)
+    if fp is None or fj is None:
+        miss = [model_key_variants(x)[0] for x, f in ((p, fp), (j, fj)) if f is None]
         return {"verdict": "unknown",
-                "reason": f"未入族表: {', '.join(sorted(set(miss)))}（族表当前只覆盖本地库 alias）",
-                "unknown": sorted(set(miss))}
-    fp, fj = index[p], index[j]
+                "reason": f"查不到族: {'; '.join(miss)}（多为**端点别名**或**未登记的出网模型**"
+                          f" ⇒ **不可判，不是通过**）",
+                "unknown": miss}
     if fp == fj:
         return {"verdict": "same", "reason": f"producer={p}({fp}) · judge={j}({fj}) **同族**",
                 "producer": p, "judge": j, "family": fp}
@@ -2820,8 +2876,27 @@ def check_model_families(ctx):
     miss = [a for a in aliases if a not in owner]
     if miss:
         bad.append(f"**未归类**的 alias {len(miss)} 个：{', '.join(miss)} ⇒ 新模型必须归类")
+    # 出网段同样要**对账**（2026-09-26 补：登记了没人查 = "存在但无人读"）
+    obs = (F.get("outbound_models") or [])
+    ob_owner = {}
+    for ob in obs:
+        fid = str(ob.get("family") or "")
+        keys = [str(x) for x in (ob.get("keys") or [])]
+        if not keys:
+            bad.append(f"outbound 条目无 `keys`（family={fid or '?'}）⇒ 空条目")
+        if not fid:
+            bad.append(f"outbound 条目缺 `family`（keys={keys[:2]}）")
+        if not str(ob.get("basis_from") or "").strip():
+            bad.append(f"outbound `{keys[:1] or ['?']}` 缺 `basis_from`（口径来源）⇒ 堵『看着像就填』")
+        for k in keys:
+            if k in owner:
+                bad.append(f"outbound 键 `{k}` 与本地族 `{owner[k]}` 的成员**同名** ⇒ **键冲突**"
+                           f"（同一模型两处定义，查表结果取决于顺序）")
+            if k in ob_owner:
+                bad.append(f"outbound 键 `{k}` 被两条记录占用（`{ob_owner[k]}` 与 `{fid}`）")
+            ob_owner[k] = fid
     note = (f"族 {len(fams)} · 成员覆盖 {len(owner)}/{len(aliases)} · "
-            f"未归类 {len(miss)} · 问题 {len(bad)}")
+            f"未归类 {len(miss)} · 出网 {len(obs)}/{len(ob_owner)}键 · 问题 {len(bad)}")
     detail = list(bad)
     if detail:
         return ("FAIL", note, detail)
