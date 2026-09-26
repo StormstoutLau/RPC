@@ -27,7 +27,11 @@ Invoke-Expression $fn.Extent.Text   # 定义函数到当前会话
 # 它们是**纯函数**(只吃 $accept/$goldenActive/卡 subjects, 不碰站、不碰文件系统)
 # ⇒ 可离线单测; 这正是"派发路径改动"能被验证而不用每次都真派发的关键。
 # O-15/AUDIT (2026-09-21): 追加提取 claude 按路基线(Get-ClaudeFrameworkSubjects) 与 fallback 判定 (Test-FallbackEligible)。
-foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-EvmStatePull', 'Test-FallbackEligible', 'Test-CtxOverflowError', 'Resolve-CtxOverflowCode', 'Resolve-ClaudeStationCandidates', 'Get-SensitivityBackendReject', 'Get-BackendEgress', 'Get-JudgeEgress', 'Get-JudgeComplianceReject', 'Get-AttachEgressReject', 'Get-ScrubRules', 'Invoke-Scrubber', 'Get-ScrubBlockReason', 'Resolve-ReviewPrompt', 'Resolve-ClaudeBudget', 'Resolve-LocalBash', 'Invoke-LocalBashCmd', 'Resolve-ExitCode', 'Test-GateSummaryOk', 'Resolve-GateCommand')) {
+foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-EvmStatePull', 'Test-FallbackEligible', 'Test-CtxOverflowError', 'Resolve-CtxOverflowCode', 'Resolve-ClaudeStationCandidates', 'Get-SensitivityBackendReject', 'Get-BackendEgress', 'Get-JudgeEgress', 'Get-JudgeComplianceReject', 'Get-AttachEgressReject', 'Get-ScrubRules', 'Invoke-Scrubber', 'Get-ScrubBlockReason', 'Resolve-ReviewPrompt', 'Resolve-ClaudeBudget', 'Resolve-LocalBash', 'Invoke-LocalBashCmd', 'Resolve-ExitCode', 'Test-GateSummaryOk', 'Resolve-GateCommand',
+# O-92 (2026-09-26): 双盲重推导 —— 三个**纯函数** + `Read-ReviewResource`（`Build-BlindPrompt` 依赖它）。
+# ⚠ 把 `Read-ReviewResource` 也提取进来 ⇒ 本夹具读的是**真模板文件**
+#   ⇒ "盲判模板里不得有 `{{PRODUCT}}`"这条能变成**行为断言**（真跑一遍看输出），而不是扫文本。
+'Read-ReviewResource', 'Get-AssertionBlock', 'Build-BlindPrompt', 'Compare-AssertionChains')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -58,7 +62,12 @@ Write-Host "DEBUG JUDGE_TABLE keys=$(@($Script:JUDGE_TABLE.Keys).Count)"
 # 为什么必须测真表: `Resolve-GateCommand` 是**纯查表**函数 ⇒ 表空了它就"恒不命中"
 #   ⇒ 断言会变成"**判据什么都没判**"（本仓头号形态）。故必须验**真表非空**且值真的是命令。
 # `$Script:GATE_SUMMARY_RE` 也必须提取 —— `Test-GateSummaryOk` 依赖它（漏了它会整段抛错）。
-foreach ($asn in @('$Script:GATE_TABLE', '$Script:GATE_SUMMARY_RE', '$Script:GATE_CACHE')) {
+foreach ($asn in @('$Script:GATE_TABLE', '$Script:GATE_SUMMARY_RE', '$Script:GATE_CACHE',
+                   # O-92: 断言块正则 / 封闭枚举。
+                   # ⚠ **刻意不含 `$Script:REVIEW_DIR`** —— 它那条赋值读 `$PSScriptRoot`，
+                   #   而 **`Invoke-Expression` 的子作用域里取不到 `$PSScriptRoot`**（下文 O-92⓪ 有实测记录）
+                   #   ⇒ 提取它会抛 "Cannot bind argument to parameter 'Path' ... empty string"。
+                   '$Script:ASSERT_BLOCK_RE', '$Script:ASSERT_OPS')) {
     $a = @($ast.FindAll({ param($n)
         $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
         $n.Left.Extent.Text -eq $asn }, $true)) | Select-Object -First 1
@@ -1442,6 +1451,120 @@ Assert-True "o90⑧: Invoke-Task 接线（调 Invoke-GateCheck 且失败 return 
     $content -match 'Invoke-GateCheck -Name \$reqGate' -and $content -match 'return 3 \}\s+# 3 = GATE_BLOCK')
 Assert-True "o90⑨: 批量侧逐项接线（fail-fast ⇒ 该行标 GATE_BLOCK，不整批崩）" (
     $content -match '\$rgB -and -not \(Invoke-GateCheck' -and $content -match "\`$err = 'GATE_BLOCK'")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# O-92（2026-09-26）：**双盲重推导** —— 判据在三个纯函数里，这里**真跑**它们（不是扫文本）。
+# 为什么：主评审模板带 `{{PRODUCT}}` ⇒ "原推理里的跳步会被它再走一遍"（锚定效应）
+#   ⇒ 形态 III（**把两件事说成一件**）**结构性拦不住**。盲判 = 只给「源 + 命题」，让 judge 独立重推。
+# ⚠ 本组最值钱的是 ③④（**不得泄漏原链 / 原产物**）：盲判若把 claimed chain 递过去，等于**没盲**。
+# ═══════════════════════════════════════════════════════════════════════════════
+function O92-Doc([string]$json) { "产物正文 SENTINEL_PRODUCT_PROSE`n`n" + '```assertions' + "`n" + $json + "`n" + '```' + "`n" }
+
+# ⓪ `Read-ReviewResource` 依赖 `$Script:REVIEW_DIR`（`agent-cli.ps1` 里它 = `Join-Path $PSScriptRoot 'review'`）。
+# ★★ 实测机制（本批踩到，记下来防下次再撞）：**`$PSScriptRoot` 在 `Invoke-Expression` 的子作用域里取不到**
+#   ⇒ 直接提取那条赋值会抛 `Cannot bind argument to parameter 'Path' because it is an empty string`，
+#   **且报错指向 `Invoke-Expression` 那一行**（不指向赋值本身）⇒ 极易误判成"AST 没找到"。
+#   实测对照：同一句 `Join-Path $PSScriptRoot 'review'` **直接求值正常**、包进 `Invoke-Expression` 即抛错。
+# ⇒ 这里用**夹具自己的位置**（与 agent-cli.ps1 同目录 ⇒ 指向同一个真资源目录），并**断言该目录真的可用**。
+$Script:REVIEW_DIR = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'review'
+Assert-True "o92⓪: 评审资源目录可得（盲判模板真存在）——否则后面的断言会以误导形式失败" (
+    (Test-Path (Join-Path $Script:REVIEW_DIR 'judge-prompt-blind.tmpl')))
+$o92Good = O92-Doc '[ {"id":"B1","conclusion":"站点数为 3","op":"counting","chain":["列出三站","数一遍得 3"],"sources":["inventory/cluster.yaml"]}, {"id":"B2","conclusion":"门禁与实现同一份代码","op":"equivalence","chain":["读门禁","读实现","比对通过"],"sources":["ops/rpc_check.py"]} ]'
+$o92Ab = Get-AssertionBlock $o92Good
+
+# ① 正例：真解析（2 条命题）—— ⚠ 名字里带 `reason`，失败时**当场看到原因**（不必再复现）
+Assert-True "o92①: Get-AssertionBlock 正例（真解析出 2 条命题）[ok=$($o92Ab.ok) reason=$($o92Ab.reason)]" (
+    $o92Ab['ok'] -and @($o92Ab['assertions']).Count -eq 2)
+
+# ①b ★★ 回归护栏：**单条**也必须 ok。
+#    ⚠ 本批真踩过：PS 5.1 的 `ConvertFrom-Json` 把顶层数组当**一个对象**发出 ⇒ 写成 `@($j | ConvertFrom-Json)`
+#      会得到 **1 个元素（=整个数组）**，`$a.id` 走成员枚举返回 "B1 B2"、`$a.op` 返回 "counting equivalence"
+#      ⇒ **1 条能过、2 条必红**（一个"看起来在工作"的解析器）。这条与 ① 成对，专门钉住那个不对称。
+$o92One = Get-AssertionBlock (O92-Doc '[ {"id":"B1","conclusion":"只有一条","op":"counting","chain":["a"]} ]')
+Assert-True "o92①b: **单条**断言也必须 ok（防「1 条过、2 条红」的不对称）[ok=$($o92One.ok) reason=$($o92One.reason)]" (
+    $o92One['ok'] -and @($o92One['assertions']).Count -eq 1)
+
+# ② 反例族：**每一类都必须不可用**（fail-closed —— 块不在 / 空 / op 越界 / 缺 chain）
+Assert-True 'o92②: 无 ```assertions 块 ⇒ 不可用' (-not (Get-AssertionBlock "正文里没有那个块").ok)
+Assert-True "o92②b: 空数组 ⇒ 不可用（防'块在但没内容'被当通过）" (-not (Get-AssertionBlock (O92-Doc '[]')).ok)
+$o92OpBad = Get-AssertionBlock (O92-Doc '[ {"id":"B1","conclusion":"x","op":"我觉得","chain":["a"]} ]')
+Assert-True "o92②c: op 不在**封闭枚举** ⇒ 不可用（否则枚举形同虚设）" (
+    (-not $o92OpBad.ok) -and $o92OpBad.reason -match '封闭枚举')
+$o92ChBad = Get-AssertionBlock (O92-Doc '[ {"id":"B1","conclusion":"x","op":"counting"} ]')
+Assert-True "o92②d: 缺 chain ⇒ 不可用（没有链就没法做步数对照）" (
+    (-not $o92ChBad.ok) -and $o92ChBad.reason -match 'chain')
+
+# ③ ★★ 泄漏护栏：盲判提示词含**命题**，但**不含原链任一步**
+$o92Fm = @{ task = 't'; body = '源材料正文' }
+$o92Prompt = Build-BlindPrompt -fm $o92Fm -assertions $o92Ab['assertions'] -runId 'r-o92'
+Assert-True "o92③: 盲判提示词含**命题**但**不含**原链任一步（否则=没盲）" (
+    $o92Prompt.Contains('站点数为 3') -and
+    -not $o92Prompt.Contains('列出三站') -and -not $o92Prompt.Contains('数一遍得 3') -and
+    -not $o92Prompt.Contains('比对通过'))
+
+# ④ ★ 盲判提示词**不含产物正文**（哨兵）且**不含 `{{PRODUCT}}` 占位符**
+Assert-True "o92④: 不含产物正文（哨兵）且不含 `{{PRODUCT}}`（真读真模板，非扫文本）" (
+    -not $o92Prompt.Contains('SENTINEL_PRODUCT_PROSE') -and -not $o92Prompt.Contains('{{PRODUCT}}'))
+Assert-True "o92④b: 其余占位符**都已被替换**（防'新模板少填一个变量'静默漏）" (
+    -not ($o92Prompt -match '\{\{[A-Z_]+\}\}'))
+
+# ⑤ Compare-AssertionChains 五态（★ 结论一致∧步数相同 = MATCH）
+#   ⚠ 观测值打进退化名 ⇒ 失败时**当场看到实际状态**（与 ① 同一手法）。
+$o92C0 = @($o92Ab['assertions'])[0]
+$o92Same = @(Compare-AssertionChains -claimed @($o92C0) -blind @(@{ id = 'B1'; verdict = 'TRUE'; chain = @('a', 'b'); key_reason = 'k' }))
+Assert-True "o92⑤: 结论一致 ∧ 步数相同 ⇒ **MATCH** [n=$($o92Same.Count) state0=$($o92Same[0].state)]" (
+    $o92Same.Count -eq 1 -and $o92Same[0].state -eq 'MATCH')
+$o92Gap = @(Compare-AssertionChains -claimed @($o92C0) -blind @(@{ id = 'B1'; verdict = 'TRUE'; chain = @('a'); key_reason = 'k' }))
+Assert-True "o92⑤b: 结论一致 ∧ 步数不同 ⇒ **STEP_GAP_OPEN**（机器**不**闭合）[state0=$($o92Gap[0].state)]" (
+    $o92Gap[0].state -eq 'STEP_GAP_OPEN')
+$o92Fal = @(Compare-AssertionChains -claimed @($o92C0) -blind @(@{ id = 'B1'; verdict = 'FALSE'; chain = @('a'); key_reason = '反证' }))
+Assert-True "o92⑤c: 盲判 FALSE ⇒ **CONFLICT**（必须仲裁）[state0=$($o92Fal[0].state)]" (
+    $o92Fal[0].state -eq 'CONFLICT')
+$o92NoP = @(Compare-AssertionChains -claimed @($o92C0) -blind @(@{ id = 'B9'; verdict = 'TRUE'; chain = @('a') }))
+Assert-True "o92⑤d: 盲判没返回该条 ⇒ **NO_PROBE**（**不算通过**）[state0=$($o92NoP[0].state)]" (
+    $o92NoP[0].state -eq 'NO_PROBE')
+$o92Unc = @(Compare-AssertionChains -claimed @($o92C0) -blind @(@{ id = 'B1'; verdict = 'UNCERTAIN'; chain = @(); key_reason = '依据不足' }))
+Assert-True "o92⑤e: 盲判 UNCERTAIN ⇒ **UNCERTAIN**（诚实优先，不算通过）[state0=$($o92Unc[0].state)]" (
+    $o92Unc[0].state -eq 'UNCERTAIN')
+
+# ⑥ ★★ **机器不产出 CLOSED**（写成正向断言，防日后有人"顺手补上"）
+$o92All = @()
+foreach ($bl in @(@{ id = 'B1'; verdict = 'TRUE'; chain = @('a', 'b') }, @{ id = 'B1'; verdict = 'TRUE'; chain = @('a') },
+                   @{ id = 'B1'; verdict = 'FALSE'; chain = @('a') }, @{ id = 'B9'; verdict = 'TRUE'; chain = @('a') },
+                   @{ id = 'B1'; verdict = 'UNCERTAIN'; chain = @() })) {
+    $o92All += @(Compare-AssertionChains -claimed @($o92C0) -blind @($bl))
+}
+Assert-True "o92⑥: 状态集内**永不出现** STEP_GAP_CLOSED（差额步无法机器闭合）" (
+    -not (@($o92All | ForEach-Object { $_.state }) -contains 'STEP_GAP_CLOSED'))
+Assert-True "o92⑥b: **源码里也**没把它写成产物（防注释与实现不符）" (
+    -not $codeOnlyFull.Contains('STEP_GAP_CLOSED'))
+
+# ⑦ **不静默**：三条"没跑成"的路径都必须**显式落状态**（O-89 同族：静默 = 假绿）
+Assert-True "o92⑦: SKIPPED / REJECT / UNPARSEABLE 三条路径都**显式落状态**" (
+    $content -match "status = 'SKIPPED'" -and $content -match "status = 'REJECT'" -and
+    $content -match "status = 'UNPARSEABLE'")
+
+# ⑧ 白名单（行为级）：卡写 `review-blind: true` **真被解析**；未声明 ⇒ false（向后兼容）
+$rbCard = Join-Path $tmpCards 'o92-review-blind.md'
+[System.IO.File]::WriteAllText($rbCard, "---`nproj: dogfood`ntask: t`nreview-blind: true`n---`n`nbody`n", [System.Text.UTF8Encoding]::new($false))
+Assert-True "o92⑧: 卡的 review-blind **真被解析**（白名单已登记）" (
+    (Get-FrontMatter $rbCard)['review-blind'] -eq 'true')
+$rbCard2 = Join-Path $tmpCards 'o92-no-blind.md'
+[System.IO.File]::WriteAllText($rbCard2, "---`nproj: dogfood`ntask: t`n---`n`nbody`n", [System.Text.UTF8Encoding]::new($false))
+Assert-True "o92⑧b(反向): 未声明 ⇒ 'false' = **不跑盲判**（存量卡行为不变）" (
+    (Get-FrontMatter $rbCard2)['review-blind'] -eq 'false')
+
+# ⑨ 接线：`Invoke-Review` 真的调用纯函数、真的由卡面门控、真的把结果写进 review
+Assert-True "o92⑨: 接线（取命题 + 对照 + 写 `blind` 段）" (
+    $content -match 'Get-AssertionBlock \$productText' -and
+    $content -match 'Compare-AssertionChains -claimed \$ab\[' -and
+    $content -match "\`$review\['blind'\] = \`$blindSection")
+Assert-True "o92⑨b: **默认关**（门控用卡面值，不是「一上来就跑两次」）" (
+    $content -match "\[string\]\`$fm\['review-blind'\] -eq 'true'")
+Assert-True "o92⑨c: 盲判提示词**与主判同规矩**出网（过 Resolve-ReviewPrompt，不绕门面）" (
+    $content -match 'Resolve-ReviewPrompt -prompt \$blindPrompt')
+Assert-True "o92⑨d: `blind` 段**仅在跑过时**才加（关掉开关时 review.json schema 不变）" (
+    $content -match "if \(\`$blindSection\) \{ \`$review\['blind'\] = \`$blindSection \}")
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
