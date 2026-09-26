@@ -1,0 +1,78 @@
+# U-5 晋升门 schema（D7-P1-5）
+#
+# ── 这是什么 ───────────────────────────────────────────────────────────────
+# 共享记忆的**准入形状**：一条发现/记忆**凭什么被允许进入共享层**。
+# 已裁（台账 **D-38**）：**把三处独立发明的"晋升门"统一为一个 schema，不许发明第四种** ——
+#   三种判据（**成功率 / 复发次数 / 验证状态**）**并存于同一 schema 的不同字段**，
+#   schema 须能被三处**各自映射**。
+#
+# ── 三处"独立发明"的实测出处（见 合并稿 §11.5）────────────────────────────
+#   · Textbook `FixMemory`          = **唯一有完整"准入 + 容量 + 注入门槛"三件套**的实现
+#   · Spec_Workflow `discoveries/`   = 判据是"**跨项目/跨 feature 复发**"，且明文"**缺锚点不得登记**"
+#   · Fin_Agent `run_p0a_v2_batch`   = 判据是"**仅 `verified=True` 才写共享层**"
+#   ⇒ 三者判据各不相同 ⇒ 本 schema 把它们做成**三个并列判据字段**（任一满足即可晋升）。
+#
+# ── 权威源在自身 ⇒ **不是生成物**（不登记进 artifacts.yaml）─────────────────
+# 它是一份**设计决定**的载体，不是"由别处推导出来的"。
+# 但"三种实现各自映射进它"这件事可被门禁 `promotion` 判（见 `mapping_closure` 段）。
+
+version: 1
+updated: 2026-09-26
+owner: Scott (鹏)
+
+# ── 字段集（`gate.required` / 判据 都只能引用这里的字段名）──────────────────
+fields:
+  - {id: anchor,       type: str,  note: "证据锚点（产物路径 / 事件 id / 行号）—— 本仓 ADR-0007『an anchor is REQUIRED』同源"}
+  - {id: entries,      type: int,  note: "当前共享层条数（容量控制用）"}
+  - {id: success_count, type: int, note: "该条目被复用的成功次数"}
+  - {id: min_success_for_inject, type: int, note: "注入门槛（Textbook `FixMemory`：`success_count >= min_success`）"}
+  - {id: recurrence,   type: int,  note: "跨项目 / 跨 feature 的复发次数"}
+  - {id: min_recurrence, type: int, note: "复发门槛（本仓为统一而**新设的显式阈值** —— 见 `unverified` 段第 3 条）"}
+  - {id: verified,     type: bool, note: "验证状态（Fin_Agent：仅 `verified=True` 帖写共享层）"}
+
+gate:
+  # ① 必填：**缺锚点不得登记**（Spec_Workflow 原文；与本仓 ADR-0007 的 anchor 要求同源）
+  required: [anchor]
+
+  # ② 容量（Textbook `FixMemory` 的"容量"件套：LRU + 上限）
+  capacity: {field: entries, max: 50, policy: lru}
+
+  # ③ 判据字段：**任一满足即可晋升**（三种实现各用其一 ⇒ 不发明第四种）
+  #    `ref` 为 `$<字段名>` 时表示引用另一个字段（类型须一致）
+  criteria:
+    - {id: success_rate, field: success_count, op: ">=", ref: "$min_success_for_inject", from: Textbook}
+    - {id: recurrence,   field: recurrence,    op: ">=", ref: "$min_recurrence",         from: Spec_Workflow}
+    - {id: verified,     field: verified,      op: "==", ref: true,                      from: Fin_Agent}
+
+  # ④ 结构约束（§11.7：**单人开发者是常态假设** ⇒ "不得自审"只能靠结构，不靠人）
+  structure:
+    - {id: asymmetric_config, note: "生成端 / 审计端不对称配置"}
+    - {id: double_blind,      note: "审计者**不得接触原推理文本**（否则锚定效应会把跳步复制一遍）"}
+
+# ── 三处实现 → 本 schema 的映射（**这就是 D-38 的"须能被三处各自映射"**）────
+# `uses` = 该实现用到的字段（必须是 `fields` 的子集）；
+# `criteria_used` = 它实际使用的判据 id（必须是 `gate.criteria` 的子集）。
+mapping_closure:
+  - id: textbook-fixmemory
+    uses: [anchor, entries, success_count, min_success_for_inject]
+    criteria_used: [success_rate]
+  - id: spec-workflow-discoveries
+    uses: [anchor, recurrence, min_recurrence]
+    criteria_used: [recurrence]
+  - id: fin-agent-p0a
+    uses: [verified]
+    criteria_used: [verified]
+
+# ── 实例（晋升登记条目）────────────────────────────────────────────────────
+# 本仓当前为 0：本仓**没有共享记忆层**（四道门属 D7-P3-3）⇒ 没有可登记的条目。
+entries: []
+empty_reason: >-
+  本仓**没有共享记忆层**（记忆四道门 write/retrieval/promotion/reuse 归 `D7-P3-3`，尚未设计）
+  ⇒ 没有可登记的晋升条目。空 ≠ 没事：门禁 `promotion` 会把「0 条」显式报出来。
+
+# ── 如实登记：本 schema 里**新设**的东西（不是从三处抄来的）─────────────────
+unverified:
+  - {item: "min_recurrence 的**具体阈值**", why: "Spec_Workflow 的原文只说『跨项目/跨 feature 复发』，**没给次数**；本仓为统一而新设为显式字段 ⇒ 阈值未定"}
+  - {item: "capacity.max=50 / policy=lru 是否为全局值", why: "来自 Textbook `FixMemory` **一个实现**；本仓并未验证它适用于共享记忆的其它形态"}
+  - {item: "structure 两条（不对称配置 / 双盲）如何**机判**", why: "当前只有名字与说明 —— **判据未设计**（§11.7 只给了形态）"}
+  - {item: "三个判据之间是否该有优先级", why: "本 schema 定为『任一满足』；三处实现各自只有一条，**无人验证过并列语义**"}
