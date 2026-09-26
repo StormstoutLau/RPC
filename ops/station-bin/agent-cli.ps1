@@ -1124,6 +1124,10 @@ function Get-FrontMatter {
     $h['review-model'] = ''
     $h['review-gate']  = 'false'
     $h['review-timeout-s'] = 0
+    # O-92 (2026-09-26): 双盲重推导开关（默认 false ⇒ **行为不变**，存量卡不受影响）。
+    #   卡面写 `review-blind: true` ⇒ 评审判完后再跑一次「只给源+命题、不给原产物」的独立重推，
+    #   并把两条链的对照结果写进 `review.json` 的 `blind` 段（**advisory，不阻断**）。
+    $h['review-blind'] = 'false'
     # O-26 Split-Dispatcher (2026-09-12): decompose ordered shard list. Each item = one shard's
     # task description. Dispatcher splits master card into N sub-cards (one per shard) and fans
     # them across stations (cross-station each 1). Only valid for readable (readonly) big tasks.
@@ -4190,6 +4194,117 @@ function Build-JudgePrompt {
     return $p
 }
 
+# ── O-92（2026-09-26）：**双盲重推导**的判据与装配（纯函数，离线夹具可测） ──────────
+# 背景：`judge-prompt.tmpl` 那条路**看得到原产物**（`{{PRODUCT}}`）⇒ 按 FWK-ASSERTION §4.3，
+#   "auditor **不得接触原推理文本**，否则**锚定效应会把跳步复制一遍**" ⇒ 形态 III 拦不住。
+# 本组只做三件事：① 从产物取**命题** ② 装配**不含产物、不含原链**的盲判提示词 ③ 把两条链**机械对照**。
+# ⚠⚠ **机器不产出 `STEP_GAP_CLOSED`** —— "差额步已被一手证据闭合"**无法机器判定** ⇒ 一律 `STEP_GAP_OPEN`，
+#   留给人工/第二视角标注（把它悄悄记成 CLOSED = **静默降级**）。
+$Script:ASSERT_BLOCK_RE = '(?ms)^```assertions[ \t]*\r?\n(.*?)\r?\n```'
+$Script:ASSERT_OPS = @('equivalence', 'existence', 'counting', 'transitivity', 'cross_library', 'causal')
+
+
+function Get-AssertionBlock {
+    # **纯函数**：从产物里取机读「断言登记块」⇒ @{ ok; assertions; reason }
+    # 格式（字段名与参考框架 FWK-ASSERTION 对齐，只取够用的子集）：
+    #   ```assertions
+    #   [ {"id":"B1","conclusion":"一句结论","op":"counting","chain":["步1","步2"],"sources":["源A"]} ]
+    #   ```
+    # ⚠ `op` 是**封闭枚举**（六项，来自参考框架）—— 凭常识自造 op ⇒ 判不合规（否则枚举形同虚设）。
+    param([string]$text)
+    if ([string]::IsNullOrWhiteSpace($text)) { return @{ ok = $false; assertions = @(); reason = '产物为空' } }
+    $m = [regex]::Match($text, $Script:ASSERT_BLOCK_RE)
+    if (-not $m.Success) { return @{ ok = $false; assertions = @(); reason = '产物里没有 ```assertions 机读块' } }
+    # ⚠⚠ **PS 5.1 的 `ConvertFrom-Json` 把顶层数组当"一个对象"发出**（`WriteObject(obj,false)` = 不枚举）。
+    #   若写成 `@($json | ConvertFrom-Json)`，外层 `@()` 收到的是**那一个对象**（=整个数组）
+    #   ⇒ `@($arr).Count` 得 **1**，而循环里 `$a` 就是整个数组 —— 于是 `$a.id` 走**成员枚举**
+    #   返回 "B1 B2"、`$a.op` 返回 "counting equivalence" ⇒ **1 条能过、2 条必红**。
+    #   （本批实测踩到，是靠断言名里打出 `reason` 才定位的；那次它**fail-closed**，没造成假绿。）
+    # ⇒ 用 `-InputObject` 避开管道，再 `@()` 归一。
+    try { $parsed = ConvertFrom-Json -InputObject $m.Groups[1].Value }
+    catch { return @{ ok = $false; assertions = @(); reason = ("断言块 JSON 解析失败: " + $_.Exception.Message) } }
+    $arr = @($parsed)
+    if ($arr.Count -eq 0) { return @{ ok = $false; assertions = @(); reason = '断言块是空数组' } }
+    $bad = @()
+    foreach ($a in @($arr)) {
+        if (-not $a.id) { $bad += '缺 id'; continue }
+        if (-not $a.conclusion) { $bad += ("$($a.id): 缺 conclusion"); continue }
+        if ([string]$a.op -notin $Script:ASSERT_OPS) {
+            $bad += ("$($a.id): op='" + [string]$a.op + "' 不在封闭枚举（" + ($Script:ASSERT_OPS -join '|') + "）"); continue
+        }
+        if (-not $a.chain) { $bad += ("$($a.id): 缺 chain（无法做步数对照）") }
+    }
+    if ($bad.Count -gt 0) { return @{ ok = $false; assertions = $arr; reason = ('断言块不合规: ' + ($bad -join '; ')) } }
+    return @{ ok = $true; assertions = $arr; reason = '' }
+}
+
+
+function Build-BlindPrompt {
+    # **纯函数**：装配盲判提示词。★ **刻意不填 `{{PRODUCT}}`** —— 盲判的全部意义就是"不给原推理"。
+    # ⚠ 也**不得**把 `chain`（原文声明的推理链）递出去 —— 那等于把原推理换个字段名再给一遍。
+    #   夹具有一条断言专钉这个：输出里**不得出现** claimed chain 的任何一步文本。
+    param($fm, $assertions, [string]$runId)
+    $tmpl = Read-ReviewResource 'judge-prompt-blind.tmpl'
+    $taskLine = if ($fm['task']) { $fm['task'] } else { '' }
+    $body = if ($fm['body']) { $fm['body'] } else { '' }
+    $lines = @()
+    foreach ($a in @($assertions)) {
+        $src = if ($a.sources) { (@($a.sources) -join ' / ') } else { '(未声明来源)' }
+        $lines += ("- id: " + [string]$a.id) + "`n" +
+                  ("  conclusion: " + [string]$a.conclusion) + "`n" +
+                  ("  op: " + [string]$a.op) + "`n" +
+                  ("  sources: " + $src)
+    }
+    $p = $tmpl
+    $p = $p.Replace('{{TASK}}', $taskLine)
+    $p = $p.Replace('{{CARD_BODY}}', $body)
+    $p = $p.Replace('{{N}}', [string](@($assertions).Count))
+    $p = $p.Replace('{{ASSERTIONS}}', ($lines -join "`n"))
+    $p = $p.Replace('{{RUN_ID}}', $runId)
+    return $p
+}
+
+
+function Compare-AssertionChains {
+    # **纯函数**：把「原文声明的链」与「盲判独立重推的链」逐条对照 ⇒ 数组（每项一个状态）。
+    # 状态（**两态、禁悬空**；借 FWK-ASSERTION §4.4-3）：
+    #   MATCH          盲判 TRUE ∧ **步数相同**（gap = 0）
+    #   STEP_GAP_OPEN  盲判 TRUE ∧ 步数不同 ⇒ **一律 OPEN**（⚠ 机器**不**产出 CLOSED，见上方注释）
+    #   CONFLICT       盲判 FALSE（结论不一致 ⇒ 必须仲裁）
+    #   UNCERTAIN      盲判 UNCERTAIN（依据不足 —— **不算通过**）
+    #   NO_PROBE       盲判没返回这条（或缺 id）
+    param($claimed, $blind)
+    $bv = @{}
+    foreach ($b in @($blind)) { if ($b.id) { $bv[[string]$b.id] = $b } }
+    $out = @()
+    foreach ($a in @($claimed)) {
+        $id = [string]$a.id
+        $cs = @($a.chain).Count
+        $b = $bv[$id]
+        if (-not $b) {
+            $out += [ordered]@{ id = $id; state = 'NO_PROBE'; claimed_steps = $cs; blind_steps = 0; note = '盲判未返回该条' }
+            continue
+        }
+        $bs = @($b.chain).Count
+        $verdict = ([string]$b.verdict).ToUpper()
+        $kr = [string]$b.key_reason
+        if ($verdict -eq 'FALSE') {
+            $out += [ordered]@{ id = $id; state = 'CONFLICT'; claimed_steps = $cs; blind_steps = $bs; note = ('盲判 FALSE: ' + $kr) }
+        }
+        elseif ($verdict -eq 'UNCERTAIN' -or -not $verdict) {
+            $out += [ordered]@{ id = $id; state = 'UNCERTAIN'; claimed_steps = $cs; blind_steps = $bs; note = ('盲判未定: ' + $kr) }
+        }
+        elseif ($bs -eq $cs) {
+            $out += [ordered]@{ id = $id; state = 'MATCH'; claimed_steps = $cs; blind_steps = $bs; note = '结论一致且步数相同' }
+        }
+        else {
+            $out += [ordered]@{ id = $id; state = 'STEP_GAP_OPEN'; claimed_steps = $cs; blind_steps = $bs
+                               note = ('步数差 ' + ($cs - $bs) + "（原文 $cs / 盲判 $bs）—— **差额步须人工/第二视角闭合**，机器不闭合") }
+        }
+    }
+    return $out
+}
+
 function Invoke-RemoteCapture {
     # review-only ssh helper: like Invoke-RemoteScript but RETURNS remote stdout (string),
     # for capturing the judge's JSON reply (opencode-gateway source ②).
@@ -4485,6 +4600,53 @@ function Invoke-Review {
     $flags = @()
     foreach ($f in @($judgeObj.flags_hit)) { $flags += [string]$f }
 
+    # ── O-92（2026-09-26）：**双盲重推导**（仅卡面 `review-blind: true` 才跑；默认关 ⇒ 行为不变）──
+    # 为什么：上面那次评审**看得到原产物 + 原卡** ⇒ "原推理里的跳步会被它再走一遍"（锚定效应）
+    #   ⇒ 这正是"证据全对、综合推理错"（形态 III）**拦不住**的结构原因。
+    # 做什么：只给「源材料（卡正文）+ 命题（产物里的 ```assertions 机读块）」⇒ 让 judge **独立重推**，
+    #   再与原文声明的链**机械对照**（结论一致？步数差？）；结果写进 `review.json` 的 `blind` 段。
+    # ⚠ 与主判**同规矩**：提示词出网前同样过 `Resolve-ReviewPrompt`（scrub + 拦截），不绕门面。
+    # ⚠ 一切"没跑成"的路径都**显式落 SKIPPED / REJECT / UNPARSEABLE**，**不静默跳过**
+    #   —— 否则"卡面想盲判、实际没跑"这件事**没人知道**（O-89 同族：静默 = 假绿）。
+    $blindSection = $null
+    if ([string]$fm['review-blind'] -eq 'true') {
+        $ab = Get-AssertionBlock $productText
+        if (-not $ab['ok']) {
+            Write-Host ("BLIND_SKIPPED: " + [string]$ab['reason'] + "（**不静默**：卡面要求了盲判但没跑成）")
+            $blindSection = [ordered]@{ status = 'SKIPPED'; reason = [string]$ab['reason'] }
+        }
+        else {
+            $blindPrompt = Build-BlindPrompt -fm $fm -assertions $ab['assertions'] -runId $runName
+            $brp = Resolve-ReviewPrompt -prompt $blindPrompt -sensitivity $sens
+            if ($brp['action'] -eq 'reject') {
+                Write-Host ("BLIND_REJECT: " + [string]$brp['reason'] + "（与主判同规矩：命中即拦截，不做抹除）")
+                $blindSection = [ordered]@{ status = 'REJECT'; reason = [string]$brp['reason'] }
+            }
+            else {
+                $braw = $null
+                try { $braw = Invoke-Judge -judge $judge -prompt $brp['prompt'] -timeoutS $rt }
+                catch { $braw = $_.Exception.Message }
+                $bobj = ConvertFrom-JudgeOutput $braw
+                if (-not $bobj) {
+                    Write-Host "BLIND_UNPARSEABLE: 盲判回复不可解析 ⇒ 记 UNPARSEABLE（**不算通过**）"
+                    $blindSection = [ordered]@{ status = 'UNPARSEABLE'; reason = '盲判回复不可解析' }
+                }
+                else {
+                    $cmp = @(Compare-AssertionChains -claimed $ab['assertions'] -blind $bobj.verdicts)
+                    $need = @($cmp | Where-Object { $_.state -in @('CONFLICT', 'STEP_GAP_OPEN', 'NO_PROBE', 'UNCERTAIN') }).Count
+                    $blindSection = [ordered]@{
+                        status = 'DONE'; n = @($ab['assertions']).Count
+                        needs_arbitration = $need
+                        # ⚠ 状态词义见 `Compare-AssertionChains`：**机器不产出 CLOSED**（不静默降级）
+                        verdicts = $cmp
+                    }
+                    Write-Host ("BLIND_DONE: n=" + @($ab['assertions']).Count + " 需仲裁=" + $need +
+                                "（states: " + ((@($cmp | ForEach-Object { $_.state }) | Sort-Object -Unique) -join ',') + "）")
+                }
+            }
+        }
+    }
+
     $review = [ordered]@{
         task = $fm['task']; run_id = $runName; card = $card
         output = [ordered]@{
@@ -4500,6 +4662,9 @@ function Invoke-Review {
             call_code = $callCode; retries = $retries
         }
     }
+    # O-92: `blind` 段**仅在跑过时才加** ⇒ 关掉开关时 `review.json` 的 schema **与本批之前完全一致**
+    #   （存量 review.json 不受影响；也避免给所有卡加一个恒为 null 的字段制造噪音）。
+    if ($blindSection) { $review['blind'] = $blindSection }
     $review | ConvertTo-Json -Depth 8 | Set-Content $reviewPath -Encoding utf8
     Write-Host "REVIEW_WRITTEN(advisory) $reviewPath"
     Write-Host ("REVIEW score=" + $review.output.score + " pass=" + $review.output.pass + " judge=" + $judge['id'] + " elapsed_s=" + $elapsed)

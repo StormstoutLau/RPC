@@ -3436,3 +3436,54 @@ U4 spec 原写"Open_Data / Auto_Prover 的**存储不在本机**（`*.duckdb` / 
 而 `git diff --stat` 为空）。⇒ 按 `git show HEAD:<path>` **逐字节恢复**。
 ★ 教训：**"只读探针"若用 write 回写同一个文件，它就不再是只读的** —— 改回来 ≠ 没改过（行尾/编码会留下痕迹）。
 ⇒ 先验红应优先用"**改内存里的字符串 / 临时副本**"，而不是改写受版本控制的真文件。
+
+---
+
+## 49. O-92 落地：**双盲重推导**（卡面 `review-blind: true`）
+
+用户指令 = "好的，执行吧"（接"剩下只有 O-92 … 要动时说一声"）。O-92 是**唯一能拦形态 III** 的那一格。
+
+### 49.1 为什么必须做（结构原因，不是"做得不够好"）
+
+主评审 `judge-prompt.tmpl` 里有 **`{{PRODUCT}}`** ⇒ judge 看得到原产物**和**原卡
+（`Build-JudgePrompt -fm $fm -product $productText … -cardPath $card`）。
+按参考框架 `FWK-ASSERTION §4.3`："auditor **不得接触原推理文本**，否则**锚定效应会把跳步复制一遍**"。
+⇒ 形态 III（**把两件事说成一件**，本仓头号形态）**拦不住"要求给链接"**（两处引用都真且对，错在综合跳步）
+—— 因为**同一个跳步会被审查者再走一遍**。
+
+### 49.2 落了什么
+
+| 件 | 内容 |
+|---|---|
+| 卡面开关 | `review-blind: true`（**默认 false ⇒ 行为不变**；与 O-90 同法：**卡面开关**，不动顶层参数） |
+| 断言登记块 | 产物里的 ```assertions 机读块：`id / conclusion / op / chain / sources`；`op` 是**六项封闭枚举** |
+| 盲判模板 | 新件 `review/judge-prompt-blind.tmpl` —— **刻意不含 `{{PRODUCT}}`**，也不含原链 |
+| 三个纯函数 | `Get-AssertionBlock`（取命题，fail-closed）· `Build-BlindPrompt`（装配）· `Compare-AssertionChains`（机械对照） |
+| 状态 | `MATCH`（结论一致 **∧ 步数相同**）· `STEP_GAP_OPEN` · `CONFLICT` · `UNCERTAIN` · `NO_PROBE` |
+| 落盘 | `review.json` 的 `blind` 段（**仅在跑过时才加** ⇒ 关掉开关时 schema 与之前完全一致） |
+| 测试 | `_fm_golden_test.ps1` **307 → 331**（含泄漏护栏 / 五态 / 白名单行为级 / 接线）；`ps1-golden` 已在 quick 门禁 ⇒ **无需新断言** |
+
+### 49.3 ★★★ 本批抓到**三个** PowerShell 陷阱（都由夹具咬出来）
+
+| # | 陷阱 | 症状 | 危害 |
+|---|---|---|---|
+| ① | **`@($json \| ConvertFrom-Json)`** —— PS 5.1 把顶层数组当**一个对象**发出（`WriteObject(obj,false)`，不枚举） | `@(…)` 只收到 **1 个元素（=整个数组）**；循环里 `$a` 就是整个数组 ⇒ `$a.op` 走**成员枚举**返回 `"counting equivalence"` | **1 条能过、2 条必红**（"看起来在工作"的解析器）。⚠ 该次 **fail-closed**，未造假绿 |
+| ② | **`(fn)[0].state`** —— 函数 `return` 的**单元素数组被解包**成 hashtable，于是 `[0]` 是**键查找**（不是下标） | 得 `$null` ⇒ `$null.state -eq 'MATCH'` 为假 | **假红**（判据没坏、测试写法坏）⇒ 若发生在真判据里就是"判据判了别的东西" |
+| ③ | **`$PSScriptRoot` 在 `Invoke-Expression` 的子作用域里取不到** | 提取 `$Script:REVIEW_DIR = Join-Path $PSScriptRoot 'review'` 抛 `Cannot bind argument to parameter 'Path' because it is an empty string` | ⚠ 报错**指向 `Invoke-Expression` 那一行**（不指向赋值本身）⇒ 极易误判成"AST 没找到"。实测对照：**直接求值正常、包进 `Invoke-Expression` 即抛错** |
+
+★ 三个都属于同一族：**"看起来在工作"**。② 尤其值得记 —— 它是**假红**，而假红的结局是"被人加进例外名单"（判据失效）。
+★ 定位手法（值得沿用）：**把观测值打进断言名**（`[ok=… reason=…]`、`[state0=…]`）——
+①的根因就是这样一眼看到的（`op='counting equivalence'`），否则要再复现一轮。
+
+### 49.4 两条刻意的边界
+
+- ⚠⚠ **机器不产出 `STEP_GAP_CLOSED`** —— "差额步已被一手证据闭合"**无法机器判定** ⇒ 一律 `STEP_GAP_OPEN`，
+  留给人工/第二视角标注。把它悄悄写成 CLOSED = **静默降级**。★ 夹具有一条**正向断言**专钉此点
+  （既断言状态集里不出现它，也断言**源码里没把它写成产物**）。
+- ★ **不静默**：三条"没跑成"路径都显式落 `SKIPPED` / `REJECT` / `UNPARSEABLE`。否则"卡面要求了盲判、实际没跑"
+  这件事没人知道 —— **O-89 同族（静默 = 假绿）**。
+
+### 49.5 ⚠ 未实测（如实记）
+
+**盲判的站上真调用（`Invoke-Judge` 出网）没有真跑过** —— 离线夹具只能覆盖纯函数与接线（本机无 judge）。
+⇒ 记入待实测，**不声称已端到端验证**。此外 `op` 枚举借自参考框架，**未针对本仓语料校准**（首次真跑后才谈得上）。
