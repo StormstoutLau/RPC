@@ -4560,10 +4560,13 @@ function Invoke-BatchTask {
                 # ★★ 真值源 = **`.agent-run.json`（有点前缀！）** —— 本轮曾误写成 `run.json` ⇒ 该文件**永不存在**
                 #   ⇒ `Test-Path` 恒假 ⇒ **静默回落到日志里的 rc**，而我对外声称"判据以 runDir 为真值"。
                 #   实测（2026-09-26 检查时发现）: 三卡 runDir 里都只有 `.agent-run.json`（含 exit_code/status/**accept**）。
-                #   ⚠ 回落到日志时**必须显式标 `(log)`** —— 否则就是"看起来更硬的真值源其实没读到"。
+                #   ⚠ 回落到日志时**必须显式标 `src=log`** —— 否则就是"看起来更硬的真值源其实没读到"。
+                # ★ 2026-09-26 就地补一刀：读的路径修好了，但**对外标签还写着 `run.json`** ⇒
+                #   汇总里打 `src=run.json` 而实际读的是 `.agent-run.json` = **标签在说谎**
+                #   （O-81 的同族，只差一层：上次错的是"读哪"，这次错的是"说读了哪"）。
                 $rj = Join-Path $runDir '.agent-run.json'
                 if (Test-Path $rj) {
-                    try { $exitReal = [int]((Get-Content $rj -Raw | ConvertFrom-Json).exit_code); $exitSrc = 'run.json' } catch { }
+                    try { $exitReal = [int]((Get-Content $rj -Raw | ConvertFrom-Json).exit_code); $exitSrc = '.agent-run.json' } catch { }
                 }
             }
             $stamp = ''
