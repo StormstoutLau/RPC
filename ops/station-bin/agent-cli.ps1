@@ -829,6 +829,105 @@ function Add-LedgerLine {
     return $false
 }
 
+# ── O-90（2026-09-26）：**流程前置** —— 门禁未过 ⇒ 拒绝派发 ─────────────────────
+# 为什么要有：派发前的既有前置**全是资源 / 安全层** —— `Invoke-StationReady` / `Invoke-SlotGate` /
+#   `Assert-AgentOutWritable` / `Enter-WorkspaceLease` / `Test-CardSafetyDeclared`
+#   ⇒ **没有任何机制**表达"**这道门禁没过，就不要启动这次派发**"。
+#
+# ★ 与参考实现（Spec_Runner 的 `gate` + `--require-gate`）**两处刻意不同**：
+#   ① **当场跑，不查历史记录** —— Spec_Runner 把 verdict 落进事件流、`--require-gate` 查那条记录；
+#      那样**必须**额外解决"**上次过了 ≠ 现在过了**"（其 README 未提绑定）。
+#      我们改成**在派发前当场执行门禁** ⇒ 那个问题**结构性消失**（跑的就是此刻的树）。
+#      代价：每次派发都要多付一次门禁（本仓 `rpc-check` 约 15–30 s，远小于一次 run）。
+#   ② **verdict 不只看 exit code** —— 本仓 O-89 实测过 `exit 0 而一条断言都没跑`（门禁仍报 PASS）
+#      ⇒ 本实现**同时要求"输出里有一个汇总行"**。
+#      ⚠ 射程必须说清：它只保证"**有收尾**"，**不保证"判了该判的"** —— 后者本机制解决不了。
+#
+# 卡如何要求：front-matter `require-gate: <名>`（不写 = 不要求；见 `Get-FrontMatter` 白名单）。
+# 门禁名 → 命令的**单一真值**下面这张表（未登记 ⇒ fail-closed 拒绝，不猜）。
+$Script:GATE_TABLE = [ordered]@{
+    'rpc-check' = 'py ops/rpc_check.py'
+    'py-tests'  = 'py tests/run_py_tests.py'
+}
+# 汇总行形态。⚠ 只收**明确的收尾行**，不用 `PASS\b` 这种宽模式 —— 否则"看起来更硬的判据其实没读到"。
+$Script:GATE_SUMMARY_RE = '^\s*(RESULT:|结论:|结果:|ALL PASS|ACCEPT_OK=)'
+# **进程内**复用表（key = 门禁名）。为什么需要：批量派发时 N 张卡可能声明同一道门禁，
+#   不缓存就会跑 N 次（本仓 `rpc-check` 约 15–30 s ⇒ 5 张卡 ≈ 2.5 min 白付）。
+# ⚠ 它的**假设**必须写明：**同一进程内的解析期里，被门禁判定的那棵树没有变**。
+#   该假设在"一次 batch 解析循环（秒级）"内成立；跨进程**不复用**（每次调用都是新进程）⇒ 不掩盖漂移。
+$Script:GATE_CACHE = @{}
+
+
+function Test-GateSummaryOk {
+    # **纯函数**（离线夹具可测）：门禁输出里**有没有一个汇总行**。
+    # 返回 @{ ok; line; reason }。⚠ 它判的是"**有没有收尾**"，不是"断言是否真的全过"。
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return @{ ok = $false; line = ''; reason = '输出为空' } }
+    $lines = @($Text -split "`r?`n" | Where-Object { $_.Trim() -ne '' })
+    if ($lines.Count -eq 0) { return @{ ok = $false; line = ''; reason = '输出只有空白' } }
+    $hit = @($lines | Where-Object { $_ -match $Script:GATE_SUMMARY_RE })
+    if ($hit.Count -eq 0) {
+        return @{ ok = $false; line = ([string]$lines[-1]).Trim()
+                  reason = '无汇总行（exit 0 也可能一条断言都没跑 —— O-89）' }
+    }
+    return @{ ok = $true; line = ([string]$hit[-1]).Trim(); reason = '' }
+}
+
+
+function Resolve-GateCommand {
+    # **纯函数**：门禁名 → 命令。未登记 ⇒ `$null`（**fail-closed，不猜**）。
+    param([string]$Name)
+    if (-not $Name) { return $null }
+    if ($Script:GATE_TABLE.Contains($Name)) { return [string]$Script:GATE_TABLE[$Name] }
+    return $null
+}
+
+
+function Invoke-GateCheck {
+    # 流程前置的**执行壳**（有副作用 ⇒ 不进离线夹具；判据本体 = `Test-GateSummaryOk` + exit）。
+    # 返回 $true/$false；**调用方据此拒绝派发**（`return 3`）。
+    param([string]$Name, [string]$Card)
+    if ($Script:GATE_CACHE.ContainsKey($Name)) {
+        $c = $Script:GATE_CACHE[$Name]
+        Write-Host "GATE_REUSE: $Name · **本次进程内已跑过**（假设：解析期内树未变）· 汇总=$($c.line)"
+        return [bool]$c.ok
+    }
+    $cmd = Resolve-GateCommand $Name
+    if (-not $cmd) {
+        Write-Host "GATE_BLOCK: 未登记的门禁名 '$Name' ⇒ fail-closed 拒绝派发"
+        Write-Host "  已登记: $((@($Script:GATE_TABLE.Keys)) -join ' | ')  （新增门禁请登记进 `$Script:GATE_TABLE`）"
+        $Script:GATE_CACHE[$Name] = @{ ok = $false; line = '未登记' }
+        return $false
+    }
+    Write-Host "GATE_RUN: $Name -> $cmd   (cwd=$Script:REPO_ROOT · card=$Card)"
+    $out = ''; $code = 0
+    Push-Location $Script:REPO_ROOT
+    try {
+        $out = (Invoke-Expression $cmd 2>&1 | Out-String)
+        # 原生命令才会设 $LASTEXITCODE；纯 cmdlet ⇒ 保持 $null（视为 0，不当成失败）
+        $code = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+    }
+    catch { $out = "$out`n$($_.Exception.Message)"; $code = 1 }
+    finally { Pop-Location }
+    $sum = Test-GateSummaryOk $out
+    if ($code -ne 0) {
+        Write-Host "GATE_BLOCK: `$name='$Name' exit=$code ≠ 0 ⇒ 拒绝派发（流程前置）"
+        Write-Host "  末行: $($sum.line)"
+        $Script:GATE_CACHE[$Name] = @{ ok = $false; line = $sum.line }
+        return $false
+    }
+    if (-not $sum.ok) {
+        Write-Host "GATE_BLOCK: `$name='$Name' exit=0 但 $($sum.reason) ⇒ 拒绝派发（流程前置）"
+        Write-Host "  末行: $($sum.line)"
+        $Script:GATE_CACHE[$Name] = @{ ok = $false; line = $sum.line }
+        return $false
+    }
+    Write-Host "GATE_PASS: $Name · 汇总=$($sum.line)"
+    $Script:GATE_CACHE[$Name] = @{ ok = $true; line = $sum.line }
+    return $true
+}
+
+
 function Assert-AgentOutWritable {
     # TODO-2 pre-flight (2026-09-07): BEFORE any remote sync/run, verify the console agent-out
     # root is writable from the injected sandbox whitelist. A fresh host session may NOT include
@@ -1034,6 +1133,11 @@ function Get-FrontMatter {
     #   本阶段只做"声明 + 落 run.json"(原文照收, 不规范化 —— ADR-0005 D2 纪律); 复验侧
     #   由复验器按 run.json 声明的 subjects 走 recipe v2 (recipe 已按条目分派, 无需重建链)。
     $h['evidence-manifest'] = @{ version = ''; subjects = @() }
+    # O-90 (2026-09-26): require-gate —— **流程前置**：卡声明"派发前哪道门禁必须过"。
+    #   默认空 = 不要求（向后兼容：存量卡一个都不带它 ⇒ 行为不变）。
+    #   ⚠ 必须登记进本白名单 —— 本函数是**白名单解析**（未知键被静默丢弃），
+    #     漏登记会让 `require-gate:` **看起来写了、其实没人读**（= 假防线，O-81 同族）。
+    $h['require-gate'] = ''
     $inFreq = $false; $bodyRead = $false; $curKey = ''
     $bodyLines = @()
     $lines = [System.IO.File]::ReadAllLines($Path, [System.Text.UTF8Encoding]::new($false))
@@ -1663,6 +1767,15 @@ function Invoke-Task {
     #   形状守卫: 环境层会往管道吐 $null 使返回值变数组(缺口 5 实测教训) ⇒ 退化时取首元素。
     $cardId = Get-CardIdentity $card
     if ($cardId -is [array]) { $cardId = $cardId[0] }
+    # O-90（2026-09-26）**流程前置**：卡可声明 `require-gate: <名>` ⇒ 派发前**当场**跑该门禁，
+    #   未过即拒（rc=3）。位置刻意选在**资源前置之前** —— 门禁是**最便宜**的一道（秒级~几十秒），
+    #   而 lock/ssh/slot 都有远端副作用；先跑贵的等于把便宜信号埋在后面。
+    #   ⚠ 射程：它只保证"门禁命令**此刻**在本仓跑过且 exit=0 且有汇总行"，
+    #     **不保证**"这张卡的产物会是对的"（那是 ACCEPT / judge 的事）。
+    $reqGate = [string]$fm['require-gate']
+    if ($reqGate) {
+        if (-not (Invoke-GateCheck -Name $reqGate -Card $card)) { return 3 }   # 3 = GATE_BLOCK（新增，O-90）
+    }
     $m = if ($model) { $model } else { if ($fm['model']) { $fm['model'] } else { '' } }
     $sens = if ($sensitive) { $sensitive } else { if ($fm['sensitivity']) { $fm['sensitivity'] } else { 'public' } }
     # O-15/AUDIT (2026-09-21 实弹实测修正): 自动 fallback 的**入参必须在此处快照** ——
@@ -4450,6 +4563,15 @@ function Invoke-BatchTask {
         $abs = ''; $absAt = ''
         if (-not $err) { $abs = (Resolve-Path -LiteralPath $card).Path }
         if ($at -and (Test-Path $at)) { $absAt = (Resolve-Path -LiteralPath $at).Path }
+        # O-90（2026-09-26）**流程前置**（批量侧）：逐卡看它自己的 `require-gate`。
+        #   ⚠ 与既有 `CARD_NOT_FOUND` / `ATTACH_NOT_FOUND` 同规矩 = **单项 fail-fast**
+        #     （该行标错，**不整批崩**）—— 批量的语义是"能跑的照跑，跑不了的标出来"。
+        #   ⚠ 同一进程内**同门禁名只跑一次**（`Invoke-GateCheck` 内置复用表）⇒ N 张卡不会跑 N 次。
+        if (-not $err -and $abs) {
+            $fmB = Get-FrontMatter $abs
+            $rgB = [string]$fmB['require-gate']
+            if ($rgB -and -not (Invoke-GateCheck -Name $rgB -Card $abs)) { $err = 'GATE_BLOCK' }
+        }
         $items += [pscustomobject]@{ line = $ln; card = $card; cardAbs = $abs; attach = $at; attachAbs = $absAt; station = $st; model = $md; err = $err; station_used = ''; host = '' }
     }
     if ($items.Count -eq 0) { Write-Host "BATCH_ABORT: 清单里没有可解析的行"; return 2 }
