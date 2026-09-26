@@ -1214,6 +1214,240 @@ def decide_invalidation(changed_ids=None, affected=None, affected_is_closure=Fal
     return "incremental", None, "四条规则全过：可安全增量"
 
 
+# ── D7-P1-5 (2026-09-26)：U-5 信任基座四问 V-1~V-4 + 晋升门 schema ────────────
+# 两部分：
+#   ① **四问各一条可机判判据**（`v1_definition_correspondence` / `v2_bridge_completeness` /
+#      `v3_axiom_whitelist` / `v4_build_reproducible`）—— 纯函数，**不是** `CHECKS` 项
+#      （本仓没有形式化信任基座的对象可判：**V-2 真空** · V-1/V-4 各仅 1 项目 · V-3 仅关键词级，见 D-37）；
+#   ② **晋升门 schema**（`inventory/promotion.yaml`）—— ★ **这一半是 `CHECKS` 项**（`promotion`），
+#      因为**被判的对象真实存在**（schema 自身 + 三处实现的映射）⇒ **不是空判**。
+#
+# ★ 已裁（台账 D-38）：把三处独立发明的晋升门**统一为一个 schema**（判据 = 成功率 / 复发次数 /
+#   验证状态，**并存于同一 schema 的不同字段**），**不许发明第四种**。
+#   ⇒ 本断言的**核心规则是"映射闭包"**：schema 里**不许有孤儿字段 / 孤儿判据** ——
+#     一个没被任何一处实现用到的字段，就是**变相发明的第四种**。
+# ★ 依据：合并稿 §6.3（V-1~V-4 规格书）· §11.5（三处晋升门实测）· §11.7（不得自审只能靠结构）
+#   · 台账 D-37（四问列为验收项）· D-38（统一 schema）。
+PROMOTION_INV = ROOT / "inventory" / "promotion.yaml"
+PROMO_OPS = (">=", "<=", "==", ">", "<", "!=")
+PROMO_POLICIES = ("lru", "fifo")
+# D-38 的落地：这三种判据**必须并存**（各自来自一处真实实现）
+PROMO_REQUIRED_CRITERIA = ("success_rate", "recurrence", "verified")
+
+
+def validate_promotion(doc):
+    """**纯函数** → `(bad, notes)`：晋升门 schema 的自洽 + **映射闭包**。"""
+    bad, notes = [], []
+    if not isinstance(doc, dict):
+        return ["promotion.yaml 顶层不是映射（结构改了？）"], notes
+
+    fields = doc.get("fields") or []
+    fids = [f.get("id") for f in fields if isinstance(f, dict)]
+    if not fields:
+        bad.append("`fields` 为空 ⇒ 判据没有字段可引用")
+    if len(fids) != len(set(fids)):
+        bad.append(f"`fields` 的 id 有重复: {fids}")
+    for f in fields:
+        if not (isinstance(f, dict) and f.get("id") and f.get("type")):
+            bad.append(f"`fields` 有条目缺 id/type: {f!r}")
+    ftype = {f["id"]: f.get("type") for f in fields if isinstance(f, dict) and f.get("id")}
+
+    gate = doc.get("gate") or {}
+    req = gate.get("required") or []
+    if not req:
+        bad.append("`gate.required` 为空 ⇒ 没有“必填”就没有门（Spec_Workflow 的『缺锚点不得登记』落不下）")
+    for r in req:
+        if r not in fids:
+            bad.append(f"`gate.required` 的 {r!r} 不在 `fields` 里")
+
+    cap = gate.get("capacity") or {}
+    if not cap:
+        bad.append("`gate.capacity` 缺失 ⇒ 容量件套没落地（Textbook `FixMemory` 的三件套之一）")
+    else:
+        if cap.get("field") not in fids:
+            bad.append(f"`gate.capacity.field`={cap.get('field')!r} 不在 `fields` 里")
+        if not isinstance(cap.get("max"), int) or cap.get("max", 0) <= 0:
+            bad.append(f"`gate.capacity.max` 必须是正整数: {cap.get('max')!r}")
+        if cap.get("policy") not in PROMO_POLICIES:
+            bad.append(f"`gate.capacity.policy`={cap.get('policy')!r} 不在封闭集 {PROMO_POLICIES}")
+
+    crit = gate.get("criteria") or []
+    cids = [c.get("id") for c in crit if isinstance(c, dict)]
+    if not crit:
+        bad.append("`gate.criteria` 为空 ⇒ 没有任何晋升判据")
+    if len(cids) != len(set(cids)):
+        bad.append(f"`gate.criteria` 的 id 有重复: {cids}")
+    for c in crit:
+        if not isinstance(c, dict):
+            bad.append(f"`gate.criteria` 有条目不是映射: {c!r}")
+            continue
+        cf, ref = c.get("field"), c.get("ref")
+        if cf not in fids:
+            bad.append(f"`criteria[{c.get('id')}].field`={cf!r} 不在 `fields` 里")
+        if c.get("op") not in PROMO_OPS:
+            bad.append(f"`criteria[{c.get('id')}].op`={c.get('op')!r} 不在封闭集 {PROMO_OPS}")
+        if isinstance(ref, str) and ref.startswith("$"):
+            tgt = ref[1:]
+            if tgt not in fids:
+                bad.append(f"`criteria[{c.get('id')}].ref` 引用了不存在的字段 {tgt!r}")
+            elif cf in ftype and ftype.get(tgt) != ftype.get(cf):
+                bad.append(f"`criteria[{c.get('id')}]` 的类型不匹配: {cf}({ftype.get(cf)}) "
+                           f"{c.get('op')} {tgt}({ftype.get(tgt)})")
+    miss_crit = [x for x in PROMO_REQUIRED_CRITERIA if x not in cids]
+    if miss_crit:
+        bad.append(f"**D-38 要求三种判据并存**，但缺 {miss_crit} ⇒ 那等于**发明第四种**或丢掉一种")
+
+    struct = gate.get("structure") or []
+    if not struct:
+        bad.append("`gate.structure` 为空 ⇒ §11.7『不得自审只能靠结构』没落地")
+
+    # ── ★ 映射闭包（本断言的核心：不许孤儿字段 / 孤儿判据）───────────────
+    maps = doc.get("mapping_closure") or []
+    if not maps:
+        bad.append("`mapping_closure` 为空 ⇒ D-38『schema 须能被三处各自映射』**没有被判**")
+    used_fields, used_crit = set(), set()
+    for m in maps:
+        if not isinstance(m, dict):
+            bad.append(f"`mapping_closure` 有条目不是映射: {m!r}")
+            continue
+        mid = m.get("id")
+        u = m.get("uses") or []
+        cu = m.get("criteria_used") or []
+        if not u:
+            bad.append(f"`mapping_closure[{mid}]` 没声明 `uses`")
+        if not cu:
+            bad.append(f"`mapping_closure[{mid}]` 没声明 `criteria_used`（映射了却不用任何判据？）")
+        for x in u:
+            if x not in fids:
+                bad.append(f"`mapping_closure[{mid}].uses` 含**不存在的字段** {x!r}")
+        for x in cu:
+            if x not in cids:
+                bad.append(f"`mapping_closure[{mid}].criteria_used` 含**不存在的判据** {x!r}")
+        used_fields |= set(u)
+        used_crit |= set(cu)
+    orphan_f = [f for f in fids if f not in used_fields]
+    if orphan_f:
+        bad.append(f"**孤儿字段** {orphan_f} ⇒ 没有任何一处实现用到它（= 变相发明第四种，D-38 不许）")
+    orphan_c = [c for c in cids if c not in used_crit]
+    if orphan_c:
+        bad.append(f"**孤儿判据** {orphan_c} ⇒ 没有一处实现用它")
+    notes.append(f"字段 {len(fids)} · 判据 {len(cids)} · 三处映射 {len(maps)}")
+
+    if "entries" not in doc:
+        bad.append("**缺 `entries` 字段** ⇒ 无法区分「没有条目」与「忘了写」")
+    else:
+        ents = doc["entries"] or []
+        if not isinstance(ents, list):
+            bad.append(f"`entries` 不是列表（{type(ents).__name__}）")
+        elif not ents and not str(doc.get("empty_reason") or "").strip():
+            bad.append("`entries` 为空**且没有 `empty_reason`** ⇒ 空得没说法")
+        elif not ents:
+            notes.append("实例 0 条 (空已显式报出, 不静默通过)")
+
+    if not (doc.get("unverified") or []):
+        bad.append("`unverified` 为空 ⇒ 本 schema 里**新设**的东西没被如实登记（新设项 = 最像“第四种”的地方）")
+    return bad, notes
+
+
+def check_promotion(ctx):
+    """D7-P1-5: U-5 晋升门 schema（`inventory/promotion.yaml`）。"""
+    try:
+        import yaml
+    except Exception:
+        return "WARN", "缺 pyyaml, 跳过 promotion 晋升门断言", []
+    if not PROMOTION_INV.exists():
+        return "FAIL", "inventory/promotion.yaml 缺失（本断言的登记依据）", []
+    try:
+        doc = yaml.safe_load(PROMOTION_INV.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        return "FAIL", f"inventory/promotion.yaml 解析失败: {type(e).__name__}: {e}", []
+    bad, notes = validate_promotion(doc)
+    return ("FAIL" if bad else "PASS"), " · ".join(notes), bad
+
+
+# ── U-5 的**四问判据**（V-1~V-4）—— 判据库，不是 CHECKS 项 ──────────────────
+# ⚠ 不判本仓状态：**V-2 真空 · V-1/V-4 各仅 1 项目 · V-3 仅关键词级**（D-37 的实况）
+#   ⇒ 本仓没有对象 ⇒ 只被测试驱动（与 U-4 的 `decide_invalidation` 同形）。
+# ★ 四条判据各自对上一处"最接近"的实现（§6.3），并把它从"人看"升为"机判"——
+#   尤其 V-3：原文要求「从**关键词级**升为**白名单级**」，本判据就是白名单比对。
+V3_WHITELIST_DEFAULT = ("propext", "Classical.choice", "Quot.sound")
+
+
+def v3_axiom_whitelist(axioms, whitelist=None):
+    """V-3 信任基座：**公理集必须 ⊆ 白名单**（白名单为空 ⇒ fail，不许"空白名单全过"）。
+
+    ⚠ **`None` 与 `[]` 必须分开**（这是本函数第一版的自伤，被测试用例抓出来的）：
+       `whitelist=[]` 是"**显式给了空白名单**"，**绝不许**静默回落到默认值 ——
+       否则"白名单为空 ⇒ fail"这段**永远到不了** = 判据恒真的近亲。
+    """
+    wl = V3_WHITELIST_DEFAULT if whitelist is None else tuple(whitelist)
+    if not wl:
+        return False, ["白名单为空 ⇒ 判据恒真（本仓头号形态）⇒ 必须显式给出白名单"]
+    extra = sorted(set(axioms or []) - set(wl))
+    if extra:
+        return False, [f"白名单外公理 {extra}（V-3 要求白名单级，不许关键词级放过）"]
+    return True, []
+
+
+def v4_build_reproducible(deps, ledger=None):
+    """V-4 构建可复现性：**每个依赖都钉到 rev**，且 ledger 记版本与 input-hash。"""
+    bad = []
+    for d in (deps or []):
+        if not isinstance(d, dict) or not d.get("name"):
+            bad.append(f"依赖条目缺 name: {d!r}")
+        elif not d.get("rev"):
+            bad.append(f"依赖 {d.get('name')!r} **未钉 rev** ⇒ 第三方无法复现（V-4）")
+    if not (ledger or {}).get("tool_versions"):
+        bad.append("ledger 缺 `tool_versions`（构建工具/库版本）⇒ V-4 要求的可追溯缺失")
+    if not (ledger or {}).get("input_hash"):
+        bad.append("ledger 缺 `input_hash` ⇒ 无法判定“这份产物对应哪次输入”")
+    return (not bad), bad
+
+
+def v1_definition_correspondence(rows):
+    """V-1 定义对应性：**官方陈述 ↔ 形式化定义**逐条对应，且每条**带锚点**。
+
+    ⚠ 判据只能判"**对应关系被逐条写明且可追溯**"；"对应得对不对"仍需人 ——
+       这条边界必须写进结论（不许把"有对照表"说成"定义正确"）。
+    """
+    bad = []
+    if not rows:
+        bad.append("对应表为空 ⇒ 无法判定定义对应性（形式化了别的东西也算通过）")
+    for i, r in enumerate(rows or [], 1):
+        if not isinstance(r, dict):
+            bad.append(f"对应表第 {i} 行不是映射")
+            continue
+        miss = [k for k in ("claim", "formal", "anchor") if not r.get(k)]
+        if miss:
+            bad.append(f"对应表第 {i} 行缺 {miss} ⇒ 该条对应**不可追溯**")
+    return (not bad), bad
+
+
+def v2_bridge_completeness(steps):
+    """V-2 桥接完整性：正文 → Lean 定理之间**每一跳都有记录**，且**首尾连续**（无缺失的一跳）。
+
+    ⚠ D-37 实测 **V-2 真空**（九项目**没有一个**做这件事）⇒ 本判据是**新造的形式**，
+       不是对既有实现的机判化（这一条必须与 V-1/V-3/V-4 区别对待）。
+    """
+    bad = []
+    if not steps:
+        bad.append("跳表为空 ⇒ 桥接完整性无从判定（而 V-2 实测是**真空**）")
+        return False, bad
+    for i, s in enumerate(steps, 1):
+        if not isinstance(s, dict):
+            bad.append(f"跳表第 {i} 条不是映射")
+            continue
+        miss = [k for k in ("from", "to", "evidence") if not s.get(k)]
+        if miss:
+            bad.append(f"跳表第 {i} 条缺 {miss} ⇒ 这一跳**没有记录**")
+    for i in range(1, len(steps)):
+        a, b = steps[i - 1], steps[i]
+        if isinstance(a, dict) and isinstance(b, dict) and a.get("to") and b.get("from") \
+                and a["to"] != b["from"]:
+            bad.append(f"跳表**断链**：第 {i} 条到 {a['to']!r}，第 {i+1} 条从 {b['from']!r} 起")
+    return (not bad), bad
+
+
 # ── O-66 (2026-09-25)：卡面 `input-provenance` 义务（`CROSS-PROJECT-WORK-STANDARD §4` 的**机判**）──
 # 义务原文：卡声明 `public`/`sanitized` **且带输入** ⇒ ① `input-provenance` 必填（逐项本仓相对路径）
 #   ② 每项须在 `sensitivity.yaml` 有 `tier` ③ 卡的 `sensitivity` **不得宽于**该项的 `tier`。
@@ -4148,6 +4382,15 @@ CHECKS = [
             "依据 D-26「禁止静默 skip」；「丢弃 / 降级」是**消费方**那一侧的 H-3 规则）；"
             "④ `(src,dst,kind)` 不得重复；⑤ **`edges` 为空必须给 `empty_reason`** —— "
             "空 ≠ 没事，门禁会把「0 条」显式报出来"},
+    # D7-P1-5 (2026-09-26): U-5 晋升门 schema —— 判的是**schema 自身 + 三处实现的映射**（对象真实存在）。
+    {"id": "promotion", "title": "U-5 晋升门 schema", "fn": check_promotion, "quick": True,
+     "fix": "D7-P1-5: `inventory/promotion.yaml` 是共享记忆**准入形状**的单一真值。"
+            "① `gate.required` / `gate.capacity`（field+max+policy）/ `gate.criteria` / `gate.structure` 四件都要有；"
+            "② 判据的 `field`/`ref` 只能引用 `fields` 里的字段，`op`/`policy` 是封闭枚举，`$ref` 类型须与 field 一致；"
+            "★ ③ **D-38 要求三种判据并存**（`success_rate` / `recurrence` / `verified`）—— 缺一即『发明第四种』；"
+            "★ ④ **映射闭包**：`mapping_closure` 里三处实现的 `uses`/`criteria_used` 必须覆盖 schema 的**全部**"
+            "字段与判据 —— **出现孤儿字段/孤儿判据 = 有一处没人用，就是变相发明第四种**；"
+            "⑤ `entries` 为空必须给 `empty_reason`；⑥ `unverified` 必须登记本 schema 里**新设**的项"},
     {"id": "facade", "title": "门面符号可达性", "fn": check_facade, "quick": True,
      "fix": "P1-3: `cluster.py` 是统一门面, `cluster_web.py` 以 `import cluster` 复用其符号 —— "
             "缺符号即 FAIL 并点名『哪个符号·被谁引用』; 修法: 在 cluster.py 重导出(或改回引用处)"},
