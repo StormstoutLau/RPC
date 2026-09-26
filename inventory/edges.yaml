@@ -1,13 +1,30 @@
+# u1:sha256:16
 # U-3 依赖边清单（D7-P1-3）
 #
 # 形状（字段 / 枚举 / 无效判定）= `spec/d6-agent-standard/U3-EDGE-FORMAT.md`（单一真值，此处不复制规则）。
 # 本文件只装**实例**。判据：门禁 `edges`。
 #
-# ⚠ 为什么现在是空的（**不是"没事"**）：见文末 `empty_reason`。
+# ⚠ **方向约定**（本条是第一条实例，把隐含约定写明，免得下游各自理解）：
+#   `src` **依赖** `dst`（即 src 的正确性以 dst 为准）。依据 = U3 spec §2 的 kind 释义措辞
+#   （如 `vendored_module` = "vendor 了**后者**的一个模块"）。
+#   ★ 但该约定**尚未写进 U3 schema** —— 已作为缺口登记为台账 **O-83**（第一条实例只能靠措辞推断）。
+#
+# ⚠ 为什么现在**不是空的**了（2026-09-26）：原 `empty_reason` 写的解锁条件是
+#   "U-1 在至少一个项目上落地（产出真实的 namespace/identifier/version 三元组）" ⇒ **本轮已满足**：
+#   U-1 的实现落在 `ops/rpc_check.py`（`u1_identity()`，唯一真值），
+#   且 `inventory/dialect.yaml` 与本文件各声明了一个**可复算**的身份（门禁 `u1-identity` 复算）⇒
+#   `empty_reason` 已删（留着它就成了"比证据旧"的字段）。
 
 version: 1
 updated: 2026-09-26
 owner: Scott (鹏)
+
+# ── 本文件自己的 U-1 产物身份（可复算；判据 = 门禁 `u1-identity`）────────────────
+u1:
+  namespace: rpc
+  identifier: inventory/edges.yaml
+  version: 0.0.0
+  identity: u1:sha256:16:ec1a214d7de90e1f
 
 # ── `kind` 封闭枚举（与 schema §2 逐条对应）──────────────────────────────
 # 新增一个 kind ⇒ 必须先在 schema §2 里给出**摘要依据**，否则门禁 `edges` 会判红。
@@ -35,11 +52,14 @@ provenance_prefixes:
 
 # ── 边实例 ───────────────────────────────────────────────────────────────
 # 每条：src / dst（U-1 产物身份 `u1:sha256:16:<16hex>`）· kind ∈ kinds · provenance `<前缀>:<载荷>`
-edges: []
-
-empty_reason: >-
-  **前置缺失**（不是"没有边"）：`src` / `dst` 要求 **U-1 产物身份**，而 U-1 当前是
-  "**设计定案 · 实现未落地**" ⇒ 至今**没有任何产物登记过 `namespace` / `identifier` / `version`**
-  ⇒ **造不出合规的边**（写一条就得先编一个身份 = 正是 U-3 要消灭的"没有唯一答案"）。
-  ⇒ 空 ≠ 没事：门禁 `edges` **必须把"0 条"显式报出来**，不得静默通过。
-  ⇒ 解锁条件 = U-1 在至少一个项目上落地（产出一个真实的 `namespace/identifier/version` 三元组）。
+#
+# ★ 第一条**真实**实例（2026-09-26）—— 它为什么是**真的**、而不是为填格式编的：
+#   本文件里每条边的 `src`/`dst` 都要求 U-1 身份，而身份的 `namespace` 取值域 = `dialect.yaml`
+#   的 `namespaces[].id`（U1 spec §1.3 把 namespace 的**单一真值**指向它）
+#   ⇒ **本文件在语义上依赖 `dialect.yaml`**（删掉那个命名空间，本文件的边就全部失去合法取值域）。
+#   `provenance` 记的是这条依赖的**可核来源**（本文件读写了什么），不是"我觉得有关系"。
+edges:
+  - src: u1:sha256:16:ec1a214d7de90e1f          # = 本文件（identifier: inventory/edges.yaml）
+    dst: u1:sha256:16:550da5b166cb60c8          # = inventory/dialect.yaml（namespace 取值域的真值源）
+    kind: document_level
+    provenance: "filetrack:v0.0.0:in=inventory/dialect.yaml,out=inventory/edges.yaml"

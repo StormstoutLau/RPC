@@ -1040,7 +1040,83 @@ def check_dialect(ctx):
 #   写一条边就得先有一个合规身份（这正是 `edges.yaml` 现在为空的原因，见其 `empty_reason`）。
 EDGES_INV = ROOT / "inventory" / "edges.yaml"
 EDGE_REQUIRED = ("src", "dst", "kind", "provenance")
-U1_ID_RE = re.compile(r"^u1:sha256:16:[0-9a-f]{16}$")
+# ── U-1 产物身份：**本仓唯一真值实现**（D-23 / D-25 · `spec/d6-agent-standard/U1-ARTIFACT-IDENTITY.md`）──
+# ★ 为什么实现放这里：此前门禁 `edges` 用**正则**判 U-1 形态，而规范里"取值维度 / 截断 / 前缀 / 算法"
+#   是**四项取值** ⇒ 两处各写一份 ⇒ 必然漂移（本仓头号形态："同一事实两个定义点"）。
+#   ⇒ 实现与校验**同源**：`edges` 改调 `u1_parse`，`u1-identity` 用它**复算**。
+U1_ALGO = "sha256"
+U1_TRUNC = 16                 # 64 bit。⚠ 与蓝本 Open_Data 的 **32** 不同 —— 这是有意的（spec §2 已登记），
+                              #   取 16 的理由：既有 7 处里 `factor_pipeline` 同为 16 ⇒ 兼容面最大。
+U1_PREFIX = f"u1:{U1_ALGO}:{U1_TRUNC}"
+U1_DEFAULT_VERSION = "0.0.0"  # 无版本者（spec §1.3）
+
+
+def u1_canonical_bytes(namespace, identifier, version=U1_DEFAULT_VERSION) -> bytes:
+    """U-1 的**哈希输入**：`["<ns>","<id>","<ver>"]` 的 RFC 8785 规范化 JSON 的 UTF-8 字节序列。
+
+    ⚠⚠ **等价性边界（只在这一形状上声称，别外推）**：本实现用
+      `json.dumps(..., ensure_ascii=False, separators=(',',':'))`，它与 RFC 8785（JCS）
+      在本规范的输入形状 **`[str, str, str]`** 上等价：
+        ① 无空白（`separators` 收紧）；
+        ② 字符串转义只用 `\\b \\t \\n \\f \\r \\" \\\\` 与 `\\uXXXX`（**小写** hex）—— 这正是 JCS 对**字符串**的规定。
+      ⚠ 本实现**不涉及** JCS 里更复杂的部分（数字的 ECMAScript 序列化、键的 UTF-16 排序）
+        ⇒ 那两项**既不实现、也不声称**（输入已被限定为**字符串数组** ⇒ 用不到）。
+      ⇒ 若将来有人把数字 / 字典塞进来，**先读这段**：那时它就不再是 JCS 了。
+    """
+    arr = [str(namespace), str(identifier), str(version)]
+    return json.dumps(arr, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def u1_identity(namespace, identifier, version=U1_DEFAULT_VERSION) -> str:
+    """算出一个**合规的 U-1 产物身份**（`u1:sha256:16:<16 位小写 hex>`）。"""
+    h = hashlib.sha256(u1_canonical_bytes(namespace, identifier, version)).hexdigest()[:U1_TRUNC]
+    return f"{U1_PREFIX}:{h}"
+
+
+def u1_parse(s):
+    """校验一个 U-1 身份字符串 ⇒ 返回 `(algo, trunc)`；不合规返回 `None`。
+
+    ★ 判据里**唯一有信息量**的那部分 = **前缀自描述必须与实现一致**：
+      写 `16` 就得真的是 16 位、写 `sha256` 就得是我们用的算法、hex 必须小写。
+      ⇒ 若只判"有个 `u1:` 前缀"，那 D-25 的"前缀必须自描述"就退化成**装饰**。
+    ⚠ 哈希**不可逆** ⇒ 本函数**只能**判形态与自描述一致性，**不能**判"这个身份是不是某个
+      `(ns,id,ver)` 算出来的" —— 后者**必须**靠"声明 + 复算"（`u1_verify_declaration`）。
+      （把这两件事混起来的后果是：任何人随手编一个 16 位 hex 都能过。）
+    """
+    if not isinstance(s, str):
+        return None
+    m = re.match(r"^u1:([a-z0-9]+):(\d+):([0-9a-f]+)$", s)
+    if not m:
+        return None
+    algo, trunc, h = m.group(1), int(m.group(2)), m.group(3)
+    if algo != U1_ALGO or trunc != U1_TRUNC or len(h) != trunc:
+        return None
+    return algo, trunc
+
+
+def u1_verify_declaration(decl):
+    """复算一个 `u1:` **声明**（`{namespace, identifier, version, identity}`）⇒ 返回错误串，或 `None` 表示通过。
+
+    ★ 这才是"身份"这个词**唯一可判的含义**：身份不是一句自述，而是**能从 `(ns,id,ver)` 复算出来**。
+      ⇒ 只判格式是**假绿**（编个 16 位 hex 就能过）；本条把"可复算"变成判据。
+    """
+    if not isinstance(decl, dict):
+        return "`u1` 必须是映射（namespace / identifier / version / identity）"
+    miss = [k for k in ("namespace", "identifier", "version", "identity") if not decl.get(k)]
+    if miss:
+        return f"`u1` 缺字段: {miss} —— 四项都要写（只写 identity 就**无法复算**，那正是本条要防的）"
+    if u1_parse(decl["identity"]) is None:
+        return f"`u1.identity` 不合规（应形如 `{U1_PREFIX}:<{U1_TRUNC} 位小写 hex>`）: {decl['identity']!r}"
+    want = u1_identity(decl["namespace"], decl["identifier"], decl["version"])
+    if want != decl["identity"]:
+        return (f"`u1.identity` **复算不符** ⇒ 声明与取值自相矛盾："
+                f"声明 {decl['identity']!r}；按 namespace={decl['namespace']!r} · "
+                f"identifier={decl['identifier']!r} · version={decl['version']!r} 复算得 {want!r}")
+    return None
+
+
+U1_DECL_SCAN_DIR = ROOT / "inventory"
+U1_HEADER_RE = re.compile(r"^#\s*u1:sha256:\d+\s*$")
 # 与 U3-EDGE-FORMAT.md §4.2 的"视为缺"第 5 条同表
 EDGE_DEAD_PROV = {"unknown", "none", "n/a", "null"}
 
@@ -1108,8 +1184,9 @@ def validate_edges(doc):
             n_invalid += 1
             continue
         for f in ("src", "dst"):
-            if not U1_ID_RE.match(str(e[f])):
-                bad.append(f"`edges[{i}].{f}` 不是 U-1 产物身份形态 `u1:sha256:16:<16 位小写 hex>`: {e[f]!r} "
+            if u1_parse(e[f]) is None:
+                bad.append(f"`edges[{i}].{f}` 不是 U-1 产物身份形态 `{U1_PREFIX}:<{U1_TRUNC} 位小写 hex>`: {e[f]!r} "
+                           f"（判据 = `u1_parse`，与 U-1 实现**同源** —— 此前这里另写了一份正则 = 同一事实两个定义点）"
                            f"⇒ 「边指向谁」没有唯一答案（U-1 与 U-3 必须咬合）")
                 n_invalid += 1
         if kinds and e["kind"] not in kinds:
@@ -1152,6 +1229,52 @@ def check_edges(ctx):
         return "FAIL", f"inventory/edges.yaml 解析失败: {type(e).__name__}: {e}", []
     bad, notes = validate_edges(doc)
     return ("FAIL" if bad else "PASS"), " · ".join(notes), bad
+
+
+def check_u1_identity(ctx):
+    """D7-P1 实现侧（U-1 落地）：`inventory/*.yaml` 的 **U-1 身份声明必须可复算**。
+
+    ★ 判什么（按信息量从高到低）：
+      ① **复算**：文件声明 `u1: {namespace, identifier, version, identity}` ⇒ 按前三项重算**必须**等于 identity。
+         只判格式是**假绿**（随手编一个 16 位 hex 就能过）—— 而"身份"这个词可判的含义只有"能从 (ns,id,ver) 复算"。
+      ② **头部注释前缀**：既然声明了身份 ⇒ 前 5 行内必须**同时**有 `# u1:sha256:<N>` 头部注释行
+         （D-25：前缀进头部注释、不进哈希行；U1 spec §1.4 要求"每文件首行"）。
+      ③ ★ **至少 1 个声明**：一个都没有 ⇒ 本条判据**没有对象** ⇒ 判红。
+         （否则它会**静默退化**成空判 —— 正是本仓头号失败形态"判据什么都没判"。）
+    """
+    try:
+        import yaml
+    except Exception:
+        return "WARN", "缺 pyyaml, 跳过 u1-identity 断言", []
+    if not U1_DECL_SCAN_DIR.is_dir():
+        return "FAIL", "inventory/ 缺失（本断言的登记依据）", []
+    bad, declared, ok_recalc = [], 0, 0
+    for p in sorted(U1_DECL_SCAN_DIR.glob("*.yaml")):
+        text = p.read_text(encoding="utf-8")
+        try:
+            doc = yaml.safe_load(text) or {}
+        except Exception as e:
+            bad.append(f"{p.name}: YAML 解析失败 {type(e).__name__}: {e}")
+            continue
+        decl = doc.get("u1") if isinstance(doc, dict) else None
+        if decl is None:
+            continue
+        declared += 1
+        err = u1_verify_declaration(decl)
+        if err:
+            bad.append(f"{p.name}: {err}")
+        else:
+            ok_recalc += 1
+        if not any(U1_HEADER_RE.match(l) for l in text.splitlines()[:5]):
+            bad.append(f"{p.name}: 有 `u1:` 身份声明，但**前 5 行内没有** `# u1:sha256:{U1_TRUNC}` 头部注释行"
+                       f"（D-25：前缀进头部注释；U1 spec §1.4 要求每文件首行）")
+    if declared == 0:
+        bad.append("`inventory/*.yaml` 里**一个 `u1:` 身份声明都没有** ⇒ 本条判据**没有对象**（= 空判）⇒ 判红；"
+                   "U-1 的落地以『至少一个可复算的声明』为可判形式")
+    # ⚠ 这两个数**算出来**，不写死 —— 上一版我在这里硬编码了"复算 0 处不符"，
+    #   那正是刚修掉的"标签在说谎"同族（标签比事实硬）。
+    notes = f"已声明 U-1 身份 {declared} 个 · 复算通过 {ok_recalc} 个（扫描 inventory/*.yaml）"
+    return ("FAIL" if bad else "PASS"), notes, bad
 
 
 # ── D7-P1-4 (2026-09-26)：U-4 失效规则 H-1~H-4（**判据库**，不是门禁项）────────
@@ -4390,10 +4513,22 @@ CHECKS = [
             "④ `sources` 的**源切片指纹**不符 ⇒ 红（这就是「源词表变了下游红」）。"
             "⚠ 报「读取失败 ⇒ 不可判」= **要修**，不是通过 —— 判不了不许当通过"},
     # D7-P1-3 (2026-09-26): U-3 依赖边格式 —— 最该被机器盯住的是**最容易缺的那个字段**。
+    {"id": "u1-identity", "title": "U-1 产物身份（可复算）", "fn": check_u1_identity, "quick": True,
+     "fix": "D7-P1 实现侧（U-1 落地）：`inventory/*.yaml` 里声明了 `u1:` 的，**身份必须可复算**。"
+            "① 声明四项 `{namespace, identifier, version, identity}` 必须齐（只写 identity **无法复算**）；"
+            "② `identity` 必须 **等于** 按 `(namespace, identifier, version)` 复算的结果 —— "
+            "★ 只判格式是**假绿**（随手编一个 16 位 hex 就能过）；'身份'可判的含义只有『能从 (ns,id,ver) 复算』；"
+            "③ 声明了身份 ⇒ 文件**前 5 行内必须有** `# u1:sha256:16` 头部注释行（D-25：前缀进头部注释、"
+            "不进哈希行 —— 进了哈希行整份 `sha256sum -c` 会一行都不被验，一手实测见 U1 spec §1.4）；"
+            "④ **一个声明都没有 ⇒ FAIL**（本条会静默退化成空判 = 本仓头号失败形态）。"
+            "\n\n算法/截断的**唯一真值**在 `ops/rpc_check.py` 的 `u1_identity()`（门禁与产出方同源）；"
+            "取值与理由见 `spec/d6-agent-standard/U1-ARTIFACT-IDENTITY.md`。"
+            "⚠ 哈希不可逆 ⇒ 本条只能判『声明可复算』，**不能**判『某个文件内容变了 ⇒ 身份该不该变』（那是 U-4 的事）"},
     {"id": "edges", "title": "U-3 依赖边格式", "fn": check_edges, "quick": True,
      "fix": "D7-P1-3: `inventory/edges.yaml` 的**实例**要满足 `U3-EDGE-FORMAT.md`（形状的单一真值）："
             "① `src`/`dst` 必须是 **U-1 产物身份**形态 `u1:sha256:16:<16 位小写 hex>`"
-            "（U-1 与 U-3 咬合：写一条边就得先有一个合规身份）；② `kind` ∈ `kinds` 封闭枚举；"
+            "（U-1 与 U-3 咬合：写一条边就得先有一个合规身份）——"
+            "★ 判据由 `u1_parse()` 给出，与 U-1 实现**同源**（此前这里另写了一份正则 = 同一事实两个定义点）；"
             "③ `provenance` 必填，形式 `<前缀>:<载荷>`，前缀 ∈ `provenance_prefixes`，"
             "**载荷允许含 `:`**（只按第一个 `:` 切分）；"
             "★ 「缺」= 字段不存在 / 空串 / 仅空白 / `null` / `unknown`·`none`·`n/a`·`null` / 前缀不在封闭集 / 载荷为空"
