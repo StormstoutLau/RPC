@@ -156,6 +156,43 @@ def main() -> int:
     chk("⑱ 覆盖：真实卡数 ≥ 35（防 glob 写坏后『什么都没扫到』却报 PASS）", st["cards"] >= 35,
         f"cards={st['cards']}")
 
+    # ── ★★ 规则 ④b（O-69，2026-09-26）：④ 的盲区 = **只看得见 registry** ─────────
+    #   ④ 只在"正文出现**已登记**且 tier 严于本卡的路径"时报 WARN ⇒ 一张 public 卡声明 `none`、
+    #   正文却引用**未登记**的本仓文件时，**门禁全程 PASS**（b3 的原始反例）。
+    #   ④b 用**两道实测过滤**（DEV-LOG-014 §56）把它变可见：
+    #     ① 排除**产物面**（`out/`/`batches/`/`golden/`）—— 语料里 14/25 误报全在这；
+    #     ② 用**事实**判"是不是本仓"（`(ROOT/token).is_file()`），**不是**"顶层段像不像 registry"。
+    f, w, _ = run([card(sensitivity="public",
+                        **{"attach-egress": "ok", "input-provenance": "none",
+                           "_body": "本卡会参考 ops/cluster.py 的审计水印实现"})])
+    chk("⑲ ★ 规则④b 声明 none 但正文引用**未登记**且**确实存在**的本仓文件 ⇒ **WARN**（且**不** FAIL）",
+        f == [] and len(w) == 1 and "未登记" in w[0],
+        f"f={f} w={w}")
+
+    f, w, _ = run([card(sensitivity="public",
+                        **{"attach-egress": "ok", "input-provenance": "none",
+                           "_body": "本卡把结果写到 out/glob-probe.txt"})])
+    chk("⑳ ★ 规则④b 反例：`out/*` 是**卡的产物**不是输入 ⇒ 不报（实测消掉的 14/25 误报）",
+        f == [] and w == [], f"w={w}")
+
+    f, w, _ = run([card(sensitivity="public",
+                        **{"attach-egress": "ok", "input-provenance": "none",
+                           "_body": "实现见 agent-cli.ps1（裸文件名，无 `/`）"})])
+    chk("㉑ ★ 规则④b 反例：**裸文件名**（不含 `/`）是散文里的普通词 ⇒ 不报",
+        f == [] and w == [], f"w={w}")
+
+    f, w, _ = run([card(sensitivity="public",
+                        **{"attach-egress": "ok", "input-provenance": "none",
+                           "_body": "参考 ops/no-such-file-xyz.py（不存在）"})])
+    chk("㉒ ★ 规则④b 反例：**本仓不存在**的路径 ⇒ 不报（事实判据；同族的『存在性否定』见 O-87）",
+        f == [] and w == [], f"w={w}")
+
+    f, w, _ = run([card(sensitivity="public",
+                        **{"attach-egress": "ok", "input-provenance": "none",
+                           "_body": "见 ops/rpc_check.py（**已登记**为 public）"})])
+    chk("㉓ ★ 规则④b 反例：路径**已登记** ⇒ 由 ④ 管，④b 不再报（防两规则重复报同一件事）",
+        f == [] and w == [], f"w={w}")
+
     print(f"\nRESULT: {'ALL PASS' if not fails else str(len(fails)) + ' FAILED'}")
     return 1 if fails else 0
 

@@ -1756,6 +1756,17 @@ CARD_GLOB = "spec/**/*cards*/**/*.md"      # 卡区目录名含 `cards`（`dogfo
 # tier 序（**不得宽于** = 卡 rank 必须 ≤ 输入 rank）；`unverified` 按 `local-only` 处置（表头 fail-closed）
 TIER_RANK = {"local-only": 0, "unverified": 0, "sanitized": 1, "public": 2}
 PROVENANCE_NONE = "none"                   # 显式"输入不来自本仓"（唯一认可的 token，刻意不收 n/a·null）
+# ── O-69（2026-09-26）：规则 ④b 的两个常量 —— **都来自实测**（DEV-LOG-014 §56）──────────
+# ④b 要补的盲区：④ 只看得见 **registry**（"已登记"）⇒ **未登记**的本仓敏感文件**完全不可见**。
+#   实现时的两条过滤，每条都对应 §56 的一个实测数：
+#     ① `PROVENANCE_OUTPUT_PREFIXES` = **产物面** —— 实测 20 张卡扫出 25 个候选，其中 **14 个是 `out/*`**
+#        （那是**卡的产物**，不是读进来的输入）⇒ 不排除就是 **≥56% 误报**；
+#     ② 判"是不是本仓"用 **事实**（`(ROOT / token).is_file()`），**不用**"顶层段像不像 registry"
+#        —— 后者会**漏** `inventory/sensitivity.yaml` 这类（它是本仓文件，但顶层段不在 registry 里）
+#        同族教训 = **O-87**："用'像不像'代替'是不是'"。
+PROVENANCE_OUTPUT_PREFIXES = ("out/", "batches/", "golden/")
+PROV_PATH_TOKEN_RE = re.compile(
+    r"[A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:md|yaml|yml|json|jsonl|py|ps1|sh|csv|txt|db|duckdb)")
 
 
 _FM_KEY_RE = re.compile(r"^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$")
@@ -1818,7 +1829,10 @@ def validate_input_provenance(cards, sensitivity_inv):
     `cards` = `[(label, frontmatter_dict, full_text)]`。返回 `(bad, stats)`；
     `bad` 里**两类后果不同**（故分桶返回给上层取最严）：
       · **FAIL 级**（规则 ① 缺字段 / ② 项未登记 / ③ 档位过宽）——**契约违规**
-      · **WARN 级**（规则 ④ `none` 不可证伪）——"提到 ≠ 读到"，机械判不出，**只报不拦**
+      · **WARN 级**（规则 ④ / **④b**）——"提到 ≠ 读到"，机械判不出，**只报不拦**
+        · ④ = 正文出现 **tier 严于本卡**的**已登记**路径；
+        · **④b（O-69，2026-09-26）** = 正文引用了**未登记**且**确实存在于本仓**的文件
+          （④ 只看得见 registry ⇒ 未登记者原先**完全不可见**）
     """
     reg = _sens_registry(sensitivity_inv)
     default_tier = str(sensitivity_inv.get("default_tier") or "local-only")
@@ -1852,6 +1866,28 @@ def validate_input_provenance(cards, sensitivity_inv):
                 warn.append(f"{label}: 声明 `input-provenance: {PROVENANCE_NONE}`，但正文出现 **tier 严于本卡"
                             f"（{tier}）** 的已登记路径 {hits} ⇒ `{PROVENANCE_NONE}` 的可证伪性不成立"
                             f"（要么把该路径列进 `input-provenance`，要么把档位降到不宽于它）")
+            # ★★ 规则 ④b（O-69，2026-09-26；仍属 **WARN 级 = 只报不拦**）：
+            #   ④ 的盲区是"**只看得见 registry**" ⇒ 一张 `public` 卡声明 `none`、正文却引用了
+            #   **未登记**的本仓文件时，④ **不触发** ⇒ 门禁全程 PASS（b3 的原始反例即此）。
+            #   ④b 把它变可见：扫正文里的**路径样式 token**（**必须含 `/`** ⇒ 排除"裸文件名"这类
+            #   散文里的普通词），再过两道过滤（**都来自 §56 的实测**）：
+            #     ① 排除 `PROVENANCE_OUTPUT_PREFIXES`（卡的**产物**，不是输入）—— 实测消掉 14/25 误报；
+            #     ② **事实**判"是不是本仓"：该路径在仓内**确实存在**（`is_file()`）
+            #        ⚠ 刻意**不用**"顶层段 ∈ registry" —— 那会漏 `inventory/sensitivity.yaml` 这类
+            #        （本仓文件，但顶层段不在 registry 里）。
+            #   ⚠ 射程：只判"**提到**了未登记的本仓文件"，**不判**"真的读了它"（提到 ≠ 读到 ⇒ 故 WARN 不 FAIL）。
+            cand = set()
+            for tok in PROV_PATH_TOKEN_RE.findall(body):
+                if "/" not in tok or tok in reg:
+                    continue
+                if tok.startswith(PROVENANCE_OUTPUT_PREFIXES):
+                    continue                       # ① 卡的产物面
+                if (ROOT / tok).is_file():
+                    cand.add(tok)                  # ② 事实：确实是本仓**存在**的文件
+            if cand:
+                warn.append(f"{label}: 声明 `input-provenance: {PROVENANCE_NONE}`，但正文引用了 **未登记**且"
+                            f"**确实存在于本仓**的文件 {sorted(cand)} ⇒ 未登记 = `{default_tier}`（fail-closed，"
+                            f"严于本卡 `{tier}`）⇒ 要么把它列进 `input-provenance`，要么说明这些只是**提及**")
             continue
         n_ok += 1
         for e in entries:
