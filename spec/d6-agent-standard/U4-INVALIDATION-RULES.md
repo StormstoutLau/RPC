@@ -45,7 +45,8 @@
 
 | 情形 | `action` | 三分 | 为什么是这一分 |
 |---|---|---|---|
-| 变更集**为空** | `none` | **`MODE_SKIP`** | 这是**唯一**允许落到 MODE_SKIP 的情形 —— 它是"**真的没事**"，不是"判不了" |
+| 变更集**为空** | `none` | **`MODE_SKIP`** | 它是"**真的没事**"，不是"判不了" |
+| ★ **有变更但影响面为空且已闭包**（O-88，2026-09-26 补） | `none` | **`MODE_SKIP`** | 同上：`affected=[] ∧ affected_is_closure=True` = **已判定「确实没有下游」** ⇒ 无动作（既非增量亦非全量）。⚠ **`None` 不是这一类**（那是 H-3 ⇒ 强制全量）|
 | **影响面无法安全判定**（H-3） | `full_rebuild` | **`WARN`** | 能力降级：保守全量，**可见但不阻断**（降级本身是**安全**方向 ⇒ 不该拦提交） |
 | **增量等价性未证**（H-1） | `full_rebuild` | **`WARN`** | 同上（付代价换正确性） |
 | **影响面未闭包化**（H-2） | `full_rebuild` | **`WARN`** | 同上 |
@@ -167,7 +168,8 @@
 | E 无变更 | `changed_ids=[]` | `('none', 'MODE_SKIP', '变更集为空：确实无需动作（不是「判不了」）')` |
 | F 四条全过 | 全绿 | `('incremental', None, '四条规则全过：可安全增量')` |
 
-⇒ **处置 = 全量重算 + WARN**，且**禁止静默跳过**（六种里**唯一**允许 `MODE_SKIP` 的只有 E）。
+⇒ **处置 = 全量重算 + WARN**，且**禁止静默跳过**（允许 `MODE_SKIP` 的只有 E，以及 **O-88 新增的那一类**：
+有变更但影响面为空且已闭包 —— 见上表；★ 判定依据 = 该情形**已判定**，不是"判不了"）。
 复现：`py -c "import sys;sys.path.insert(0,'ops');import rpc_check as R;print(R.decide_invalidation(changed_ids=['open_data:blackmarble', …], affected=None))"`
 
 ### 5. 为什么这次**只能**判"判不了"（而不是偷懒写 `None`）
@@ -243,6 +245,11 @@
 而**那个证明不存在**（未实测第 6 条）⇒ **本期仍然落到 H-3**。
 ⚠⚠ **但机制化后暴露了一个新的规则缺口**（已立 **O-88**）：`changed_ids` 非空、`affected` 为空**且已闭包**
 （= 确实没有下游）时，四条规则**没有一条认领它** ⇒ 落到 H-1 ⇒ **为"没有下游"付一次全量**。
+✅ **已修（2026-09-26，O-88 结算）**：给它**单列一个归宿**（`action=none` + `MODE_SKIP`，理由"有变更但影响面为空且已闭包（= 已判定：确实无下游）"），
+位置在 **H-3（`affected is None`）之后、H-1 之前**。★ **端到端实测**（同一条命令）：改前 `full_rebuild` / `WARN(H-1)`
+⇒ 改后 `action=none · class=MODE_SKIP`（`py ops/id_storage_census.py --invalidate --changed inventory/edges.yaml`）。
+⚠ **三条保守路径（H-1/H-2/H-3）一条未改**，且新增**两条反例**钉住不放宽（`affected=[] ∧ 未闭包化` ⇒ 仍全量；
+`affected=["a"] ∧ eq 未证` ⇒ 仍不许 skip）；穷举 **72** 组合的硬不变量仍成立。详见 `DEV-LOG-014` §54。
 
 ## 未实测登记
 

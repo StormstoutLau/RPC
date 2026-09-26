@@ -135,23 +135,48 @@ def test_empty_affected_is_not_unknown():
     unknown = R.decide_invalidation(changed_ids=["u1:x"], affected=None, affected_is_closure=True,
                                     incremental_equivalent=False)
     assert "H-3" not in empty[2], "空列表**不得**走 H-3（那是'判不了'才有的）"
-    assert "H-1" in empty[2], "空列表应当继续往下走，落到 H-1"
     assert "H-3" in unknown[2], "None 才是 H-3 的触发条件"
     assert empty[2] != unknown[2], "两种输入**必须**给出不同的理由（否则就是混成一个）"
+    # ⚠ **O-88（2026-09-26）改的是这一行**：原断言 `"H-1" in empty[2]`（"空列表应当继续往下走，
+    #   落到 H-1"）—— 那**描述的正是 O-88 那个缺口**（为"没有下游"付一次全量，**期望陈旧**）。
+    #   空集 ∧ 已闭包 = **已判定「确实无下游」** ⇒ 正确归宿是 `none`/`MODE_SKIP`，不是 H-1。
+    assert "确实无下游" in empty[2], "空列表 ∧ 已闭包 = 已判定无下游（不是 H-1 的'未证'）"
+    assert empty[1] == "MODE_SKIP", f"空列表 ∧ 已闭包应当落到 MODE_SKIP，实际 {empty[1]}"
 
 
-def test_empty_changed_is_the_only_mode_skip():
-    """`changed_ids` 为空是**唯一**允许落到 MODE_SKIP 的情形（真的没事）。"""
+def test_mode_skip_has_exactly_two_decided_classes():
+    """允许落到 `MODE_SKIP` 的**两类**（都是"**已判定**"，都不是"判不了"）：
+
+      ① `changed_ids` 为空 —— 真的没事；
+      ② ★ O-88（2026-09-26）：**有变更**但 `affected=[] ∧ affected_is_closure=True` —— 确实无下游。
+    ⚠ 原先本测试叫 `..._is_the_only_mode_skip`（"**唯一**"）—— 那个"唯一"随 O-88 作废。
+    """
     action, class_, reason = R.decide_invalidation(changed_ids=[], affected=None)
     assert (action, class_) == ("none", "MODE_SKIP")
     assert "确实无需动作" in reason
+    action2, class2, reason2 = R.decide_invalidation(
+        changed_ids=["u1:x"], affected=[], affected_is_closure=True, incremental_equivalent=False)
+    assert (action2, class2) == ("none", "MODE_SKIP")
+    assert "确实无下游" in reason2
+    # ★ 三类**保守**输入仍一律不许 skip（否则第二类就成了"给判不了开口子"）
+    for kw in ({"affected": [], "affected_is_closure": False},
+               {"affected": None}):
+        _, c, _ = R.decide_invalidation(changed_ids=["u1:x"], **kw)
+        assert c != "MODE_SKIP", f"保守路径被放宽了: {kw}"
 
 
 def test_no_judgment_falls_into_mode_skip():
-    """★ 硬不变量：**任何"判不了"都不得落到 MODE_SKIP**（那正是"静默 skip"的形态）。"""
-    for kw in ({"affected": None}, {"affected": []},
-               {"affected": [], "incremental_equivalent": False},
-               {"affected": [], "affected_is_closure": False}):
+    """★ 硬不变量：**任何"判不了"都不得落到 MODE_SKIP**（那正是"静默 skip"的形态）。
+
+    ⚠ **O-88（2026-09-26）后射程精确化**：原先把 `affected=[]`（默认 `closure=False`）与
+      `{"affected": [], "incremental_equivalent": False}` 都当作"判不了"列在这里 ——
+      现在 `[] ∧ 已闭包` 是**已判定**（合法 MODE_SKIP），故**移出本测试**，
+      并**补两条反例**证明本断言**没有变成恒真**（H-1 的射程 = **有下游时**才看等价性）。
+    """
+    for kw in ({"affected": None},                                    # H-3 判不了
+               {"affected": [], "affected_is_closure": False},        # 空但**未闭包化** ⇒ 保守
+               {"affected": ["a"], "incremental_equivalent": False},  # ★ 反例：有下游且未证 ⇒ H-1
+               {"affected": ["a"], "affected_is_closure": False}):    # ★ 反例：有下游未闭包 ⇒ H-2
         _, class_, _ = R.decide_invalidation(changed_ids=["u1:x"], **kw)
         assert class_ != "MODE_SKIP", f"判不了却报 MODE_SKIP: {kw}"
 

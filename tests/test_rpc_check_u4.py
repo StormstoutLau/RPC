@@ -8,6 +8,9 @@
   ② ★ **硬不变量**：任何"**判不了**"的情形都**不得**落到 `MODE_SKIP`
      （`MODE_SKIP` 的后果是"不进 results ⇒ 不计失败" ⇒ 那正是"静默 skip"：
      把"判不了"悄悄变成"没事"）；用**穷举全部输入组合**（2×3×2×3×2 = **72** 种）来钉它，而不是举一两个例子；
+     ⚠ **O-88（2026-09-26）后该不变量的"判不了"定义精确化**：`affected` 非空时才看 `incremental_equivalent`
+     （下游为空 ⇒ 没有增量 ⇒ H-1 不适用）；`MODE_SKIP` 的合法前提 = **已判定**两类
+     （`changed` 为空 ∨ `affected` 空且已闭包）—— 放宽处**自带反例**（见 CASES 里两条 `O-88 反例`）；
   ③ **先验红自证**：证明"`cls != MODE_SKIP`"这条断言**非恒真**（故意错映射 ⇒ 必须能红）。
 """
 import sys
@@ -44,9 +47,23 @@ CASES = [
     ("★H-3 反例 **无法安全判定**（affected=None）⇒ 强制全量",
      dict(changed_ids=["p1"], affected=None, affected_is_closure=True, incremental_equivalent=True),
      "full_rebuild", "WARN", "H-3"),
-    ("★H-3 边界 即使是 `affected=[]`（**空但确定**）也不等于“判不了” ⇒ 不触发 H-3",
+    # ★★ O-88（2026-09-26）：`affected=[] ∧ 已闭包` = **已判定「确实无下游」** ⇒ 第三个归宿（`none`/`MODE_SKIP`）。
+    #   ⚠ **本用例的期望值是变更过的**（原为 `incremental`，理由"四条规则全过"）：对**空集**做增量
+    #     与"付全量"一样，都是**把 empty set 当成有活干**；正确语义 = **明确的无动作 + 理由**。
+    #     判定依据 = "先判是回归还是期望陈旧" ⇒ 此处是**期望陈旧**（DEV-LOG-014 §54.4）。
+    ("★O-88 `affected=[] ∧ 已闭包` ⇒ 已判定无下游（无动作，带理由）",
      dict(changed_ids=["p1"], affected=[], affected_is_closure=True, incremental_equivalent=True),
-     "incremental", None, "四条规则全过"),
+     "none", "MODE_SKIP", "确实无下游"),
+    ("★O-88 实测形态 `affected=[] ∧ 已闭包 ∧ eq=False` ⇒ **不再白白付全量**",
+     dict(changed_ids=["p1"], affected=[], affected_is_closure=True, incremental_equivalent=False),
+     "none", "MODE_SKIP", "确实无下游"),
+    # ★ 反例：**没有被放宽**——三条保守路径一条都不能少（否则 O-88 就成了"给判不了开口子"）
+    ("★O-88 反例 `affected=[] ∧ **未闭包化**` ⇒ 仍保守全量（空集也要闭包化才算「已判定」）",
+     dict(changed_ids=["p1"], affected=[], affected_is_closure=False, incremental_equivalent=True),
+     "full_rebuild", "WARN", "H-2"),
+    ("★O-88 反例 **有下游**但等价性未证 ⇒ 仍不许 skip（H-1）",
+     dict(changed_ids=["p1"], affected=["a"], affected_is_closure=True, incremental_equivalent=False),
+     "full_rebuild", "WARN", "H-1"),
 
     # ── H-4 失败不得部分覆盖 ────────────────────────────────────────────
     ("★H-4 反例 重算**失败** ⇒ 不落盘（保留上一份有效产物），且**算失败**",
@@ -57,8 +74,8 @@ CASES = [
      dict(changed_ids=["p1"], affected=None, incremental_equivalent=None, build_failed=True),
      "none", "SKIP_FAILED", "H-4"),
 
-    # ── 空变更集：**唯一**允许 MODE_SKIP 的情形 ──────────────────────────
-    ("空白例 变更集为空 ⇒ 确实无需动作（**唯一**允许 MODE_SKIP 的情形）",
+    # ── 空变更集：允许 MODE_SKIP 的**第一类**（O-88 后**不再是唯一**）────────
+    ("空白例 变更集为空 ⇒ 确实无需动作（允许 MODE_SKIP 的情形之一）",
      dict(changed_ids=[], affected=None, incremental_equivalent=None),
      "none", "MODE_SKIP", "不是「判不了」"),
 ]
@@ -89,7 +106,13 @@ def main() -> int:
         if not str(reason).strip():
             fails.append(f"组合 ({changed},{affected},{closure},{eq},{failed}) **没有理由** ⇒ 静默")
         # 硬不变量：只要「判不了/失败」，就绝不许是 MODE_SKIP
-        undecided = (affected is None) or (eq is not True) or (closure is False) or failed
+        # ⚠ O-88（2026-09-26）：末项加了 `and bool(affected)` —— 这**不是**为了变绿，而是 H-1 的**射程**：
+        #   `incremental_equivalent` 的语义是"**增量**结果是否已证与全量等价"，而**下游为空 ⇒ 没有增量**
+        #   ⇒ 该维度**不存在** ⇒ 空集情形已由 O-88 的新分支（`affected=[] ∧ 已闭包` ⇒ 无动作）认领。
+        #   ★ 放宽判据必须自带反例 ⇒ 上面的 `★O-88 反例 有下游但等价性未证 ⇒ 仍不许 skip` 就是它。
+        # ⚠ `MODE_SKIP` 的**唯一**合法前提 = "已判定"两类：`changed` 为空 ∨ (`affected` 空 ∧ 已闭包)。
+        undecided = ((affected is None) or (closure is False) or failed
+                     or (eq is not True and bool(affected)))
         if changed and undecided:
             n_undecided += 1
             if cls == "MODE_SKIP":
