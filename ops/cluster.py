@@ -2563,6 +2563,11 @@ def _run_digest(run_dir: Path, recipe: str = AGENT_DIGEST_RECIPE):
     recipe v1: sha256( "v1\\n" + 逐件 "name:hex|-\\n" )   ← 固定 6 件(AGENT_EVIDENCE_FILES)
     缺件记 `-`: 老 run / collect 部分失败属正常, **不等于篡改** (故不能拿"缺件"当告警)。
     新 recipe 应在此分派, 并登记进 AGENT_DIGEST_RECIPES; **条目各按自己的 recipe 复验**。
+    ⚠⚠ **副作用（O-29；2026-09-23 引入，2026-09-26 显式登记）**：v2 分支会 `_fwver_set(...)` 设**全局**
+      `_FWVER_SCOPE`（供 `_gap_key` 分桶）⇒ **审计侧依赖「每个 run 都从本函数过一遍」这一【隐性契约】**。
+      ⇒ 若将来为性能给本函数加**缓存 / 短路**，`_FWVER_SCOPE` 会**残留上一个 run 的值** ⇒ **静默错桶** ——
+      而分桶是**报告层**的：错了**不报错、只是数字不对**（本仓最防的那一类）。
+      ⇒ **要短路就必须同时**在调用点显式设框架代（把隐式副作用改成**显式参数**）。
     """
     if recipe not in AGENT_DIGEST_RECIPES:
         return None
