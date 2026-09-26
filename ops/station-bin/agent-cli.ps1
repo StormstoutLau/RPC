@@ -435,6 +435,27 @@ function Invoke-SlotGate {
 
 # ---------------- Invoke-Workspace (M1) ----------------
 
+# ★★ O-78② (2026-09-26): 「框架保留目录 / 根级文件」的**唯一真值**。
+#
+# 为什么单独立常量：这两份清单此前**散在两处**（sync 的排除 vs 站上 diff 过滤），
+#   而它们说的是**同一件事** —— "工作区里哪些路径是**框架自有**、不是被同步的内容"。
+#   两份清单的下场是**各自漂移**：O-77 实测的那次 `tar: ./agent-out: file changed as we read it`
+#   正是"diff 过滤早就排了 `agent-out`、而 sync 排除没排"⇒ 同一事实两个定义点。
+#   ⇒ 现在 **sync 排除**与**站上 diff 过滤**都从这里取值（改一处即两处生效）。
+# ⚠ 边界（如实写）：载体 `.agentsync` **仍是权威源之一**（它按项目给额外排除）
+#   ⇒ 本常量是**下限**（框架保留项），不是"全部排除项"；两者是叠加关系。
+$Script:FRAMEWORK_RESERVED_DIRS = @('out', '.golden', '.attach', 'agent-out', '.agentsync', '.git')
+$Script:FRAMEWORK_RESERVED_ROOTFILES = @('.agent-lock', '.agent-state.json', '.run-marker', 'agent-runs.log')
+
+function Get-FrameworkReservedDirRegex {
+    # 站上 `grep -v -E` 用的正则（**从上面的常量派生**，不许在别处再写一份字面量）
+    return '^(' + ((@($Script:FRAMEWORK_RESERVED_DIRS) | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')/'
+}
+
+function Get-FrameworkReservedFileRegex {
+    return '^(' + ((@($Script:FRAMEWORK_RESERVED_ROOTFILES) | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')$'
+}
+
 function Get-AgentsyncExcludes([string]$proj, [string]$type) {
     $projRoot = $Script:PROJECTS[$proj]
     if (-not $type) { $type = 'python' }   # default (Paper pilot)
@@ -530,8 +551,11 @@ md5sum AGENTS.md CLAUDE.md .agentsync
         #   ⚠ **为什么写在代码里而不是改 proj 的 `.agentsync`**: 后者是**运行时载体**里的文件（`tmp/dogfood-ws/.agentsync`），
         #     **不在版本控制内** ⇒ 修它会随载体重建而**静默消失**（本仓纪律: 修复必须落在版本控制内的真值源上）。
         #     实测该文件当下只排除了 `archive/`、`runs/` —— 两个在该载体里**并不存在**的目录（= 排了个寂寞）。
-        #   ⚠ **本轮只修已证实的这一个**；`out/`/`.attach/` 是否同病、以及"载体 `.agentsync` vs 本清单"如何合流，见 O-78（待实测再定）。
-        $excl = @($excl) + @('agent-out')
+        #   ⚠ **O-78② 已收口（2026-09-26）**：本节原写"**本轮只修已证实的这一个**；`out/`/`.attach/` 是否同病、
+        #     以及'载体 `.agentsync` vs 本清单'如何合流，见 O-78（待实测再定）"。
+        #     ⇒ 现在改为**从唯一真值常量取值**（`$Script:FRAMEWORK_RESERVED_DIRS`，与站上 diff 过滤**同源**），
+        #     不再"补一个漏一个"；载体 `.agentsync` 仍是**叠加**的另一处排除源（它是按项目的额外排除，不是替代）。
+        $excl = @($excl) + $Script:FRAMEWORK_RESERVED_DIRS
         $exArgs = Convert-ToExcludeArgs $excl
         # 2026-09-23 (F-14): 三处 tar 名都必须带 per-invocation 身份 —— 原为共享固定名
         #   `agent-cli-sync-<proj>.tar`(本地 temp 与**站上 /tmp** 同名), 而 **sync 发生在远端 flock 之前**
@@ -903,6 +927,34 @@ function Get-UniqueRunStamp {
 #     `| Out-Null`（各自注释里写了原因）⇒ 本条是**该纪律的漏用**, 不是新错误。
 #   护栏: `_fm_golden_test.ps1` 有**全文件级**断言 —— 代码行里每个 `Remove-Item` 都必须同现 `| Out-Null`。
 
+function Get-LeaseWhoPath([string]$Key) {
+    $safe = ($Key -replace '[^A-Za-z0-9]', '_')
+    return (Join-Path $env:TEMP "agent-cli-lease-$safe.who")
+}
+
+function Format-WorkspaceLeaseHolder([string]$Key) {
+    # ★ O-78① (2026-09-26): 拒绝文案**不许猜持有者的模式**。
+    #   实测病（DEV-LOG-014 §40.6）：3 个 **shared** run 在跑时，一张想取 exclusive 的卡被拒，
+    #     文案却写「已有**排他**派发在跑」⇒ **行为对、文案错**，会把排障方向指反。
+    #   为什么不能直接从租约读：租约 = Windows **文件锁**（`FileShare.None` / `FileShare.Read`），
+    #     锁上**没有元数据**，且排他持有时**连打开都打不开** ⇒ 想报"持有者是谁"只能靠**旁路文件**。
+    #   ⇒ 本函数的立场：**能读到就报事实；读不到就明说不可得** —— 绝不退回去猜。
+    $w = Get-LeaseWhoPath $Key
+    if (-not (Test-Path $w)) {
+        return "持有者**不可得**（无 who 记录 —— 可能由旧版进程 / 另一台控制台 / 手工 ssh 持有）"
+    }
+    $line = ''
+    try { $line = (Get-Content $w -Raw -ErrorAction Stop).Trim() } catch { }
+    if (-not $line) { return "持有者**不可得**（who 记录为空或读不到）" }
+    if ($line -match 'pid=(\d+)') {
+        $hp = [int]$Matches[1]
+        if (-not (Get-Process -Id $hp -ErrorAction SilentlyContinue)) {
+            return "who 记录**已过期**（pid $hp 已不存在）⇒ 持有者不可确定；原文: $line"
+        }
+    }
+    return $line
+}
+
 function Enter-WorkspaceLease {
     # O-62 / C3 + O-62/C1 (2026-09-25): **控制台侧的"工作区租约"** —— 覆盖 staging + 执行**整次派发**。
     # 为什么要有它: 两条通道都直接 `rm -rf <workspace>/.attach` + scp，而站上锁只覆盖"执行相"；
@@ -937,6 +989,13 @@ function Enter-WorkspaceLease {
             $fs = [IO.File]::Open($p, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
         }
         $Script:LEASES += $fs
+        # ★ O-78① (2026-09-26): 写 **who 旁路**（best-effort）—— 让**被拒的一方**能说出"谁持有"。
+        #   ⚠ 写失败**不影响**租约（租约本身才是功能，who 只是诊断）⇒ 故整段吞异常。
+        try {
+            [IO.File]::WriteAllText((Get-LeaseWhoPath $Key),
+                "pid=$PID mode=$(if ($Exclusive) { 'exclusive' } else { 'shared' }) why=$(if ($Why) { $Why } else { '-' }) key=$Key at=$(Get-Date -Format o)")
+        }
+        catch { }
         return $fs
     }
     catch { return $null }
@@ -1792,7 +1851,11 @@ function Invoke-Task {
     $leaseMain = Enter-WorkspaceLease -Key $leaseKey -Exclusive $leaseX -Why 'main-opencode'
     if (-not $leaseMain) {
         $modeTxt = $(if ($leaseX) { 'exclusive' } else { 'shared' })
-        Write-Host "REJECT main-workspace-busy (exit 3) - $leaseKey 上已有**排他**派发在跑（本 run 想取 $modeTxt）(O-62/C1)"
+        # ★ O-78① (2026-09-26): 原文案写死「已有**排他**派发在跑」⇒ **实测会说错持有者**
+        #   （3 个 shared 在跑时也这么报）。⇒ 改为"已有派发持有租约"，并**另起一行报实际持有者**
+        #   （`Format-WorkspaceLeaseHolder`；读不到就明说不可得，不猜）。
+        Write-Host "REJECT main-workspace-busy (exit 3) - $leaseKey 上已有派发持有租约（本 run 想取 $modeTxt）(O-62/C1)"
+        Write-Host "  HOLDER: $(Format-WorkspaceLeaseHolder $leaseKey)"
         return 3
     }
     Write-Host "LEASE_ACQUIRED: main $leaseKey ($(if ($leaseX) { 'exclusive' } else { 'shared' }))"
@@ -2260,10 +2323,13 @@ printf 't=end bytes=%s bytes_s=%s\n' "`$TOTAL_BYTES" "`$TBPS" >> "`$W/out/.progr
 #   运行窗口内被改动的**工作区相对路径**(`-printf '%P'`)。
 #   **放在 golden/accept 门之前** —— 否则会被 golden 自身产出的构建物(如 cpphub beta 编译)污染。
 #   排除框架自身产物(漏项 ⇒ diff 恒非空 ⇒ 判据退化为噪声)。
+# ★★ O-78② (2026-09-26): 这两条正则**不再是字面量** —— 从 `$Script:FRAMEWORK_RESERVED_*` 派生
+#   （`Get-FrameworkReservedDirRegex` / `Get-FrameworkReservedFileRegex`），与 sync 排除**同源**。
+#   ⚠ 之前正是这里的字面量比 sync 那份**更全**（这里早就有 `agent-out`）⇒ 两份清单漂移，
+#     结果 sync 面踩了 O-77（`tar: ./agent-out: file changed as we read it`）。
 ( cd "`$W" && find . -newer .run-marker -type f -printf '%P\n' 2>/dev/null \
-    | grep -v -E '^(out|\.golden|\.attach|agent-out|\.agentsync|\.git)/' \
-    | grep -v -E '^\.(agent-lock|agent-state\.json|run-marker)$' \
-    | grep -v -E '^agent-runs\.log$' ) > "`$W/out/.workspace-diff.txt`$EV_SUF" 2>/dev/null || true
+    | grep -v -E '$(Get-FrameworkReservedDirRegex)' \
+    | grep -v -E '$(Get-FrameworkReservedFileRegex)' ) > "`$W/out/.workspace-diff.txt`$EV_SUF" 2>/dev/null || true
 echo "WORKSPACE_DIFF_LINES=`$(wc -l < "`$W/out/.workspace-diff.txt`$EV_SUF" 2>/dev/null || echo 0)"
 # accept gate (A14): run executable criteria in workspace after agent completes
 # golden gate (O-12, IMPLEMENTATION §3.3 M3): authoritative criteria run BEFORE self accept (inv 2/5)
