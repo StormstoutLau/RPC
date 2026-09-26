@@ -10,6 +10,11 @@
   · **不引入 pytest / 任何第三方**：直接以子进程跑各脚本，各自的 sys.path 注入与退出码语义不变。
   · **每个测试一个独立子进程** ⇒ 互不污染（有的测试会 monkeypatch `cluster.*` 全局）。
   · 以**退出码**为通过与否的权威（不靠解析文本）；文本只用来出人读摘要。
+  · ★★ **但 `rc == 0` 还不够**（**O-89**，2026-09-26 落地）：**还必须有 `RESULT:` 汇总行** ——
+    否则"被 import、定义一堆 `test_*`、正常退出 0"的文件会**静默通过**，而**一条断言都没跑**。
+    ⚠ 本仓**实际发生过一次**（`test_rpc_check_u1.py` 整整一个版本 0 执行）；更刺眼的是
+    下面那句"入口本身坏了"的警告**当时就写在本 docstring 里** —— 只是**没有判据**去管它。
+    ⇒ 教训：**警告不是判据**（本仓已有 O-70 同族讨论）。现已把它变成 `run_one` 里的一行判断。
   · 子进程强制 `PYTHONIOENCODING=utf-8`，避免 Windows 控制台编码把中文输出打乱。
 
 用法（退出码 0 = 全过）：
@@ -54,8 +59,20 @@ def run_one(path: Path, verbose: bool):
     except subprocess.TimeoutExpired:
         out, rc = f"超时 (> {TIMEOUT_S}s): {path.name}", 124
     dt = time.time() - t0
-    ok = (rc == 0)
-    print(f"  {'PASS' if ok else 'FAIL'}  {path.name:<28} {dt:5.1f}s   {parse_result(out)}")
+    summary = parse_result(out)
+    # ★★ O-89（2026-09-26）：`rc == 0` 但**没有 `RESULT:` 汇总行** ⇒ **判红**。
+    #   为什么必须有这条：门禁**只认退出码** ⇒ 一个"被 import、定义一堆 test_*、
+    #   然后正常退出 0"的文件会**静默通过**，而它**一条断言都没跑**。
+    #   本仓实际发生过一次（`test_rpc_check_u1.py` 整整一个版本 0 执行）——
+    #   而下面那句警告**当时就已经写在 docstring 里**，只是**没有判据**去管它。
+    #   ⇒ 现在把它变成可机判：**"没报汇总" = "没跑"**。
+    missing = (rc == 0 and not summary)
+    ok = (rc == 0) and not missing
+    if missing:
+        print(f"  FAIL  {path.name:<28} {dt:5.1f}s   "
+              f"⚠ 无 `RESULT:` 汇总行 ⇒ 判红（它可能**一条断言都没跑**；见 O-89）")
+    else:
+        print(f"  {'PASS' if ok else 'FAIL'}  {path.name:<28} {dt:5.1f}s   {summary}")
     if verbose or not ok:
         if not verbose:
             print(f"  ── {path.name} 输出 ──")
