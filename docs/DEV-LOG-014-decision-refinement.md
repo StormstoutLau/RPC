@@ -4729,3 +4729,47 @@ J-1 要的**不是**"某台站上装着什么"，而是"**某次派发时，judg
 ⇒ **阶段门 §7 的"两条判据生效"**：**判据有消费者且在真数据上产出报数** ✅（⚠ 但**"生效"的规模受限于 review 覆盖 2/246**，如实登记）。
 ⇒ 剩 `D7-P3-1` 的**权限模型本身**（"只标记永不改写 + 能力裁剪 + 盲写 + 不得自审"）。
 
+## 76. `D7-P3-1`：权限模型的**"不得自审"**落到站上（2026-09-26）
+
+### 76.1 先核现有基础（四要素里三个已有，缺第四个）
+
+| 要素 | 现状 |
+|---|---|
+| **只标记永不改写** | ✅ `review.json` = advisory（"NEVER alters run.json/task accept semantics"）+ `record_sha256` 可判凭据（§62）· golden 的 `hidden_from_model = $true` |
+| **能力裁剪** | ✅ `sensitivity × egress/compliance` 门 · `readonly` 卡 · `require-gate` |
+| **盲写** | ✅ golden 内容**从不进 prompt** · O-92 双盲重推导 |
+| **★ 不得自审** | ❌ **缺** —— 此前没有任何地方检查"判官与产出者是不是同一个模型" |
+
+### 76.2 ★★ 关键设计决定：站上只做**粗判**，族级细判**留在本仓**
+
+**为什么不在站上判族**：族表（`inventory/model-families.yaml`）**在本仓、不在站上**
+⇒ 站上**不假装能判族**。⇒ 分两层，**各在其位**：
+- **站上**（`Resolve-SelfReviewGuard`，本次新增）⇒ **归一后同名 ⇒ 自审 ⇒ 拒**；
+- **本仓**（`ops/agent_pair_audit.py`，§75）⇒ **族级**（J-1/J-2）。
+
+### 76.3 落地
+
+`Resolve-SelfReviewGuard -ProducerModel -JudgeId -JudgeAlias [-Allow]`（**纯函数**，可离线单测）：
+三态 `ok` / `self`（同名 ⇒ 拒）/ `unknown`（读不出 ⇒ **拒**，fail-closed）。
+接线在 `Invoke-Review` 里、**同样位于"读产物 / 建提示词 / 发请求之前"**；
+★ **原料复用**上面 L1 门已读的 run 记录（`$l1Record.model` = 产出者模型）⇒ **不重复读盘**。
+拒码 = **`exit 8`**（本地前置门，与判官调用失败码 5/6/7 区分）· 显式通道 `--allow-self-review`（**放行不改 verdict**）·
+`review.json.self_review_guard` 段（**两处写点都带**）。
+
+★ 归一的顺序坑**又一次出现**（与 §73 同源）：必须**先取末段、再剥 `:` 尾参** —— 否则
+`station:A/ThinkingMachines/Inkling:Free` 会被腰斩成 `station`。⇒ 站上/Python **同规则**（`sr-4` 守它）。
+
+### 76.4 验收（`_fm_golden_test.ps1` **375 → 388**，`sr-1`~`sr-13` 全绿）
+
+★ 其中三条是**关键反例**（否则这条判据很容易"看起来在判、实际只判裸名"）：
+- **`sr-2` 跨传输前缀同名**（`local/m27-q4ks` vs `cluster-litellm/m27-q4ks`）⇒ 判 `self`；
+- **`sr-3` 尾参差异**（`local/gpt-oss-20b` vs `openrouter/nvidia/gpt-oss-20b:free`）⇒ 判 `self`；
+- **`sr-6`/`sr-7` 读不出 ⇒ 拒**（fail-closed），且**显式放行时 verdict 仍是 `unknown`/`self`**（降级 ≠ 隐藏）。
+
+### 76.5 边界（如实）
+
+1. **粗判的射程**：它只抓"**同名**"。**同族不同名**（如 `gpt-oss-20b` 审 `gpt-oss-120b`）**站上抓不到**
+   ⇒ 那是 **J-1（族级）** 的活儿，且**只在有 review 的 run 上**才判得起来（§75：可配对 **2/246**）。
+2. **`--allow-self-review` 的放行占比无判据** —— 与 `--allow-l1-red` 同族（§62.5）；建议先**报数**。
+3. **站上真跑未实测**（同 O-92 / §62 边界）：本批覆盖**纯函数 + 接线 + 结构**。
+

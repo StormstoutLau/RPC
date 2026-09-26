@@ -4598,6 +4598,48 @@ function Merge-JudgeFindings {
     }
 }
 
+function Resolve-SelfReviewGuard {
+    # ── D7-P3-1（2026-09-26）：**不得自审**（权限模型四要素之一）─────────────────────────
+    # 判什么：**产出者与判官不能是同一个模型** —— "让写它的模型审它" 等于**没有审**
+    #   （Courtroom-MAD 的实测："homogeneous agents cannot reliably improve over majority voting"）。
+    # ★★ **站上只做【粗判】：归一后同名 ⇒ 自审**。**族级细判不在站上** ——
+    #   因为**族表（`inventory/model-families.yaml`）在本仓、不在站上** ⇒ 站上**不假装能判族**；
+    #   族级判定由本仓消费者 `ops/agent_pair_audit.py` 承担（J-1/J-2）⇒ **两层，各在其位**。
+    # ⚠ **fail-closed**：producer 的 model 读不出 ⇒ **拒**（"读不到 ≠ 不同" ⇒ 不许默认放行）。
+    # ⚠ 显式通道 `--allow-self-review`：放行**不改 verdict**（仍是 `self`/`unknown`），且**留痕**。
+    param(
+        [string]$ProducerModel,
+        [string]$JudgeId,
+        [string]$JudgeAlias,
+        [switch]$Allow
+    )
+    # 归一：与 Python 侧 `rpc_check.normalize_model_id` **同规则**（取末段 → 去 `:xxx` 尾参）
+    #   ⚠ 顺序不能反：`station:A/vendor/model:free` 里的 `:` **在前缀中间**（本批实测踩过）。
+    $key = {
+        param($s)
+        $t = [string]$s
+        if (-not $t) { return '' }
+        $t = ($t -split '/')[-1]
+        $t = ($t -split ':')[0]
+        return $t.Trim().ToLower()
+    }
+    $pk = & $key $ProducerModel
+    $jk = & $key $JudgeId
+    $facts = [ordered]@{ producer_model = [string]$ProducerModel; producer_key = $pk
+                         judge_id = [string]$JudgeId; judge_alias = [string]$JudgeAlias; judge_key = $jk }
+    if (-not $pk) {
+        return @{ ok = [bool]$Allow; verdict = 'unknown'; reason = 'producer 的 model 读不出（run 记录缺 model）'; facts = $facts }
+    }
+    if (-not $jk) {
+        return @{ ok = $false; verdict = 'unknown'; reason = 'judge 的 id 读不出'; facts = $facts }
+    }
+    if ($pk -eq $jk) {
+        return @{ ok = [bool]$Allow; verdict = 'self';
+                  reason = "产出者与判官**归一后同名**（$pk）⇒ **自己审自己**"; facts = $facts }
+    }
+    return @{ ok = $true; verdict = 'ok'; reason = ''; facts = $facts }
+}
+
 function Invoke-Review {
     param(
         [string]$proj,
@@ -4606,10 +4648,11 @@ function Invoke-Review {
         [string]$model,
         [switch]$overwrite,
         [switch]$allowL1Red,
+        [switch]$allowSelfReview,
         [string]$sensitive
     )
     if (-not $proj) { $proj = $env:AGENT_CLI_PROJ }
-    if (-not $card) { Write-Host 'usage: agent-cli review <proj> --card <task.md> [--run-id <ts>] [--model <judge-alias>] [--overwrite] [--allow-l1-red]'; return 2 }
+    if (-not $card) { Write-Host 'usage: agent-cli review <proj> --card <task.md> [--run-id <ts>] [--model <judge-alias>] [--overwrite] [--allow-l1-red] [--allow-self-review]'; return 2 }
     if (-not (Test-Path $card)) { Write-Host "card not found: $card"; return 3 }
     $projRoot = $Script:PROJECTS[$proj]
     if (-not $projRoot -or -not (Test-Path $projRoot)) { Write-Host "unknown/missing project: $proj (registered: $($Script:PROJECTS.Keys -join ','))"; return 2 }
@@ -4677,6 +4720,29 @@ function Invoke-Review {
         golden_passed = $l1['facts']['golden_passed']
         allowed_red = [bool]$allowL1Red
         record_sha256 = "sha256:$l1RecSha"
+    }
+    # ── D7-P3-1（2026-09-26）：**不得自审**（权限模型四要素之一）─────────────────────────
+    # 位置同样在"读产物 / 建提示词 / 发请求"**之前**（省一次出网 + 不产出"自己审自己"的结论）。
+    # ★ 原料复用上面已读的 run 记录（`$l1Record.model` = **产出者模型**），不重复读盘。
+    # ★★ 站上**只做粗判（同名 ⇒ 自审）**；**族级细判在本仓**（`ops/agent_pair_audit.py`）——
+    #   因为族表不在站上 ⇒ **站上不假装能判族**。
+    # ⚠ fail-closed：`model` 读不出 ⇒ 拒（读不到 ≠ 不同）。
+    $sg = Resolve-SelfReviewGuard -ProducerModel ([string]$l1Record.model) -JudgeId ([string]$judge['id']) -JudgeAlias ([string]$judgeAlias) -Allow:$allowSelfReview
+    if (-not $sg['ok']) {
+        Write-Host ("REJECT SELF_REVIEW_BLOCK (" + $sg['verdict'] + ": " + $sg['reason'] + ") exit 8 - " +
+                    "产出者与判官须为不同模型；诊断用可加 --allow-self-review")
+        return 8
+    }
+    if ($sg['verdict'] -ne 'ok') {
+        Write-Host ("SELF_REVIEW_ALLOWED: " + $sg['verdict'] + "（" + $sg['reason'] + "）但显式 --allow-self-review ⇒ 进 L2；事实将写进 review.json")
+    }
+    $sgSection = [ordered]@{
+        verdict = $sg['verdict']
+        reason = $sg['reason']
+        producer_model = $sg['facts']['producer_model']
+        judge_id = $sg['facts']['judge_id']
+        judge_alias = $sg['facts']['judge_alias']
+        allowed = [bool]$allowSelfReview
     }
 
     $runName = Split-Path $runDir -Leaf
@@ -4789,6 +4855,7 @@ function Invoke-Review {
         #   机械面上写的，而"失败"恰恰是最需要知道 L1 状态的场合）。
         $review['l1'] = $l1Section
         $review['contract'] = $ccSection        # D7-P2-2：判官调用失败也留契约校验结果（多半 ok=false）
+        $review['self_review_guard'] = $sgSection   # D7-P3-1：不得自审的事实也留档
         $review | ConvertTo-Json -Depth 8 | Set-Content $reviewPath -Encoding utf8
         Write-Host "REVIEW_WRITTEN(advisory,error) $reviewPath"
         if ($callCode -ge 5) { return $callCode }   # NETFAIL(5)/timeout(6)/unparseable(7) surfaced, non-blocking
@@ -4873,6 +4940,8 @@ function Invoke-Review {
     # D7-P2-2（2026-09-26）：**结论契约**随产物留档 —— 让"判官说了什么、是否合契约、意见落在哪一行"
     #   机器可读（`merged.judges` 同时暴露**输入规模** ⇒ 单判官不会被误读成"多家共识"）。
     $review['contract'] = $ccSection
+    # D7-P3-1（2026-09-26）：**不得自审**的事实随产物留档（判官/产出者各自的模型 + 是否放行）
+    $review['self_review_guard'] = $sgSection
     $review | ConvertTo-Json -Depth 8 | Set-Content $reviewPath -Encoding utf8
     Write-Host "REVIEW_WRITTEN(advisory) $reviewPath"
     Write-Host ("REVIEW score=" + $review.output.score + " pass=" + $review.output.pass + " judge=" + $judge['id'] + " elapsed_s=" + $elapsed)
