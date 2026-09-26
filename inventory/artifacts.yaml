@@ -54,6 +54,14 @@ items:
   - path: inventory/id-site-census.yaml
     authority: "各项目代码实况（口径 = ops/id_site_census.py：正则 + 范围 + 单位三件套）；重出 = --emit"
     check: id-census
+  # U-4 (2026-09-26): ID **存储面**普查真值 —— 口径的唯一实现在 `ops/id_storage_census.py`，
+  #   本文件是它的一次快照 ⇒ 属生成物（重出 = `py ops/id_storage_census.py --emit`）。
+  #   ★ 它是 `decide_invalidation()` 那个 `affected` 入参的**生产者**（此前是"开库手工数"）。
+  #   ⚠ 门禁 `id-storage` 判：① 数值/形态一致性 ② ★ **声明的 role 必须回库里核过**（声明与实测不符 ⇒ FAIL）
+  #     ③ 口径漂移优先判红 ④ 存储不可达 ⇒ WARN 不 FAIL（库在别的盘），但报 `不可达 N/M` 不静默通过。
+  - path: inventory/id-storage-census.yaml
+    authority: "各项目**存储**实况（duckdb / sqlite / jsonl 只读探测）；重出 = --emit"
+    check: id-storage
 
   # ── 受理交付物：**按项目一份**（不是仓库里的静态路径）─────────────────────
   # D6-P1-1 §11.1-C 纪律 1/2/3：登记为生成物 · `--check` 等价物（重算→比对）· freshness 决定能否结案。

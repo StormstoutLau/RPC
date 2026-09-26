@@ -86,6 +86,12 @@ frozen_ops_scripts:
   #   ③ 它被门禁以 `importlib` 全路径加载（不靠 sys.path）⇒ 与 `_fm_golden_test.ps1` /
   #      `_runstamp_hammer.ps1` 同类: **受治理的夹具**, 而非并列管理入口。
   - ops/id_site_census.py
+  # 2026-09-26 (U-4): ID **存储面**普查（`affected` 的生产者）。与 `id_site_census.py` **同一条理由**：
+  #   ① 门禁 `id-storage` 与"重出真值"必须**同一份代码**（口径分两份写就是"同一事实两个定义点"）;
+  #   ② 它也有**写入动作**（`--emit`）与 `--invalidate` 的**决策输出** ⇒ 挂在只读门禁上职责相反;
+  #   ③ 被门禁以 `importlib` 全路径加载 ⇒ 同属**受治理的夹具**。
+  #   ⚠ 它**只读**打开别的项目的生产库（`mode=ro` / `read_only=True`）—— 这一点写进了脚本 docstring。
+  - ops/id_storage_census.py
   - ops/llama-serve-instance
   - ops/lm-download/speedtest_asset.sh
   - ops/lm-download/speedtest_codeload.sh

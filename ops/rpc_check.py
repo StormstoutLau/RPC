@@ -1307,6 +1307,64 @@ def check_id_census(ctx):
     return "PASS", note, []
 
 
+def check_id_storage(ctx):
+    """U-4: **存储面**普查 —— `affected` 的**生产者**（此前是"开库手工数"）。
+
+    ★ 判什么：
+      ① **数值/形态**与真值一致（`inventory/id-storage-census.yaml`）；
+      ② ★★ **声明的 `role` 必须回库里核过** —— 声明 `primary_key` 而实测不是 ⇒ **FAIL**
+         （"声明 ≠ 事实"是这个脚本唯一能咬住自己的地方，也最容易被写成自说自话）；
+      ③ **口径漂移**（形态档 / 取样上限 / role 取值域）⇒ 比数值不符**优先**判红。
+    ⚠ 存储不可达 ⇒ **WARN 不 FAIL**（库在别的盘），但报 `不可达 N/M` ⇒ **不静默通过**（D-26）。
+    """
+    import importlib.util
+    try:
+        import yaml  # noqa: F401
+    except Exception:
+        return "WARN", "缺 pyyaml, 跳过 id-storage 断言", []
+    script = ROOT / "ops" / "id_storage_census.py"
+    if not script.is_file():
+        return "FAIL", "ops/id_storage_census.py 缺失（本断言的登记依据）", []
+    spec = importlib.util.spec_from_file_location("_id_storage_census", script)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    doc = yaml.safe_load(mod.CENSUS.read_text(encoding="utf-8")) or {}
+    m = doc.get("metric") or {}
+    drift = []
+    if m.get("shape_sample_limit") != mod.MAX_SHAPE_SAMPLE:
+        drift.append("shape_sample_limit")
+    if m.get("role_domain") != ["primary_key", "record_key"]:
+        drift.append("role_domain")
+
+    now = {(s["project"], s["path"], s["table"], s["column"]): s for s in mod.census()}
+    mism, unreach, badrole, ok = [], [], [], 0
+    for s in doc.get("stores") or []:
+        cur = now.get((s["project"], s["path"], s["table"], s["column"]))
+        if cur is None:
+            continue
+        if not cur.get("reachable"):
+            unreach.append(f"{s['project']}.{s['column']}")
+        elif s.get("declared_role") == "primary_key" and cur.get("is_primary_key") is not True:
+            badrole.append(f"{s['project']}.{s['column']}: 声明 primary_key 但**库里不是**"
+                           f"（实测 is_primary_key={cur.get('is_primary_key')}）")
+        elif (s.get("rows"), s.get("distinct")) != (cur.get("rows"), cur.get("distinct")):
+            mism.append(f"{s['project']}.{s['column']}: 真值 {s.get('rows')}行/{s.get('distinct')}distinct "
+                        f"≠ 实测 {cur.get('rows')}行/{cur.get('distinct')}distinct")
+        else:
+            ok += 1
+    total = len(doc.get("stores") or [])
+    rows = sum(s.get("rows") or 0 for s in (doc.get("stores") or []) if s.get("reachable"))
+    note = f"存储 {total} 处 · 一致 {ok} · 角色不实 {len(badrole)} · 不符 {len(mism)} · 不可达 {len(unreach)}/{total} · 存量 {rows} 行"
+    if drift:
+        return "FAIL", note, [f"**口径已漂移**: {drift} ⇒ 重跑 --emit 并复核下游结论"] + badrole + mism
+    if badrole or mism:
+        return "FAIL", note, badrole + mism
+    if unreach:
+        return "WARN", note, [f"不可达 ⇒ 本次 **affected 不完整**（可见，不静默）: {', '.join(unreach)}"]
+    return "PASS", note, []
+
+
 def check_u1_identity(ctx):
     """D7-P1 实现侧（U-1 落地）：`inventory/*.yaml` 的 **U-1 身份声明必须可复算**。
 
@@ -4611,6 +4669,19 @@ CHECKS = [
             "\n\n★ 这条断言的**存在理由**：U4 §1 表原来那一列「计数」**没有口径** —— "
             "Open_Data 换四种口径实测得 12 / 14 / 117 / 139，而表里写的是 34 ⇒ **数字没有定义**。"
             "⚠ 它只回答『有多少处哈希用法』，**不回答**『哪些是产物 ID』（那是 U-4 的 `affected`，仍未解）。"},
+    {"id": "id-storage", "title": "ID 存储面（affected 生产者）", "fn": check_id_storage, "quick": True,
+     "fix": "U-4: `inventory/id-storage-census.yaml` 是**唯一真值**，口径的**唯一实现**在 `ops/id_storage_census.py`。"
+            "① 数值不符 ⇒ 存储变了（正常）⇒ 跑 `py ops/id_storage_census.py --emit` 重出真值，"
+            "**并回头复核 U-4 的 `affected`**；"
+            "② ★★ **角色不实 ⇒ FAIL**：声明 `primary_key` 就必须**回库里核过**（duckdb 查 "
+            "`duckdb_constraints()` · sqlite 查 `PRAGMA table_info`）—— 声明与实测不一致，说明这张表在**自说自话**；"
+            "③ **口径漂移**（形态档 / 取样上限 / role 取值域）⇒ 比数值不符**优先**判红；"
+            "④ 存储不可达 ⇒ **WARN 不 FAIL**（库在 `F:`/`E:` 等别的盘）—— 但报 `不可达 N/M`，**绝不静默通过**。"
+            "\n\n★ **它是什么**：把 2026-09-26 那次『开库手工数 affected』（duckdb + sqlite）变成**可复算的机制**。"
+            "`py ops/id_storage_census.py --invalidate --changed <带 u1: 声明的文件>` 会串起三段："
+            "**changed_ids（取声明）→ affected（本普查实测）→ `decide_invalidation()` 的处置**。"
+            "⚠ 它只产出**决策**，不执行重算（执行侧仍未实现 —— U4 未实测第 10 条）；"
+            "⚠ `affected` 的完整性取决于 `STORES` 清单，而**清单是线索不是事实**（已吃过两次亏）。"},
     {"id": "edges", "title": "U-3 依赖边格式", "fn": check_edges, "quick": True,
      "fix": "D7-P1-3: `inventory/edges.yaml` 的**实例**要满足 `U3-EDGE-FORMAT.md`（形状的单一真值）："
             f"① `src`/`dst` 必须是 **U-1 产物身份**形态 `{U1_PREFIX}:<{U1_TRUNC} 位小写 hex>`"

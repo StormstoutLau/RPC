@@ -165,3 +165,48 @@ def test_repo_inventory_declarations_exist_and_recompute():
             f"{p.name} 缺 `# {R.U1_PREFIX}` 头部注释行（D-25：前缀进头部注释）"
     # ★ 一个都没有 ⇒ 本条判据失去对象（会在门禁里静默退化成空判）
     assert seen, "inventory/*.yaml 里没有任何 U-1 身份声明 ⇒ 未实测 #2 并未被消掉"
+
+
+# ── ⑦ ★ **无 pytest 的自跑入口**（门禁 `py-tests` 以**脚本**方式调用本文件）────────
+def _run_all() -> int:
+    """★ 为什么必须有这个入口（**一手教训**）：
+
+    门禁 `py-tests` 是 `py tests/run_py_tests.py`，它把每个 `test_*.py` 当**独立脚本**跑，
+    **只认退出码**（见 `tests/run_py_tests.py` 的 `run_one`）。
+
+    ⇒ 本文件**原先没有**这个入口：被 import、定义一堆 `test_*`、然后**正常退出 0**
+    ⇒ 门禁报 `PASS  test_rpc_check_u1.py  0.1s`（`RESULT` 列是**空的**），
+      而**一条断言都没跑** —— 这就是"**整批验证静默消失**"，也是假绿的第 ③ 类
+      （"看起来更硬的判据其实没读到"）。
+
+    ⚠⚠ **这不是假设**：2026-09-26 实测确认（`py tests/test_rpc_check_u1.py` ⇒ **exit 0、零输出**），
+      而本文件的 14 条断言此前**只在 pytest 下**被跑过（`py -m pytest` 能看到 "14 passed"）
+      ⇒ **"我跑过了"与"门禁跑过了"是两件事**，中间差的就是这个入口。
+    """
+    tests = [(n, f) for n, f in sorted(globals().items())
+             if n.startswith("test_") and callable(f)]
+    fails = []
+    for name, fn in tests:
+        try:
+            fn()
+        except AssertionError as e:
+            fails.append(name)
+            print(f"  FAIL {name}: assert 失败 {e or ''}".rstrip())
+        except Exception as e:                      # 非断言异常同样是失败（不许静默）
+            fails.append(name)
+            print(f"  FAIL {name}: {type(e).__name__}: {e}")
+        else:
+            print(f"  ok   {name}")
+    ok = len(tests) - len(fails)
+    print()
+    # ⚠ 空集也算失败：没有用例可跑时**绝不能**报 ALL PASS（否则入口坏了没人知道）
+    if not tests:
+        print("RESULT: FAIL 未发现任何 test_* 函数（入口本身坏了）")
+        return 1
+    print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAILED -> {fails}")
+    print(f"  （{ok}/{len(tests)} 通过）")
+    return 1 if fails else 0
+
+
+if __name__ == "__main__":
+    sys.exit(_run_all())
