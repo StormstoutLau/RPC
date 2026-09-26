@@ -31,6 +31,14 @@ items:
   - path: inventory/ops.yaml
     authority: "ops/** 目录实况（frozen_ops_scripts 必须与扫描集一致；只允许'只减不增'）"
     check: scripts
+  # D7-P1-1 (2026-09-26): U-2 方言字典/映射表 —— **权威源在别处**（各项目的符号定义），
+  #   本文件是它的投影 ⇒ 属生成物。门禁 `dialect` 重算**源切片指纹**（源变了 ⇒ 红）
+  #   并用 `coverage` 逐族点行数（防漏项，`b1b` 实漏过一行）。
+  #   ⚠ 无自动生成器（重抽是人/agent 在环）：`regeneration.why_not_automated` 已如实登记
+  #     「本仓只能对账、不能强制（下游在别的 repo）」⇒ 门禁只保证"你忘了重抽"会被抓住。
+  - path: inventory/dialect.yaml
+    authority: "合并稿 §11.1 原文切片 + 出站版摘要（两层输入；重抽=人/agent 在环，见文件内 regeneration 段）"
+    check: dialect
 
   # ── 受理交付物：**按项目一份**（不是仓库里的静态路径）─────────────────────
   # D6-P1-1 §11.1-C 纪律 1/2/3：登记为生成物 · `--check` 等价物（重算→比对）· freshness 决定能否结案。
