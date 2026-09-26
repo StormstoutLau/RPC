@@ -953,6 +953,12 @@ Assert-True "o68: ★ GC 的**裕度理由**写在源码里(7天 vs 最长 timeo
 #   ⇒ 与 O-65 那次"全文子串 ⇒ 可被注释蒙过"是**同一个坑的两个方向**（那次是假绿, 这次是假红）:
 #     判据必须**只看代码**。此处就地做代码/注释分离（去 `#` 之后的部分）。
 $codeOnlyFull = (($content -split "`n") | ForEach-Object { $_ -replace '#.*$', '' }) -join "`n"
+# ★ 2026-09-26: 夹具此前**只读 agent-cli.ps1**（`$content`/`$codeOnlyFull`），但 O-70 的 `[orph2]` 探针
+#   **住在 `ops/rpc_check.py`** ⇒ 断言必须读**那个文件**。
+#   ⚠ 我第一版把 o70 断言写在 `$codeOnlyFull` 上（= 读错了被测对象）⇒ **门禁 P3-2 当场判红**
+#     —— 那条"先判是回归还是夹具期望值陈旧"的护栏正为此存在，这次它咬的是**我**。
+$checkSrc = [System.IO.File]::ReadAllText('d:\RPC\ops\rpc_check.py', [System.Text.UTF8Encoding]::new($false))
+$checkCode = (($checkSrc -split "`n") | ForEach-Object { $_ -replace '#.*$', '' }) -join "`n"
 Assert-True "o68: ★★ **已无**'无条件删固定名'(D2 落地 = O-68 修法的**前提条件**; 只看代码)" (
     -not $codeOnlyFull.Contains('$evRmCmd'))
 Assert-True "o68: ★ 源码**写明**'不要把它加回来'的理由(防有人手滑复原 reset)" (
@@ -1137,6 +1143,16 @@ Assert-True "o67②: 把条件写成**账户/站粒度**（跨站独立 key ⇒ 
     $content.Contains('并行性取决于**账户/站粒度**') -and
     $content.Contains('跨站（各站独立 key）= 可并行') -and
     $content.Contains('实测') -and $content.Contains('均成立'))
+
+# --- O-70 修法③ (2026-09-26): `orph2` 的**自匹配**不能靠"文本巧合"来挡 ---
+# 一手实测（三站对照）: 无残留时 **NAIVE 版（只把排除键换成 `ps -eo`）会多报 1 行 —— 就是 `grep` 进程自己**；
+#   而 **NEW 版（按 pgid 排除自己的进程组）0 行**；有真残留时 NEW **只列出真的那条**。
+Assert-True "o70①: 探针按 **pgid** 排除自己的进程组（结构性修法，不靠模式串）· **读 rpc_check.py**" (
+    $checkCode.Contains('pid=,pgid=,etimes=,args=') -and
+    $checkCode.Contains('awk -v pg=$(') -and
+    $checkCode.Contains('$2!=pg'))
+Assert-True "o70②: **反向断言** —— 不许退回 `grep -v -e grep` 那种'恰好挡住'的文本巧合（它会静默排掉含 `grep` 的真残留）" (
+    -not $checkCode.Contains('grep -v -e grep'))
 
 # --- O-76 (2026-09-25): 私有中转目录的**按龄清**（"派发在 body 之前中止"那一格的出口） ---
 # 一手泄漏: B 站 2 个残留（含 attach/ 与 golden.tgz，其中一个是 O-71 那次 aborted 派发）。

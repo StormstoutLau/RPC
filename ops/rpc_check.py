@@ -2954,9 +2954,22 @@ STATION_CMD = (
     #     ② 即便过滤对了, 桌面用户的 `ppid=1` 也天然包含 `systemd --user` 等**合法**长龄进程 ⇒ 恒有噪声。
     #   ⇒ 改成按**产物名**匹配(args 里出现我们自己的脚本名): 这是"事实"判据、噪声面小得多,
     #     且**正好**覆盖 O-72 那一类。阈值仍留在门禁侧(下面按 `ORPHAN_SEC` 判)。
-    "printf '\\n[orph2]\\n'; ps -eo pid=,etimes=,args= 2>/dev/null "
+    # ★★ 2026-09-26 结构性修法：**按 pgid 排除探针自己的整个进程组**（不再靠文本巧合）。
+    #   起因（本轮实测）：直查时用 `pgrep -af agent-cli-task …` ⇒ **它自匹配了自己所在的命令行**
+    #     ⇒ 说明"自匹配"是这条探针的**真实**风险，不是理论风险。
+    #   旧版靠 `grep -v -e grep` 恰好挡住（自匹配行里也含 `grep` 一词）—— **侥幸成立**，
+    #     代价是：**任何 args 里含子串 `grep` 的真残留会被静默排掉**（"路灯下找钥匙"的第二个面）。
+    #   ⚠ 我曾以为"把排除键换成 `ps -eo`"是正解 —— **三站实测证伪**：那样会漏掉
+    #     `grep -e agent-cli-task …` **进程自己**（其 args 含 `agent-cli-task` 却不含 `ps -eo`）⇒ 假阳性 1 行。
+    #   ⇒ 现改为：`ps` 多输出一列 pgid + `awk` 剔除 `$2 == 自身 pgid`。
+    #     shell / ps / grep / awk **同属一个进程组** ⇒ 一次全剔，**不依赖任何模式串**。
+    #   ★ 实测对照（三站，注入假残留前后）：
+    #       无残留 ⇒ **NEW 0 行**（旧版 0 行 / NAIVE 1 行假阳性）；有真残留 ⇒ **NEW 1 行，且只有真的那条**。
+    #   ⚠ awk 把 pgid 列清空 ⇒ 输出行多一个空格；门禁侧用 `line.split()` 解析 ⇒ 不受影响（已实测）。
+    "printf '\\n[orph2]\\n'; ps -eo pid=,pgid=,etimes=,args= 2>/dev/null "
+    "| awk -v pg=$(ps -o pgid= -p $$ | tr -d ' ') '$2!=pg { $2=\"\"; print }' "
     "| grep -e agent-cli-task -e agent-stage- -e _oc_session_meta -e _p3_run -e _station_ready -e _slot_gate "
-    "| grep -v -e grep | head -20; "
+    "| head -20; "
 )
 # 刻意不取 infer-list: (1) 它自身约 10s+, 三站并行也要 30s+ (实测全量从 31s 涨到 60s);
 # (2) 判定"别名在该站是否可用"本来就该看 conf —— infer-load 读的正是
