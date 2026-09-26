@@ -21,8 +21,8 @@ sys.path.insert(0, str(ROOT / "ops"))
 
 import rpc_check as R  # noqa: E402
 
-S_ID = "u1:sha256:16:0123456789abcdef"
-D_ID = "u1:sha256:16:fedcba9876543210"
+S_ID = "u1:sha256:32:0123456789abcdef0123456789abcdef"
+D_ID = "u1:sha256:32:fedcba9876543210fedcba9876543210"
 
 KINDS = ["document_level", "formal_handoff_package"]
 PREFIXES = ["hash", "filetrack", "manual", "tool"]
@@ -80,7 +80,7 @@ CASES = [
     ("★反例 src 不是 U-1 身份形态（随手写路径）",
      _nonempty(edges=[_edge(src="out/foo.md")]), False, "不是 U-1 产物身份形态"),
     ("★反例 dst 用大写 hex（形态不合）",
-     _nonempty(edges=[_edge(dst="u1:sha256:16:ABCDEF0123456789")]), False, "不是 U-1 产物身份形态"),
+     _nonempty(edges=[_edge(dst="u1:sha256:32:ABCDEF0123456789ABCDEF0123456789")]), False, "不是 U-1 产物身份形态"),
 
     # ── ★ 枚举 / 重复 ──────────────────────────────────────────────────
     ("★反例 kind 不在 `kinds` 封闭枚举里",

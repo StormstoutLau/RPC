@@ -2,12 +2,15 @@
 
 为什么必须有这个文件：`spec/d6-agent-standard/U1-ARTIFACT-IDENTITY.md` 末节记着两条**未实测**：
   ① "**规范化 JSON 数组**作为哈希输入：**从未在任何出处实现过**，只存在于文档里"；
-  ② "**头部注释前缀 `# u1:sha256:16`**：**从未在任何清单 / 索引文件里写过**"。
+  ② "**头部注释前缀 `# u1:sha256:<截断>`**：**从未在任何清单 / 索引文件里写过**"。
 ⇒ 本文件把 ① 变成**可复算**；② 由 `inventory/dialect.yaml` / `inventory/edges.yaml` 的**真实声明**消掉
   （判据 = 门禁 `u1-identity`，它**复算**而不只看格式）。
 
-⚠ 本文件的立场：只判"有个 `u1:` 前缀"是**假绿**（随手编一个 16 位 hex 就能过）⇒
+⚠ 本文件的立场：只判"有个 `u1:` 前缀"是**假绿**（随手编一个合规长度的 hex 就能过）⇒
   下面既有正例，也有**反例族**，还有一条**先验红自证**（证明"复算"这条判据不是恒真）。
+⚠⚠ **不硬编码截断长度**：算法 / 截断一律从 `R.U1_ALGO` / `R.U1_TRUNC` 取 ——
+  否则改一次取值（如 2026-09-26 的 `16`→`32`，见 O-84）就得回来手改一堆字面量，
+  而**漏改的那条会变成"因为格式不对而通过的假测试"**（本文件 2026-09-26 就这么差点踩中）。
 """
 import hashlib
 import sys
@@ -30,8 +33,9 @@ def test_canonical_bytes_is_exactly_the_array():
     assert b", " not in R.u1_canonical_bytes(NS, IDENT, VER)
 
 
-def test_identity_equals_sha256_first16_of_that_vector():
-    want = "u1:sha256:16:" + hashlib.sha256(b'["rpc","inventory/edges.yaml","0.0.0"]').hexdigest()[:16]
+def test_identity_equals_sha256_first_trunc_of_that_vector():
+    want = f"{R.U1_PREFIX}:" + hashlib.sha256(
+        b'["rpc","inventory/edges.yaml","0.0.0"]').hexdigest()[:R.U1_TRUNC]
     assert R.u1_identity(NS, IDENT, VER) == want
 
 
@@ -69,14 +73,15 @@ def test_field_boundaries_do_not_blur():
 def test_parse_accepts_only_the_declared_shape():
     good = R.u1_identity(NS, IDENT, VER)
     assert R.u1_parse(good) is not None
+    T = R.U1_TRUNC
     bad = [
         ("大写 hex（规范要求小写）", good.upper()),
-        ("长度不足", "u1:sha256:16:0123456789abcde"),
-        ("长度超出", "u1:sha256:16:0123456789abcdef0"),
-        ("前缀写的长度与实际不符（32 vs 16 位）", "u1:sha256:32:" + "0" * 16),
-        ("算法不是我们用的那个", "u1:md5:16:" + "0" * 16),
+        ("长度不足", f"{R.U1_PREFIX}:" + "0" * (T - 1)),
+        ("长度超出", f"{R.U1_PREFIX}:" + "0" * (T + 1)),
+        ("前缀写的长度与实际位数不符", "u1:sha256:16:" + "0" * 16),
+        ("算法不是我们用的那个", f"u1:md5:{T}:" + "0" * T),
         ("截断长度不是我们定的那个", "u1:sha256:12:" + "0" * 12),
-        ("缺段", "u1:sha256:" + "0" * 16),
+        ("缺段", "u1:sha256:" + "0" * T),
         ("不是字符串", 12345),
         ("空串", ""),
         ("路径混进来（不是身份）", "inventory/edges.yaml"),
@@ -106,11 +111,14 @@ def test_declaration_rejects_missing_fields():
 
 
 def test_declaration_rejects_recompute_mismatch():
-    """★ 核心反例：编一个**格式完全合规**的 16 位 hex ⇒ 必须被复算判红。
+    """★ 核心反例：编一个**格式完全合规**的 hex ⇒ 必须被复算判红。
 
     这条就是"格式判 != 身份判"的分界；没有它，`u1-identity` 门禁等于什么都没判。
+    ⚠⚠ 假身份**必须按当前 `U1_TRUNC` 造**：若写成别的长度，它会被 `u1_parse` 以**格式**为由拦下，
+      于是本用例**因为错的原因通过** —— 报的还是"复算不符"就会被读成"复算在起作用"（假绿）。
     """
-    fake = "u1:sha256:16:" + "deadbeefdeadbeef"
+    fake = f"{R.U1_PREFIX}:" + "deadbeef" * (R.U1_TRUNC // 8)
+    assert R.u1_parse(fake) is not None, "假身份必须先过**格式**判（否则本用例证不到复算）"
     err = R.u1_verify_declaration(_decl(identity=fake))
     assert err and "复算不符" in err
 
@@ -121,13 +129,13 @@ def test_declaration_rejects_swapped_fields():
 
 
 def test_declaration_rejects_non_mapping():
-    assert R.u1_verify_declaration("u1:sha256:16:" + "0" * 16) is not None
+    assert R.u1_verify_declaration(f"{R.U1_PREFIX}:" + "0" * R.U1_TRUNC) is not None
     assert R.u1_verify_declaration(None) is not None
 
 
 # ── ⑤ ★ **先验红自证**：上面那条判据不是恒真 ─────────────────────────────────
 def _naive_verify(decl):
-    """一个**只判格式**的桩：任何 16 位小写 hex 都放过（= 假绿版判据）。"""
+    """一个**只判格式**的桩：任何合规长度的 hex 都放过（= 假绿版判据）。"""
     return None if R.u1_parse((decl or {}).get("identity")) else "格式不合规"
 
 
@@ -136,7 +144,7 @@ def test_the_recompute_check_is_not_vacuous():
 
     没这条，"复算"可能只是写了个 `return None`（本仓头号形态：判据什么都没判）。
     """
-    fake = _decl(identity="u1:sha256:16:" + "deadbeefdeadbeef")
+    fake = _decl(identity=f"{R.U1_PREFIX}:" + "deadbeef" * (R.U1_TRUNC // 8))
     assert _naive_verify(fake) is None, "桩应当放过（证明假绿确实存在）"
     assert R.u1_verify_declaration(fake) is not None, "真判据必须判红"
 
@@ -154,6 +162,6 @@ def test_repo_inventory_declarations_exist_and_recompute():
         assert R.u1_verify_declaration(doc["u1"]) is None, f"{p.name} 的身份复算不符"
         head = p.read_text(encoding="utf-8").splitlines()[:5]
         assert any(R.U1_HEADER_RE.match(l) for l in head), \
-            f"{p.name} 缺 `# u1:sha256:16` 头部注释行（D-25：前缀进头部注释）"
+            f"{p.name} 缺 `# {R.U1_PREFIX}` 头部注释行（D-25：前缀进头部注释）"
     # ★ 一个都没有 ⇒ 本条判据失去对象（会在门禁里静默退化成空判）
     assert seen, "inventory/*.yaml 里没有任何 U-1 身份声明 ⇒ 未实测 #2 并未被消掉"

@@ -78,6 +78,14 @@ station_runtime:
 
 # 历史一次性脚本: **只减不增**; 迁进统一入口后请从本表删除 (删减是受欢迎的方向)
 frozen_ops_scripts:
+  # 2026-09-26 (O-85): ID 站点普查 —— 口径的**唯一实现**。**为何不能并入入口**（ADR-0004 要求写明理由）:
+  #   ① 门禁 `id-census` 与"重出真值"**必须用同一份代码** —— 口径分两份写就是本仓头号形态
+  #      （"同一事实两个定义点"）;
+  #   ② 它有一个**写入动作**（`--emit` 重写真值），而 `rpc_check.py` 是**门禁**: 门禁应当**只读**,
+  #      把写盘能力挂到门禁上是职责相反;
+  #   ③ 它被门禁以 `importlib` 全路径加载（不靠 sys.path）⇒ 与 `_fm_golden_test.ps1` /
+  #      `_runstamp_hammer.ps1` 同类: **受治理的夹具**, 而非并列管理入口。
+  - ops/id_site_census.py
   - ops/llama-serve-instance
   - ops/lm-download/speedtest_asset.sh
   - ops/lm-download/speedtest_codeload.sh
