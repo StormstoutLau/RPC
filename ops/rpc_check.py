@@ -1026,6 +1026,134 @@ def check_dialect(ctx):
     return ("FAIL" if bad else "PASS"), " · ".join(notes), bad
 
 
+# ── D7-P1-3 (2026-09-26)：U-3 依赖边格式（`inventory/edges.yaml`）────────────
+# 目的：统一基座的**边**要有**唯一形状**（`src`/`dst`/`kind`/`provenance`），
+#   而最该被机器盯住的是那个**最容易缺**的字段 —— Ontoly RFC-0002 的 invariant 原文：
+#     **"Edges SHOULD contain provenance. Edges without provenance are invalid."**
+# ★ `provenance` 缺 ⇒ 边**无效**：这是 D7-P1-3 退出判据里"可机判"那一半。
+# ★ 本仓当前是**产出方**（不是消费方）⇒ 无效边的处置**不是"丢弃继续"**，而是 **FAIL** ——
+#   依据 **D-26**「H-3 的降级必须有机判呈现位、**禁止静默 skip**」：
+#   丢掉一条边 = 把一次"判不了"悄悄变成"没有这条边"。（消费方那一侧才走 H-3 强制降级。）
+# ★ **空清单 ≠ 没事**：`edges` 为空时**不 FAIL**，但**必须**给出 `empty_reason`，
+#   并在 note 里**显式报"0 条"** —— 否则"没有对象"会被读成"一切正常"（本仓头号形态）。
+# ★ `src`/`dst` 必须是 **U-1 产物身份**形态 ⇒ 本断言把 U-1 与 U-3 **咬合**在一起：
+#   写一条边就得先有一个合规身份（这正是 `edges.yaml` 现在为空的原因，见其 `empty_reason`）。
+EDGES_INV = ROOT / "inventory" / "edges.yaml"
+EDGE_REQUIRED = ("src", "dst", "kind", "provenance")
+U1_ID_RE = re.compile(r"^u1:sha256:16:[0-9a-f]{16}$")
+# 与 U3-EDGE-FORMAT.md §4.2 的"视为缺"第 5 条同表
+EDGE_DEAD_PROV = {"unknown", "none", "n/a", "null"}
+
+
+def edge_provenance_invalid(prov, prefixes):
+    """`(是否无效, 原因)` —— 按 `spec/d6-agent-standard/U3-EDGE-FORMAT.md` §4.1 的七条。
+
+    ⚠ 切分**只按第一个 `:`** ⇒ 载荷**允许**含 `:`（`filetrack:v1:in=a,out=b` 是合法的）。
+      这条是刻意留的：产物初稿既写"载荷禁含未转义 `:`"、又给了四条含 `:` 的示例 —— 自相矛盾。
+    """
+    if prov is None:
+        return True, "字段不存在"
+    if not isinstance(prov, str):
+        return True, f"不是字符串（{type(prov).__name__}）"
+    if prov == "":
+        return True, "空串"
+    if prov.strip() == "":
+        return True, "仅含空白"
+    if prov.strip().lower() in EDGE_DEAD_PROV:
+        return True, f"命中禁用词 {prov.strip()!r}"
+    if ":" not in prov:
+        return True, "缺 `<前缀>:<载荷>` 形式"
+    pref, _, payload = prov.partition(":")
+    if prefixes and pref not in prefixes:
+        return True, f"前缀 {pref!r} 不在封闭集 {sorted(prefixes)}"
+    if payload.strip() == "":
+        return True, "载荷为空（有前缀没有内容）"
+    return False, ""
+
+
+def validate_edges(doc):
+    """**纯函数** → `(bad, notes)`（离线可正反夹测，见 tests/test_rpc_check_edges.py）。"""
+    bad, notes = [], []
+    if not isinstance(doc, dict):
+        return ["edges.yaml 顶层不是映射（结构改了？）"], notes
+
+    kinds = doc.get("kinds") or []
+    prefixes = doc.get("provenance_prefixes") or []
+    if not kinds:
+        bad.append("`kinds` 为空 ⇒ `kind` 没有封闭枚举可判（凭常识补的 kind 会静默通过）")
+    if len(kinds) != len(set(kinds)):
+        bad.append(f"`kinds` 有重复项: {kinds}")
+    if not prefixes:
+        bad.append("`provenance_prefixes` 为空 ⇒ `provenance` 没有封闭集可判")
+    if len(prefixes) != len(set(prefixes)):
+        bad.append(f"`provenance_prefixes` 有重复项: {prefixes}")
+
+    if "edges" not in doc:
+        bad.append("**缺 `edges` 字段** ⇒ 无法区分「清单为空」与「忘了写」（空必须显式）")
+        return bad, notes
+    edges = doc["edges"] or []
+    if not isinstance(edges, list):
+        bad.append(f"`edges` 不是列表（{type(edges).__name__}）")
+        return bad, notes
+
+    seen, n_invalid = {}, 0
+    for i, e in enumerate(edges, 1):
+        if not isinstance(e, dict):
+            bad.append(f"`edges[{i}]` 不是映射")
+            n_invalid += 1
+            continue
+        miss = [f for f in EDGE_REQUIRED if not e.get(f)]
+        if miss:
+            bad.append(f"`edges[{i}]` **缺字段** {miss} ⇒ 该边无效（★ 产出方**不许写出**无效边）")
+            n_invalid += 1
+            continue
+        for f in ("src", "dst"):
+            if not U1_ID_RE.match(str(e[f])):
+                bad.append(f"`edges[{i}].{f}` 不是 U-1 产物身份形态 `u1:sha256:16:<16 位小写 hex>`: {e[f]!r} "
+                           f"⇒ 「边指向谁」没有唯一答案（U-1 与 U-3 必须咬合）")
+                n_invalid += 1
+        if kinds and e["kind"] not in kinds:
+            bad.append(f"`edges[{i}].kind`={e['kind']!r} 不在 `kinds` 封闭枚举里")
+            n_invalid += 1
+        inv, why = edge_provenance_invalid(e.get("provenance"), set(prefixes))
+        if inv:
+            bad.append(f"`edges[{i}].provenance` **无效**（{why}）⇒ 该边**无效**。"
+                       f"⚠ 产出方的处置是 **FAIL**，不是「丢掉这条边继续」—— 依据 D-26「禁止静默 skip」；"
+                       f"「丢弃 / 降级」是**消费方**那一侧的规则（H-3）")
+            n_invalid += 1
+        key = (e.get("src"), e.get("dst"), e.get("kind"))
+        if key in seen:
+            bad.append(f"`edges[{i}]` 与第 {seen[key]} 行重复 (src,dst,kind) ⇒ 同一事实两处定义")
+        else:
+            seen[key] = i
+
+    if not edges:
+        why = str(doc.get("empty_reason") or "").strip()
+        if not why:
+            bad.append("`edges` 为空**且没有 `empty_reason`** ⇒ 空得没说法"
+                       "（空 ≠ 没事：必须写明“为什么空”，否则会被读成“一切正常”）")
+        else:
+            notes.append("清单为空已显式报出 (不静默通过; empty_reason 已给)")
+    notes.append(f"边 {len(edges)} 条 · 无效 {n_invalid} 条 · kind {len(kinds)} 项 · 前缀 {len(prefixes)} 项")
+    return bad, notes
+
+
+def check_edges(ctx):
+    """D7-P1-3: U-3 依赖边清单（`inventory/edges.yaml`）。"""
+    try:
+        import yaml
+    except Exception:
+        return "WARN", "缺 pyyaml, 跳过 edges 边格式断言", []
+    if not EDGES_INV.exists():
+        return "FAIL", "inventory/edges.yaml 缺失（本断言的登记依据）", []
+    try:
+        doc = yaml.safe_load(EDGES_INV.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        return "FAIL", f"inventory/edges.yaml 解析失败: {type(e).__name__}: {e}", []
+    bad, notes = validate_edges(doc)
+    return ("FAIL" if bad else "PASS"), " · ".join(notes), bad
+
+
 # ── O-66 (2026-09-25)：卡面 `input-provenance` 义务（`CROSS-PROJECT-WORK-STANDARD §4` 的**机判**）──
 # 义务原文：卡声明 `public`/`sanitized` **且带输入** ⇒ ① `input-provenance` 必填（逐项本仓相对路径）
 #   ② 每项须在 `sensitivity.yaml` 有 `tier` ③ 卡的 `sensitivity` **不得宽于**该项的 `tier`。
@@ -3948,6 +4076,18 @@ CHECKS = [
             "③ `coverage` 逐族行数与实际**双向**相等（`b1b` 实测漏过一行）；"
             "④ `sources` 的**源切片指纹**不符 ⇒ 红（这就是「源词表变了下游红」）。"
             "⚠ 报「读取失败 ⇒ 不可判」= **要修**，不是通过 —— 判不了不许当通过"},
+    # D7-P1-3 (2026-09-26): U-3 依赖边格式 —— 最该被机器盯住的是**最容易缺的那个字段**。
+    {"id": "edges", "title": "U-3 依赖边格式", "fn": check_edges, "quick": True,
+     "fix": "D7-P1-3: `inventory/edges.yaml` 的**实例**要满足 `U3-EDGE-FORMAT.md`（形状的单一真值）："
+            "① `src`/`dst` 必须是 **U-1 产物身份**形态 `u1:sha256:16:<16 位小写 hex>`"
+            "（U-1 与 U-3 咬合：写一条边就得先有一个合规身份）；② `kind` ∈ `kinds` 封闭枚举；"
+            "③ `provenance` 必填，形式 `<前缀>:<载荷>`，前缀 ∈ `provenance_prefixes`，"
+            "**载荷允许含 `:`**（只按第一个 `:` 切分）；"
+            "★ 「缺」= 字段不存在 / 空串 / 仅空白 / `null` / `unknown`·`none`·`n/a`·`null` / 前缀不在封闭集 / 载荷为空"
+            " ⇒ **该边无效** ⇒ **FAIL**（⚠ 产出方的处置是 FAIL，**不是「丢掉这条边继续」** —— "
+            "依据 D-26「禁止静默 skip」；「丢弃 / 降级」是**消费方**那一侧的 H-3 规则）；"
+            "④ `(src,dst,kind)` 不得重复；⑤ **`edges` 为空必须给 `empty_reason`** —— "
+            "空 ≠ 没事，门禁会把「0 条」显式报出来"},
     {"id": "facade", "title": "门面符号可达性", "fn": check_facade, "quick": True,
      "fix": "P1-3: `cluster.py` 是统一门面, `cluster_web.py` 以 `import cluster` 复用其符号 —— "
             "缺符号即 FAIL 并点名『哪个符号·被谁引用』; 修法: 在 cluster.py 重导出(或改回引用处)"},
