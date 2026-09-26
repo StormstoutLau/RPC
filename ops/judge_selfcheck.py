@@ -87,6 +87,30 @@ runpy.run_path(r"{test}", run_name="__main__")
 '''
 
 
+# ── `NO_UNIT` 的显式登记（O-99 ①，2026-09-26 逐条读码后定）─────────────────────────
+# ★ 为什么要登记而不是"硬塞一个本体"：这 7 条的**本体形态**决定了"同模块直接调用"这一层
+#   **提取不到**（逐条读码实测）——
+#   · **逻辑内联在包装里**（无同模块调用可变异）：`artifacts`(61 行) / `impact`(27) /
+#     `evidence`(121) / `backend`(129)；
+#   · **本体在别的模块 / 动态加载**：`id-census` / `id-storage`（`spec_from_file_location`
+#     + `exec_module` 动态加载 `ops/id_site_census.py` / `id_storage_census.py`）· `models`
+#     （调用 `_scan_models`，不在本模块顶层定义中）。
+# ★★ **不硬塞**：把包装本身当"本体"变异 = 回到第一版（**必然全绿、无信息**）；
+#   而支持跨模块/动态加载要动到"替换点"语义（`exec_module` 的产物）⇒ **代价远大于收益**，
+#   且它们**不是**"审判据"的关键面（都是外部数据/远端一致性判据）。
+# ⇒ **登记为"本模式不适用 + 理由"**（本仓纪律：**"不做"也是一种结论，必须写下来**），
+#   并让工具把它报成 `NA_UNIT`（**已登记不适用**）而**不是**一直显示成"待办"。
+UNITS_NA = {
+    "artifacts": "逻辑内联在包装里（无同模块调用可变异）",
+    "impact": "逻辑内联在包装里（无同模块调用可变异）",
+    "evidence": "逻辑内联在包装里（且跨模块调 cluster.*）",
+    "backend": "逻辑内联在包装里（且跨模块调 ssh_run）",
+    "id-census": "本体在别的模块且**动态加载**（`spec_from_file_location`+`exec_module` ⇒ 替换点不是模块属性）",
+    "id-storage": "本体在别的模块且**动态加载**（同上）",
+    "models": "本体 `_scan_models` 不在本模块顶层定义（跨模块/嵌套）",
+}
+
+
 def judge_units(fn_name: str) -> list:
     """用 **AST** 找 `check_x` 函数体里**直接调用**的**同模块函数**（= 它的"本体"）。
 
@@ -267,12 +291,17 @@ def main():
     # ★ 口径：候选 = **真的调用了该判据本体**的测试文件（AST）—— 不是"调用了包装"的文件。
     if a.units:
         print(f"[本体变异] 选中 {len(target)} 条（AST 提取同模块直接调用 + 记忆化桩）")
-        tally, bad, nounit, notest = {}, [], [], []
+        tally, bad, nounit, notest, na = {}, [], [], [], []
         for r in target:
             us = judge_units(r["fn"])
             if not us:
-                nounit.append(r["id"])
-                tally["NO_UNIT"] = tally.get("NO_UNIT", 0) + 1
+                if r["id"] in UNITS_NA:
+                    # ★ 已登记"本模式不适用"⇒ 报 `NA_UNIT`（**不是**"待办"），并带上理由。
+                    na.append(r["id"])
+                    tally["NA_UNIT"] = tally.get("NA_UNIT", 0) + 1
+                else:
+                    nounit.append(r["id"])
+                    tally["NO_UNIT"] = tally.get("NO_UNIT", 0) + 1
                 continue
             utests = tests_calling_units(us)
             if not utests:
@@ -291,6 +320,10 @@ def main():
         print(f"[汇总·本体变异] " + " · ".join(f"{k}={v}" for k, v in sorted(tally.items())))
         if nounit:
             print("[NO_UNIT] AST 未找到同模块直接调用（待人工登记本体）: " + ", ".join(nounit))
+        if na:
+            print(f"[NA_UNIT] 已登记**本模式不适用**（{len(na)} 条 · 逐条理由见脚本内 `UNITS_NA`）:")
+            for x in na:
+                print(f"  · {x}: {UNITS_NA[x]}")
         if notest:
             print("[NO_TEST_UNIT] 有本体但**无测试直接调用本体**（点名）: " + ", ".join(notest))
         if bad:
