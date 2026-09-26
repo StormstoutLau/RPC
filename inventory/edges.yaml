@@ -1,0 +1,45 @@
+# U-3 依赖边清单（D7-P1-3）
+#
+# 形状（字段 / 枚举 / 无效判定）= `spec/d6-agent-standard/U3-EDGE-FORMAT.md`（单一真值，此处不复制规则）。
+# 本文件只装**实例**。判据：门禁 `edges`。
+#
+# ⚠ 为什么现在是空的（**不是"没事"**）：见文末 `empty_reason`。
+
+version: 1
+updated: 2026-09-26
+owner: Scott (鹏)
+
+# ── `kind` 封闭枚举（与 schema §2 逐条对应）──────────────────────────────
+# 新增一个 kind ⇒ 必须先在 schema §2 里给出**摘要依据**，否则门禁 `edges` 会判红。
+kinds:
+  - knowledge_graph_direct
+  - shared_formal_repl
+  - formal_handoff_package
+  - stub_retrieval
+  - authoritative_migration
+  - manual_backflow
+  - conceptual_absorption
+  - path_level
+  - document_level
+  - vendored_module
+  - shared_intermediate_library
+  - document_copy
+  - acceptance_matrix_component
+
+# ── `provenance` 前缀封闭枚举（schema §3）────────────────────────────────
+provenance_prefixes:
+  - hash
+  - filetrack
+  - manual
+  - tool
+
+# ── 边实例 ───────────────────────────────────────────────────────────────
+# 每条：src / dst（U-1 产物身份 `u1:sha256:16:<16hex>`）· kind ∈ kinds · provenance `<前缀>:<载荷>`
+edges: []
+
+empty_reason: >-
+  **前置缺失**（不是"没有边"）：`src` / `dst` 要求 **U-1 产物身份**，而 U-1 当前是
+  "**设计定案 · 实现未落地**" ⇒ 至今**没有任何产物登记过 `namespace` / `identifier` / `version`**
+  ⇒ **造不出合规的边**（写一条就得先编一个身份 = 正是 U-3 要消灭的"没有唯一答案"）。
+  ⇒ 空 ≠ 没事：门禁 `edges` **必须把"0 条"显式报出来**，不得静默通过。
+  ⇒ 解锁条件 = U-1 在至少一个项目上落地（产出一个真实的 `namespace/identifier/version` 三元组）。
