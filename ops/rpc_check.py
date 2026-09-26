@@ -5780,6 +5780,303 @@ def check_memory_gates(ctx, doc=None):
     return "PASS", " · ".join(notes), []
 
 
+# ── D7-P4-1 (2026-09-26)「多轮闭环 + **轮数上限有判据**」────────────────────────
+#   退出判据原文 = 「多轮闭环可跑；**轮数上限有判据**」。
+#   ★ 先去找对象（本会话第四次）：受理侧**早就有**一个协商回环（`plan-review ⇄ plan-revise`，
+#     路线总表 §11.2(a) 已实测标注「**已有原型 ⇒ 复用状态语义，而非另建**」）
+#     ⇒ 本项不是"造多轮引擎"，而是**把本仓真实存在的闭环逐条钉住上限与终止条件**。
+#   ★★ 本批实测抓到的真缺陷：**注释里的上限落后于代码** —— `agent-cli.ps1` 里**两处**
+#     写 `retry <=2`，而代码分别是 `-lt 3` 与 `-le 3`（O-46 改 cap 时注释没跟）。
+#     ⇒ 故本判据专门有 **`prose_caps` 封闭集**：散文里的上限必须逐处登记且与代码一致。
+MULTI_ROUND_INV = ROOT / "inventory" / "multi-round.yaml"
+LOOP_KINDS = ("advance", "retry")
+LOOP_CAP_STATES = ("capped", "unbounded-by-design", "undecided")
+ROUND_COUNTER_KINDS = ("file-glob", "shell-var", "state-log")
+# 超限处置：**封闭枚举**（★ 刻意不是"扫散文里有没有『继续』" —— 那是文本口径，
+#   实测会假红：`"超限 ⇒ 升级（不是继续）"` 里含「继续」就被判红）。
+ON_EXCEED_KINDS = ("escalate", "terminate", "fail-record", "undecided")
+CODE_CAP_RE = re.compile(r"-(?:lt|le)\s+(\d+)")
+
+
+def extract_loop_cap(text, marker, op):
+    """从目标文件里**实提取**循环上限：形如 `<marker> … <op> N` → `[(行号, N)]`。
+
+    ★ 口径（**双锚**，写死）：**同一行**里既含 `marker` 又含 `<op> N`，且不是注释。
+      为什么要双锚：只按 marker 找会把 `CONT_ATTEMPT=0` 这种**赋值行**也算进来
+      —— 那正是"口径没定就量"的老毛病（本仓已连踩三次）。
+    """
+    rx = re.compile(re.escape(op) + r"\s+(\d+)")
+    hits = []
+    for i, ln in enumerate(text.splitlines(), 1):
+        if ln.lstrip().startswith("#"):
+            continue
+        if marker in ln:
+            m = rx.search(ln)
+            if m:
+                hits.append((i, int(m.group(1))))
+    return hits
+
+
+def scan_prose_caps(text, words):
+    """扫**散文里的上限**：`<词> <= N`（口径写死：词集封闭 + 允许空格）→ `[(行号, N, 行)]`。"""
+    out = []
+    for i, ln in enumerate(text.splitlines(), 1):
+        for w in words:
+            m = re.search(re.escape(w) + r"\s*<=\s*(\d+)", ln)
+            if m:
+                out.append((i, int(m.group(1)), ln.strip()))
+                break
+    return out
+
+
+def validate_multi_round(doc):
+    """**纯函数**（D7-P4-1）：多轮闭环的结构自洽（轮次可数 · 上限或理由 · 正向终止 · 超限处置）。"""
+    bad, notes = [], []
+    if not isinstance(doc, dict):
+        return ["顶层不是映射（yaml 根应是 mapping）"], notes
+
+    loops = doc.get("loops")
+    if not isinstance(loops, list) or not loops:
+        bad.append("`loops` 为空 ⇒ 多轮闭环没有对象（退化空判 = 本仓头号形态）")
+        loops = []
+    seen, undecided = {}, []
+    for i, lp in enumerate(loops):
+        at = f"loops[{i}]"
+        if not isinstance(lp, dict):
+            bad.append(f"{at} 不是映射")
+            continue
+        lid = _s(lp.get("id"))
+        if not lid or lid in seen:
+            bad.append(f"{at} 缺 `id` 或 `id` 重复: {lid!r}")
+        seen[lid or i] = lp
+        at = f"loops[{lid or i}]"
+        for k in ("what", "carrier", "evidence", "delta", "delta_note", "on_exceed"):
+            if not _s(lp.get(k)):
+                bad.append(f"{at} 缺 `{k}`")
+        if lp.get("kind") not in LOOP_KINDS:
+            bad.append(f"{at} `kind`={lp.get('kind')!r} 不在封闭集 {LOOP_KINDS} —— "
+                       f"**状态推进型**与**同一步重试型**必须分开标（否则就是把两件事说成一件）")
+        # ── 轮次**可数** ────────────────────────────────────────────────
+        rc = lp.get("round_counter")
+        if not isinstance(rc, dict):
+            bad.append(f"{at} 缺 `round_counter` ⇒ **轮次从哪来**没写 ⇒ 上限无法核")
+        else:
+            if rc.get("kind") not in ROUND_COUNTER_KINDS:
+                bad.append(f"{at}.round_counter.kind={rc.get('kind')!r} 不在封闭集 {ROUND_COUNTER_KINDS}")
+            if not _s(rc.get("how")):
+                bad.append(f"{at}.round_counter 缺 `how`（怎么数）")
+            if rc.get("kind") == "file-glob" and not _s(rc.get("glob")):
+                bad.append(f"{at}.round_counter 是 `file-glob` 但没给 `glob`")
+            if rc.get("kind") == "shell-var" and not _s(rc.get("var")):
+                bad.append(f"{at}.round_counter 是 `shell-var` 但没给 `var`")
+        # ── 上限：**要么给数、要么给理由、要么点名待裁**（三条都不许空）────
+        cs = lp.get("cap_state")
+        if cs == "capped":
+            mr = lp.get("max_rounds")
+            if not isinstance(mr, int) or isinstance(mr, bool) or mr < 1:
+                bad.append(f"{at} `cap_state: capped` 但 `max_rounds`={mr!r} 不是正整数")
+        elif cs == "unbounded-by-design":
+            if not _s(lp.get("unbounded_reason")):
+                bad.append(f"{at} `cap_state: unbounded-by-design` 但缺 `unbounded_reason` ⇒ "
+                           f"**「没有上限」必须给理由**（否则与「忘了写」无法区分）")
+        elif cs == "undecided":
+            if not _s(lp.get("needs_decision_by")):
+                bad.append(f"{at} `cap_state: undecided` 但缺 `needs_decision_by` ⇒ "
+                           f"**未定也要写清等谁裁**（点名，不许静默）")
+            else:
+                undecided.append(lid)
+        else:
+            bad.append(f"{at} `cap_state`={cs!r} 不在封闭集 {LOOP_CAP_STATES} ⇒ "
+                       f"**漏写上限**是本项最要防的形态（上限/理由/待裁三者必须显式其一）")
+        # ── EASE 式**正向终止**（"一致即停"）────────────────────────────
+        if not _s(lp.get("stop_on_agreement")):
+            bad.append(f"{at} 缺 `stop_on_agreement` ⇒ **正向终止条件**没写明 —— "
+                       f"上限只管「最多几轮」，「什么时候**可以停**」是另一半（EASE 早停）")
+        if not isinstance(lp.get("stop_on_agreement_machine_readable"), bool):
+            bad.append(f"{at} `stop_on_agreement_machine_readable` 必须是布尔 "
+                       f"（它是人判还是可机判，是 EASE 能不能自动早停的前提）")
+        # ── 超限处置：**结构化**地声明"超限时发生什么" ───────────────────
+        # ★★ 第一版这里是**文本禁令**（"不得出现『继续』"）⇒ 实测**当场假红**：
+        #    `on_exceed: "超限 ⇒ 升级（不是继续）"` 里含「继续」就被判红。
+        #    —— 又是"文本口径造假阳性"（本仓已因口径吃过多次亏）。
+        #    ⇒ 改为**封闭枚举**：作者必须声明**处置的种类**，机器不猜措辞。
+        oek = lp.get("on_exceed_kind")
+        if oek not in ON_EXCEED_KINDS:
+            bad.append(f"{at} `on_exceed_kind`={oek!r} 不在封闭集 {ON_EXCEED_KINDS} ⇒ "
+                       f"**超限时发生什么**必须是一个可枚举的动作（不是一段散文）")
+        elif cs == "capped" and oek == "undecided":
+            bad.append(f"{at} 已有上限（`cap_state: capped`）却把 `on_exceed_kind` 留成 `undecided` ⇒ "
+                       f"**上限没说清超限怎么办 = 上限只有一半**")
+
+    # ── 散文上限：**封闭集**（本批实测抓到的真实缺陷形态）──────────────────
+    pw = [_s(w) for w in (doc.get("prose_words") or []) if _s(w)]
+    if not pw:
+        bad.append("`prose_words` 为空 ⇒ 散文上限没有扫描口径（口径不先定就量 = 本仓吃过三次亏）")
+    pcs = doc.get("prose_caps")
+    if not isinstance(pcs, list) or not pcs:
+        bad.append("`prose_caps` 为空 ⇒ **注释里的上限没人管** —— "
+                   "实测它就会落后于代码（本批两处都写 2 而代码是 3）")
+        pcs = []
+    for i, p in enumerate(pcs):
+        at = f"prose_caps[{i}]"
+        if not isinstance(p, dict):
+            bad.append(f"{at} 不是映射")
+            continue
+        f_, tok = _s(p.get("file")), _s(p.get("line_token"))
+        at = f"prose_caps[{f_}:{tok or i}]"
+        for k in ("file", "line_token", "why"):
+            if not _s(p.get(k)):
+                bad.append(f"{at} 缺 `{k}`")
+        if not isinstance(p.get("expect"), int) or isinstance(p.get("expect"), bool):
+            bad.append(f"{at} 的 `expect` 必须是整数（散文里应当写的那个数）")
+
+    unv = doc.get("unverified")
+    if not isinstance(unv, list) or not unv:
+        bad.append("`unverified` 为空 ⇒ 本项自己未实测 / 未定的部分没登记")
+
+    if not bad:
+        n_cap = sum(1 for v in seen.values() if v.get("cap_state") == "capped")
+        n_unb = sum(1 for v in seen.values() if v.get("cap_state") == "unbounded-by-design")
+        kinds = sorted({_s(v.get("kind")) for v in seen.values()})
+        notes.append(f"闭环 {len(seen)} 条 · kind {kinds} · 有上限 {n_cap} · 无上限(有理由) {n_unb} · "
+                     f"**未定 {len(undecided)}**"
+                     f"{'（点名: ' + ', '.join(undecided) + '）' if undecided else ''} · "
+                     f"散文上限登记 {len(pcs)} 处（词集 {pw}）")
+    return bad, notes
+
+
+def check_multi_round(ctx, doc=None):
+    """D7-P4-1: 多轮闭环 —— **轮数上限有判据**（含与代码**实提取**对账 + 散文上限封闭集）。
+
+    ★ `doc` 是可注入缝（测试用）：`None` ⇒ 从 `inventory/multi-round.yaml` 读。
+    """
+    try:
+        import yaml
+    except Exception:
+        return "WARN", "缺 pyyaml, 跳过 multi-round 断言", []
+    if doc is None:
+        if not MULTI_ROUND_INV.exists():
+            return "FAIL", "inventory/multi-round.yaml 缺失（本断言的登记依据）", []
+        try:
+            doc = yaml.safe_load(_read_text(MULTI_ROUND_INV)) or {}
+        except Exception as e:
+            return "FAIL", f"inventory/multi-round.yaml 解析失败: {type(e).__name__}: {e}", []
+
+    bad, notes = validate_multi_round(doc)
+    cache = {}
+
+    def _text(rel):
+        if rel not in cache:
+            cache[rel] = _read_text(ROOT / rel)
+        return cache[rel]
+
+    # 1) ★★ 与**代码实提取**对账：每个 `cap_sites` 都要实测到**恰一处**上限；
+    #    **各 site 必须同值**；且 `max_rounds == 该值 + plus_extra 之和`。
+    #    ★ 为什么是**复数** site：本条闭环有**两份实现**（站上 bash body + 本地 PS）——
+    #      那正是"同一事实两个定义点"最容易漂的地方（本批实测的注释漂移就发生在旁边）。
+    for lp in (doc.get("loops") or []):
+        if not isinstance(lp, dict):
+            continue
+        lid = _s(lp.get("id")) or "?"
+        sites = [x for x in (lp.get("cap_sites") or []) if isinstance(x, dict)]
+        if not sites:
+            continue                      # 无代码侧实现（如受理侧回环）⇒ 不对账；**不是"通过"**
+        caps = []
+        for s in sites:
+            rel = _s(s.get("file"))
+            where = _s(s.get("where"))
+            if not where:
+                bad.append(f"loops[{lid}].cap_sites 有一条缺 `where` ⇒ 两个定义点必须可区分")
+                where = "?"
+            if not rel or not (ROOT / rel).exists():
+                bad.append(f"loops[{lid}].cap_sites 的 file={rel!r} 不存在 ⇒ "
+                           f"对账不可判（**不可判 ≠ 通过**）")
+                continue
+            hits = extract_loop_cap(_text(rel), _s(s.get("marker")), _s(s.get("op")))
+            if len(hits) != 1:
+                bad.append(f"loops[{lid}] 的 site({where})：在 {rel} 按锚点 "
+                           f"({s.get('marker')!r}, {s.get('op')!r}) 实测到 **{len(hits)} 处**上限"
+                           f"（要求恰 1 处）⇒ 要么上限多了个定义点、要么口径过期；"
+                           f"行号 {[n for n, _ in hits]}")
+                continue
+            caps.append((where, hits[0][0], hits[0][1]))
+        if not caps:
+            continue
+        if len({v for _, _, v in caps}) > 1:
+            bad.append(f"loops[{lid}] **多处实现的上限不一致**: "
+                       + " / ".join(f"{w}@{ln}={v}" for w, ln, v in caps)
+                       + " ⇒ 同一事实两个定义点，必须同步（或合并为一处）")
+            continue
+        rel0 = _s(sites[0].get("file"))
+        n_extra = 0
+        for x in [y for y in (lp.get("plus_extra") or []) if isinstance(y, dict)]:
+            anc, cnt = _s(x.get("anchor")), x.get("count")
+            if not anc or not isinstance(cnt, int) or isinstance(cnt, bool):
+                bad.append(f"loops[{lid}].plus_extra 缺 `anchor` 或 `count` 非整数")
+                continue
+            if anc not in _text(rel0):
+                bad.append(f"loops[{lid}].plus_extra 的锚点 {anc!r} 在 {rel0} 里**找不到** ⇒ "
+                           f"登记腐化（那段代码改了 / 删了）")
+                continue
+            n_extra += cnt
+        code_cap = caps[0][2]
+        want = code_cap + n_extra
+        if isinstance(lp.get("max_rounds"), int) and lp.get("max_rounds") != want:
+            bad.append(f"loops[{lid}] 的 `max_rounds`={lp.get('max_rounds')} 与代码**不符**："
+                       f"实测循环上限 {code_cap}"
+                       f"{f' + plus_extra {n_extra}' if n_extra else ''} = {want} ⇒ "
+                       f"改真值表**或**改代码（两处必须同时说同一个数）")
+
+    # 2) ★★ 散文上限：逐处核 + **完整性**（文件里每一处都要被登记）
+    pw = [_s(w) for w in (doc.get("prose_words") or []) if _s(w)]
+    pcs = [p for p in (doc.get("prose_caps") or []) if isinstance(p, dict)]
+    for rel in sorted({_s(p.get("file")) for p in pcs if _s(p.get("file"))}):
+        if not (ROOT / rel).exists():
+            bad.append(f"prose_caps 指向的 {rel} 不存在 ⇒ 登记腐化")
+            continue
+        t = _text(rel)
+        caps_all = {int(x) for x in CODE_CAP_RE.findall(t)}
+        found = scan_prose_caps(t, pw)
+        for ln_no, val, txt in found:
+            covered = [p for p in pcs if _s(p.get("line_token")) and _s(p.get("line_token")) in txt]
+            if not covered:
+                bad.append(f"★**未登记的散文上限**: {rel}:{ln_no} ⇒ `{txt[:100]}` —— "
+                           f"散文里的上限**逐处登记**，否则它会悄悄落后于代码")
+        for p in pcs:
+            if _s(p.get("file")) != rel:
+                continue
+            tok = _s(p.get("line_token"))
+            lines = [(i, l) for i, l in enumerate(t.splitlines(), 1) if tok in l]
+            if not lines:
+                bad.append(f"prose_caps 登记的锚 {tok!r} 在 {rel} 里**找不到** ⇒ 口径过期（代码改了？）")
+                continue
+            if len(lines) > 1:
+                bad.append(f"prose_caps 的锚 {tok!r} 在 {rel} 里命中 {len(lines)} 行 ⇒ 锚不唯一")
+                continue
+            ln_no, txt = lines[0]
+            vals = [re.search(re.escape(w) + r"\s*<=\s*(\d+)", txt) for w in pw]
+            got = next((int(m.group(1)) for m in vals if m), None)
+            if got is None:
+                bad.append(f"{rel}:{ln_no} 锚在但**不再含上限写法** ⇒ 口径过期"
+                           f"（散文改成别的说法了？那该重定口径，而不是留着这条）")
+            elif got != p.get("expect"):
+                bad.append(f"★★ 散文上限与登记**不符**: {rel}:{ln_no} 实测 {got} ≠ "
+                           f"`expect` {p.get('expect')} ⇒ `{txt[:100]}`")
+            elif caps_all and got not in caps_all:
+                bad.append(f"{rel}:{ln_no} 的 `expect`={got} **不落在该文件的循环上限集合** "
+                           f"{sorted(caps_all)} 里 ⇒ 像随手编的数")
+
+    if bad:
+        return "FAIL", " · ".join(notes) if notes else "见明细", bad
+    und = [_s(v.get("id")) for v in (doc.get("loops") or [])
+           if isinstance(v, dict) and v.get("cap_state") == "undecided"]
+    if und:
+        # 上限**未定**：**点名 + WARN**（不是漏写 —— 漏写在 `validate_` 里已经是红了）
+        return "WARN", " · ".join(notes), [
+            f"上限未定的闭环 {len(und)} 条（待裁，点名）: " + ", ".join(und)]
+    return "PASS", " · ".join(notes), []
+
+
 CHECKS = [
     {"id": "secrets", "title": "明文扫描", "fn": check_secrets, "quick": True,
      "fix": "删除明文密钥, 或加入 SECRET_ALLOW 并写明原因(不允许静默放行); "
@@ -6011,6 +6308,26 @@ CHECKS = [
             "⚠ **它不判什么**：不判记忆**内容**，也**验不了门的效力** —— "
             "MAPLE-Guard 的 ASR 下降是**它自己的实验**，本仓没有投毒实验台 ⇒ "
             "**别把本项读成「记忆已安全」**"},
+    {"id": "multi-round", "title": "多轮闭环 + 轮数上限", "fn": check_multi_round, "quick": True,
+     "fix": "D7-P4-1（退出判据原文：多轮闭环可跑；**轮数上限有判据**）："
+            "`inventory/multi-round.yaml` 是本仓**真实存在的重复执行闭环**的单一真值"
+            "（★ 受理侧的协商回环**早就有**，路线总表 §11.2(a) 已裁「复用状态语义、不另建」）。"
+            "① 报『`cap_state` 不在封闭集』= **漏写上限** —— 上限 / 无上限的理由 / 待谁裁，"
+            "**三者必须显式其一**（不许靠「没写就是没有」）；"
+            "② 报『`max_rounds` 与代码不符』= 真值表与 `agent-cli.ps1` **实提取**的上限不一致 "
+            "⇒ 改真值表**或**改代码；"
+            "③ ★★ 报『**未登记的散文上限**』或『散文上限与登记不符』= **注释里的上限落后于代码** —— "
+            "本批实测**两处**都写 2 而代码是 3（O-46 改 cap 时注释没跟）；"
+            "散文里的上限**逐处登记**，否则它会悄悄骗人；"
+            "④ 报『缺 `stop_on_agreement`』= **正向终止条件**没写 —— 上限只管最多几轮，"
+            "『什么时候可以停』是另一半（EASE 早停）；"
+            "⑤ 报『`on_exceed_kind` 不在封闭集』= **超限时发生什么**必须是一个可枚举的动作"
+             "（`escalate` / `terminate` / `fail-record`）—— 且已有上限却留 `undecided` ⇒ 上限只有一半；"
+            "⑥ 报『`plus_extra` 锚点找不到』= 那段代码改了/删了（登记腐化）；"
+            "⑦ 报『上限未定的闭环 …（待裁，点名）』= **WARN 不阻断**："
+            "已如实登记、等裁定 ⇒ 但**点名在案，不许静默**。"
+            "⚠ **它不判什么**：不判「多轮**跑通**了没有」—— 只验**上限与终止条件被写明**；"
+            "`agent-resume` 的续接链与受理侧回环**本轮均未端到端实跑**（见 yaml 的 `unverified`）"},
     # O-63 (2026-09-25): 取号并发夹具。**刻意 quick:False**（要起 8 个独立进程 + 两次 2.5s 共同释放时刻 ⇒ 约 6s）。
     {"id": "ps1-runstamp", "title": "ts 取号并发夹具", "fn": check_ps1_runstamp, "quick": False,
      "fix": "O-63: 跑 `powershell -NoProfile -ExecutionPolicy Bypass -File ops/station-bin/_runstamp_hammer.ps1 -N 8 -SelfTest`。"

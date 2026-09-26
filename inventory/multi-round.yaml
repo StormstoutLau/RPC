@@ -1,0 +1,161 @@
+# 多轮闭环真值表（D7-P4-1 · 「多轮续聊 + 会话复用 + Delta」）
+#
+# ── 这是什么 ────────────────────────────────────────────────────────────────
+# D7-P4-1 的**退出判据**原文 = 「多轮闭环可跑；**轮数上限有判据**」。
+# 本表就是那个「判据」的载体：把本仓**真实存在的重复执行闭环**逐条登记，每条必须写清
+# **轮次怎么数 · 上限是多少（或为什么没有） · 正向终止条件 · 超限怎么办 · 有没有 Delta**。
+#
+# ── 为什么先去找对象（而不是先写判据）──────────────────────────────────────
+# 合并稿 §13.1 与 `D-41`（六相协议）都说"多轮续聊**必须自建**"（A2A 与 Codex 都只有单轮）。
+# ⚠ 但**本仓受理侧早就有一个协商回环**（`plan-review ⇄ plan-revise`，见 `inbox/README.md` §3/§4.5）
+#   —— 路线总表 §11.2(a) 已实测标注：★「受理侧**已有原型** ⇒ D7 应**复用其状态语义，而非另建**」。
+# ⇒ 本批先做的是**把这几个闭环找出来并钉住上限**，不是新造一套多轮引擎。
+#
+# ── 口径（写死，不许再含糊）────────────────────────────────────────────────
+# **闭环** = 同一件事会被**重复执行 ≥2 次**、且**次数有语义**的循环。两类**必须分开标 `kind`**
+#   （否则就是把两件事说成一件）：
+#     · `advance` —— **状态在轮与轮之间推进**（协商回环 / 会话续跑）；
+#     · `retry`   —— **同一步重试**（输入不变，只等失败重来）。
+# ⚠ **轮次上限**取 `max_rounds`（含 `plus_extra` 那些非循环的额外尝试）——
+#   只写 for 循环的次数会**少算**（本批实测踩到：判官路径 3 + 1 次回包重试 = 4）。
+
+version: 1
+updated: 2026-09-26
+owner: Scott (鹏)
+basis: "D7-P4-1 · 合并稿 §13.1 · 路线总表 §4.3 · §11.2(a)（受理侧已有原型）"
+
+loops:
+  # ── ① 受理侧协商回环（★ 已有原型：不新建，只补"上限"这一件）───────────────
+  - id: plan-review-loop
+    kind: advance
+    what: "派发计划的**协商回环**：交需求方复核 → 收意见 → 修订计划 → 再交复核"
+    carrier: "inbox/<proj>-<date>/ 的两态（`plan-review` ⇄ `plan-revise`）+ README §4.5 第 5 步"
+    round_counter:
+      kind: file-glob
+      glob: "10_admin/复核意见-*.md"
+      field: N
+      how: "**每轮一条文件**（`复核意见-1.md` / `-2.md` …，模板 `inbox/_template/10_admin/复核意见-N.md`）⇒ N 可数"
+    # ★★ 上限**未定** —— 且这是**如实登记**，不是漏写：README §4.5 只写「**循环至定稿**」，
+    #    而"定稿"是**人的判断**。⇒ 处置同 `known_non_structural`：**点名 + 待裁**，不许静默。
+    cap_state: undecided
+    needs_decision_by: "Scott（单人开发者的协商回环要不要设数值上限，是治理决定）"
+    stop_on_agreement: "需求方**不再提出意见** ⇒ 管理员定稿（README §4.5『循环至定稿』）"
+    stop_on_agreement_machine_readable: false
+    on_exceed: "未定 —— 与 `cap_state` 一并待裁（**当前没有任何「停太久就升级」的判据**）"
+    on_exceed_kind: undecided
+    delta: none
+    delta_note: "每轮交的是 `20_plan/` 的**全量新版 vN**，不是差异（Δ 未做）"
+    evidence: "inbox/README.md §4.5 第 5 步；inventory/inbox.yaml 的 plan-review / plan-revise；ADR-0008"
+
+  # ── ② agent 会话续跑（D7-P4-1 的「会话复用」= 这一条）────────────────────
+  - id: agent-resume
+    kind: advance
+    what: "站上首跑超时/失败后，用 `--continue` **复用同一会话**从停处续跑"
+    carrier: "agent-cli.ps1 站上 body 的 resume 循环（`CONT_ATTEMPT`）"
+    round_counter:
+      kind: shell-var
+      var: CONT_ATTEMPT
+      how: "站上 body 里 `CONT_ATTEMPT` 计数，每次续接 +1，`while` 条件即上限"
+    cap_state: capped
+    max_rounds: 3
+    # ★★ `cap_sites`：这条闭环有**两份实现**（站上 bash body + 本地 PS），各有各的上限字面量。
+    #   ⇒ 全部必须登记，且**必须同值** —— 这正是"同一事实两个定义点"最容易漂移的地方
+    #   （O-46 把 cap 2→3 时，`retry <=2` 那条注释就漂了）。
+    cap_sites:
+      - file: ops/station-bin/agent-cli.ps1
+        marker: CONT_ATTEMPT
+        op: "-lt"
+        where: "站上 bash body 的 `while` 循环"
+      - file: ops/station-bin/agent-cli.ps1
+        marker: "$contAttempt"
+        op: "-lt"
+        where: "本地支的等价实现（claude 通道）"
+    stop_on_agreement: "首跑 `rc=0` ⇒ 不进续接循环（等价于「已一致即停」）"
+    stop_on_agreement_machine_readable: true
+    on_exceed: "续接预算耗尽仍非 0 ⇒ **不静默 done**：final `.agent-state.json` 记 `ST=failed`（G1 C4）"
+    on_exceed_kind: fail-record
+    delta: session-resume
+    delta_note: >-
+      ★ **靠会话复用而不重发全量 prompt**：续接时发的是**固定最小指令**（base64 常量 `CONT_B64`：
+      "Continue the unfinished task from where it stopped."），上下文由 `--continue` 的会话承担。
+      ⚠ 这与"审→改→再审"的语义 Delta **不是一回事**（那只登记在 `plan-review-loop` 的 `delta: none`）。
+    evidence: "agent-cli.ps1 的 `CONT_ATTEMPT` 循环 + `CONT_B64`；O-24 P0-①；O-46（cap 2→3）"
+
+  # ── ③ 判官调用重试（kind: retry —— 与上面两条**刻意分开标**）─────────────
+  - id: judge-call-retry
+    kind: retry
+    what: "语义判官**调用**失败（网络/超时/不可解析）时的重试"
+    carrier: "agent-cli.ps1 `Invoke-Review` 里的 `for ($try = 1; $try -le 3; $try++)`"
+    round_counter:
+      kind: shell-var
+      var: "$try"
+      how: "PowerShell for 循环变量，`-le` 即上限"
+    cap_state: capped
+    max_rounds: 4                                # ★ 见下面 plus_extra：3 次循环 + 1 次"回包重试"
+    cap_sites:
+      - file: ops/station-bin/agent-cli.ps1
+        marker: "$try"
+        op: "-le"
+        where: "`Invoke-Review` 的 `for` 循环"
+    plus_extra:
+      - anchor: "JUDGE_JSON_RETRY"
+        count: 1
+        how: >-
+          回包**到了但解析不了**时**再加一次** —— 它是 `if` 不是循环，所以**不会**出现在 `-lt/-le` 里；
+          ⇒ 只数循环会把它**漏掉**（本批实测踩到）。
+    stop_on_agreement: "调用成功（`break`）⇒ 不再重试"
+    stop_on_agreement_machine_readable: true
+    on_exceed: "重试耗尽 ⇒ 记 `callCode`（5=NETFAIL / 6=超时 / 7=其他）+ `callError`，**判官失败留档、不静默**"
+    on_exceed_kind: fail-record
+    delta: none
+    delta_note: "同一 prompt 原样重试（输入不变 ⇒ 无 Δ 可言）"
+    evidence: "agent-cli.ps1 的 `for ($try = 1; $try -le 3; $try++)` + 其后的 `JUDGE_JSON_RETRY` 分支"
+
+# ── 散文里的上限：**封闭集**（本批实测抓到的形态就是它出错）───────────────────
+# 为什么单列一段：**注释里的上限会落后于代码**（本批实测**两处**都写 `retry <=2` 而代码是 3）。
+# 口径：目标文件里**每一行**匹配 `retry\s*<=\s*(\d+)` 的，都必须在此登记；
+#   未登记 ⇒ 红（新冒出一处散文上限没人管）；登记了却找不到 ⇒ 红（口径过期）。
+# `expect` 还必须 ∈ **该文件里 `-lt`/`-le` 的上限字面量集合**（否则就是随手编的数）。
+# ⚠ `prose_words` 是**扫描用的词集**（封闭集）：文件里凡出现 `<词> <= N` 的行都要被登记；
+#   换个词写（如 `max try = 2`）**扫不到** —— 该逃逸如实记在 `unverified`。
+prose_words: ["retry", "失败"]
+prose_caps:
+  - file: ops/station-bin/agent-cli.ps1
+    line_token: "on failure retry"
+    word: retry
+    expect: 3
+    why: "= `agent-resume` 的**循环上限**（站上）；O-46 把 2 改成 3 时**这行注释没跟** ⇒ 本批修"
+  - file: ops/station-bin/agent-cli.ps1
+    line_token: "(本地等价)"
+    word: 失败
+    expect: 3
+    why: "= `agent-resume` 的**循环上限**（本地支）—— ★ 换了说法（`失败 <=3 次`）就绕过了 `retry` 口径，故词集必须含它"
+  - file: ops/station-bin/agent-cli.ps1
+    line_token: "G3: retry"
+    word: retry
+    expect: 3
+    why: "= `judge-call-retry` 的**循环上限**（for 循环次数）。⚠ 该路径**实际最多 4 次**调用（+1 次回包重试）—— 本句只描述循环"
+
+# ── 如实登记：本项未实测 / 未定的部分 ──────────────────────────────────────
+unverified:
+  - item: "★ `plan-review-loop` 的**上限未定**（`cap_state: undecided`）"
+    why: >-
+      README §4.5 只说「循环至定稿」⇒ **没有数值上限，也没有"停太久就升级"的判据**。
+      设上限是**治理决定**（单人开发者下协商双方是同一人）⇒ 本表**不替它定**，只**点名**。
+  - item: "「多轮闭环**可跑**」这条判据只验到**结构**，没验**端到端跑过**"
+    why: >-
+      `agent-resume` 的续接链**未在本轮实测**（要真断一次站上调用）；`plan-review-loop` 的回环
+      在受理区**尚无真实实例走完**（`inbox/` 只有 1 个项目且停在 `waiting`）。⇒ 本项验的是
+      **上限/终止条件被写明**，**不是**"多轮真的跑通"。
+  - item: "`stop_on_agreement_machine_readable` 只报真假，**不判'该不该可机判**'"
+    why: >-
+      `plan-review-loop` 的正向终止是**人判**（"需求方不再提意见"）⇒ 登记为 `false`。
+      把它变成可机判需要**意见文件的格式契约**（现在 `复核意见-N.md` 是自由文本）—— 未做。
+  - item: "散文上限的 `expect ∈ 文件里 -lt/-le 集合` 这个口径**偏松**"
+    why: >-
+      若两个循环恰好都写 3，把某处散文上限配到另一个循环上也**看不出来**（本批正是 3/3）。
+      ⇒ 再收紧需要"散文行 ↔ 循环"的显式锚，那会把口径做成脆的（同 `memory-gates` 出网口径的取舍）。
+  - item: "散文上限扫描**只认 `prose_words` 里的词**"
+    why: >-
+      换成别的措辞（如 `max try = 2` / `最多两次`）**扫不到** ⇒ 逃逸。
+      之所以不做成"扫所有像上限的句子"：那个口径**不可判**（本仓已因口径含糊连踩三次）。
