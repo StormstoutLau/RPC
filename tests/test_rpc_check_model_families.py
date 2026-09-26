@@ -78,7 +78,7 @@ _ls = GOOD[GOOD.index("linked_state:"):] if "linked_state:" in GOOD else ""
 _st = ""
 for _ln in _ls.splitlines()[1:6]:
     if _ln.strip().startswith("status:"):
-        _st = _ln.split(":", 1)[1].strip()
+        _st = _ln.split(":", 1)[1].split("#")[0].strip()   # ★ 去掉行尾注释（否则 `in` 判定会因注释而假红）
         break
 # ★ 2026-09-26 实测后 `status` 由 `unverified` 改为更精确的 `runtime-not-truth-table`
 #   ⇒ **改断言（不是回退代码）**：本条的**意图**是"**不许假装拿到了『已加载』**" ⇒
