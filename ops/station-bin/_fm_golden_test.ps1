@@ -34,7 +34,9 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 'Read-ReviewResource', 'Get-AssertionBlock', 'Build-BlindPrompt', 'Compare-AssertionChains',
 # D7-P2-1 (2026-09-26): **机械门先行** 的判定本体（纯函数：只吃已解析的 run 记录 ⇒ 可离线单测）。
 # D7-P2-2 (2026-09-26): **结论契约** —— 三个纯函数（校验器 + 综合器）。
-'Test-FindingShape', 'Test-ConclusionContract', 'Merge-JudgeFindings', 'Resolve-L1Gate')) {
+'Test-FindingShape', 'Test-ConclusionContract', 'Merge-JudgeFindings', 'Resolve-L1Gate',
+# D7-P3-1 (2026-09-26): **不得自审**的判定本体（纯函数）。
+'Resolve-SelfReviewGuard')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -1703,6 +1705,40 @@ $ccTmpl = [System.IO.File]::ReadAllText((Join-Path (Split-Path $cli) 'review\jud
 Assert-True "cc-26 提示词模板**明确禁止**判官自报分类" ($ccTmpl -match '禁止输出 `agreement`')
 Assert-True "cc-27 提示词模板要求 `path`/`line_range` 必填" (
     $ccTmpl -match 'line_range' -and $ccTmpl -match '必填')
+
+# ⑫ D7-P3-1（2026-09-26）：**不得自审**（权限模型四要素之一）
+# 为什么要有：站上**只做粗判（归一后同名 ⇒ 自审）**；族级细判在本仓（`agent_pair_audit.py`）
+#   —— 因为**族表不在站上** ⇒ 站上**不假装能判族**。本组守的就是"粗判"这一层。
+$g1 = Resolve-SelfReviewGuard -ProducerModel 'local/m27-q4ks' -JudgeId 'local/m27-q4ks' -JudgeAlias 'm27'
+Assert-True "sr-1 同名 ⇒ self 且**拒**" ((-not $g1['ok']) -and $g1['verdict'] -eq 'self')
+$g2 = Resolve-SelfReviewGuard -ProducerModel 'local/m27-q4ks' -JudgeId 'cluster-litellm/m27-q4ks' -JudgeAlias 'x'
+Assert-True "sr-2 ★**跨传输前缀同名** ⇒ self（归一穿透前缀）" ($g2['verdict'] -eq 'self')
+$g3 = Resolve-SelfReviewGuard -ProducerModel 'local/gpt-oss-20b' -JudgeId 'openrouter/nvidia/gpt-oss-20b:free' -JudgeAlias 'x'
+Assert-True "sr-3 ★**尾参差异**（`:free`）仍判 self" ($g3['verdict'] -eq 'self')
+$g4 = Resolve-SelfReviewGuard -ProducerModel 'Station:A/ThinkingMachines/Inkling:Free' -JudgeId 'thinkingmachines/inkling' -JudgeAlias 'x'
+Assert-True "sr-4 大小写与前缀差异 ⇒ self" ($g4['verdict'] -eq 'self')
+$g5 = Resolve-SelfReviewGuard -ProducerModel 'local/gpt-oss-20b' -JudgeId 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free' -JudgeAlias 'ultra'
+Assert-True "sr-5 不同名 ⇒ ok（放行进 L2）" ($g5['ok'] -and $g5['verdict'] -eq 'ok')
+$g6 = Resolve-SelfReviewGuard -ProducerModel '' -JudgeId 'local/m27-q4ks' -JudgeAlias 'm27'
+Assert-True "sr-6 ★producer 的 model **读不出 ⇒ 拒**（fail-closed：读不到 ≠ 不同）" (
+    (-not $g6['ok']) -and $g6['verdict'] -eq 'unknown')
+$g7 = Resolve-SelfReviewGuard -ProducerModel '' -JudgeId 'local/m27-q4ks' -JudgeAlias 'm27' -Allow
+Assert-True "sr-7 显式 Allow ⇒ 放行但 **verdict 仍 unknown**（降级 != 隐藏）" ($g7['ok'] -and $g7['verdict'] -eq 'unknown')
+$g8 = Resolve-SelfReviewGuard -ProducerModel 'local/m27-q4ks' -JudgeId 'local/m27-q4ks' -JudgeAlias 'm27' -Allow
+Assert-True "sr-8 显式 Allow ⇒ 放行但 **verdict 仍 self**" ($g8['ok'] -and $g8['verdict'] -eq 'self')
+$g9 = Resolve-SelfReviewGuard -ProducerModel 'local/gpt-oss-20b' -JudgeId '' -JudgeAlias ''
+Assert-True "sr-9 judge id 读不出 ⇒ **Allow 也不放行**（配置错误，不是'不可判'）" (-not $g9['ok'])
+Assert-True "sr-10 facts 带两侧原始值（可追溯）" (
+    $g1['facts']['producer_model'] -eq 'local/m27-q4ks' -and $g1['facts']['judge_id'] -eq 'local/m27-q4ks')
+# 接线（防"写了但没跑"）
+Assert-True "sr-11 接线：门在**读产物之前**且**拒码独立**（exit 8）" (
+    $content.IndexOf('Resolve-SelfReviewGuard -ProducerModel') -lt
+    $content.IndexOf('$productText = [System.IO.File]::ReadAllText($product') -and
+    $content -match 'return 8')
+Assert-True "sr-12 两处写点都留 self_review_guard" (
+    ([regex]::Matches($content, "\`$review\['self_review_guard'\] = \`$sgSection")).Count -ge 2)
+Assert-True "sr-13 有显式放行通道（不是偷偷放行）" (
+    $content -match '\[switch\]\$allowSelfReview' -and $content -match '--allow-self-review')
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
