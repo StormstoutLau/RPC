@@ -1195,6 +1195,11 @@ Assert-True "o80⑦: >1 每站并发**显式拒绝**（不许静默按 1 跑）+
 Assert-True "o80⑧: 清单支持逐卡附件 `attach=`（解析 + 缺失 fail-fast + 传绝对路径进 -Attach）" (
     $codeOnlyFull.Contains("'^(?i)attach=(.+)$'") -and $codeOnlyFull.Contains("'ATTACH_NOT_FOUND'") -and
     $codeOnlyFull.Contains('$h.Attach = @($c.attachAbs)'))
+# ★ 2026-09-26 检查时发现的自伤: 汇总声称"以 runDir 为真值", 但文件名写成 `run.json`（**该文件永不存在**）
+#   ⇒ Test-Path 恒假 ⇒ **静默回落到日志**。真值源是 **`.agent-run.json`**（有点前缀，含 exit_code/status/accept）。
+Assert-True "o80⑨: 汇总从 **`.agent-run.json`** 读真值（不是 `run.json`）+ 回落时显式标来源" (
+    $codeOnlyFull.Contains("'.agent-run.json'") -and -not $codeOnlyFull.Contains("Join-Path `$runDir 'run.json'") -and
+    $codeOnlyFull.Contains("`$exitSrc = 'log'") -and $codeOnlyFull.Contains('src={5}'))
 
 # --- O-56 (2026-09-25): 基线"**声明无条件 / 产出有条件**"(两处) ---
 # ① 主路: `accept-cmds` 原为**裸列**, 而站上只在 `[ -n "$ACCEPT_B64" ]` 时才写 ⇒ 无 accept 的卡

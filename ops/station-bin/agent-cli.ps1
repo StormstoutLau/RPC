@@ -4473,17 +4473,23 @@ function Invoke-BatchTask {
                 $bad++; continue
             }
             $done = $txt | Where-Object { "$_" -like '*TASK_DONE dir=*' } | Select-Object -Last 1
-            $runDir = ''; $exitReal = $rc
+            $runDir = ''; $exitReal = $rc; $exitSrc = 'log'
             if ($done -and ("$done" -match 'TASK_DONE dir=(\S+)')) {
                 $runDir = $Matches[1]
-                $rj = Join-Path $runDir 'run.json'
-                if (Test-Path $rj) { try { $exitReal = [int]((Get-Content $rj -Raw | ConvertFrom-Json).exit_code) } catch { } }
+                # ★★ 真值源 = **`.agent-run.json`（有点前缀！）** —— 本轮曾误写成 `run.json` ⇒ 该文件**永不存在**
+                #   ⇒ `Test-Path` 恒假 ⇒ **静默回落到日志里的 rc**，而我对外声称"判据以 runDir 为真值"。
+                #   实测（2026-09-26 检查时发现）: 三卡 runDir 里都只有 `.agent-run.json`（含 exit_code/status/**accept**）。
+                #   ⚠ 回落到日志时**必须显式标 `(log)`** —— 否则就是"看起来更硬的真值源其实没读到"。
+                $rj = Join-Path $runDir '.agent-run.json'
+                if (Test-Path $rj) {
+                    try { $exitReal = [int]((Get-Content $rj -Raw | ConvertFrom-Json).exit_code); $exitSrc = 'run.json' } catch { }
+                }
             }
             $stamp = ''
             $s2 = $txt | Where-Object { "$_" -like '*RUNSTAMP:*' } | Select-Object -Last 1
             if ("$s2" -match 'RUNSTAMP: (\d+)') { $stamp = $Matches[1] }
             if ($exitReal -ne 0) { $bad++ }
-            Write-Host ("  {0,-52} st={1} ts={2} exit={3} runDir={4}" -f $c.card, $j.station, $stamp, $exitReal, $runDir)
+            Write-Host ("  {0,-52} st={1} ts={2} exit={3} src={5} runDir={4}" -f $c.card, $j.station, $stamp, $exitReal, $runDir, $exitSrc)
         }
     }
     foreach ($j in $jobs) { Remove-Job -Job $j.job -Force 2>$null }
