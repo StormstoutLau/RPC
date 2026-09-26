@@ -13,6 +13,13 @@ accept:
   - test "$(grep -c '^|' out/dialect-map.md)" -ge 8
   - grep -q 'L1' out/dialect-map.md
   - grep -qE 'Textbook|Open_Data' out/dialect-map.md
+evidence-manifest:
+  version: 1
+  subjects:
+    - name: dialect-map
+      path: dialect-map.md
+      state: out/dialect-map.md
+      digest: sha256
 ---
 > **本卡 = U-2 双卡的「分析提案」层**（`b1b`）：出网档（`public` + 人工脱敏摘要），产出含**统一字典候选轴**。
 > 与之配对的「转录底稿」层 = [b1a-u2-dialect-map-transcribe.md](b1a-u2-dialect-map-transcribe.md)（`local-only` + 全文，**只转录原文**）。
