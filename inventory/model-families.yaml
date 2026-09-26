@@ -1,0 +1,69 @@
+# ============================================================================
+# 模型**家族**表（`D7-P3-1` 前置 · 2026-09-26 登记）
+#
+# 为什么要这张表:
+#   `D7-P0-3` 的判据 **J-1（跨族）** = `lookup_family(judge.model) != lookup_family(producer.model)`
+#   —— 它要的是"**判官与产出者不是同一族**"（异构的价值在"认知多样性"而非同族多实例）。
+#   ⚠ 而 J-1 在此之前**不可判**：因为**没有"模型 → 家族"这张表**（路线总表 `D7-P0-3` 原文：
+#     "① 有 4 族实测但**未落表**"）。⇒ 本表就是把它落下来。
+#
+# ★★ 族的划分依据（**唯一口径，不许换**）：
+#   **按【权重血统】判** —— 即"这个模型的权重从哪个基座来"，**不是**按发布者/托管者。
+#   理由：J-1 的目的是"跨族 ⇒ 认知不相关"；**蒸馏/微调会把基座的偏差一起继承**
+#   ⇒ 按血统判才是"真的不同族"。⇒ 微调者 / 蒸馏者 / 量化者一律记进 `note`，**不改族**。
+#   例：`gpt-oss-120b-fable-5-distilled`（`autotrust/…Fable-5-Distilled-GGUF`）**归 `gpt-oss`**
+#       —— 它是 gpt-oss 的**蒸馏**，血统仍是 OpenAI 的 gpt-oss。
+#
+# ★★ **本表刻意不复制模型清单**（防"同一事实两个定义点"，O-50 纪律）：
+#   `members` 里写的 `alias` **就是** `inventory/models.yaml` 的主键 ⇒
+#   门禁 `model-families` **双向对账**（见下），**任何一侧新增都会被点名**。
+#
+# 门禁怎么用它（`ops/rpc_check.py` 的断言 `model-families`）:
+#   ① 本表可解析；② 每个 `members` 里的 alias **必须**在 `models.yaml` 里存在（否则 = 孤儿引用）；
+#   ③ **`models.yaml` 的每个 alias 必须恰好属 1 族**（漏项与重复**都会红** —— 只做单向包含
+#      会漏掉"新模型没归类"，那正是本表最容易腐化的方向）；
+#   ④ 每族**必须有非空的 `basis`**（族划分依据）⇒ 堵"看着像就填"（与 `dialect.yaml` 同纪律）。
+#
+# ⚠⚠ 一个**必须说清**的语义边界（否则会被读过头）：
+#   `models.yaml` 的 `stations` = "该别名在**哪些站的模型库里**"（可加载），
+#   `conf` = "哪些站**配过实例**" —— ★ **两者都不等于"已加载/正在服务"**。
+#   `D7-P0-3` 的 J-1 要的是后者（**站↔已加载模型**）⇒ **本表不提供它**，见文末 `loaded_state`。
+#
+# 数据来源: 由 `inventory/models.yaml`（2026-09-14 三站实测 · updated 2026-09-16）的 12 个 alias
+#           **逐条按 engine_id 判血统**得出（2026-09-26）。
+# ============================================================================
+version: 1
+updated: 2026-09-26
+
+families:
+  - id: gpt-oss
+    basis: OpenAI 开源权重（gpt-oss 系列）
+    members: [gpt-oss-120b, gpt-oss-20b, gpt-oss-120b-fable-5-distilled]
+    note: "`fable-5-distilled` 由 `autotrust` 蒸馏、`20b` 是缩小版 ⇒ **血统同族**（按依据判，不按发布者）"
+  - id: nvidia
+    basis: NVIDIA 自研权重（Nemotron 系列）
+    members: [nvidia-nemotron-3-super-120b-a12b]
+  - id: deepseek
+    basis: DeepSeek 自研权重
+    members: [deepseek-v4-flash-0731]
+  - id: qwen
+    basis: 阿里 Qwen 系权重（含其社区微调，血统未变）
+    members: [qwen3.8-27b-mtp, qwen3.8-flash-next, qwen2.5-7b-instruct, qwen3-coder-next, davidau-q38-27b-q4k]
+    note: "`qwen3.8-27b-mtp` 由 `Jackrong` 微调、`davidau-q38-27b-q4k` 由 `DavidAU` 微调 ⇒ 微调者记此、**不改族**"
+  - id: minimax
+    basis: MiniMax 自研权重
+    members: [m27-q4ks]
+  - id: sentence-embedding
+    basis: 句子嵌入模型（**非生成模型**，用于向量检索而非判官/产出）
+    members: [all-minilm-l6-v2-embedding]
+    kind: embedding
+
+# ── 站↔**已加载**模型（J-1 的第二个输入）—— **本表不提供，如实登记"未实测"** ──────────
+# ★ 为什么单列：`models.yaml` 的 `stations`（库中有）与 `conf`（配过实例）**都不等于"已加载"**。
+#   把前者当后者用 = **把两件事说成一件**（本仓头号形态）—— 那会让 J-1 在"库里有但没跑"时
+#   **仍然判成"跨族成立"**（假绿）。
+linked_state:
+  status: unverified
+  why: "`D7-P0-3` 原文即写『站↔已加载模型真值表**尚未登记**』；本轮**只接管了【模型→家族】**这一半，未凭空造另一半"
+  candidate_source: "站上 `:8080/v1/models`（各实例的引擎自报已服务模型）+ 实例进程表 —— ★ **未实测**，未取数"
+  next: "实测口径确定后，把 `site_id → {loaded_model_names}` 登记为 `loaded_state.stations`；在此之前 J-1 **仍不可判**"
