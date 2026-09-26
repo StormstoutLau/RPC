@@ -14,8 +14,9 @@ accept:
   - grep -q Verdict out/d7-p0-2-protocol-freeze.md
   - grep -q 六相 out/d7-p0-2-protocol-freeze.md
   - grep -q 主控站 out/d7-p0-2-protocol-freeze.md
-  - grep -q 未实测 out/d7-p0-2-protocol-freeze.md
-  - test "$(wc -l < out/d7-p0-2-protocol-freeze.md)" -ge 30
+  - grep -q '^## 未实测登记' out/d7-p0-2-protocol-freeze.md
+  - test "$(sed -n '/^## 未实测登记/,$p' out/d7-p0-2-protocol-freeze.md | grep -cE '^[-*] |^[0-9]+\. ')" -ge 5
+  - test "$(wc -l < out/d7-p0-2-protocol-freeze.md)" -ge 45
 evidence-manifest:
   version: 1
   subjects:
@@ -42,8 +43,12 @@ evidence-manifest:
 
 ### 3. `## 未实测登记`
 
-逐条列出"本契约里**尚未被任何真实运行验证过**的部分"（例如某个不变量从未机判过、某个信封字段从未被写过）。
-这一节**必须存在**；没有就写一个字：`无`。
+★ **标题必须逐字就是 `## 未实测登记`**（**不要**写成 `## 3. ## 未实测登记` 这类嵌套形式）。
+逐条列出"本契约里**尚未被任何真实运行验证过**的部分"，**每条要指出"在什么意义上"没被验证**：
+① 某一相是否**从未真实跑通过**；② 某个信封/字段是否**从未被真正写过**；③ 某条不变量或红线是否**从未被机判过**；
+④ 某条规则是否**只存在于文档、代码里没有对应实现**。
+⚠⚠ **这一节必然非空、且至少 5 条** —— 理由：本契约是**新定案的**，其任何部分都还没有真实运行验证过
+⇒ **写「无」不成立**。若你确实认为某部分**已被**验证，必须指出**是哪一个 run / 哪一次机判**；指不出来，就属于未实测。
 ⚠ 硬要求：**未经实测的东西不得写成"已具备"**。
 
 ### 硬性要求
