@@ -1,0 +1,89 @@
+# ID **存储面**普查真值（可复算）—— affected 的**生产者**
+#
+# 生成：`py ops/id_storage_census.py --emit`   ·   复算比对（门禁）：`id-storage`
+# 口径的**唯一实现**在 `ops/id_storage_census.py`；本文件只是它的一次输出快照。
+# ⚠ `shape` = ID 值的形态分布（取样 ≤ 10 万；`shape_sampled: true` 表示未全量）。
+# ⚠ `is_primary_key` 是**回库里核的**，不是照抄声明 —— 声明与实测不一致时门禁判红。
+# ⚠ JSONL 无主键概念 ⇒ `is_primary_key: null`（**显式未知**，不假装是 false）。
+metric:
+  shape_classes:
+  - U-1 合规
+  - sha256[:32] 无前缀
+  - 其它长度 hex
+  - 带前缀
+  - 空值
+  shape_sample_limit: 100000
+  u1_judge: rpc_check.u1_parse（与 U-1 实现同源）
+  role_domain:
+  - primary_key
+  - record_key
+stores:
+- project: Open_Data
+  kind: duckdb
+  path: F:\Open_Data\alternative_data.duckdb
+  table: alt_events
+  column: event_id
+  declared_role: primary_key
+  reachable: true
+  ok: true
+  rows: 598942
+  distinct: 598942
+  is_primary_key: true
+  shape:
+    sha256[:32] 无前缀: 100000
+  shape_sampled: true
+- project: Open_Data
+  kind: duckdb
+  path: F:\Open_Data\alternative_data.duckdb
+  table: raster_index
+  column: raster_id
+  declared_role: primary_key
+  reachable: true
+  ok: true
+  rows: 38
+  distinct: 38
+  is_primary_key: true
+  shape:
+    sha256[:32] 无前缀: 38
+  shape_sampled: false
+- project: Open_Data
+  kind: duckdb
+  path: F:\Open_Data\alternative_data.duckdb
+  table: spatial_entities
+  column: entity_id
+  declared_role: primary_key
+  reachable: true
+  ok: true
+  rows: 0
+  distinct: 0
+  is_primary_key: true
+  shape: {}
+  shape_sampled: false
+- project: Auto_Prover
+  kind: sqlite
+  path: F:\Auto_Prover\.artifacts\m1\verdicts.db
+  table: verdicts
+  column: verdict_id
+  declared_role: primary_key
+  reachable: true
+  ok: true
+  rows: 1
+  distinct: 1
+  is_primary_key: true
+  shape:
+    带前缀: 1
+  shape_sampled: false
+- project: Auto_Prover
+  kind: jsonl
+  path: F:\Auto_Prover\.artifacts\m1\unified_cases.jsonl
+  table: null
+  column: case_id
+  declared_role: record_key
+  reachable: true
+  ok: true
+  rows: 1
+  distinct: 1
+  is_primary_key: null
+  shape:
+    带前缀: 1
+  shape_sampled: false
