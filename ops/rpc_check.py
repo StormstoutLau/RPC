@@ -819,6 +819,213 @@ def check_sensitivity(ctx):
     return ("FAIL" if bad else "PASS"), note, bad
 
 
+# ── D7-P1-1 (2026-09-26)：U-2 证据强度字典 + 方言映射表 ──────────────────────
+# 目的：同一个符号（`L1` / `A` / `R1` / `E1`）在九个项目里指互不相干的东西；
+#   「建映射、不迁移权威源」缺了它就只能靠人读文档记忆。而**映射表自己**最容易出的两种病是：
+#     · **漏项**（实测：`b1b` 的对照表漏了摘要族 2 的第三行 `Cpp_Hub Tier 1/2`）⇒ 用 `coverage` 逐族点行数（**双向**：多也红）；
+#     · **静默漂移**（源词表改了，映射表还是旧的）⇒ 用**源切片指纹**比对（这就是 D7-P1-1 退出判据的「源词表变了下游红」）。
+# ★ 为什么必须**真读源文件**而不是只信登记：D7-P1-1 的教训②原文 =「映射表本身要能被门禁校验
+#   （源词表变了下游要红）」。⚠ 但源在**别的仓库**（他方项目）⇒ 本仓**只能对账、不能强制**，
+#   ⇒ 本断言把"源"定义成**本仓内的两个投影**（原文切片 + 出站版摘要），对它们做指纹；
+#     他方源本身的变化**抓不到**，此事已在 `regeneration.why_not_automated` 如实登记（不假装能同步）。
+# ★ 三处硬要求各有出处（§11.4 的三条教训）：
+#   ① 命名空间前缀 = **必填字段**（不靠人自觉写前缀）⇒ `namespace` 必填且 ∈ 白名单；
+#   ② 未定轴**不许硬塞**：`axis=not-assigned` 必须写 `axis_note`（说明它属于什么轴）；
+#   ③ `axis=evidence-strength` 而逐级对应未知时，只允许写 `axis_value: undefined` + 理由
+#      —— 堵住"看着像就填"（`b1b` 实测把 RPC 的 E1–E5 猜成了「官方>社区>实测>推断>无据」，输入里没有）。
+DIALECT_INV = ROOT / "inventory" / "dialect.yaml"
+DIALECT_AXES = {"evidence-strength", "not-assigned"}
+DIALECT_RELATIONS = {"独占", "冲突", "同名不同义-族内"}
+DIALECT_UNKNOWN = "undefined"
+
+
+def _dialect_norm(text):
+    """与指纹登记**同口径**：CRLF→LF、逐行去尾空白、行尾统一 `\\n`。
+
+    ⚠ 必须与写指纹时用的口径逐字一致 —— 差一个 `\\r` 就会让**每一次**跑都红（假红），
+    而假红的下场是"把判据关掉"（比不判更坏）。
+    """
+    return "\n".join(l.rstrip() for l in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"))
+
+
+def _dialect_slice(text, start_marker, next_prefix):
+    """取"从首个 `start_marker` 行 到 下一个 `next_prefix` 行（不含）"的切片；找不到 ⇒ None。"""
+    lines = _dialect_norm(text).split("\n")
+    i = next((k for k, l in enumerate(lines) if l.startswith(start_marker)), None)
+    if i is None:
+        return None
+    j = next((k for k in range(i + 1, len(lines)) if lines[k].startswith(next_prefix)), len(lines))
+    return "\n".join(lines[i:j])
+
+
+def validate_dialect(inv, read_text_fn, exists_fn):
+    """**纯函数** → `(bad, notes)`（离线可正反夹测，见 tests/test_rpc_check_dialect.py）。
+
+    规则：① 轴与命名空间是封闭枚举/白名单；② 每行映射的前缀必填；
+          ③ `coverage` 与实际行数**双向**相等（漏一行、多一行都红）；
+          ④ `sources` 的 path 必须存在，且**复算指纹**必须与登记一致（源变 ⇒ 下游红）。
+    """
+    bad, notes = [], []
+    if not isinstance(inv, dict):
+        return ["dialect.yaml 顶层不是映射（结构改了？）"], notes
+
+    # ── ① 轴 ────────────────────────────────────────────────────────────
+    axis = inv.get("axis") or {}
+    axis_id = axis.get("id")
+    values = axis.get("values") or []
+    vids = [v.get("id") for v in values if isinstance(v, dict)]
+    if not axis_id:
+        bad.append("`axis.id` 缺失")
+    if not values:
+        bad.append("`axis.values` 为空 ⇒ 字典没有轴（“单一轴字典”名不副实）")
+    if len(vids) != len(set(vids)):
+        bad.append(f"`axis.values` 的 id 有重复: {vids}")
+    for v in values:
+        if not (isinstance(v, dict) and v.get("id") and v.get("label")):
+            bad.append(f"`axis.values` 有条目缺 id/label: {v!r}")
+
+    # ── ② 命名空间白名单（前缀必填的值域）────────────────────────────────
+    ns_ids = [n.get("id") for n in (inv.get("namespaces") or []) if isinstance(n, dict)]
+    if not ns_ids:
+        bad.append("`namespaces` 为空 ⇒ 「前缀必填」没有值域可查")
+
+    # ── ③ 映射表 ────────────────────────────────────────────────────────
+    mapping = inv.get("mapping") or []
+    if not mapping:
+        bad.append("`mapping` 为空 ⇒ 映射表不存在")
+    seen_pair = {}
+    for i, row in enumerate(mapping, 1):
+        if not isinstance(row, dict):
+            bad.append(f"`mapping[{i}]` 不是映射")
+            continue
+        ns, sym = row.get("namespace"), row.get("symbol")
+        if not ns:
+            bad.append(f"`mapping[{i}]` 缺 `namespace`（★ 前缀是**必填字段**，§11.4 教训①）")
+        elif ns_ids and ns not in ns_ids:
+            bad.append(f"`mapping[{i}]` 的 namespace={ns!r} 不在 `namespaces` 白名单里")
+        if not sym:
+            bad.append(f"`mapping[{i}]` 缺 `symbol`")
+        if (ns, sym) in seen_pair:
+            bad.append(f"`mapping[{i}]` ({ns}, {sym}) 与第 {seen_pair[(ns, sym)]} 行重复 "
+                       f"⇒ 同一符号同一出处两处定义（本仓头号形态）")
+        else:
+            seen_pair[(ns, sym)] = i
+        if row.get("relation") not in DIALECT_RELATIONS:
+            bad.append(f"`mapping[{i}]` relation={row.get('relation')!r} 不在封闭枚举 {sorted(DIALECT_RELATIONS)}")
+        ax = row.get("axis")
+        if ax not in DIALECT_AXES:
+            bad.append(f"`mapping[{i}]` axis={ax!r} 不在封闭枚举 {sorted(DIALECT_AXES)}")
+            continue
+        av, note = row.get("axis_value"), row.get("axis_note")
+        if ax == "evidence-strength":
+            if not av:
+                bad.append(f"`mapping[{i}]` axis=evidence-strength 但缺 `axis_value`")
+            elif av == DIALECT_UNKNOWN:
+                if not note:
+                    bad.append(f"`mapping[{i}]` axis_value=undefined **必须**写 `axis_note` 说明为何不可判 "
+                               f"（不许“看着像就填”）")
+            elif vids and av not in vids:
+                bad.append(f"`mapping[{i}]` axis_value={av!r} 不在 `axis.values` 的 id 里")
+        else:                                    # not-assigned
+            if av not in (None, ""):
+                bad.append(f"`mapping[{i}]` axis=not-assigned 却给了 `axis_value={av!r}` "
+                           f"⇒ 既说不属此轴、又给了取值（自相矛盾）")
+            if not note:
+                bad.append(f"`mapping[{i}]` axis=not-assigned **必须**写 `axis_note`（说明它属于什么轴）")
+
+    # ── ④ 覆盖对账（**双向**：漏行/多行都红）────────────────────────────
+    cov = inv.get("coverage") or []
+    if not cov:
+        bad.append("`coverage` 缺失 ⇒ 没有“有没有漏项”的判据（`b1b` 漏过一行，正因缺这一段）")
+    actual = {}
+    for row in mapping:
+        if isinstance(row, dict) and row.get("family"):
+            actual[row["family"]] = actual.get(row["family"], 0) + 1
+    for c in cov:
+        if not isinstance(c, dict):
+            bad.append(f"`coverage` 有条目不是映射: {c!r}")
+            continue
+        fam, want = c.get("family"), c.get("expected_rows")
+        got = actual.get(fam, 0)
+        if got != want:
+            bad.append(f"`coverage` 不符: family={fam!r} 期望 {want} 行, 实际 {got} 行 "
+                       f"⇒ 映射表**漏项**或 `coverage` 过期（两者必改其一）")
+    for fam in sorted(set(actual) - {c.get("family") for c in cov if isinstance(c, dict)}):
+        bad.append(f"`mapping` 里的 family={fam!r} 未在 `coverage` 登记 ⇒ 新增族没报行数")
+    notes.append(f"映射 {len(mapping)} 行 / {len(actual)} 族")
+
+    # ── ⑤ 冲突清单 / 不可判项（各自非空）─────────────────────────────────
+    for key, need in (("conflicts", ("symbol", "sides", "why")), ("undecidable", ("item", "missing"))):
+        items = inv.get(key) or []
+        if not items:
+            bad.append(f"`{key}` 为空 —— 这两节是“不许硬塞 / 不许猜”的落地处，空 = 没做")
+            continue
+        for i, it in enumerate(items, 1):
+            if not isinstance(it, dict) or any(not it.get(f) for f in need):
+                bad.append(f"`{key}[{i}]` 缺字段（须全有 {list(need)}）: {it!r}")
+    notes.append(f"冲突 {len(inv.get('conflicts') or [])} 条 · 不可判 {len(inv.get('undecidable') or [])} 条")
+
+    # ── ⑥ 源词表指纹（D7-P1-1 退出判据的「源词表变了下游红」）────────────
+    srcs = inv.get("sources") or []
+    if not srcs:
+        bad.append("`sources` 为空 ⇒ 没有“源词表变了要红”的对象")
+    n_ok = 0
+    for s in srcs:
+        if not isinstance(s, dict):
+            bad.append(f"`sources` 有条目不是映射: {s!r}")
+            continue
+        p, want = s.get("path"), s.get("sha256")
+        tag = s.get("id") or p
+        if not p or not want:
+            bad.append(f"`sources[{tag}]` 缺 path 或 sha256")
+            continue
+        if not exists_fn(p):
+            bad.append(f"`sources[{tag}]` 的 path 不存在: {p} ⇒ 登记指向空物")
+            continue
+        try:
+            text = read_text_fn(p)
+        except Exception as e:                      # ⚠ 不静默跳过：读不到就是"判不了"，必须显式报
+            bad.append(f"`sources[{tag}]` 读取失败（{type(e).__name__}）⇒ 本项**不可判**，"
+                       f"不得当作通过: {p}")
+            continue
+        if s.get("whole_file"):
+            got = hashlib.sha256(_dialect_norm(text).encode("utf-8")).hexdigest()
+        else:
+            sl = _dialect_slice(text, s.get("slice_start") or "", s.get("slice_next_prefix") or "# ")
+            if sl is None:
+                bad.append(f"`sources[{tag}]` 切片起点 {s.get('slice_start')!r} 在 {p} 里找不到 "
+                           f"⇒ 结构改了（判据前提失效）")
+                continue
+            got = hashlib.sha256(sl.encode("utf-8")).hexdigest()
+        if got != want:
+            bad.append(f"`sources[{tag}]` **指纹不符** ⇒ 源词表变了下游没重抽。"
+                       f"登记 {want[:12]}… / 实算 {got[:12]}… ⇒ 重抽映射表并更新 `sources[].sha256`")
+        else:
+            n_ok += 1
+    notes.append(f"源 {len(srcs)} 处 · 指纹一致 {n_ok}")
+    return bad, notes
+
+
+def check_dialect(ctx):
+    """D7-P1-1: U-2 证据强度字典 + 方言映射表（`inventory/dialect.yaml`）。"""
+    try:
+        import yaml
+    except Exception:
+        return "WARN", "缺 pyyaml, 跳过 dialect 字典断言", []
+    if not DIALECT_INV.exists():
+        return "FAIL", "inventory/dialect.yaml 缺失（本断言的登记依据）", []
+    try:
+        inv = yaml.safe_load(DIALECT_INV.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        return "FAIL", f"inventory/dialect.yaml 解析失败: {type(e).__name__}: {e}", []
+
+    def _read(rel):
+        return (ROOT / rel).read_text(encoding="utf-8", errors="replace")
+
+    bad, notes = validate_dialect(inv, _read, lambda rel: (ROOT / rel).exists())
+    return ("FAIL" if bad else "PASS"), " · ".join(notes), bad
+
+
 # ── O-66 (2026-09-25)：卡面 `input-provenance` 义务（`CROSS-PROJECT-WORK-STANDARD §4` 的**机判**）──
 # 义务原文：卡声明 `public`/`sanitized` **且带输入** ⇒ ① `input-provenance` 必填（逐项本仓相对路径）
 #   ② 每项须在 `sensitivity.yaml` 有 `tier` ③ 卡的 `sensitivity` **不得宽于**该项的 `tier`。
@@ -3730,6 +3937,17 @@ CHECKS = [
             "确无本仓输入 ⇒ **显式写 `input-provenance: none`**（不要留空；留空 = 缺字段 ⇒ FAIL）。"
             "⚠ 报『none 可证伪性存疑』= **WARN 不阻断**：声明 none 却在正文提到 tier 严于本卡的已登记路径 —— "
             "『提到』不等于『读到』，机械判不出 ⇒ 请人工核一次：若确实读了，把它列进 `input-provenance` 或降档。"},
+    # D7-P1-1 (2026-09-26): U-2 证据强度字典 + 方言映射表 —— 映射表自己的两种病
+    #   （**漏项** / **源词表改了而映射表没重抽**）。
+    {"id": "dialect", "title": "U-2 方言字典与映射表", "fn": check_dialect, "quick": True,
+     "fix": "D7-P1-1: `inventory/dialect.yaml` 是「符号 × 出处 → 含义」的投影（**权威源在别处** ⇒ "
+            "已登记进 `inventory/artifacts.yaml`，**禁止手工编辑语义**：改源 → 重抽 → 重跑）。"
+            "本项判四件事：① `axis` / `namespaces` 是封闭枚举与白名单，映射行的 `namespace` **必填**"
+            "（§11.4 教训①：前缀不靠人自觉写）；② `axis=not-assigned` 必须写 `axis_note`（说明属于什么轴），"
+            "`axis_value=undefined` 必须写理由（堵「看着像就填」）；"
+            "③ `coverage` 逐族行数与实际**双向**相等（`b1b` 实测漏过一行）；"
+            "④ `sources` 的**源切片指纹**不符 ⇒ 红（这就是「源词表变了下游红」）。"
+            "⚠ 报「读取失败 ⇒ 不可判」= **要修**，不是通过 —— 判不了不许当通过"},
     {"id": "facade", "title": "门面符号可达性", "fn": check_facade, "quick": True,
      "fix": "P1-3: `cluster.py` 是统一门面, `cluster_web.py` 以 `import cluster` 复用其符号 —— "
             "缺符号即 FAIL 并点名『哪个符号·被谁引用』; 修法: 在 cluster.py 重导出(或改回引用处)"},

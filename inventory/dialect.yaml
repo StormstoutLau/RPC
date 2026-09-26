@@ -1,0 +1,189 @@
+# U-2 证据强度字典 + 方言映射表（D7-P1-1）
+#
+# ── 这是什么 ───────────────────────────────────────────────────────────────
+# U-2 的目标是「**建映射、不迁移权威源**」：同一个符号（如 `L1` / `A` / `R1` / `E1`）
+# 在九个项目里指互不相干的东西。本文件把「**符号 × 出处 → 该处含义**」摊平，
+# 并把可归入**同一条轴**的那些含义钉到轴上；归不进去的**显式登记为未定轴**，不硬塞。
+#
+# ── 权威源在别处 ⇒ 本文件是「生成物」───────────────────────────────────────
+# 符号定义的真值在**各项目自己的仓库**里；本文件是它的**投影**。
+# ⇒ 已登记进 `inventory/artifacts.yaml`（`check: dialect`）。纪律见该文件头部：
+#   **生成物禁止手工编辑语义** —— 一律「改源头 → 重抽 → 跑门禁 `dialect`」。
+#   本文件**没有**可重跑的生成器（重抽是人/agent 在环，见末节 `regeneration`）；
+#   门禁能做的就是**把你漏掉的那一步抓住**：源切片指纹一变 ⇒ 红（见 `sources`）。
+#
+# ── 两层输入（同一事实的两个来源，故意都留）────────────────────────────────
+#   · `survey-11-1`     = 合并稿 §11.1 原文切片（`local-only` 文档；`b1a` 转录层的输入）
+#   · `dialect-excerpt` = 已人工脱敏的出站版摘要（`public`；`b1b` 分析层的输入）
+#   两层都留的理由：**底稿求真、分析求用**（裁定见 DEV-LOG-014 D1）；
+#   `b1b` 的产物实测**漏了摘要族 2 的第三行**（`Cpp_Hub` 平台支持档位）——
+#   本表的 `coverage` 段就是为这一类漏项设的机判（见下）。
+#
+# ── 本文件**不含**的东西（刻意）────────────────────────────────────────────
+#   · 不写任何盘符 / 主机名 / IP / 用户目录（出处一律用**项目名**；盘符形态只在 `b1a` 底稿里）
+#   · **不**给出摘要没有的含义（`b1b` 曾把 RPC 的 E1–E5 写成「官方>社区>实测>推断>无据」——
+#     那**不在**摘要里，本表按未定登记，见 `rpc:RPC-E*` 行）
+
+version: 1
+updated: 2026-09-26
+owner: Scott (鹏)
+
+# ── 单一轴：证据强度 ──────────────────────────────────────────────────────
+# 为什么只立这一条轴：D7-P1-1 的名字就是「证据强度字典」；且 D7 判定「这份产物算不算证据」
+# 时**只有这一条轴**是跨项目可比的。其余族（阶段序 / 本体层级 / 严重度 / 优先级 / 成熟度 /
+# 断言确定性 / 访问控制 / 修正动作 / 复现强度）**各自是别的轴**，硬并入会造出新冲突。
+# ⚠ `partial: true` 是**如实声明**：摘要只给出了三级；本仓自己那族的逐级定义**不在**输入里。
+axis:
+  id: evidence-strength
+  label: 证据强度
+  partial: true
+  why: >-
+    来源强度是可跨项目比较的**一条**序；D7 用它回答「这份证据有多硬」。
+    只取摘要已明确给出的三级，不强推第四级。
+  values:                     # 有序：强 → 弱
+    - id: official
+      label: 官方来源
+      note: 出处 = Open_Data 的 `L1`（原文词「官方来源级」）
+    - id: community
+      label: 社区来源
+      note: 出处 = Open_Data 的 `L2`（原文词「社区来源级」）
+    - id: measured
+      label: 实测取得
+      note: 出处 = Open_Data 的 `L3`（原文词「实测取得级」）
+
+# ── 命名空间前缀（§11.4 教训③：**必填字段**，不靠人自觉写前缀）────────────
+namespaces:
+  - {id: paper, label: Paper}
+  - {id: textbook, label: Textbook}
+  - {id: open_data, label: Open_Data}
+  - {id: macro_data, label: Macro_Data}
+  - {id: fin_agent, label: Fin_Agent}
+  - {id: cpp_hub, label: Cpp_Hub}
+  - {id: spec_workflow, label: Spec_Workflow}
+  - {id: factor_pipeline, label: factor_pipeline}
+  - {id: rpc, label: 本仓 RPC}
+  - {id: rpc_inbox, label: 本仓 inbox}
+
+# ── 源词表（指纹一旦不符 ⇒ 门禁红：源变了而你没重抽）──────────────────────
+sources:
+  - id: survey-11-1
+    path: docs/2026-09-23_D7调研_立项·机制·统一基座.md
+    slice_start: "### 11.1 "
+    slice_next_prefix: "### "
+    sha256: f382849a90ae203445ec7e89fe350aac015fe7c778947b5cc5c050232925c590
+    note: 合并稿 §11.1（符号冲突）原文切片
+  - id: dialect-excerpt
+    path: spec/d6-agent-standard/dogfood-cards/inputs/d7-dialect-excerpt.md
+    whole_file: true
+    sha256: efa4d22fbecbd50c5355bbe7426d58779d01e24accaa009c901ceafb1c200511
+    note: 出站版摘要（public）；`b1b` 卡的输入
+
+# ── 覆盖对账（防「漏了一行」——`b1b` 实犯过一次）───────────────────────────
+# 门禁按 `family` 逐族点行数；与实际不符 ⇒ 红（多一行也会红 ⇒ 双向）。
+coverage:
+  - family: L-ladder
+    expected_rows: 13
+    note: "Paper 3 + Textbook 3 + Open_Data 3 + Macro_Data 2（缓存档 + 反爬栈）+ Fin_Agent 2（标签粒度 + 架构分层）"
+  - family: ABC-ladder
+    expected_rows: 3
+    note: "Cpp_Hub·Spec_Workflow 断言分级 + Macro_Data 可访问性 + Cpp_Hub 平台支持档位"
+  - family: R-ladder
+    expected_rows: 2
+    note: "Open_Data 幻觉修正分级 + Macro_Data 多源冲突裁决规则码"
+  - family: E-ladder
+    expected_rows: 2
+    note: "本仓 RPC-E* + Spec_Workflow 自有 E*"
+  - family: misc-id-ladder
+    expected_rows: 6
+    note: "Paper B1/B2 · Paper D1–D8 · factor_pipeline CRITICAL/MAJOR/MINOR · P0–P3 · Tier 1–3 · inbox Reproduced/Replicated"
+
+# ── 映射表（逐行 = 一个「符号 × 出处」组合）────────────────────────────────
+# 字段：family · namespace（**必填**）· symbol · source(出处展示名) · raw_meaning（原文词）·
+#       relation（独占 | 冲突 | 同名不同义-族内）· axis（evidence-strength | not-assigned）·
+#       axis_value（仅 axis=evidence-strength；`undefined` = 该族属此轴但逐级对应不可判）· axis_note
+mapping:
+  # ── L-ladder ──
+  - {family: L-ladder, namespace: paper, symbol: L1, source: Paper, raw_meaning: 元数据抽取阶段, relation: 冲突, axis: not-assigned, axis_note: "属**处理阶段序**轴（Paper 自己的 L1→L3 流水线），非来源强度"}
+  - {family: L-ladder, namespace: paper, symbol: L2, source: Paper, raw_meaning: 正文提取阶段, relation: 冲突, axis: not-assigned, axis_note: "同上（阶段序轴）"}
+  - {family: L-ladder, namespace: paper, symbol: L3, source: Paper, raw_meaning: 质检阶段, relation: 冲突, axis: not-assigned, axis_note: "同上（阶段序轴）"}
+  - {family: L-ladder, namespace: textbook, symbol: L1, source: Textbook, raw_meaning: 结构层（节点与边）, relation: 冲突, axis: not-assigned, axis_note: "属**本体层级**轴（结构/元数据/边），非阶段序、非来源强度"}
+  - {family: L-ladder, namespace: textbook, symbol: L2, source: Textbook, raw_meaning: 元数据层, relation: 冲突, axis: not-assigned, axis_note: "同上（本体层级轴）"}
+  - {family: L-ladder, namespace: textbook, symbol: L3, source: Textbook, raw_meaning: 边层, relation: 冲突, axis: not-assigned, axis_note: "同上（本体层级轴）"}
+  - {family: L-ladder, namespace: open_data, symbol: L1, source: Open_Data, raw_meaning: 官方来源级, relation: 冲突, axis: evidence-strength, axis_value: official}
+  - {family: L-ladder, namespace: open_data, symbol: L2, source: Open_Data, raw_meaning: 社区来源级, relation: 冲突, axis: evidence-strength, axis_value: community}
+  - {family: L-ladder, namespace: open_data, symbol: L3, source: Open_Data, raw_meaning: 实测取得级, relation: 冲突, axis: evidence-strength, axis_value: measured}
+  - {family: L-ladder, namespace: macro_data, symbol: L1, source: "Macro_Data（缓存 TTL 档）", raw_meaning: 缓存 TTL 档位（L1–L5）, relation: 同名不同义-族内, axis: not-assigned, axis_note: "属**运行时档位**轴，非来源强度"}
+  - {family: L-ladder, namespace: macro_data, symbol: "L1–L7", source: "Macro_Data（反爬栈层级，独立一套）", raw_meaning: 反爬栈层级 L1–L7, relation: 同名不同义-族内, axis: not-assigned, axis_note: "同上（运行时档位轴）；且与缓存 TTL 档**同项目内**不同义"}
+  - {family: L-ladder, namespace: fin_agent, symbol: L1, source: "Fin_Agent（标签粒度）", raw_meaning: 标签粒度（宽泛概念 / 细分行业 / 精细标的）, relation: 同名不同义-族内, axis: not-assigned, axis_note: "属**模型粒度**轴，非来源强度"}
+  - {family: L-ladder, namespace: fin_agent, symbol: "L1–L4", source: "Fin_Agent（架构分层，独立一套）", raw_meaning: 架构分层 L1–L4, relation: 同名不同义-族内, axis: not-assigned, axis_note: "属**代码分层**轴；与标签粒度**同项目内**不同义"}
+
+  # ── ABC-ladder ──
+  - {family: ABC-ladder, namespace: cpp_hub, symbol: "A/B/C", source: "Cpp_Hub · Spec_Workflow", raw_meaning: "断言证据分级：A=事实 / B=推断 / C=判断", relation: 冲突, axis: not-assigned, axis_note: "属**断言确定性**轴（这条断言有多确定），不是**来源**强度 ⇒ 与证据强度轴正交"}
+  - {family: ABC-ladder, namespace: macro_data, symbol: "A/B/C/D", source: Macro_Data, raw_meaning: "数据源可访问性档位：A=无 key / B / C / D", relation: 冲突, axis: not-assigned, axis_note: "属**访问控制**轴（要不要 key），与来源强度正交"}
+  - {family: ABC-ladder, namespace: cpp_hub, symbol: "Tier 1/2", source: "Cpp_Hub（平台支持档位）", raw_meaning: 平台支持档位 Tier 1 / Tier 2, relation: 独占, axis: not-assigned, axis_note: "属**平台成熟度**轴；⚠ 本行是 `b1b` 漏掉的那一行（摘要族 2 有 3 行，它的对照表只落了 2 行）"}
+
+  # ── R-ladder ──
+  - {family: R-ladder, namespace: open_data, symbol: "R1–R5", source: Open_Data, raw_meaning: "幻觉修正分级：R1 硬伤 / R2 降级 / R3 补注 / R4 失效 / R5 过期", relation: 冲突, axis: not-assigned, axis_note: "属**修正动作**轴（发现问题后做什么），非来源强度"}
+  - {family: R-ladder, namespace: macro_data, symbol: "R1–R5", source: Macro_Data, raw_meaning: "多源冲突裁决规则码：R1 基准优先 / R2 单位不一致 / R3 中位数兜底 / …", relation: 冲突, axis: not-assigned, axis_note: "属**裁决规则**轴（两源不一致时信谁），与修正动作轴正交"}
+
+  # ── E-ladder ──
+  - {family: E-ladder, namespace: rpc, symbol: "RPC-E1–E5", source: 本仓（RPC）, raw_meaning: "证据档位族（含 [官方] / [社区] / [实测] 这类来源强度）", relation: 冲突, axis: evidence-strength, axis_value: undefined, axis_note: "**属本轴**，但逐级对应**不可判**：摘要只给出该族含 [官方]/[社区]/[实测] 三个标签，未给出 E1–E5 ↔ 标签的对应 ⇒ 不得替它猜（`b1b` 猜过一次，见于本文件头部）"}
+  - {family: E-ladder, namespace: spec_workflow, symbol: "SW-E1–E5", source: Spec_Workflow, raw_meaning: "其自有 E1–E5 族（与本仓同名不同义）", relation: 冲突, axis: not-assigned, axis_note: "内涵不在摘要内 ⇒ 连「是否也属证据强度轴」都不可判；本仓已加 `RPC-` 前缀区分"}
+
+  # ── misc-id-ladder ──
+  - {family: misc-id-ladder, namespace: paper, symbol: "B1/B2", source: Paper, raw_meaning: 存在两套内部编号族之一（具体含义不在摘要内）, relation: 独占, axis: not-assigned, axis_note: "含义不在摘要内 ⇒ 无法定轴"}
+  - {family: misc-id-ladder, namespace: paper, symbol: "D1–D8", source: Paper, raw_meaning: 存在两套内部编号族之二（具体含义不在摘要内）, relation: 独占, axis: not-assigned, axis_note: "含义不在摘要内 ⇒ 无法定轴"}
+  - {family: misc-id-ladder, namespace: factor_pipeline, symbol: "CRITICAL/MAJOR/MINOR", source: factor_pipeline, raw_meaning: 三套并存之一（具体含义不在摘要内）, relation: 独占, axis: not-assigned, axis_note: "疑属**严重度**轴，但含义不在摘要内 ⇒ 不可判"}
+  - {family: misc-id-ladder, namespace: factor_pipeline, symbol: "P0–P3", source: factor_pipeline, raw_meaning: 三套并存之二（具体含义不在摘要内）, relation: 独占, axis: not-assigned, axis_note: "疑属**优先级**轴，但含义不在摘要内 ⇒ 不可判"}
+  - {family: misc-id-ladder, namespace: factor_pipeline, symbol: "Tier 1–3", source: factor_pipeline, raw_meaning: 三套并存之三（具体含义不在摘要内）, relation: 独占, axis: not-assigned, axis_note: "疑属**成熟度**轴，但含义不在摘要内 ⇒ 不可判；⚠ 与 Cpp_Hub 的 `Tier 1/2` 是否同义**亦不可判**"}
+  - {family: misc-id-ladder, namespace: rpc_inbox, symbol: "Reproduced/Replicated", source: 本仓 inbox, raw_meaning: "交付分级：内部同基座复验 / 异基座独立审计", relation: 独占, axis: not-assigned, axis_note: "属**复现强度**轴（谁来复现），与来源强度正交；含义已知，但只有两级且与其它族无可比性"}
+
+# ── 未定轴族（**显式登记**，不硬塞进证据强度轴）─────────────────────────
+# 门禁要求：出现在此处的每一条都必须说明「它属于什么轴」。
+unassigned_axes:
+  - {axis: 处理阶段序, family: L-ladder, scope: Paper}
+  - {axis: 本体层级, family: L-ladder, scope: Textbook}
+  - {axis: 运行时档位, family: L-ladder, scope: "Macro_Data（缓存 TTL + 反爬栈）"}
+  - {axis: 模型粒度, family: L-ladder, scope: "Fin_Agent（标签粒度）"}
+  - {axis: 代码分层, family: L-ladder, scope: "Fin_Agent（架构分层）"}
+  - {axis: 断言确定性, family: ABC-ladder, scope: "Cpp_Hub · Spec_Workflow"}
+  - {axis: 访问控制, family: ABC-ladder, scope: Macro_Data}
+  - {axis: 平台成熟度, family: ABC-ladder, scope: Cpp_Hub}
+  - {axis: 修正动作, family: R-ladder, scope: Open_Data}
+  - {axis: 裁决规则, family: R-ladder, scope: Macro_Data}
+  - {axis: 复现强度, family: misc-id-ladder, scope: "本仓 inbox"}
+  - {axis: 未定（含义不在输入内）, family: misc-id-ladder, scope: "Paper B1/B2 · D1–D8 · factor_pipeline 三套"}
+  - {axis: 未定（同名不同义，内涵不在输入内）, family: E-ladder, scope: Spec_Workflow}
+
+# ── 冲突清单（同名不同义，逐条）──────────────────────────────────────────
+conflicts:
+  - {symbol: "L1/L2/L3", sides: "Paper vs Textbook vs Open_Data vs Macro_Data vs Fin_Agent", why: "五个出处各自把 L1–L3 定义为完全不同的阶段/层/来源级/档位，互不可替代"}
+  - {symbol: "A/B/C", sides: "Cpp_Hub·Spec_Workflow vs Macro_Data", why: "前者是断言证据分级（事实/推断/判断），后者是数据源可访问性档位（无 key 等）；同为「分级」但轴不同"}
+  - {symbol: "R1–R5", sides: "Open_Data vs Macro_Data", why: "前者管「文档幻觉怎么改」，后者管「两个数据源不一致时信谁」；分级维度正交"}
+  - {symbol: "E1–E5", sides: "本仓 RPC vs Spec_Workflow", why: "同名不同义；本仓已被迫加 `RPC-` 前缀区分 ⇒ 两套体系不可合流"}
+
+# ── 不可判项（缺什么才能判，逐条）────────────────────────────────────────
+undecidable:
+  - {item: "Paper 的 B1/B2 含义", missing: "该族在 Paper 中的定义原文"}
+  - {item: "Paper 的 D1–D8 含义", missing: "该族在 Paper 中的定义原文"}
+  - {item: "factor_pipeline 的 CRITICAL/MAJOR/MINOR 含义", missing: "该族在 factor_pipeline 中的定义原文"}
+  - {item: "factor_pipeline 的 P0–P3 含义", missing: "该族在 factor_pipeline 中的定义原文"}
+  - {item: "factor_pipeline 的 Tier 1–3 含义", missing: "该族在 factor_pipeline 中的定义原文"}
+  - {item: "Spec_Workflow 自有 E1–E5 的内涵", missing: "其定义原文（摘要只记「同名不同义」）"}
+  - {item: "Macro_Data 反爬栈 L1–L7 与缓存 TTL L1–L5 的逐级对应", missing: "两套档位的映射表"}
+  - {item: "Fin_Agent 架构分层 L1–L4 的逐级定义", missing: "该族的逐级定义"}
+  - {item: "Cpp_Hub `Tier 1/2` 与 factor_pipeline `Tier 1–3` 是否同义", missing: "两者各自的定义"}
+  - {item: "inbox `Reproduced`/`Replicated` 是否穷尽（有无第三级）", missing: "该分级是否穷尽的声明"}
+  - {item: "本仓 RPC-E1–E5 的逐级定义", missing: "该族在输入摘要里只有「含 [官方]/[社区]/[实测]」这一句"}
+
+# ── 重抽路径（本文件是生成物，但没有自动生成器 —— 如实登记）──────────────
+regeneration:
+  mode: manual-in-the-loop
+  steps:
+    - "重取两个源（`sources` 里的 path/slice 规则）并读它们"
+    - "按 `coverage` 逐族重新点行数；行数变了先改 `coverage` 再改 `mapping`"
+    - "重算两个源的 sha256 并更新 `sources[].sha256`（口径：CRLF→LF、逐行去尾空白、行尾统一 \\n）"
+    - "跑 `python ops/rpc_check.py --quick`；`dialect` 项应转绿"
+  why_not_automated: >-
+    重抽要读他方项目的符号定义，而本仓**只能对账、不能强制**（下游在别的 repo，同 §C 机制 2 的既有判断）。
+    故此处只保证「**你忘了重抽**」会被抓住，不假装能做全自动同步。
