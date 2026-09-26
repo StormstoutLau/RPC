@@ -4457,6 +4457,47 @@ echo "REVIEW_B64_END"
     }
 }
 
+function Resolve-L1Gate {
+    # ── D7-P2-1（2026-09-26）：**机械门先行 —— L1 全绿才允许进 L2** ──────────────────────
+    # L1 = **机械面**（`accept:` 金标 + 判据）；L2 = **语义复核**（`Invoke-Review` 的 judge）。
+    # 为什么需要有这条判据：此前 `Invoke-Review` **只看产物、完全不读 run 记录** ⇒ 一个
+    #   "accept 红 / 根本没跑"的 run 也能被 judge 打出一个语义结论，并与机械面**并列呈现**
+    #   ⇒ 读的人分不清"这个结论有没有机械面支撑"（= 把两件事说成一件）。
+    # ★ 判定是**纯函数**（只吃已解析的 run 记录对象）⇒ 可离线单测，不需要真派发。
+    # ⚠ **fail-closed**：记录缺失 / `status` 读不出 / `accept.passed` 读不出 ⇒ `unknown` ⇒ **拒**
+    #   （与 O-22「stale meta = verdict unknown ⇒ 不信任旧值」同纪律：**读不到 ≠ 已通过**）。
+    # ⚠ **显式通道 `-AllowRed`**：放行**不改 verdict**（仍是 `red`）⇒ 调用方必须把事实写进产物，
+    #   结论永远带着"L1 是红的"这一标签。**降级 ≠ 隐藏**。
+    param(
+        [object]$Record,
+        [switch]$AllowRed
+    )
+    $facts = [ordered]@{ status = ''; exit_code = $null; accept_passed = $null;
+                         golden_active = $false; golden_passed = $null }
+    $unknown = ''
+    if ($null -eq $Record) {
+        $unknown = 'NO_RECORD'
+    } else {
+        $facts.status = [string]$Record.status
+        $facts.exit_code = $Record.exit_code
+        if ($null -ne $Record.accept) { $facts.accept_passed = $Record.accept.passed }
+        if ($null -ne $Record.accept_golden) {
+            $facts.golden_active = $true
+            $facts.golden_passed = $Record.accept_golden.passed
+        }
+        if (-not $facts.status) { $unknown = 'NO_STATUS' }
+        elseif ($null -eq $facts.accept_passed) { $unknown = 'NO_ACCEPT_VERDICT' }
+    }
+    if ($unknown) { return @{ ok = $false; verdict = 'unknown'; reason = $unknown; facts = $facts } }
+    $red = @()
+    if ($facts.status -ne 'completed') { $red += "status=$($facts.status)" }
+    if (-not $facts.accept_passed) { $red += 'accept=FAIL' }
+    # 金标**未启用**（键缺）时**不参与**判定 —— 否则会把"没这道门"读成"这道门红了"（假红）。
+    if ($facts.golden_active -and -not $facts.golden_passed) { $red += 'golden=FAIL' }
+    if ($red.Count -eq 0) { return @{ ok = $true; verdict = 'green'; reason = ''; facts = $facts } }
+    return @{ ok = [bool]$AllowRed; verdict = 'red'; reason = ($red -join ' · '); facts = $facts }
+}
+
 function Invoke-Review {
     param(
         [string]$proj,
@@ -4464,10 +4505,11 @@ function Invoke-Review {
         [string]$runId,
         [string]$model,
         [switch]$overwrite,
+        [switch]$allowL1Red,
         [string]$sensitive
     )
     if (-not $proj) { $proj = $env:AGENT_CLI_PROJ }
-    if (-not $card) { Write-Host 'usage: agent-cli review <proj> --card <task.md> [--run-id <ts>] [--model <judge-alias>] [--overwrite]'; return 2 }
+    if (-not $card) { Write-Host 'usage: agent-cli review <proj> --card <task.md> [--run-id <ts>] [--model <judge-alias>] [--overwrite] [--allow-l1-red]'; return 2 }
     if (-not (Test-Path $card)) { Write-Host "card not found: $card"; return 3 }
     $projRoot = $Script:PROJECTS[$proj]
     if (-not $projRoot -or -not (Test-Path $projRoot)) { Write-Host "unknown/missing project: $proj (registered: $($Script:PROJECTS.Keys -join ','))"; return 2 }
@@ -4498,6 +4540,45 @@ function Invoke-Review {
 
     $runDir = Get-ReviewRunDir -projRoot $projRoot -runId $runId
     if (-not $runDir) { Write-Host "REVIEW_RUNDIR_NOT_FOUND (proj=$proj run-id=$runId) exit 3"; return 3 }
+    # ── D7-P2-1（2026-09-26）：机械门先行 —— **L1 全绿才允许进 L2** ──────────────────────
+    # 位置刻意在"读产物 / 建提示词 / 发请求"**之前** ⇒ L1 红就不该把产物送出去判（省一次出网 + 少一份
+    #   会被误读为"复核通过"的语义结论）。判据本体 = 纯函数 `Resolve-L1Gate`（可离线单测）。
+    # ⚠ **L2 无权改写可机判**：本函数**只读** `.agent-run.json`，并把它的**摘要**写进自己的产物
+    #   （`review.json.l1.record_sha256`）⇒ 事后 `sha256(.agent-run.json) != 该摘要` 就说明
+    #   **L2 之后有人动过 L1 记录**（"不改写"从注释承诺变成可判事实）。
+    $l1Record = $null; $l1RecSha = ''
+    $l1RecPath = Join-Path $runDir '.agent-run.json'
+    if (Test-Path $l1RecPath) {
+        try {
+            $l1RecText = [IO.File]::ReadAllText($l1RecPath, [System.Text.UTF8Encoding]::new($false))
+            $l1RecSha = Get-Sha256Text $l1RecText
+            $l1Record = $l1RecText | ConvertFrom-Json
+        } catch { $l1Record = $null; $l1RecSha = '' }
+    }
+    $l1 = Resolve-L1Gate -Record $l1Record -AllowRed:$allowL1Red
+    if (-not $l1['ok']) {
+        $why = $l1['reason']
+        if ($l1['verdict'] -eq 'unknown') {
+            Write-Host "REJECT L2_BLOCKED_L1_UNKNOWN ($why) exit 5 - run 记录的 L1 verdict 读不出 ⇒ 不得进 L2（读不到 != 已通过）"
+        } else {
+            Write-Host "REJECT L2_BLOCKED_L1_RED ($why) exit 5 - L1 全绿才允许进 L2；诊断用可加 --allow-l1-red"
+        }
+        return 5
+    }
+    if ($l1['verdict'] -eq 'red') {
+        Write-Host "L1_RED_ALLOWED: L1 非全绿（$($l1['reason'])）但显式 --allow-l1-red ⇒ 进 L2；事实将写进 review.json.l1"
+    }
+    $l1Section = [ordered]@{
+        verdict = $l1['verdict']
+        status = $l1['facts']['status']
+        exit_code = $l1['facts']['exit_code']
+        accept_passed = $l1['facts']['accept_passed']
+        golden_active = $l1['facts']['golden_active']
+        golden_passed = $l1['facts']['golden_passed']
+        allowed_red = [bool]$allowL1Red
+        record_sha256 = "sha256:$l1RecSha"
+    }
+
     $runName = Split-Path $runDir -Leaf
     $product = Join-Path $runDir 'agent-output.txt'
     if (-not (Test-Path $product)) {
@@ -4587,6 +4668,9 @@ function Invoke-Review {
             }
             review_error = $callError
         }
+        # D7-P2-1: 判官调用失败也**必须**带上 L1 事实（否则这份 review.json 无法自证它是在什么
+        #   机械面上写的，而"失败"恰恰是最需要知道 L1 状态的场合）。
+        $review['l1'] = $l1Section
         $review | ConvertTo-Json -Depth 8 | Set-Content $reviewPath -Encoding utf8
         Write-Host "REVIEW_WRITTEN(advisory,error) $reviewPath"
         if ($callCode -ge 5) { return $callCode }   # NETFAIL(5)/timeout(6)/unparseable(7) surfaced, non-blocking
@@ -4665,6 +4749,9 @@ function Invoke-Review {
     # O-92: `blind` 段**仅在跑过时才加** ⇒ 关掉开关时 `review.json` 的 schema **与本批之前完全一致**
     #   （存量 review.json 不受影响；也避免给所有卡加一个恒为 null 的字段制造噪音）。
     if ($blindSection) { $review['blind'] = $blindSection }
+    # D7-P2-1（2026-09-26）：**L1 事实随 L2 产物留档** —— 让"这个语义结论是在什么机械面上得到的"
+    #   可被机器读到（而不是只有 exit code）。`record_sha256` 同时是"L2 未改写 L1 记录"的可判凭据。
+    $review['l1'] = $l1Section
     $review | ConvertTo-Json -Depth 8 | Set-Content $reviewPath -Encoding utf8
     Write-Host "REVIEW_WRITTEN(advisory) $reviewPath"
     Write-Host ("REVIEW score=" + $review.output.score + " pass=" + $review.output.pass + " judge=" + $judge['id'] + " elapsed_s=" + $elapsed)

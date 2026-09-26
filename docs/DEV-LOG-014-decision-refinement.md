@@ -4098,3 +4098,61 @@ F-11/F-12 拆出。⇒ **一个原语，两处调用**，不为第二条另造�
 台账 **96 行 · ✅ 闭环 93 · 仍开着 3** —— `O-07`（事件驱动，无动作可做）· `O-29`（已并入路线 D6-P1-1）· `O-86`（下游 repo）。
 ⇒ ★ **本次"清台账"从 19 条开到 3 条**，且**唯一需要动代码的一对（O-95/O-96）是本轮最后一对**。
 
+## 62. `D7-P2-1` 站上侧落地：**机械门先行（L1 先于 L2）**（2026-09-26）
+
+用户问"D7 升级是否可以继续执行"，我给的答案是"可以，下一批 = `D7-P2-1`"，**但前提是先找到 L1+L2 并存的真实对象**
+（否则会重演 D7-P1 那种"**判据只被测试驱动**"的局面）。本轮按此执行。
+
+### 62.1 对象在哪：**站上 review 链**（读码取证，不是猜）
+
+| 面 | 是什么 | 在哪 |
+|---|---|---|
+| **L1（机械）** | `accept:` 金标 + 判据的裁决 | 落进 **`runDir/.agent-run.json`**：`status`（= `exit_code==0 ∧ accept ∧ golden` 三者合取，`agent-cli.ps1:2793`）· `exit_code` · `accept.passed` · `accept_golden.passed` |
+| **L2（语义）** | `Invoke-Review` 的 judge（出网 / 跨族） | `agent-cli.ps1` 的 `Invoke-Review` |
+
+★ **实测缺陷**：`Invoke-Review` **只找 runDir、读 `agent-output.txt` 就开判** —— **从不读 run 记录**
+⇒ 一个 `accept` 红 / 根本没跑的 run，也能被 judge 打出一个语义结论，且与机械面**并列呈现**
+⇒ **读的人分不清"这个结论有没有机械面支撑"**（= 把两件事说成一件，本仓头号形态）。
+
+### 62.2 落地（3 处改动，站上侧）
+
+1. **新纯函数 `Resolve-L1Gate`**（`agent-cli.ps1`）—— 判定本体，**只吃已解析的 run 记录对象**
+   ⇒ **可离线单测**（与 `Test-GateSummaryOk` / `Resolve-ExitCode` 同族）。三态：
+   `green`（全绿）· `red`（非全绿，`reason` 逐项点名）· `unknown`（**读不出**）。
+2. **接线进 `Invoke-Review`**，位置刻意在"**读产物 / 建提示词 / 发请求之前**"：
+   - `unknown` ⇒ `REJECT L2_BLOCKED_L1_UNKNOWN` **exit 5**（**fail-closed**：读不到 ≠ 已通过，与 O-22 同纪律）
+   - `red` ⇒ `REJECT L2_BLOCKED_L1_RED` **exit 5**
+   - ★ **显式通道 `--allow-l1-red`**（诊断用）：放行**不改 verdict**（仍 `red`），且打 `L1_RED_ALLOWED` 行
+3. **`review.json.l1` 段**（两处写点都带：正常写 + 判官失败写）：
+   `verdict / status / exit_code / accept_passed / golden_active / golden_passed / allowed_red / record_sha256`
+   ⇒ ★ **`record_sha256` = "L2 无权改写可机判"的落地形式**：L2 只**读** L1 记录，把它的**摘要**钉进自己的产物
+   ⇒ 事后 `sha256(.agent-run.json) != 该摘要` 就说明**L2 之后有人动过 L1 记录**。
+   （原文只有一句注释承诺"review.json is a parallel key; NEVER alters run.json" —— 本轮把它变成**可判事实**。）
+
+### 62.3 验收（`_fm_golden_test.ps1` **331 → 348**，l1-1~l1-17 全绿）
+
+| 组 | 内容 |
+|---|---|
+| l1-1~l1-5 | 正例（无金标 / 金标过）+ 三种红（accept 红 / 金标红 / `status != completed`）· **`reason` 逐项点名** |
+| **l1-6** | ★ **金标未启用（键缺）不是红** —— 防把"**没这道门**"读成"这道门红了"（**假红**） |
+| l1-7~l1-9 | 三种 `unknown`（记录缺 / `status` 空 / `accept` 键缺）⇒ **拒** |
+| **l1-10/l1-11** | 显式 `-AllowRed` ⇒ **放行但 verdict 仍 `red`**，`facts` 如实带 `status/exit_code` ⇒ **降级 ≠ 隐藏** |
+| l1-12~l1-17 | **接线护栏**：真过门 · 门在**读产物之前** · **两处**写点都带 `l1` · 摘要可验 · ★ **结构护栏**（`Invoke-Review` 函数体内**没有** `.agent-run.json` 的写）· 显式放行通道存在 |
+
+### 62.4 如实登记的边界（4 条，防"以为做完了"）
+
+1. ⚠ **"L2 无权改写"当前是"可判"而非"物理隔离"** —— 同进程内它确实只读；本轮给的是**事后可验凭据**（摘要），
+   不是权限隔离。**真隔离属性归 `D7-P3-1`（权限模型：只标记永不改写）**。
+2. ⚠ **L2 的结论契约**（`consensus / disagreement / unique` + `path:line_range`）**未做** ⇒ 属 **`D7-P2-2`**。
+3. ⚠ **站上真跑未实测**：本批只覆盖**纯函数 + 接线 + 结构**（离线夹具）；`Invoke-Review` 的**出网判官真调用**
+   与 O-92 同款**未实测**（既有边界，不在本批扩大）。
+4. ⚠ `--allow-l1-red` 是**新开的放行口** —— 它的风险与 `--overwrite` 同类（人能绕过），
+   故**要求 `allowed_red` 落进产物**（放行必须留痕）。★ 但**目前没有判据**扫"有多少 review 是放行的" ⇒ 见 62.5。
+
+### 62.5 ★ 本批自己产出的下一步（不是缺陷，是"已知未做"）
+
+- **L1 门只管"进不进 L2"，不管"红过几次"** ⇒ 若某卡长期 `--allow-l1-red` 拿语义结论，
+  **现状无人能统计**。⇒ 建议形态：`evidence`/`review` 侧**报数**（不判）"放行过的 review 占比"（同 O-97 纪律：**先量**）。
+- **`D7-P2-2`（结论契约）**：把"L2 的意见"结构化为"受限判定 + priority + confidence + 每条带 `path:line_range` +
+  **显式分类 consensus/disagreement/unique**" ⇒ 与本批的 `l1` 段同处一个 schema（**一次改完，别分两次**）。
+

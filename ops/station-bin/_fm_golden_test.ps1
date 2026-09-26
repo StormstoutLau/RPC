@@ -31,7 +31,9 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 # O-92 (2026-09-26): 双盲重推导 —— 三个**纯函数** + `Read-ReviewResource`（`Build-BlindPrompt` 依赖它）。
 # ⚠ 把 `Read-ReviewResource` 也提取进来 ⇒ 本夹具读的是**真模板文件**
 #   ⇒ "盲判模板里不得有 `{{PRODUCT}}`"这条能变成**行为断言**（真跑一遍看输出），而不是扫文本。
-'Read-ReviewResource', 'Get-AssertionBlock', 'Build-BlindPrompt', 'Compare-AssertionChains')) {
+'Read-ReviewResource', 'Get-AssertionBlock', 'Build-BlindPrompt', 'Compare-AssertionChains',
+# D7-P2-1 (2026-09-26): **机械门先行** 的判定本体（纯函数：只吃已解析的 run 记录 ⇒ 可离线单测）。
+'Resolve-L1Gate')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -1565,6 +1567,55 @@ Assert-True "o92⑨c: 盲判提示词**与主判同规矩**出网（过 Resolve-
     $content -match 'Resolve-ReviewPrompt -prompt \$blindPrompt')
 Assert-True "o92⑨d: `blind` 段**仅在跑过时**才加（关掉开关时 review.json schema 不变）" (
     $content -match "if \(\`$blindSection\) \{ \`$review\['blind'\] = \`$blindSection \}")
+
+# ⑩ D7-P2-1（2026-09-26）：**机械门先行 —— L1 全绿才允许进 L2**
+# 为什么要有这组：此前 `Invoke-Review` 只看产物、不读 run 记录 ⇒ "accept 红/没跑"的 run 也能被打出
+#   语义结论并**与机械面并列呈现**。判定是本组上方提取的**纯函数** `Resolve-L1Gate`。
+$l1g = Resolve-L1Gate -Record (@{ status = 'completed'; exit_code = 0; accept = @{ passed = $true } })
+Assert-True "l1-1 全绿（卡无金标）⇒ ok + green" ($l1g['ok'] -and $l1g['verdict'] -eq 'green')
+$l1g2 = Resolve-L1Gate -Record (@{ status = 'completed'; exit_code = 0; accept = @{ passed = $true };
+                                   accept_golden = @{ passed = $true } })
+Assert-True "l1-2 金标启用且过 ⇒ green" ($l1g2['ok'] -and $l1g2['verdict'] -eq 'green')
+$l1gf = Resolve-L1Gate -Record (@{ status = 'completed'; exit_code = 0; accept = @{ passed = $true };
+                                   accept_golden = @{ passed = $false } })
+Assert-True "l1-3 金标红 ⇒ 拒（red，reason 点名 golden）" (
+    (-not $l1gf['ok']) -and $l1gf['verdict'] -eq 'red' -and $l1gf['reason'] -match 'golden=FAIL')
+$l1af = Resolve-L1Gate -Record (@{ status = 'completed'; exit_code = 0; accept = @{ passed = $false } })
+Assert-True "l1-4 accept 红 ⇒ 拒（reason 点名 accept）" (
+    (-not $l1af['ok']) -and $l1af['reason'] -match 'accept=FAIL')
+$l1st = Resolve-L1Gate -Record (@{ status = 'failed'; exit_code = 1; accept = @{ passed = $true } })
+Assert-True "l1-5 status != completed ⇒ 拒（reason 带 status 值）" (
+    (-not $l1st['ok']) -and $l1st['reason'] -match 'status=failed')
+Assert-True "l1-6 ★**金标未启用（键缺）不是红**（防假红：把'没这道门'读成'这道门红了'）" (
+    (Resolve-L1Gate -Record (@{ status = 'completed'; exit_code = 0; accept = @{ passed = $true } }))['verdict'] -eq 'green')
+$l1nr = Resolve-L1Gate -Record $null
+Assert-True "l1-7 记录缺 ⇒ unknown + 拒（读不到 != 已通过）" (
+    (-not $l1nr['ok']) -and $l1nr['verdict'] -eq 'unknown' -and $l1nr['reason'] -eq 'NO_RECORD')
+Assert-True "l1-8 status 空 ⇒ unknown" (
+    (Resolve-L1Gate -Record (@{ accept = @{ passed = $true } }))['verdict'] -eq 'unknown')
+Assert-True "l1-9 accept 键缺 ⇒ unknown（不可当'不适用=通过'）" (
+    (Resolve-L1Gate -Record (@{ status = 'completed' }))['verdict'] -eq 'unknown')
+$l1al = Resolve-L1Gate -Record (@{ status = 'failed'; exit_code = 1; accept = @{ passed = $false } }) -AllowRed
+Assert-True "l1-10 显式 AllowRed ⇒ 放行但 **verdict 仍 red**（降级 != 隐藏）" (
+    $l1al['ok'] -and $l1al['verdict'] -eq 'red')
+Assert-True "l1-11 放行时 facts 仍如实带 status/exit_code（结论永远带标签）" (
+    $l1al['facts']['status'] -eq 'failed' -and $l1al['facts']['exit_code'] -eq 1)
+# ── 接线（防"写了但没跑"）──
+Assert-True "l1-12 接线：L2 里真过了 L1 门（拒 ⇒ return 5）" (
+    $content -match 'Resolve-L1Gate -Record \$l1Record -AllowRed:\$allowL1Red' -and
+    $content -match 'return 5')
+Assert-True "l1-13 接线：L1 门在**读产物之前**（红就不把产物送出去判）" (
+    $content.IndexOf('Resolve-L1Gate -Record $l1Record') -lt
+    $content.IndexOf('$productText = [System.IO.File]::ReadAllText($product'))
+Assert-True "l1-14 L1 事实写进 review.json（**两处**写点都带 ⇒ 判官失败也留档）" (
+    ([regex]::Matches($content, "\`$review\['l1'\] = \`$l1Section")).Count -ge 2)
+Assert-True "l1-15 **L2 无权改写可机判**：review 自带 run 记录摘要（事后可验）" (
+    $content -match 'record_sha256 = "sha256:\$l1RecSha"')
+$fnRev = @($fns) | Where-Object { $_.Name -eq 'Invoke-Review' } | Select-Object -First 1
+Assert-True "l1-16 ★**结构护栏**：`Invoke-Review` 函数体内**没有**对 `.agent-run.json` 的写" (
+    $null -ne $fnRev -and -not ($fnRev.Extent.Text -match 'Set-Content[^\r\n]*\.agent-run\.json'))
+Assert-True "l1-17 卡面/命令行有**显式放行通道**（不是偷偷放行）" (
+    $content -match '\[switch\]\$allowL1Red' -and $content -match '--allow-l1-red')
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
