@@ -186,6 +186,16 @@ documents:
       定档依据同 ADR-0009 —— 内容来自已登记为 public 的出站版摘要
       `spec/d6-agent-standard/dogfood-cards/inputs/d7-p0-2-protocol-excerpt.md` ⇒ 无超出摘要的新披露。
       ⚠ 同样带扩张条件（超出摘要即须重裁）
+  - path: spec/d6-agent-standard/U1-ARTIFACT-IDENTITY.md
+    tier: public
+    fails: []
+    why: >-
+      D7-P1-2 的产出: U-1 产物身份四项（算法 / 截断长度 / 取值维度 / 算法标识前缀）。
+      定档依据 = 内容来自**已登记为 public 的卡面** `spec/d6-agent-standard/dogfood-cards/d7-p1-2-u1-identity-draft.md`
+      （卡面即出网载体 ⇒ 同一批内容已在出站范围内）⇒ 无**超出该卡面**的新披露
+      （无 IP / 主机名 / 用户名 / 凭据形态；无他方仓库路径与内部文件名；命名空间取值**不复制**、
+      指向 `inventory/dialect.yaml`）。
+      ⚠ 同样带扩张条件: 内容一旦扩张到卡面摘要之外（例：补入各项目 ID 的完整源码实现）⇒ **须重裁**
 
 # ── 常被卡引用的契约/载体文档 ──
 contracts:
