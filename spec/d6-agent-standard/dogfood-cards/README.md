@@ -1,13 +1,19 @@
 # `dogfood-cards/` —— 吃狗粮卡面专用目录
 
 > **建立：2026-09-24（Scott 裁定）** · **本目录 tier = `public`**（登记于 `inventory/sensitivity.yaml`）
+>
+> ⚠ **本 README 的 C3 内容已脱敏（2026-09-26，O-82 方案 A）**：按 `sensitivity.yaml` 表头的**出站口径裁定**
+> （"唯一需脱密的是私有 API 凭据 / IP / **用户信息**"），把**站上用户名与绝对路径**换成占位符
+> ⇒ **具体指纹不留、事实与教训一字不改**。
+> ★ 起因是一手证据：站上 agent **读到本文件**并把里面的用户名抄进了产物（而**同一张卡的正文**明写"不得引入用户名"）
+> ⇒ 证明"不要探索目录"在站上是**软约束**。详见 `spec/d6-agent-standard/OPEN-ISSUES.md` 的 **O-82**。
 
 ## 为什么单独建这个目录
 
 `test-cards/`（历史卡区）在真值表里是 **`local-only`**，理由是其卡面**含 proj 路径 / 站标识 / 站上落点**。
 而**卡正文会进 prompt**（一手实测：`prompt.txt` = `[proj:x]` + task 行 + **正文全文**），
 ⇒ 一张"声明 `public` 却走 `test-cards/` 旧卡面"的卡，**本身就带着 C3 指纹出网**（实测 `01a` 卡正文写了
-`ls -1 /home/scott-lau/agent-workspaces`，随 openrouter 请求原样发出）。
+**站上用户目录下的一个绝对路径** ⇒ 随 openrouter 请求原样发出）。
 
 ⇒ 把**干净卡面**与旧卡区物理分开：**本目录下的卡，本体即可出网**。
 
@@ -22,8 +28,8 @@
 | 4 | **附件内容不经 scrubber** ⇒ 附件必须本身是 `public` 档 | 附件走 `scp` 原文；scrubber 只改 `$promptFull`（含附件**文件名**，不含内容） |
 | 5 | **要脱敏就别用附件** —— 受限输入应**内嵌进卡正文**（只在正文会过 scrub） | 同上 |
 | 6 | 声明 `public`/`sanitized` **且带输入**时，**逐项写 `input-provenance`**，每项须在 `sensitivity.yaml` 有 `tier`，且**卡档位不得宽于该项** | `CROSS-PROJECT-WORK-STANDARD §4`；⚠ **该义务目前未被机判**（2026-09-24 全仓核对：`input-provenance` 在 `ops/` 下**零命中**） |
-| 7 | ★ **卡的射程 = 平台注册的工作区根**（实测 `~/agent-workspaces` **可读**）—— 该根**之外**的站上路径（`~/scripts`、`/proc`、系统目录）**不要指示模型去读** | **一手实测（2026-09-24）+ 一次自我修正**：A2 首跑的 `cd ~/scripts …` 被 `permission requested: external_directory (/home/scott-lau/scripts/*); auto-rejecting` 拒（= O-30 第一条第二实例，`TASK_RC=9`）；**但同一批 A1 的 `ls -1 ~/agent-workspaces` 成功**（工作区**根**可读）⇒ 边界**不是**"工作区内/外"，而是**白名单**（含工作区根；`~/scripts`、`/proc` 均不在）。⇒ 工作区根之外的取证**由主控 ssh 直接做**；agent 可安全依赖的是**可执行命令**（`infer-list`/`free -m`/`ss -ltn`/`hostname` —— A1 正是靠这些成功）。⚠ **白名单的确切边界未定**（`~/.config/opencode/` 下**无显式 `permission` 配置** ⇒ 走默认；待查 opencode 默认规则） |
-| **7b** | ★★ **精度更正（2026-09-25 实测）—— 射程【不是"根"，而是"自己的 proj 目录"】**：根**只可列一层名字**（`ls -1 ..` **成功**），但**根下任何兄弟 proj 的子树【不可进】** | **一手实测（a3 首跑，2026-09-25）**：`ls -1 ..` ⇒ 成功列出 `Cpp_Hub` / `dogfood` / `paper` / `v0probe-a`；但它随后对 `Cpp_Hub` 依次试 `find` / `du -sk` / `stat` / `ls -1A` / `wc` ⇒ **5 条全部**被 `permission requested: external_directory (/home/scott-lau/agent-workspaces/*); auto-rejecting` 拒 ⇒ **产物未生成** ⇒ `TASK_RC=9` / `ACCEPT_OK=0` / `COLLECT_FAIL`。<br>⚠ **与纪律 7 的差别（为什么必须改口径）**：7 说"射程 = 根"，读起来像"根以下均可读" ⇒ **a3 正是按这个理解写的，然后失败了**。| **只采自己的工作目录**（`$W`）。**不要**去 enumerate 兄弟 proj。若确需根层信息，只做 `ls -1 ..` 拿名字，**且别把它写进产物**（产物的兄弟目录名会随归档落盘 ⇒ 属他方项目名的**新披露面**）。★ **另加一条写卡纪律**：卡要**先写一个合格的空骨架产物、再逐项填** ⇒ 中途被拒也留得下产物（a3 v1 的产物**完全没生成**，正因为没这个顺序）。 |
+| 7 | ★ **卡的射程 = 平台注册的工作区根**（实测 `~/agent-workspaces` **可读**）—— 该根**之外**的站上路径（`~/scripts`、`/proc`、系统目录）**不要指示模型去读** | **一手实测（2026-09-24）+ 一次自我修正**：A2 首跑的 `cd ~/scripts …` 被 `permission requested: external_directory (~/scripts/*); auto-rejecting` 拒（= O-30 第一条第二实例，`TASK_RC=9`）；**但同一批 A1 的 `ls -1 ~/agent-workspaces` 成功**（工作区**根**可读）⇒ 边界**不是**"工作区内/外"，而是**白名单**（含工作区根；`~/scripts`、`/proc` 均不在）。⇒ 工作区根之外的取证**由主控 ssh 直接做**；agent 可安全依赖的是**可执行命令**（`infer-list`/`free -m`/`ss -ltn`/`hostname` —— A1 正是靠这些成功）。⚠ **白名单的确切边界未定**（`~/.config/opencode/` 下**无显式 `permission` 配置** ⇒ 走默认；待查 opencode 默认规则） |
+| **7b** | ★★ **精度更正（2026-09-25 实测）—— 射程【不是"根"，而是"自己的 proj 目录"】**：根**只可列一层名字**（`ls -1 ..` **成功**），但**根下任何兄弟 proj 的子树【不可进】** | **一手实测（a3 首跑，2026-09-25）**：`ls -1 ..` ⇒ 成功列出**同级目录名**（含本项目在内共 4 个）；但它随后对其中一个兄弟 proj 依次试 `find` / `du -sk` / `stat` / `ls -1A` / `wc` ⇒ **5 条全部**被 `permission requested: external_directory (~/agent-workspaces/*); auto-rejecting` 拒 ⇒ **产物未生成** ⇒ `TASK_RC=9` / `ACCEPT_OK=0` / `COLLECT_FAIL`。<br>⚠ **与纪律 7 的差别（为什么必须改口径）**：7 说"射程 = 根"，读起来像"根以下均可读" ⇒ **a3 正是按这个理解写的，然后失败了**。| **只采自己的工作目录**（`$W`）。**不要**去 enumerate 兄弟 proj。若确需根层信息，只做 `ls -1 ..` 拿名字，**且别把它写进产物**（产物的兄弟目录名会随归档落盘 ⇒ 属他方项目名的**新披露面**）。★ **另加一条写卡纪律**：卡要**先写一个合格的空骨架产物、再逐项填** ⇒ 中途被拒也留得下产物（a3 v1 的产物**完全没生成**，正因为没这个顺序）。 |
 
 ### ★ 站上环境的五条硬约束（2026-09-24 入册；纪律 8/9/10 = O-30，纪律 11 = O-48，纪律 12 = O-58；均**实测**得出）
 
