@@ -1129,8 +1129,14 @@ foreach ($f in @($logLoop, $logPos, $logNeg)) { Remove-Item $f -ErrorAction Sile
 #     ⇒ 凡"判某串在/不在"的断言，**先问一句：它会不会被注释影响？**
 Assert-True "o67①: SPLIT_WARN **不再**断言『出网档 fan-out 可能不并行』(只看代码)" (
     -not $codeOnlyFull.Contains('fanout may not parallelize'))
-Assert-True "o67②: 改后把条件写成**账户/站粒度**（跨站独立 key ⇒ 可并行）" (
-    $content.Contains('并行性取决于**账户/站粒度**') -and $content.Contains('实测 2 片/2 站成立'))
+# ⚠ 2026-09-26 期望值更新（**是"夹具陈旧"不是回归**）：代码侧按新的取证把括号里的实测数字
+#   从「2 片/2 站成立」改成「2 片/2 站、3 片/3 站均成立」（O-67 补测满宽度 3/3，见台账）。
+#   ⇒ 顺手把本断言**改成不锚具体数字** —— 否则"证据每增长一次就要改一次夹具"，
+#     而这类摩擦的常见下场是**有人干脆把断言删掉**（比不锚更危险）。
+Assert-True "o67②: 把条件写成**账户/站粒度**（跨站独立 key ⇒ 可并行）；实测数字随取证更新，断言只锚措辞结构" (
+    $content.Contains('并行性取决于**账户/站粒度**') -and
+    $content.Contains('跨站（各站独立 key）= 可并行') -and
+    $content.Contains('实测') -and $content.Contains('均成立'))
 
 # --- O-76 (2026-09-25): 私有中转目录的**按龄清**（"派发在 body 之前中止"那一格的出口） ---
 # 一手泄漏: B 站 2 个残留（含 attach/ 与 golden.tgz，其中一个是 O-71 那次 aborted 派发）。
