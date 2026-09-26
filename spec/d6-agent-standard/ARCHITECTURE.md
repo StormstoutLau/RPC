@@ -17,6 +17,20 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0002]
 > **本文件定位**: 单一入口描述系统「是什么」「怎么动」「边界在哪」，供维护者/后续 D7 开发者快速建立心智模型，不复述 DESIGN 的论证过程
 > **跨项目标准引用**: D6 为多任务项目统一 agent-cli 调用标准（DESIGN 顶层目标），跨项目工作规范（立项→设计→派发→跨站执行→验收→入档五层）见 [CROSS-PROJECT-WORK-STANDARD.md](./CROSS-PROJECT-WORK-STANDARD.md)；三站执行规范调研输入见 [RESEARCH_2026-09-12_Cpp_Hub_3station.md](./RESEARCH_2026-09-12_Cpp_Hub_3station.md)。
 
+> ⚠⚠ **2026-09-26 复核（`D7` 收口时回写）—— 本文件的"实况对齐"停在 2026-09-07**：
+> 此后 `agent-cli.ps1` 又落了**五个命令面**（`route` / `lock` / `split` / `review` / `batch`，
+> 合计 **7 个**；见 `agent-cli.ps1:5231-5275` 的派发链），以及 **`D7-P1~P4` 的判据族**
+> （`Resolve-L1Gate` · `Test-ConclusionContract` · `Merge-JudgeFindings` · `Resolve-SelfReviewGuard` ·
+> `Select-Reviewer` · `review-blind` 盲判 · `require-gate` 流程前置）。
+> ⇒ **§1 的系统边界图与"两命令面"等表述是 MVP 期快照，未回写**。
+> **以什么为准**：**代码** + [IMPLEMENTATION.md](./IMPLEMENTATION.md) + `docs/三机推理集群使用手册.md`（§2.4 由门禁 `mirror` 对账）。
+> **为什么不就地改图**：§1 是**逐字符对齐的 ASCII 框图**，改字会让框线错位；而真正该做的是
+> **一次有验收的架构回填**（不在本次"回写分析"的射程内）⇒ 此处**只标注过期**，
+> 不留一个读起来像真的**假事实**（本仓最防"过期但看起来像真值"）。
+> ★ **另一件要说清的事**：`D7` **没有**独立的架构文档 —— 这是 **`D7-P0` 的裁定**，不是缺口：
+> 「**D7 叠在 ADR-0005/0007 之上，不另造第二套**」⇒ D7 的落体是**判据族 + 真值表**，
+> 它们分布在 `inventory/*.yaml` 与 `ops/rpc_check.py`，**不以架构文档为载体**。
+
 ***
 
 ## 1. 系统边界

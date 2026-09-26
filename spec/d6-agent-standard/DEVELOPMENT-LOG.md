@@ -19,6 +19,43 @@ upstream: \[d6-agent-standard-.* 全量文档]
 
 ## 历史回溯（2026-09-03 起）
 
+### 2026-09-26 — **`D7-P1~P4` 实施回填**（本册此前只记到 09-23，**D7 全程未回填**）
+
+> 本册规则写的是「每次重要落地/闭环后由执行体回填」，而 **`D7` 从 `P1` 到 `P4` 全程没回填**
+> （只落在阶段卷）。⇒ 本章是**补记**：只记**与 D6 框架直接相关**的部分；D7 的逐批推演见
+> [DEV-LOG-014](../../docs/DEV-LOG-014-decision-refinement.md) **§63~§83**。
+
+- **① `agent-cli.ps1` 新增 6 个纯函数 + 4 处接线**（都在**既有派发链**上，未动关键路径）：
+  `Resolve-L1Gate`（L1 门，**读 run 记录**）· `Test-FindingShape` / `Test-ConclusionContract` /
+  `Merge-JudgeFindings`（结论契约 + Council 综合）· `Resolve-SelfReviewGuard`（不得自审）·
+  `Select-Reviewer`（**自动避让**：先换后拒）。接线点：`Invoke-Review` 在**读产物之前**过 L1 门与自审门；
+  卡面新增 `require-gate`（流程前置）与 `review-blind`（双盲重推导）。
+  **验收证据**：离线夹具 `_fm_golden_test.ps1` **331 → 399**（`pass=399 / fail=0`）。
+- **② 门禁：断言 36 → 42（quick 34）**，其中 **13 项**是 D7 落的（`model-families` /
+  `conclusion-ledger` / `review-catalog` / `memory-gates` / `multi-round` /
+  `interruption-untrusted` / `rubric-blindspot` 等）。**证据**：`ops/rpc_check.py --quick` 当场输出；
+  手册 §2.4 的计数由门禁 `mirror` 对账。
+- **③ 新增 7 张真值表**（`inventory/*.yaml`）：D7 的落体是**判据 + 真值表**，**不以架构文档为载体**
+  —— 依据 `D7-P0` 的裁定「**D7 叠在 ADR-0005/0007 之上，不另造第二套**」。
+- **④ ⚠ 本册与 [ARCHITECTURE.md](./ARCHITECTURE.md) 的"实况对齐"滞后**：两者都停在 **2026-09-07** 附近，
+  而此后新增了 **5 个命令面**（`route`/`lock`/`split`/`review`/`batch`，合计 **7 个**）。
+  **处置**：**只在 `ARCHITECTURE.md` 标注"已过期 + 以什么为准"**，**不就地改图**（ASCII 框线会错位）
+  —— 一次**有验收的架构回填**是独立工作项。
+- **⑤ 顺带回写 `docs/FRAMEWORK-INDEX.md` 的一条过期触发**：那条「待 D7 进入实施阶段…迁入 `spec/d7-*/`」
+  的**条件早已达成而无人回写**，且原文"尚无实现（一行代码未改）"**已是事实错误**。
+  ⇒ 迁移判定由「整批迁」改为**逐条判**，实际迁移**拆为独立待办**（见 `O-100`）。
+  关联: [OPEN-ISSUES](OPEN-ISSUES.md) **`O-100`** · [DEV-LOG-014](../../docs/DEV-LOG-014-decision-refinement.md) **§83**（D7 收口后未实测边界普查）
+- **⑥ 另外两处「查过但不改」（检查回写的结论，一并留档）**：
+  · **`IMPLEMENTATION.md` / `DESIGN.md`**：同为 **D6 MVP 范围**的文档（实测：grep `review`/`batch` 只命中
+    "Step 6 review" 这类无关词）⇒ D7 落体**不在其射程内**，这与 `D7-P0` 的「不另造第二套」一致；
+    ⚠ **但它们描述 `agent-cli.ps1` 内部结构时已过时**（D7 新增 **6 个纯函数 + 2 个卡面字段**未登记）
+    ⇒ **点名在此，不就地改写**（同 ④ 的处置：该做的是**一次有验收的架构回填**）。
+  · **`ADR-0009` 的"尚未在派发引擎中实现"仍然成立**（**不假改**）：它那三条是 **D6/D7 分界判据**
+    （"归谁"），而引擎里接的是 `D7-P0-3` 的 **J-1/J-2 + 不得自审**（"同一产物上由谁复核"）——
+    **两者互补但不同**，别把后者当成前者的落地。
+  · ✅ 顺带核实**另一条回写义务已兑现**：`ADR-0009` 转 accepted 时登记「手册 §1.3 增『受理后归哪一侧』段」
+    ⇒ 实测手册 §1.3 第 97 行**已有该段**（**这条回写做到了**）。
+
 ### 2026-09-23 — D6/D7 路线厘清 + 影响面反查 + 盲区扫描（**仅文档**；D6 侧无代码改动）
 
 > 本阶段是**路线治理**，不是实现；**完整时间线见 [DEV-LOG-012](../../docs/DEV-LOG-012-d6-d7-roadmap-and-impact.md)**（阶段卷），本册只记与 **D6 框架**直接相关的三条。
