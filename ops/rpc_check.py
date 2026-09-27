@@ -6465,6 +6465,171 @@ def check_rubric_blindspot(ctx, doc=None):
     return "PASS", " · ".join(notes), []
 
 
+CAPABILITY_INV = ROOT / "inventory" / "capability-inventory.yaml"
+CAP_DOMAINS = ("verify", "identity", "orchestration", "meta")
+CAP_VERDICTS = ("present", "partial", "absent")
+CAP_BASIS = ("E1", "E2")
+CAP_WHY_KINDS = ("na", "not-done", "pending-decision")
+CAP_CARRIER_KINDS = ("file", "gate", "table")
+
+
+def _ds(v):
+    """日期字段取串：**接受 yaml 把裸日期解析出的 `date` / `datetime`**。
+
+    ★ 为什么单独一个函数：`updated: 2026-09-27` 会被 yaml 解析成 **`datetime.date`**，
+    而 `_s()` 对非字符串一律返回空 ⇒ 判据会报「缺 `updated`」，**而人看表里明明有** ——
+    这是**口径陷阱**（同族：O-93 的『同一棵树三种口径三个结果』）。
+    ⇒ 判据对**同一事实的不同合法写法**要宽容（裸日期 / 带引号都收），只对**真的没有**严格。
+    """
+    if isinstance(v, str):
+        return v.strip()
+    if hasattr(v, "isoformat"):
+        return v.isoformat()
+    return ""
+
+
+def validate_capability_inventory(doc, known_checks, exists_fn):
+    """**纯函数**（O-105）：能力 → 载体 → 判定。
+
+    ★★ 它要防的是「**能力的存在性靠自报**」—— 所以 present / partial **必须给可核载体**，
+    判据去**仓里真找**（file 存在 / gate 是已注册 CHECKS id / table 在 inventory/）；
+    absent **必须写理由**（本仓纪律:「不适用也是一种结论，必须写下来」）**与读数** `evidence`
+    —— 「本仓没有这个机制」**本身也是断言**，absent **不豁免** evidence（真表首版即此错）。
+    """
+    bad, notes = [], []
+    if not isinstance(doc, dict):
+        return ["顶层不是映射（yaml 根应是 mapping）"], notes
+
+    # ── ① 表级：口径 + 读数日期（它是**增长型载体**，没日期读者不知道是哪天的树）──
+    m = doc.get("metric")
+    if not isinstance(m, dict) or not (_s(m.get("name")) and _s(m.get("unit")) and _s(m.get("scope"))):
+        bad.append("缺 `metric` 的 `name`/`unit`/`scope` ⇒ **增长型计数没有口径** —— "
+                   "口径一变，表里所有数字立刻失去意义（§87.6 的『同日漂移』就是这类）")
+    if not _ds(doc.get("updated")):
+        bad.append("缺 `updated` ⇒ **没有读数日期** ⇒ 读者无法判断这表是哪一天的树")
+
+    # ── ② 声明的封闭集 == 判据实现（防口径漂移：改了代码没改表 / 反之）──────────
+    for k, allowed in (("domains", CAP_DOMAINS), ("verdicts", CAP_VERDICTS),
+                       ("basis", CAP_BASIS), ("why_kinds", CAP_WHY_KINDS),
+                       ("carrier_kinds", CAP_CARRIER_KINDS)):
+        v = doc.get(k)
+        if not isinstance(v, list) or tuple(v) != allowed:
+            bad.append(f"`{k}`={v!r} 应为封闭集 {list(allowed)} ⇒ "
+                       f"**声明的口径必须与判据实现一致**（不一致时，本判据自己就是假绿）")
+
+    items = doc.get("items")
+    if not isinstance(items, list) or not items:
+        return bad + ["`items` 为空 ⇒ **判据没有对象**（退化空判，本仓头号形态）"], notes
+
+    # ── ③ 逐项 ─────────────────────────────────────────────────────────────
+    seen = set()
+    for i, it in enumerate(items):
+        at = f"items[{i}]"
+        if not isinstance(it, dict):
+            bad.append(f"{at} 不是映射")
+            continue
+        cid = _s(it.get("id"))
+        if not cid or cid in seen:
+            bad.append(f"{at} 缺 `id` 或 `id` 重复: {cid!r}")
+        seen.add(cid)
+        at = f"items[{cid or i}]"
+        for k in ("domain", "what", "evidence"):
+            if not _s(it.get(k)):
+                bad.append(f"{at} 缺 `{k}`")
+        if it.get("domain") not in CAP_DOMAINS:
+            bad.append(f"{at} `domain`={it.get('domain')!r} 不在封闭集 {CAP_DOMAINS}")
+        if it.get("basis") not in CAP_BASIS:
+            bad.append(f"{at} `basis`={it.get('basis')!r} 不在封闭集 {CAP_BASIS} ⇒ "
+                       f"**取证方式必须写明**（E1 读文件 / E2 跑命令）")
+        vd = it.get("verdict")
+        if vd not in CAP_VERDICTS:
+            bad.append(f"{at} `verdict`={vd!r} 不在封闭集 {CAP_VERDICTS}")
+            continue
+
+        # ★★ 核心：有载体 ⇒ 必须**可达**（去仓里真找，不采信自报）
+        if vd in ("present", "partial"):
+            cs = it.get("carriers")
+            if not isinstance(cs, list) or not cs:
+                bad.append(f"{at} verdict={vd} ⇒ **必须给载体**（否则是自报）")
+            else:
+                for j, c in enumerate(cs):
+                    cat = f"{at}.carriers[{j}]"
+                    if not isinstance(c, dict):
+                        bad.append(f"{cat} 不是映射")
+                        continue
+                    ck, ref = c.get("kind"), _s(c.get("ref"))
+                    if ck not in CAP_CARRIER_KINDS:
+                        bad.append(f"{cat}.kind={ck!r} 不在封闭集 {CAP_CARRIER_KINDS}")
+                        continue
+                    if not ref:
+                        bad.append(f"{cat} 缺 `ref`")
+                        continue
+                    if ck == "gate" and ref not in known_checks:
+                        bad.append(f"{cat} 指的判据 {ref!r} **不是已注册的 CHECKS id** ⇒ 挂名"
+                                   f"（判据写了但没人跑 —— 本仓最典型的一类假绿）")
+                    elif ck == "file" and not exists_fn(ref):
+                        bad.append(f"{cat} 指的仓内文件 {ref!r} **不存在**")
+                    elif ck == "table" and not exists_fn(
+                            ref if "/" in ref else f"inventory/{ref}"):
+                        bad.append(f"{cat} 指的真值表 {ref!r} **不存在**")
+        if vd == "partial" and not _s(it.get("gap")):
+            bad.append(f"{at} verdict=partial 但缺 `gap` ⇒ **缺哪一块必须写清**"
+                       f"（否则 partial 是个托词，读者无法判断它离 present 差多少）")
+        if vd == "absent":
+            wk = it.get("why_kind")
+            if wk not in CAP_WHY_KINDS:
+                bad.append(f"{at} verdict=absent 但 `why_kind`={wk!r} 不在封闭集 {CAP_WHY_KINDS}"
+                           f"（不适用 / 未做 / 待裁 —— 三者含义**不同**，混起来就不可判）")
+            if not _s(it.get("why")):
+                bad.append(f"{at} verdict=absent 但缺 `why` ⇒ "
+                           f"**「不做」也是一种结论，必须写下来**")
+
+    # ── ④ 自指：本表必须盘到自己（否则「能力盘点」这项能力本身没被盘点）────────
+    sid = _s(doc.get("self_id"))
+    if not sid:
+        bad.append("缺 `self_id` ⇒ 表没有声明**哪一项是它自己**")
+    elif sid not in seen:
+        bad.append(f"`self_id`={sid!r} 不在 items 里 ⇒ "
+                   f"**「能力盘点」这项能力本身没被盘点**（自指缺口）")
+
+    unv = doc.get("unverified")
+    if not isinstance(unv, list) or not unv:
+        bad.append("`unverified` 为空 ⇒ 本项自己未实测 / 未定的部分没登记")
+
+    if not bad:
+        cnt = {}
+        for x in items:
+            if isinstance(x, dict):
+                cnt[_s(x.get("verdict"))] = cnt.get(_s(x.get("verdict")), 0) + 1
+        notes.append(f"能力 {len(seen)} 项 · present {cnt.get('present', 0)} / "
+                     f"partial {cnt.get('partial', 0)} / absent {cnt.get('absent', 0)} · "
+                     f"口径 {_s(m.get('name')) if isinstance(m, dict) else '?'} · 读数 {_ds(doc.get('updated'))}")
+    return bad, notes
+
+
+def check_capability_inventory(ctx, doc=None):
+    """O-105: 能力 → 载体 → 判定（能力盘点表）。"""
+    try:
+        import yaml
+    except Exception:
+        return "WARN", "缺 pyyaml, 跳过 capabilities 断言", []
+    if doc is None:
+        if not CAPABILITY_INV.exists():
+            return "FAIL", "inventory/capability-inventory.yaml 缺失（本断言的登记依据）", []
+        try:
+            doc = yaml.safe_load(_read_text(CAPABILITY_INV)) or {}
+        except Exception as e:
+            return "FAIL", f"inventory/capability-inventory.yaml 解析失败: {type(e).__name__}: {e}", []
+
+    bad, notes = validate_capability_inventory(
+        doc, known_checks={c["id"] for c in CHECKS},
+        exists_fn=lambda rel: (ROOT / rel).exists())
+
+    if bad:
+        return "FAIL", " · ".join(notes) if notes else "见明细", bad
+    return "PASS", " · ".join(notes), []
+
+
 CHECKS = [
     {"id": "secrets", "title": "明文扫描", "fn": check_secrets, "quick": True,
      "fix": "删除明文密钥, 或加入 SECRET_ALLOW 并写明原因(不允许静默放行); "
@@ -6749,6 +6914,27 @@ CHECKS = [
             "它会**永远挂着或悄悄做掉**。"
             "⚠ **它不判什么**：只核那几句**在不在**，**不判 rubric 全文写得好不好**（纯文本，语义不可机判）；"
             "盲区清单**不是穷举**；`derived_edges` 的触发条件是**跨仓事件**，本仓判不了"},
+    # O-105 (2026-09-27): 能力盘点表 —— 动机 = "能力的存在性每次都要靠问一遍"
+    #   （实测散落在 4 份调研正文里）⇒ 收成一张**可机核**的表；形态借自姊妹仓 P-050 RESEARCH §3.7。
+    {"id": "capabilities", "title": "能力盘点（能力 → 载体 → 判定）",
+     "fn": check_capability_inventory, "quick": True,
+     "fix": "O-105：`inventory/capability-inventory.yaml` 是**能力层**的单一真值"
+            "（与 ports/models/plugins 那类**事实**真值表分工不同：本表只**引用**它们，不复制事实）。"
+            "① 报『缺 `metric` / `updated`』= **增长型计数没有口径或读数日期** —— "
+            "口径一变，表里所有数字立刻失去意义（§87.6 的『同日漂移』就是这类失败）；"
+            "② ★ 报『`carriers` 指的判据**不是已注册 CHECKS id**』= **挂名**"
+            "（判据写了但没人跑 —— 本仓最典型的一类假绿）；"
+            "③ 报『`carriers` 指的文件 / 真值表不存在』= **载体已腐化** ⇒ 改登记或补文件；"
+            "④ 报『partial 缺 `gap`』= **缺哪一块没写清**（否则 partial 是个托词，"
+            "读者无法判断它离 present 差多少）；"
+            "⑤ ★ 报『absent 缺 `why`，或 `why_kind` 不在封闭集』= "
+            "**「不做」也是一种结论，必须写下来**（不适用 / 未做 / 待裁 —— 三者含义不同）；"
+            "⑥ 报『`self_id` 不在 items 里』= **「能力盘点」这项能力本身没被盘点**（自指缺口）；"
+            "⑦ 报『声明的封闭集与判据实现不一致』= 改了代码没改表（或反之）"
+            "⇒ **那时本判据自己就是假绿**。"
+            "⚠ **它不判什么**：只保证「**有载体且可达**」，**不保证「载体真的管用」**"
+            "（效力未被任何实验测过）；`verdict` 与 `gap` / `why` 均为**人工判断**且未经第二方复核；"
+            "★ 「**漏了哪项能力**」**不可判** —— 没有权威清单可比对，只能靠新增时补"},
     # O-63 (2026-09-25): 取号并发夹具。**刻意 quick:False**（要起 8 个独立进程 + 两次 2.5s 共同释放时刻 ⇒ 约 6s）。
     {"id": "ps1-runstamp", "title": "ts 取号并发夹具", "fn": check_ps1_runstamp, "quick": False,
      "fix": "O-63: 跑 `powershell -NoProfile -ExecutionPolicy Bypass -File ops/station-bin/_runstamp_hammer.ps1 -N 8 -SelfTest`。"

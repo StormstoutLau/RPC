@@ -1,0 +1,381 @@
+# ============================================================================
+# 能力盘点真值（O-105 · 2026-09-27）
+#
+# 为什么需要:
+#   本仓有 **43 项判据（`rpc check -List`，quick 35 + 全量 8）/ 22 张真值表（`inventory/*.yaml`，含本表）/ 103 行台账**
+#   —— 但**没有一张"能力 → 载体 → 判定"的表** ——
+#   ⚠ 口径与读数日期：三个数都是 **2026-09-27** 实测，口径如上括号内；★ 它们是**增长型**的，
+#     改判据 / 加表 / 加台账行都会动 ⇒ 引用时**带上日期**，别裸引（§86 就栽在这里，见 §89.6）。
+#   于是"这项能力到底有没有载体"每次都要**靠问一遍**。实测"能力"字样只出现在
+#   4 份调研文档正文里（Ds 工作区扫描 / Agent 生态 / 跨项目调用 / 统一入口）⇒ **散落未成表**。
+#   来源 = 姊妹仓 Spec_Workflow 的 P-050 RESEARCH §3.7「差距矩阵」形态（逐项：能力 → 当前载体 → 判定）。
+#
+# ★★ 本表要防的是什么:
+#   不是"能力少"，而是"**能力的存在性靠自报**" —— 所以每项 present/partial **必须给可核载体**，
+#   判据会去**仓里真找**（file 存在 / gate 是已注册 CHECKS id / table 在 inventory/）。
+#   absent 则**必须写理由**（本仓纪律:「不适用也是一种结论，必须写下来」）。
+#
+# ★ 与其它真值表的分工:
+#   ports.yaml / models.yaml / plugins.yaml … → 各自的**事实**真值
+#   本表 → **能力层**：哪些能力有载体、载体是谁、缺什么。**不复制**它们的事实，只**引用**。
+#
+# 口径 (verdict_scale —— 判据按这个判):
+#   present  有可核载体，且本轮读过或跑过
+#   partial  有载体，但**已知缺一块** ⇒ 必须写 `gap`（否则 partial 是托词）
+#   absent   无载体 ⇒ 必须写 `why` + `why_kind`（★ 且**不豁免** `basis` / `evidence` ——
+#            「本仓没有这个机制」**本身也是断言**，要么给读数，要么就是自报）
+#
+# 维护约定:
+#   · 新增/废弃能力 ⇒ 改本表；能力状态变了（absent → present 等）**同一批**改
+#   · `updated` 是**读数日期** —— 本表是**增长型载体**，没有日期，读者无法判断它是哪一天的树
+# ============================================================================
+version: 1
+updated: 2026-09-27
+self_id: capability-inventory
+
+metric:
+  name: capability_items
+  unit: 登记项数（增删能力项即变）
+  scope: 本文件 `items` 数组；**不含**其它 inventory 表的条目
+  note: ★ 增长型计数 ⇒ **必须附口径 + 读数日期**（§87.6 的同日漂移即此类失败）
+
+# ── 封闭集（判据会核「声明 == 判据实现」，防口径漂移）──────────────────────
+domains: [verify, identity, orchestration, meta]
+verdicts: [present, partial, absent]
+basis: [E1, E2]
+why_kinds: [na, not-done, pending-decision]
+carrier_kinds: [file, gate, table]
+
+source:
+  what: 能力清单的**派生来源**（不是新发明 —— 每一项都指向已存在的判据 / 文件 / 真值表）
+  from:
+  - docs/DEV-LOG-014-decision-refinement.md §85.2（初衷 → 落体 → 判据）
+  - docs/DEV-LOG-014-decision-refinement.md §86.3（姊妹仓十道不变式 I-1~I-10）
+  - docs/DEV-LOG-014-decision-refinement.md §87.2（两仓能力对照）
+  - docs/DEV-LOG-014-decision-refinement.md §88（FTA：残余割集）
+  - ops/rpc_check.py 的 CHECKS
+  - inventory/ 的既有真值表
+
+items:
+
+# ── 域 1: verify 验证（判据族）────────────────────────────────────────────
+- id: gate-machine-runnable
+  domain: verify
+  what: 判据可机跑（门禁）
+  verdict: present
+  carriers:
+  - {kind: file, ref: ops/rpc_check.py}
+  basis: E2
+  evidence: "本轮实测 `rpc check --quick` 34 项（全量 43）"
+
+- id: pre-red
+  domain: verify
+  what: 先验红（改坏真对象 ⇒ 断言红 ⇒ 字节级恢复 + 自证）
+  verdict: present
+  carriers:
+  - {kind: file, ref: ops/station-bin/_fm_golden_test.ps1}
+  basis: E2
+  evidence: "离线黄金夹具实测 pass=399 fail=0"
+
+- id: judge-selfcheck
+  domain: verify
+  what: 判据自身被审（变异**本体** + 四态 · 禁「基本通过」）
+  verdict: present
+  carriers:
+  - {kind: file, ref: ops/judge_selfcheck.py}
+  basis: E1
+  evidence: "D7-P3 落地；四态 EFFECTIVE / DEFENSE_EMPTY / BASELINE_RED / ERROR"
+
+- id: false-green-taxonomy
+  domain: verify
+  what: 假绿四型（什么都没判 / 判了别的 / 没读到 / 报数型）+「没判 ≠ 判了且通过」
+  verdict: present
+  carriers:
+  - {kind: file, ref: docs/DEV-LOG-014-decision-refinement.md}
+  basis: E1
+  evidence: "纪律在册；本会话据此抓出多处假绿（含我自己的三处）"
+
+- id: conclusion-contract
+  domain: verify
+  what: 结论契约（`verdict` 封闭枚举 + `findings` 锚点必填 + 禁判官自报 `agreement`）
+  verdict: present
+  carriers:
+  - {kind: file, ref: spec/d6-agent-standard/D7-PROTOCOL-CONCLUSION-CONTRACT.md}
+  basis: E1
+  evidence: "D7-P2 设计定案 · 校验器已落地"
+
+- id: cross-family
+  domain: verify
+  what: J-1 跨族（判官与产出者不同族）
+  verdict: present
+  carriers:
+  - {kind: gate, ref: model-families}
+  - {kind: table, ref: model-families.yaml}
+  basis: E2
+  evidence: "族 6 · 成员覆盖 12/12 · 出网 8/8 键"
+
+- id: cross-input
+  domain: verify
+  what: J-2 输入独立（判官输入 ≠ 产出者输入）
+  verdict: present
+  carriers:
+  - {kind: file, ref: ops/agent_pair_audit.py}
+  basis: E1
+  evidence: "D7-P3-1 最小消费者；实测可配对 2/246"
+
+- id: ledger-machine-readable
+  domain: verify
+  what: 台账状态可机读（格首标记自证）
+  verdict: present
+  carriers:
+  - {kind: gate, ref: ledger-status}
+  basis: E2
+  evidence: "数据行 103 · 可机读 103"
+
+# ── 域 2: identity 身份 / 规范（U-1~U-5）─────────────────────────────────
+- id: u1-artifact-identity
+  domain: identity
+  what: U-1 产物身份（内容寻址 · 四项决定）
+  verdict: present
+  carriers:
+  - {kind: gate, ref: u1-identity}
+  - {kind: file, ref: spec/d6-agent-standard/U1-ARTIFACT-IDENTITY.md}
+  basis: E2
+  evidence: "已声明 2 个 · 复算通过 2 个"
+
+- id: u2-dialect
+  domain: identity
+  what: U-2 方言映射（符号 × 出处 → 该处含义）
+  verdict: present
+  carriers:
+  - {kind: gate, ref: dialect}
+  - {kind: table, ref: dialect.yaml}
+  basis: E2
+  evidence: "映射 26 行 / 5 族 · 冲突 4 · 不可判 11"
+
+- id: u3-edges
+  domain: identity
+  what: U-3 边格式（`kind` / `provenance` 封闭集）
+  verdict: present
+  carriers:
+  - {kind: gate, ref: edges}
+  - {kind: table, ref: edges.yaml}
+  basis: E2
+  evidence: "边 1 条 · kind 13 项 · 前缀 4 项"
+
+- id: u4-invalidation
+  domain: identity
+  what: U-4 失效传播（`affected` **可复算**，非开库手工数）
+  verdict: present
+  carriers:
+  - {kind: gate, ref: id-storage}
+  - {kind: file, ref: ops/id_storage_census.py}
+  basis: E2
+  evidence: "存储 5 处 · 一致 5 · 存量 598982 行；★ 姊妹仓承认四件套缺此机制"
+
+- id: u5-promotion
+  domain: identity
+  what: U-5 信任基座（晋升门 schema）
+  verdict: present
+  carriers:
+  - {kind: gate, ref: promotion}
+  - {kind: table, ref: promotion.yaml}
+  basis: E2
+  evidence: "字段 7 · 判据 3 · 三处映射 3 · **实例 0 条**（空已显式报出）"
+
+- id: doc-invalidation-status
+  domain: identity
+  what: 文档级失效态（`superseded` / `deprecated`）
+  verdict: absent
+  basis: E2
+  why_kind: not-done
+  why: "spec 文档的 `status:` 实测是**开放散文**（approved / finalized / 成稿 / research）⇒ **被推翻的上游文档无合法状态可标记**；姊妹仓同缺口但已落地 ⇒ 见台账 O-106"
+  evidence: "实测 `status:` 值域 = **12 种开放散文**（draft / pending / proposed / verified / approved（…括注）/ active（维护中）/ research / finalized / 成稿（…括注）/ accepted / reviewed / implemented）⇒ 无合法位点可标 `superseded`"
+
+# ── 域 3: orchestration 编排 / 权限 / 记忆 ─────────────────────────────────
+- id: no-self-review
+  domain: orchestration
+  what: 不得自审（归一后同名 ⇒ 先换后拒，换不到才 exit 8）
+  verdict: present
+  carriers:
+  - {kind: file, ref: ops/station-bin/agent-cli.ps1}
+  basis: E2
+  evidence: "D7-P3-1/P3-2 落地；夹具 sel-1~sel-11"
+
+- id: round-cap
+  domain: orchestration
+  what: 轮次上限 + 正向终止条件（EASE 早停）
+  verdict: partial
+  gap: "`plan-review-loop` 的上限**未定**（待裁，点名在案）⇒ 已登记但等一个数"
+  carriers:
+  - {kind: gate, ref: multi-round}
+  - {kind: table, ref: multi-round.yaml}
+  basis: E2
+  evidence: "闭环 3 条 · 有上限 2 · 未定 1 · 散文上限登记 3 处"
+
+- id: interruption-two-sided
+  domain: orchestration
+  what: 中断态**两岸**口径（四值封闭枚举 + `deadlock_risk` 由判据算）
+  verdict: present
+  carriers:
+  - {kind: gate, ref: interruption-untrusted}
+  - {kind: table, ref: interruption-and-untrusted.yaml}
+  basis: E2
+  evidence: "中断态 3 条（两岸口径齐）· 有死锁风险 0 · 已修事故 1"
+
+- id: untrusted-evidence
+  domain: orchestration
+  what: 不可信证据声明（含「不算不可信」的三类）
+  verdict: partial
+  gap: "**只声明在提示词里**；模型**是否真遵守无法机判**（无注入实验台）"
+  carriers:
+  - {kind: gate, ref: interruption-untrusted}
+  basis: E1
+  evidence: "不可信输入 3 条 · 未声明 1（review-comment）"
+
+- id: memory-gates
+  domain: orchestration
+  what: 记忆四道门（write / retrieval / promotion / reuse）+ 授权边界
+  verdict: partial
+  gap: "**引擎侧 1 条通道无门**（`adhoc-notes-flat`）—— 本仓关不了，只能点名 + WARN"
+  carriers:
+  - {kind: gate, ref: memory-gates}
+  - {kind: table, ref: memory-gates.yaml}
+  basis: E2
+  evidence: "四门齐 4/4 · 通道 3 条 · 接触点 4 个"
+
+- id: review-catalog
+  domain: orchestration
+  what: 标准复核目录（免终裁类目）
+  verdict: partial
+  gap: "**类目 0 条** + **类型轴未定义** ⇒ 列了也无处生效（先量后定档）"
+  carriers:
+  - {kind: gate, ref: review-catalog}
+  - {kind: table, ref: review-catalog.yaml}
+  basis: E1
+  evidence: "准入门槛 min_approvals=2 · 比例目标只报数不判"
+
+- id: conclusion-ledger
+  domain: orchestration
+  what: 结论收束记账（只追加 ∧ 唯一写入者 ∧ 有独立校验）
+  verdict: present
+  carriers:
+  - {kind: gate, ref: conclusion-ledger}
+  - {kind: table, ref: conclusion-ledgers.yaml}
+  basis: E2
+  evidence: "账本 2 本 · 非账本点名 3 项"
+
+- id: blindspot-registry
+  domain: orchestration
+  what: 自环盲区**显式登记**（含「无替代机制」也要写理由）
+  verdict: present
+  carriers:
+  - {kind: gate, ref: rubric-blindspot}
+  - {kind: table, ref: rubric-and-blindspots.yaml}
+  basis: E2
+  evidence: "盲区 3 条 · 无替代机制的 1（heterogeneous-thirdparty）"
+
+# ── 域 4: meta 元能力（口径 / 同源 / 承载 / 视图 / 过程）──────────────────
+- id: capability-inventory
+  domain: meta
+  what: 能力盘点（能力 → 载体 → 判定，本表自身）
+  verdict: present
+  carriers:
+  - {kind: file, ref: inventory/capability-inventory.yaml}
+  - {kind: gate, ref: capabilities}
+  basis: E2
+  evidence: "O-105 落地：本表 + 门禁 `capabilities`"
+
+- id: count-scope-and-date
+  domain: meta
+  what: 增长型计数须附**口径 + 读数日期**
+  verdict: partial
+  gap: "**两处已有实例**（`id-site-census` 的 `updated` + `metric` / 本表），但**未成通则** —— 台账行数 / 未实测条数仍散落无日期"
+  carriers:
+  - {kind: gate, ref: id-census}
+  - {kind: table, ref: id-site-census.yaml}
+  basis: E2
+  evidence: "姊妹仓独立发现同一病（其 v1.7：漂移第三度复发、同日即漂移）"
+
+- id: cell-safety
+  domain: meta
+  what: 承载安全（表单元格竖线安全化 · 长无断点 token 不入格）
+  verdict: absent
+  basis: E1
+  why_kind: not-done
+  why: "本会话 O-102 行的竖线安全化事故即此类（转义的竖线在字节里仍是竖线 ⇒ 列数被拆）⇒ 尚无判据；姊妹仓有 I-9 与断言 S32（口径 = **列数守恒**）"
+  evidence: "本会话 O-102 事故实测：转义后的竖线在**字节里仍是竖线** ⇒ 台账列数被拆（人工发现，非判据报出）；姊妹仓侧有不变式 I-9 + 断言 S32"
+  # 注: 本表**不复制**姊妹仓的实现，只登记缺口与可借来源
+
+- id: semantic-single-source
+  domain: meta
+  what: 语义同源（**禁**「双实现 + 对账」）
+  verdict: partial
+  gap: "有**共享模块**先例（姊妹仓抽 `spec_map.py`），但本仓 `multi-round` 的 `cap_sites` 仍是「**各 site 同值**」= **同值对账** ⇒ 正是被禁的形态"
+  carriers:
+  - {kind: table, ref: multi-round.yaml}
+  basis: E1
+  evidence: "姊妹仓论证：对账只能检出「两处不一致」，检不出「**两处一致地错**」"
+
+- id: determinism-idempotence
+  domain: meta
+  what: 确定性与幂等（**禁 wall clock** · 同源双跑**逐字节一致** · 内容未变不写盘）
+  verdict: absent
+  basis: E1
+  why_kind: not-done
+  why: "本仓有保字节纪律（行尾 / 二进制推送），但**没有**『同源双跑逐字节一致』这条判据 ⇒ 也就没有可机判的确定性"
+  evidence: "43 项 CHECKS 中**无**『同源双跑逐字节一致』判据；只有保字节纪律经人工/脚本复现过（O-102 收敛用了 **6 次**复现才定下机制）"
+  # 注: 姊妹仓有此不变式（I-2）与 selftest S15
+
+- id: derived-readonly-view
+  domain: meta
+  what: 派生只读视图（**可 diff** · 过期即红 · 不增真值）
+  verdict: absent
+  basis: E1
+  why_kind: not-done
+  why: "本仓派生物是**运行时渲染**（`cluster_web.py`）、**不留档** ⇒ **无 diff 对象**；姊妹仓的 `CONSOLE.md` + `--check` 是该形态的现成样板（§86）"
+  evidence: "派生出口均为运行时渲染（`cluster_web.py` 页面 / `cluster*.py` 终端输出）⇒ 仓内**无留档的派生只读文档**；`ops/cluster_console.py` 经查只是**显示宽度**共用件（`disp_width`/`pad`），**不是视图**"
+
+- id: fault-tree
+  domain: meta
+  what: 故障树 / 最小割集（**给结构不给概率**）
+  verdict: absent
+  basis: E1
+  why_kind: na
+  why: "**不适用为常规工具**：姊妹仓已裁『不工具化』（触发条件① 结构性分叉 ≥3 例，当前 1 例）；其自身定性 = **判据选择器非生成器**。本仓 §88 已**手工**用过一次（未工具化）"
+  evidence: "§88 手工用过一次（三候选 ⇒ **25 个二元素割集 · 0 个单点故障**）**未落任何判据**；触发条件① 实测当前 **1 例**（结构性分叉 = P-050 回写流），未达 ≥3"
+
+- id: executor-trace
+  domain: meta
+  what: 执行侧**过程**留痕（改过哪些文件 / 跑过哪些命令）
+  verdict: absent
+  basis: E1
+  why_kind: not-done
+  why: "判据只能看**产物**，看不到**过程** ⇒ 幻觉抑制最缺的证据（它怎么得出这个结论）在视野外（§85.5）"
+  evidence: "43 项 CHECKS 的输入源**只有仓内文件与命令产物** ⇒ 无进程级采集点（站上 agent 改过哪些文件 / 跑过哪些命令，仓里查不到）"
+
+- id: human-context-metric
+  domain: meta
+  what: 「人的上下文」可量指标（恢复一个决策要几步）
+  verdict: absent
+  basis: E1
+  why_kind: not-done
+  why: "初衷**第一条**却**零判据** —— 载体全在（台账 / DEV-LOG / 不适用登记 / 口径声明），但『有没有真被管住』从未被测（§85.4）"
+  evidence: "载体实测都在（台账 **103 数据行** · DEV-LOG **§1~§88** · 不适用登记 · 口径声明），但『恢复一个决策要几步』这类**读数 0 条**（从未采过）"
+
+- id: plugin-project-axis
+  domain: meta
+  what: 插件面按**项目**个性化（`(站, 项目)` 维）
+  verdict: absent
+  basis: E1
+  why_kind: pending-decision
+  why: "`plugins.yaml` 判的是「**三站一致**」（`scope` 只有『站』维）⇒ **第一件项目专属插件出现那天，这条门禁会把它判红**；本仓别处早有『按项目一份』先例 ⇒ **缺这一维**（§85.3，需裁）"
+  evidence: "`plugins.yaml` 表头自注 `# scope: 适用站; 缺省 = 三站通用` ⇒ 实测 `scope` **只有『站』一维**，**无** `(站, 项目)` 维"
+
+unverified:
+- 本表的 `verdict` 是**判断**，不是测量 —— 判据只保证「**有载体且可达**」，
+  **不保证「载体真的管用」**（效力未被任何实验测过）
+- 「partial」的 `gap` 与「absent」的 `why` / `evidence` 均为**人工判断**（读数由我手取，**未经第二方复核**）
+- 多数「absent」项的「**本仓该不该补**」**未裁**（其中 1 项是 `pending-decision`，需用户定；
+  其余 `not-done` 项只是"还没做"，**不等于"应该做"**）
+- 本表的**项数选取**（32 项）没有权威清单可比对 ⇒ 「**漏了哪项能力**」**不可判**（只能靠新增时补）
