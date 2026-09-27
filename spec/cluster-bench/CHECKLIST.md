@@ -13,7 +13,7 @@ upstream: null
 > **Feature**: B5q (beowulf-ai-cluster 4 行动项)
 > **创建日期**: 2026-08-31
 > **验收日期**: 2026-08-31
-> **状态**: **验收通过** (48/48, P1 全过 — §8)
+> **状态**: **已验收** (48/48, P1 全过 — §8)
 > **基于设计**: [DESIGN.md](./DESIGN.md) (含 §10 审计注记, 已 review 修正)
 > **执行环境**: B 站 scott-lau (client) + A 站 NEX (rpc worker), ssh 互通已由 B5i 验证
 

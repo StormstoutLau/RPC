@@ -5,7 +5,7 @@
 id: d1-watchdog-fault-IMPLEMENTATION
 type: design
 version: 1.1
-status: implemented
+status: verified
 date: 2026-09-02
 depends: \[d1-watchdog-fault-RESEARCH]
 upstream: null
@@ -13,7 +13,7 @@ upstream: null
 
 > **Feature**: D1 防挂死与容错补全（health 看门狗 + LiteLLM fallbacks + 参数台账）
 > **创建日期**: 2026-09-02
-> **状态**: draft
+> **状态**: verified
 > **Spec 步骤**: Step 3-6
 > **基于调研**: [RESEARCH.md](./RESEARCH.md)
 > **决策来源**: [ADR-0001](../../adr/ADR-0001-集群运维框架审计与四项改进决策.md) §决策 4

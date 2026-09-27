@@ -13,7 +13,7 @@ upstream: null
 
 > **Feature**: D1 防挂死与容错补全（health 看门狗 + LiteLLM fallbacks + 参数台账）
 > **创建日期**: 2026-09-02
-> **状态**: 已验收通过（2026-09-02，A1-A8/R1-R3/C1-C7 全过，见 §3/§4）
+> **状态**: 已验收（2026-09-02，A1-A8/R1-R3/C1-C7 全过，见 §3/§4）
 > **Spec 步骤**: Step 7-8, 10
 > **基于实施**: [IMPLEMENTATION.md](./IMPLEMENTATION.md)
 > **基于调研**: [RESEARCH.md](./RESEARCH.md)

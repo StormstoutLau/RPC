@@ -14,7 +14,7 @@ upstream: null
 
 > **Feature**: 基于《RPC协议瓶颈调研.md》结论，对 A/B 双机 USB4 RPC 链路执行分层优化
 > **创建日期**: 2026-08-28
-> **状态**: 草稿（待 review）
+> **状态**: draft（草稿，待 review）
 > **Spec 步骤**: Step 3-4
 > **基于调研**: [research/RPC协议瓶颈调研.md](research/RPC协议瓶颈调研.md)（下文简称"调研"）
 > **2026-09-09 归并**: docs 下 4 篇互连/RPC 层调研已移入本域 `research/`（RPC 协议瓶颈 / RPC 串行跨链 / AMD395 互连 / AMD 平台算子层），作为本 DESIGN 的上游依据统一收敛；详见 [research/README.md](research/README.md)

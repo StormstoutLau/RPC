@@ -5,14 +5,14 @@
 id: d6-agent-standard-ARCHITECTURE
 type: architecture
 version: 1.1
-status: approved（与 DESIGN v1.4 / IMPLEMENTATION v1.2 实况对齐，2026-09-04；v1.1 补复杂度路由 M3/契约字段 + wrapper 稳定性 preflight/exit12，2026-09-07）
+status: verified（与 DESIGN v1.4 / IMPLEMENTATION v1.2 实况对齐，2026-09-04；v1.1 补复杂度路由 M3/契约字段 + wrapper 稳定性 preflight/exit12，2026-09-07）
 date: 2026-09-04
 depends: \[d6-agent-standard-DESIGN v1.4 (approved), d6-agent-standard-IMPLEMENTATION v1.2, d6-agent-standard-CHECKLIST v1.0 (验收通过)]
 upstream: \[d6-agent-standard-DESIGN, ADR-0002]
 -------------------------------------
 
 > **Feature**: 主控站 agent-cli wrapper MVP 的系统架构（工作区 + 任务卡 + 并发锁 + 敏感路由 + 跨站扇出）
-> **状态**: approved（以已验收实现为准，非纸面设计）
+> **状态**: verified（以已验收实现为准，非纸面设计）
 > **真值源**: 与 IMPLEMENTATION §3 代码结构逐模块对齐；并发模型/退出码/契约 schema 以 DESIGN §4/§6/§8 与 CHECKLIST A1-A16 实测为准
 > **本文件定位**: 单一入口描述系统「是什么」「怎么动」「边界在哪」，供维护者/后续 D7 开发者快速建立心智模型，不复述 DESIGN 的论证过程
 > **跨项目标准引用**: D6 为多任务项目统一 agent-cli 调用标准（DESIGN 顶层目标），跨项目工作规范（立项→设计→派发→跨站执行→验收→入档五层）见 [CROSS-PROJECT-WORK-STANDARD.md](./CROSS-PROJECT-WORK-STANDARD.md)；三站执行规范调研输入见 [RESEARCH_2026-09-12_Cpp_Hub_3station.md](./RESEARCH_2026-09-12_Cpp_Hub_3station.md)。

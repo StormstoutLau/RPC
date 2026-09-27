@@ -4,7 +4,7 @@
 id: d6-strong-accept-DESIGN
 type: design
 version: 1.2
-status: draft
+status: verified（Step 4 修复批完成，P1+P2 清零，可进入 Step 5）
 date: 2026-09-09
 depends: [d6-strong-accept-RESEARCH, d6-agent-standard-DESIGN v1.4, d6-agent-standard-OPEN-ISSUES v1.0]
 upstream: null
@@ -12,7 +12,7 @@ upstream: null
 
 > **Feature**: strong-accept（O-12——主控站侧独立 golden 测试，消除"模型自写测试自证通过"）
 > **创建日期**: 2026-09-09
-> **状态**: v1.2（Step 4 修复批完成：异基座复审 §9.4 P1×2/P2×3 + 复核 §9.5 分级修正已全部执行，P1+P2 清零，P3×4 转入 IMPLEMENTATION 处理并记录 §9.5；可进入 Step 5）
+> **状态**: verified（Step 4 修复批完成：异基座复审 §9.4 P1×2/P2×3 + 复核 §9.5 分级修正已全部执行，P1+P2 清零，P3×4 转入 IMPLEMENTATION 处理并记录 §9.5；可进入 Step 5）
 > **Spec 步骤**: Step 3-4
 > **基于调研**: [RESEARCH.md](./RESEARCH.md) v1.0（异基座复审通过，P2 全部修复）
 

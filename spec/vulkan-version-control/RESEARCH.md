@@ -4,7 +4,7 @@
 id: vulkan-version-control-RESEARCH
 type: design
 version: 1.0
-status: draft
+status: in-review
 date: 2026-08-27
 depends: []
 upstream: null
