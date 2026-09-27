@@ -60,23 +60,36 @@ print("      note =", (notes[0] if notes else "(无)"))
 chk("真扫描：两处都有 >= 20（否则判据没对象）", len(REAL_PAIRS) >= 20, f" <- {len(REAL_PAIRS)}")
 chk("真扫描：模板被排除且计入报数", REAL_TPL >= 3, f" <- {REAL_TPL} 个模板")
 eq = sum(1 for x in REAL_PAIRS if R._doc_token(x["fm"]) == R._doc_token(x["body"]))
-chk("真扫描：不等数 == 冻结数（即**新增 0**）", len(REAL_PAIRS) - eq == len(REAL.get("freeze") or []),
-    f" <- 不等 {len(REAL_PAIRS) - eq} / 冻结 {len(REAL.get('freeze') or [])}")
+chk("真扫描：不等数 == 0（清账后）", len(REAL_PAIRS) - eq == 0,
+    f" <- 不等 {len(REAL_PAIRS) - eq}")
+chk("真扫描：冻结数 == 不等数（清账后 freeze 为空，一致性仍成立）",
+    len(REAL.get("freeze") or []) == len(REAL_PAIRS) - eq,
+    f" <- 冻结 {len(REAL.get('freeze') or [])} / 不等 {len(REAL_PAIRS) - eq}")
 
 
-def _first_frozen_pair(pairs):
-    frz = {e["file"] for e in (REAL.get("freeze") or [])}
-    for x in pairs:
-        if x["file"] in frz and R._doc_token(x["fm"]) != R._doc_token(x["body"]):
-            return x
-    raise AssertionError("真表里找不到一个『冻结且不等』的对（夹具前提不成立）")
+# ★ 清账（2026-09-27）后真表**再无不等项 / freeze 为空** ⇒ 夹具由「找」改为「造」：
+def _unequal_pair(p):
+    """取任意一个『两处都有』的对 ⇒ 把它改成**不等**（并返回它，供后续变异）。"""
+    if not p:
+        raise AssertionError("真扫描里没有任何『两处都有』的对（夹具前提不成立）")
+    x = p[0]
+    x["fm"], x["body"] = "verified", "draft"
+    return x
+
+
+def _frozen_pair(d, p):
+    """夹具：造一个**在 freeze 里**的不等项（真表 freeze 已清空 ⇒ 需注入一条）。"""
+    x = _unequal_pair(p)
+    d["freeze"] = [e for e in (d.get("freeze") or []) if e["file"] != x["file"]]
+    d["freeze"].append({"file": x["file"], "fm": x["fm"], "body": x["body"],
+                        "why": "夹具注入（真表 freeze 已清空）"})
+    return x
 
 
 # ── ③ ★★ 先验红：核心 —— 非冻结的"两处不等"必须红且点名 ───────────────────
 def m_new_unequal(d, p):
-    x = _first_frozen_pair(p)
-    x["fm"], x["body"] = "verified", "draft"        # 造一个新的"不等"
-    d["freeze"] = [e for e in d["freeze"] if e["file"] != x["file"]]   # 且**不在**冻结里
+    x = _unequal_pair(p)                            # 造一个新的"不等"
+    d["freeze"] = [e for e in (d.get("freeze") or []) if e["file"] != x["file"]]   # 且**不在**冻结里
 
 
 red(m_new_unequal, "非冻结的两处不等（判派生过期）", "派生过期")
@@ -85,8 +98,8 @@ red(m_new_unequal, "同上 —— 必须**点名文件**", "两处状态声明")
 # ── ④ 先验红：冻结清单的三种腐化（防腐化）────────────────────────────────
 def m_healed(d, p):
     """冻结项**已自愈**（真文件被修好、但忘删冻结项）⇒ 必须报「删掉它」。"""
-    x = _first_frozen_pair(p)
-    x["body"] = x["fm"]
+    x = _frozen_pair(d, p)
+    x["body"] = x["fm"]                              # 两处一致 ⇒ 自愈
 
 
 red(m_healed, "冻结项已自愈（须从 freeze 删掉）", "已自愈")
@@ -94,7 +107,7 @@ red(m_healed, "冻结项已自愈（须从 freeze 删掉）", "已自愈")
 
 def m_gone(d, p):
     """冻结项**不再是两处都有**（少了一处）⇒ 该面已只剩一个位点 ⇒ 须报「删掉它」。"""
-    x = _first_frozen_pair(p)
+    x = _frozen_pair(d, p)
     p.remove(x)                                       # 少了一处 ⇒ 不再是"两处都有"
 
 
@@ -102,6 +115,7 @@ red(m_gone, "冻结项已不再是两处都有（须删掉）", "已不再是")
 
 
 def m_bad_file(d, p):
+    _frozen_pair(d, p)                                # 清账后 freeze 为空 ⇒ 先注入一条再腐化
     d["freeze"][0]["file"] = "spec/__no_such_doc__.md"
 
 
@@ -109,6 +123,7 @@ red(m_bad_file, "冻结项文件不在仓里（登记腐化）", "不在仓里")
 
 
 def m_no_why(d, p):
+    _frozen_pair(d, p)                                # 清账后 freeze 为空 ⇒ 先注入一条再腐化
     d["freeze"][0].pop("why", None)
 
 

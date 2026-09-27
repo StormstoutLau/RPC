@@ -4,7 +4,7 @@
 id: d6-strong-accept-IMPLEMENTATION
 type: implementation
 version: 1.4
-status: implemented
+status: verified
 date: 2026-09-09
 depends: [d6-strong-accept-DESIGN v1.2, d6-strong-accept-RESEARCH v1.0, d6-agent-standard-DESIGN v1.4, d6-agent-standard-IMPLEMENTATION v1.0]
 upstream: null
@@ -12,7 +12,7 @@ upstream: null
 
 > **Feature**: strong-accept（O-12——主控站侧独立 golden 测试，消除"模型自写测试自证通过"）
 > **创建日期**: 2026-09-09
-> **状态**: **implemented v1.4（V0 验证门通过 + A15c 全闭环，2026-09-09）**——M1-M4 全链落地 agent-cli.ps1；V0 dogfood 全链 exit 0（ACCEPT_GOLDEN_OK=1 / accept_golden.passed=true / NOT_OBSERVED）；TAMPERED 安全侧失败实证；golden FAIL（exit 9 双义契约消歧）与 source 缺失（exit 2 abort）两负例跑通；离线单测 9/9 绿。V0 完整复盘 = §11。详情 see CHECKLIST §2.8（A15b/c/d 全 ☑）/ OPEN-ISSUES O-12
+> **状态**: **verified v1.4（V0 验证门通过 + A15c 全闭环，2026-09-09）**——M1-M4 全链落地 agent-cli.ps1；V0 dogfood 全链 exit 0（ACCEPT_GOLDEN_OK=1 / accept_golden.passed=true / NOT_OBSERVED）；TAMPERED 安全侧失败实证；golden FAIL（exit 9 双义契约消歧）与 source 缺失（exit 2 abort）两负例跑通；离线单测 9/9 绿。V0 完整复盘 = §11。详情 see CHECKLIST §2.8（A15b/c/d 全 ☑）/ OPEN-ISSUES O-12
 > **Spec 步骤**: Step 5-6
 > **基于设计**: [DESIGN.md](./DESIGN.md) v1.2（Step 4 修复批完成：P1+P2 清零）
 > **基于调研**: [RESEARCH.md](./RESEARCH.md) v1.0

@@ -5,7 +5,7 @@
 id: d5-agent-ecosystem-CHECKLIST
 type: design
 version: 1.0
-status: draft
+status: accepted
 date: 2026-09-02
 depends: \[d5-agent-ecosystem-IMPLEMENTATION, d5-agent-ecosystem-DESIGN, Agent生态升级与多智能体协作架构调研 (docs/)]
 upstream: \[ADR-0001 集群运维框架审计与四项改进决策]
@@ -13,7 +13,7 @@ upstream: \[ADR-0001 集群运维框架审计与四项改进决策]
 
 > **Feature**: D5 Agent 生态升级（两站 claude code / opencode 的技能·插件·上下文管理·跨会话记忆装备）
 > **创建日期**: 2026-09-02
-> **状态**: verified（2026-09-02 V0-T6 执行 + A5 早期闭环，A1-A13 全过，见 §3/§4）
+> **状态**: 已验收（2026-09-02 V0-T6 执行 + A5 早期闭环，A1-A13 全过，见 §3/§4）
 > **Spec 步骤**: Step 7-8, 10
 > **基于实施**: [IMPLEMENTATION.md](./IMPLEMENTATION.md) v1.0（含 R1-R6 修正）
 > **基于设计**: [DESIGN.md](./DESIGN.md) v1.3

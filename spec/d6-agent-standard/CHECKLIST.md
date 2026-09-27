@@ -5,7 +5,7 @@
 id: d6-agent-standard-CHECKLIST
 type: design
 version: 1.0
-status: pending
+status: accepted
 date: 2026-09-03
 depends: \[d6-agent-standard-IMPLEMENTATION v1.2, d6-agent-standard-DESIGN v1.4 (approved, 含 BP-1/BP-2 对齐审计回灌)]
 upstream: \[d6-agent-standard-DESIGN]
@@ -13,7 +13,7 @@ upstream: \[d6-agent-standard-DESIGN]
 
 > **Feature**: 主控站 agent-cli wrapper MVP（workspace + task 两命令，opencode 单路径，试点 Paper）
 > **创建日期**: 2026-09-03
-> **状态**: **验收通过（修复批后 2026-09-03 16:30）**：验收轮裁决"有条件通过"→条件已满足——P1a scrubber + P1b 正文传输（修复批新发现）+ P2-1 时间语义 + P2-2 退出码 5 四项修复并实机复验（A8b/A15/A16）；功能 A1-A16 全过、不变式 7/7、错误处理 6/6（zen 限额按定义待触发）；遗留 P3×5 登记 §7.2 不阻塞
+> **状态**: **已验收（修复批后 2026-09-03 16:30）**：验收轮裁决"有条件通过"→条件已满足——P1a scrubber + P1b 正文传输（修复批新发现）+ P2-1 时间语义 + P2-2 退出码 5 四项修复并实机复验（A8b/A15/A16）；功能 A1-A16 全过、不变式 7/7、错误处理 6/6（zen 限额按定义待触发）；遗留 P3×5 登记 §7.2 不阻塞
 > **跟进（paper-pilot 重跑验证 2026-09-03 17:09）**：① 新增并修复 **P2 accept 判据多命令执行**（仅第一命令执行、`.meta` ACCEPT\_OK 为空——见 §7.2）实机复验；② **P1b 规格符合性闭环**：clean-room 重跑 202609031704438655（exit 0 / status completed / queue\_s=2 / run\_s=176 / accept 双判据 test\_code\_check 13 + classifier 29 passed，ACCEPT\_OK=1），模型按正文规格实现 `is_well_formed_code`（非自设计 `validate_classification`）——A14 判据四项 + 规格符合性全部成立，见 §2.6。遗留不变：P3×5 登记 §7.2 不阻塞
 > **Spec 步骤**: Step 7-8, 10
 > **基于实施**: [IMPLEMENTATION.md](./IMPLEMENTATION.md)（v1.2，含 M1-M4+m1-m2+BP-3/BP-4 修正）

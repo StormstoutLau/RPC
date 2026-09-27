@@ -5,7 +5,7 @@
 id: d6-agent-standard-DESIGN
 type: design
 version: 1.4
-status: approved（Step 3-4 通过，Scott 签字 2026-09-03；v1.4 对齐审计回灌：BP-1 契约补 readonly / BP-2 别名映射表，均为 schema 补全非行为变更）
+status: verified（Step 3-4 通过，Scott 签字 2026-09-03；v1.4 对齐审计回灌：BP-1 契约补 readonly / BP-2 别名映射表，均为 schema 补全非行为变更）
 date: 2026-09-03
 depends: \[Agent跨项目调用标准与迁移复用调研 (docs/, v3.4.1 2026-09-03 含幻觉审计轮: 1 项剔除 + 2 项决策链断裂修复 + 7 项证据强度修正)]
 upstream: \[D5 Agent 生态升级 (verified 2026-09-02), ADR-0001]
@@ -13,7 +13,7 @@ upstream: \[D5 Agent 生态升级 (verified 2026-09-02), ADR-0001]
 
 > **Feature**: D6 agent-cli wrapper MVP（主控站→两站 agent CLI 的跨项目调用标准：工作区 + 任务卡 + 并发锁 + 敏感路由）
 > **创建日期**: 2026-09-03
-> **状态**: Review 通过（v1.3，Step 4 gate + F1 定案，待签字）；v1.0 曾为草稿
+> **状态**: verified（Step 3-4 通过，Scott 签字 2026-09-03；v1.3 全文批准，含 F1 定案）
 > **Review 记录（v1.0→v1.3）**: 6 项 minor 发现全处理——F1 后端并发探测降级 **已获 Scott 批准并定案为后续升级项目**（2026-09-03：MVP 观测先行 queue\_s；**后端并发探测单独立项，随 V2/并发 fan-out 阶段升级**）/ F2 补 sanitized scrubber 归属 / F3 .agentsync 四型移交 IMPLEMENTATION / F4 TUI 并发边界登记为已知限制 / F6 架构图补免费档出站 / F7 重试语义适配注记。无 major、无幻觉、无断裂（引用核验全部命中）。待文末签字。
 > **Spec 步骤**: Step 3-4
 > **基于调研**: [Agent跨项目调用标准与迁移复用调研.md](../../docs/Agent跨项目调用标准与迁移复用调研.md)（v3.4.1 审计后版；**本文真值源约定：模型路由与 CLI 边界以调研 §2.1/§9.4 实测层为准，§0/§5 仅作导览**——审计元教训 R11/R3）

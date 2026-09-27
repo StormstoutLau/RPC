@@ -5,7 +5,7 @@
 id: d5-agent-ecosystem-IMPLEMENTATION
 type: design
 version: 1.0
-status: draft
+status: verified
 date: 2026-09-02
 depends: \[d5-agent-ecosystem-DESIGN v1.3]
 upstream: \[ADR-0001 集群运维框架审计与四项改进决策]

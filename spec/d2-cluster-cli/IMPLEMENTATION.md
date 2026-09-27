@@ -4,7 +4,7 @@
 id: d2-cluster-cli-IMPLEMENTATION
 type: design
 version: 1.0
-status: draft
+status: verified
 date: 2026-09-01
 depends: [d2-cluster-cli-RESEARCH]
 upstream: null

@@ -5,7 +5,7 @@
 id: d6-agent-standard-DECISIONS
 type: decisions
 version: 1.1
-status: approved（与 DESIGN v1.4 / CHECKLIST 验收实况对齐，2026-09-04；v1.1 补 D-16 复杂度路由 + D-17 wrapper 稳定性，2026-09-07；v1.2 补 D-18 ctx 一致性 radical fix B；v1.3 补 D-20 D6/D7 路线权威源与编号，2026-09-23；v1.4 补 D-21~D-23 = D7 待裁 10/11/12 裁定，2026-09-24；v1.5 补 D-24~D-25 = D7 待裁 13/30 裁定（`MANIFEST.sha256` 的 `parent` 与算法标识形态），2026-09-24；v1.6 补 D-26~D-27 = D7 待裁 14/15 裁定（U-4 采用 H-1~H-4 · 结构性事实不得由 LLM 产生），2026-09-24；**v1.7 补 D-28~D-49 = D7 待裁 A/B/E/F/G 五组 22 条裁定**（含 6 条"确认既有实现 + 措辞随 D-20 更新"、1 条"暂缓"）；**v1.8 补 D-50~D-57 = D7 待裁 H 组 8 条**（含 2 条为 Scott 2026-09-23 既有裁定的登记）⇒ **D7 待裁 38 条仅余 1 条（D 组 16，非裁定项）**，2026-09-24）
+status: verified（与 DESIGN v1.4 / CHECKLIST 验收实况对齐，2026-09-04；v1.1 补 D-16 复杂度路由 + D-17 wrapper 稳定性，2026-09-07；v1.2 补 D-18 ctx 一致性 radical fix B；v1.3 补 D-20 D6/D7 路线权威源与编号，2026-09-23；v1.4 补 D-21~D-23 = D7 待裁 10/11/12 裁定，2026-09-24；v1.5 补 D-24~D-25 = D7 待裁 13/30 裁定（`MANIFEST.sha256` 的 `parent` 与算法标识形态），2026-09-24；v1.6 补 D-26~D-27 = D7 待裁 14/15 裁定（U-4 采用 H-1~H-4 · 结构性事实不得由 LLM 产生），2026-09-24；**v1.7 补 D-28~D-49 = D7 待裁 A/B/E/F/G 五组 22 条裁定**（含 6 条"确认既有实现 + 措辞随 D-20 更新"、1 条"暂缓"）；**v1.8 补 D-50~D-57 = D7 待裁 H 组 8 条**（含 2 条为 Scott 2026-09-23 既有裁定的登记）⇒ **D7 待裁 38 条仅余 1 条（D 组 16，非裁定项）**，2026-09-24）
 date: 2026-09-04
 depends: \[d6-agent-standard-DESIGN v1.4, d6-agent-standard-CHECKLIST v1.0]
 upstream: \[d6-agent-standard-DESIGN, ADR-0001, ADR-0002]

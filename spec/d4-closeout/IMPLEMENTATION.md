@@ -4,7 +4,7 @@
 id: d4-closeout-IMPLEMENTATION
 type: design
 version: 1.0
-status: draft
+status: verified
 date: 2026-09-01
 depends: [d4-closeout-RESEARCH]
 upstream: null
