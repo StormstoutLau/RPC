@@ -1,0 +1,66 @@
+# ============================================================================
+# 文档状态声明：**两处位点**的登记与存量冻结（O-108 · 2026-09-27）
+#
+# 为什么需要:
+#   `spec` / `adr` 的文档**同时**在 ① front matter 的 `status:` 与 ② 正文的 `> **状态**:`
+#   写状态 ⇒ **同一事实两处表达**。实测 **39 文件两处都有**（5 模板 + 34 实例），
+#   其中**实例 12 处两处不等**（含 `draft` ↔ `verified` 这类**互斥**）。
+#
+# ★★ 本表防什么 & **防不了什么**（如实，不藏）:
+#   防 = 「**派生过期**」—— 唯一写入点是 front matter，正文行是**渲染**；不等 ⇒ **改正文行**。
+#   ★ 严格读 I-10：本面**仍是两个位点**（对账只能检出"两处**不一致**"，检不出"两处**一致地错**"）
+#     ⇒ 本表是**降格处置**（唯一写入点 + 派生位点），**不是** I-10 的完全实现。
+#     彻底消除的选项**仍开着** = `O-108` 案①（只留 front matter，删 39 处正文行）。
+#
+# 维护约定:
+#   · `freeze` **只装存量**；新增文档**不得**进 freeze（判据会对新不等项直接红）
+#   · 冻结项**自愈**（两处已一致）或**不再是两处都有** ⇒ 判据报「把它删掉」（防腐化，
+#     同 `inventory/ops.yaml` 的「冻结存量」与 `secrets` 的「豁免未命中」）
+#   · 本表**只判两处一致**；**不判**"这个词合不合词表"（词表真值在模板链，见 O-106）
+# ============================================================================
+version: 1
+updated: 2026-09-27
+
+semantics:
+  face: 文档状态声明（`spec/**/*.md` + `adr/*.md` 的**文档头**；射程 = 前 20 行）
+  single_write: "front matter 的 `status:` —— ★ **唯一可以写入**的地方"
+  derived: "正文的 `> **状态**:` —— ★ **只可派生**（渲染），不得独立编辑"
+  rule: "不一致时**修法唯一**：改正文行；**永不**改 fm 去迁就正文"
+  i10_note: "★ 严格读 I-10：本面仍是**两个位点** ⇒ 本表是**降格处置**，非完全实现；彻底消除 = O-108 案①"
+
+# ── 存量冻结（**逐条显式，不静默豁免**）───────────────────────────────────
+# ★ 大小写/中英写法已在判据里归一（`_doc_token`），故此处记**归一后的 token**。
+freeze:
+- {file: spec/d1-watchdog-fault/IMPLEMENTATION.md, fm: implemented, body: draft,
+   why: "存量冻结：正文写 draft 而 fm 写 implemented ⇒ **方向性未定**（需逐份读正文判定哪一侧陈旧）"}
+- {file: spec/d2-cluster-cli/CHECKLIST.md, fm: pending, body: accepted,
+   why: "存量冻结：正文已写「已验收」而 fm 仍 pending ⇒ 疑为 fm 未跟进（待逐份定案）"}
+- {file: spec/d2-cluster-cli/IMPLEMENTATION.md, fm: draft, body: verified,
+   why: "存量冻结：正文写 verified 而 fm 仍 draft ⇒ 疑为 fm 未跟进（待逐份定案）"}
+- {file: spec/d4-closeout/IMPLEMENTATION.md, fm: draft, body: verified,
+   why: "存量冻结：同上（fm draft ↔ 正文 verified）"}
+- {file: spec/d5-agent-ecosystem/CHECKLIST.md, fm: draft, body: verified,
+   why: "存量冻结：fm 用了 design 档的 `draft` 而正文写 `verified` ⇒ **档位也用错了**（待逐份定案）"}
+- {file: spec/d5-agent-ecosystem/IMPLEMENTATION.md, fm: draft, body: verified,
+   why: "存量冻结：fm draft ↔ 正文 verified"}
+- {file: spec/d6-agent-standard/CHECKLIST.md, fm: pending, body: accepted,
+   why: "存量冻结：正文已「验收通过」而 fm 仍 pending"}
+- {file: spec/d6-agent-standard/DESIGN.md, fm: approved, body: in-review,
+   why: "存量冻结：fm 是**签字态** approved、正文写 in-review ⇒ 语义不同（正文疑为旧）"}
+- {file: spec/d6-agent-standard/strong-accept/DESIGN.md, fm: draft, body: v1.2,
+   why: "存量冻结：★ 正文**把版本号写进了状态位** ⇒ 不只是值不等，**位置也串了**（需人工定案）"}
+- {file: spec/vulkan-version-control/DESIGN.md, fm: draft, body: in-review,
+   why: "存量冻结：fm draft ↔ 正文 in-review（同域 3 份同形，疑为同一批漏改）"}
+- {file: spec/vulkan-version-control/IMPLEMENTATION.md, fm: draft, body: in-review,
+   why: "存量冻结：同上"}
+- {file: spec/vulkan-version-control/RESEARCH.md, fm: draft, body: in-review,
+   why: "存量冻结：同上"}
+
+unverified:
+- 本表的 `semantics` 是**约定**：判据**验不了**「人是否只改 fm」—— 它只能检出**两处不一致**
+  ⇒ ★ 这正是 I-10 说的"检不出两处**一致地错**"；本表**不假装**解决了它
+- 12 处冻结项的**方向性未定**（哪一侧陈旧）⇒ 尚未逐份读正文取证
+- "**词表符合性不在本判据**（存量实测 **95 位点里 33 不合词表**，已由 `O-106` 裁「冻结存量」）"
+- 射程**只到文档头 20 行**；正文别处的状态描述**不在射程**（★ 口径写死在此 ——
+  `O-108` 取证时同一测量换过三次口径得 55 / 110 / 102 / 95，见 DEV-LOG-014 §90.4）
+- 模板（`*_TEMPLATE.md`）的正文行是**词表**而非实例值 ⇒ **不入对**，只报数

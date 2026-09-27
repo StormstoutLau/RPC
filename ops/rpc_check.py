@@ -6630,6 +6630,164 @@ def check_capability_inventory(ctx, doc=None):
     return "PASS", " · ".join(notes), []
 
 
+# ── O-108 (2026-09-27): 文档状态声明的**两处位点** ────────────────────────────
+DOC_STATUS_INV = ROOT / "inventory" / "doc-status.yaml"
+DOC_STATUS_DIRS = ("spec", "adr")
+DOC_STATUS_HEAD = 20          # ★ 射程**写死**：文档头 N 行（口径是判据的一部分，见 DEV-LOG-014 §90.4）
+_DOC_FM_RE = re.compile(r"^status:\s*(.+)$")
+_DOC_BODY_RE = re.compile(r"^>\s*\*\*状态\*\*:\s*(.+)$")
+# ★ 这是**归一表，不是词表**：只为把「同一事实的不同合法写法」比到一处。
+#   词表真值**只有一个地方** —— `spec/vulkan-version-control/*_TEMPLATE.md` 的「状态」行（O-106）。
+_DOC_NORM = {
+    "草稿": "draft", "review 中": "in-review", "review": "in-review",
+    "已验证": "verified", "已作废": "superseded",
+    "待验收": "pending", "验收中": "in-review",
+    "已验收": "accepted", "已验收通过": "accepted", "验收通过": "accepted",
+}
+
+
+def _doc_token(v):
+    """状态 token：去粗体 / 括注后归一。
+
+    ★ 与 `_ds()` 同族 —— 对**合法写法差异**宽容（`draft` / `草稿` / `**draft**` 是同一事实），
+    只对**真的不等**严格（否则判据会红一片**假阳性**）。
+    """
+    t = _s(v).strip("*").strip()
+    t = re.split(r"[（(—\s]", t)[0].strip("*:：")
+    return _DOC_NORM.get(t.lower(), _DOC_NORM.get(t, t.lower()))
+
+
+def scan_doc_status(root=ROOT, dirs=DOC_STATUS_DIRS, head=DOC_STATUS_HEAD):
+    """扫两处状态声明（★ **纯读，不判**）：返回 `(pairs, n_template)`。
+
+    `pairs` 只收**两处都有**的**实例**文档 —— `*_TEMPLATE.md` 的正文行是**词表**而非实例值
+    ⇒ **不入对**，只报数。
+
+    ★ 射程**写死 `head` 行**：本仓实测，同一测量不写死会把「正文里描述**别的对象**的
+    `**状态**:`」（如"某对象状态 = A/B/C"）也算进来 ⇒ 数从 **95 涨到 110**（§90.4）。
+    """
+    pairs, n_tpl = [], 0
+    for d in dirs:
+        base = root / d
+        if not base.is_dir():
+            continue
+        for p in sorted(base.rglob("*.md")):
+            if p.name.upper().endswith("_TEMPLATE.MD"):
+                n_tpl += 1
+                continue
+            fm = body = None
+            for i, line in enumerate(_read_text(p).splitlines(), 1):
+                if i > head:
+                    break
+                m = _DOC_FM_RE.match(line)
+                if m and fm is None:
+                    fm = m.group(1).strip()
+                m2 = _DOC_BODY_RE.match(line)
+                if m2 and body is None:
+                    body = m2.group(1).strip()
+            if fm is not None and body is not None:
+                pairs.append({"file": p.relative_to(root).as_posix(), "fm": fm, "body": body})
+    return pairs, n_tpl
+
+
+def validate_doc_status(pairs, doc, n_template=0):
+    """**纯函数**（O-108）：两处状态声明 = **一个真值（fm）+ 一个派生位（正文）**。
+
+    ★★ 为什么它**不是**"被 I-10 禁掉的对账"：**唯一写入点是 front matter**，正文行是**渲染**
+    ⇒ 判据检的是「**派生是否过期**」，而**不是**「两处谁对」；★ **修法唯一**（改正文，不改 fm）。
+    ⚠ 但**严格读 I-10，本面仍是两个位点** ⇒ 本表是**降格处置**、非完全实现
+    （彻底消除 = `O-108` 案①，仍开着）—— 这句如实写在 `semantics.i10_note` 里，**不藏**。
+    """
+    bad, notes = [], []
+    if not isinstance(doc, dict):
+        return ["顶层不是映射（yaml 根应是 mapping）"], notes
+
+    sem = doc.get("semantics")
+    if not isinstance(sem, dict) or not (_s(sem.get("single_write")) and _s(sem.get("derived"))):
+        bad.append("缺 `semantics.single_write` / `semantics.derived` ⇒ **本表会退化成一张豁免清单**："
+                   "没声明「谁是真值、谁是派生」（而那恰是 I-10 要的那一句）")
+    if not _ds(doc.get("updated")):
+        bad.append("缺 `updated` ⇒ 没有读数日期（读者无法判断这是哪一天的树）")
+    unv = doc.get("unverified")
+    if not isinstance(unv, list) or not unv:
+        bad.append("`unverified` 为空 ⇒ 本项自己未实测 / 未定的部分没登记")
+
+    fr = doc.get("freeze") or []
+    if not isinstance(fr, list):
+        return bad + ["`freeze` 不是列表"], notes
+    froze = {}
+    for i, e in enumerate(fr):
+        at = f"freeze[{i}]"
+        if not isinstance(e, dict):
+            bad.append(f"{at} 不是映射")
+            continue
+        f_ = _s(e.get("file"))
+        if not f_ or not (ROOT / f_).exists():
+            bad.append(f"{at} 的 `file`={f_!r} **不在仓里** ⇒ 登记腐化（文件已删 / 改名）")
+            continue
+        if not _s(e.get("why")):
+            bad.append(f"{at} 缺 `why` ⇒ **冻结是一种豁免，必须写理由**"
+                       f"（照 `inventory/ops.yaml` 的「冻结存量」）")
+        froze[f_] = e
+
+    eq, ne = 0, []
+    for p in pairs:
+        f_, a, b = _s(p.get("file")), _doc_token(p.get("fm")), _doc_token(p.get("body"))
+        if a == b:
+            eq += 1
+        else:
+            ne.append((f_, a, b))
+    new_ne = [x for x in ne if x[0] not in froze]
+    frz_ne = [x for x in ne if x[0] in froze]
+    for f_, a, b in new_ne:
+        bad.append(f"★ `{f_}` 两处状态声明**不等**：front matter `{a}` ↔ 正文 `{b}` ⇒ "
+                   f"**判为「派生过期」**（唯一写入点是 fm ⇒ **改正文行**；"
+                   f"**别**改 fm 去迁就正文）")
+
+    seen = {_s(p.get("file")) for p in pairs}
+    eq_files = {_s(p.get("file")) for p in pairs
+                if _doc_token(p.get("fm")) == _doc_token(p.get("body"))}
+    healed = sorted(f for f in froze if f in eq_files)
+    gone = sorted(f for f in froze if f not in seen)
+    if healed:
+        bad.append(f"冻结清单里 {len(healed)} 项**已自愈**（两处已一致）："
+                   f"{', '.join(healed[:5])}{' …' if len(healed) > 5 else ''} ⇒ **删掉它们**"
+                   f"（留着会把本表烂成垃圾桶 —— 同 `secrets` 的「豁免未命中」防腐化）")
+    if gone:
+        bad.append(f"冻结清单里 {len(gone)} 项**已不再是「两处都有」**："
+                   f"{', '.join(gone[:5])}{' …' if len(gone) > 5 else ''} ⇒ **删掉它们**"
+                   f"（少了一处 ⇒ 该面已只剩一个位点）")
+
+    notes.append(f"两处都有 {len(pairs)} · 一致 {eq} · 不等 {len(ne)}"
+                 f"（冻结 {len(frz_ne)} / **新增 {len(new_ne)}**）"
+                 f" · 模板 {n_template}（正文行是词表，不入对） · 读数 {_ds(doc.get('updated'))}")
+    return bad, notes
+
+
+def check_doc_status(ctx=None, doc=None, pairs=None):
+    """O-108: 同一文档两处状态声明 —— 判「**派生是否过期**」。"""
+    try:
+        import yaml
+    except Exception:
+        return "WARN", "缺 pyyaml, 跳过 doc-status 断言", []
+    if doc is None:
+        if not DOC_STATUS_INV.exists():
+            return "FAIL", "inventory/doc-status.yaml 缺失（本断言的登记依据）", []
+        try:
+            doc = yaml.safe_load(_read_text(DOC_STATUS_INV)) or {}
+        except Exception as e:
+            return "FAIL", f"inventory/doc-status.yaml 解析失败: {type(e).__name__}: {e}", []
+
+    n_tpl = 0
+    if pairs is None:
+        pairs, n_tpl = scan_doc_status()
+
+    bad, notes = validate_doc_status(pairs, doc, n_template=n_tpl)
+    if bad:
+        return "FAIL", " · ".join(notes) if notes else "见明细", bad
+    return "PASS", " · ".join(notes), []
+
+
 CHECKS = [
     {"id": "secrets", "title": "明文扫描", "fn": check_secrets, "quick": True,
      "fix": "删除明文密钥, 或加入 SECRET_ALLOW 并写明原因(不允许静默放行); "
@@ -6935,6 +7093,24 @@ CHECKS = [
             "⚠ **它不判什么**：只保证「**有载体且可达**」，**不保证「载体真的管用」**"
             "（效力未被任何实验测过）；`verdict` 与 `gap` / `why` 均为**人工判断**且未经第二方复核；"
             "★ 「**漏了哪项能力**」**不可判** —— 没有权威清单可比对，只能靠新增时补"},
+    # O-108 (2026-09-27): 文档状态声明的**两处位点** —— 动机 = `O-106` 落体时发现：
+    #   同一文档在 front matter 与正文各写一份状态，**实例 12 处两处不等**（含 `draft` ↔ `verified`）。
+    {"id": "doc-status", "title": "文档状态两处声明（判派生过期）",
+     "fn": check_doc_status, "quick": True,
+     "fix": "O-108：`inventory/doc-status.yaml` 是**两处状态声明**的单一真值"
+            "（`semantics` 声明「谁是真值、谁是派生」；`freeze` 只装**存量**）。"
+            "① ★ 报『两处不等』= **判为「派生过期」**：**唯一写入点是 front matter** ⇒ "
+            "**改正文行**；**别**改 fm 去迁就正文（一改，那个面就变回「两处都可写」= 被 I-10 禁的形态）；"
+            "② 报『冻结项**已自愈** / 已不再是两处都有』= **从 `freeze` 删掉**"
+            "（防腐化 —— 同 `secrets` 的「豁免未命中」、`ops.yaml` 的冻结存量）；"
+            "③ 报『缺 `semantics.single_write` / `derived`』= 本表**退化成一张豁免清单**了"
+            "（没声明谁是真值，就只剩「不许红」这一个作用）；"
+            "④ 报『`file` 不在仓里 / 缺 `why`』= 登记腐化 / **冻结没写理由**。"
+            "⚠ **它不判什么**：① 它**验不了**「人是否只改 fm」（只能检出两处**不一致**）——"
+            "**这正是 I-10 说的「检不出两处一致地错」**；② ★ **本面仍是两个位点** ⇒ "
+            "本项是**降格处置**、**非 I-10 的完全实现**（彻底消除 = O-108 案①：只留 front matter）；"
+            "③ **词表符合性不在本项**（存量 95 位点里 33 不合词表 ⇒ 见 O-106 的触发条件）；"
+            "④ 射程**只到文档头 20 行**（口径写死在 `DOC_STATUS_HEAD`，§90.4 的教训）"},
     # O-63 (2026-09-25): 取号并发夹具。**刻意 quick:False**（要起 8 个独立进程 + 两次 2.5s 共同释放时刻 ⇒ 约 6s）。
     {"id": "ps1-runstamp", "title": "ts 取号并发夹具", "fn": check_ps1_runstamp, "quick": False,
      "fix": "O-63: 跑 `powershell -NoProfile -ExecutionPolicy Bypass -File ops/station-bin/_runstamp_hammer.ps1 -N 8 -SelfTest`。"
