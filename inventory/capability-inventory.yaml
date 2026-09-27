@@ -186,11 +186,14 @@ items:
 - id: doc-invalidation-status
   domain: identity
   what: 文档级失效态（`superseded` / `deprecated`）
-  verdict: absent
-  basis: E2
-  why_kind: not-done
-  why: "spec 文档的 `status:` 实测是**开放散文**（approved / finalized / 成稿 / research）⇒ **被推翻的上游文档无合法状态可标记**；姊妹仓同缺口但已落地 ⇒ 见台账 O-106"
-  evidence: "实测 `status:` 值域 = **12 种开放散文**（draft / pending / proposed / verified / approved（…括注）/ active（维护中）/ research / finalized / 成稿（…括注）/ accepted / reviewed / implemented）⇒ 无合法位点可标 `superseded`"
+  verdict: partial
+  gap: "词表**已入**（3 个 design 档模板的「状态」行），但 ① **零判据**（`status` 取值**未做**封闭集校验 ⇒ 谁自造一个词也不会红）② **零实例**（仓内**无一份文档**真的标了 `superseded`）⇒ **有词无牙**"
+  carriers:
+  - {kind: file, ref: spec/vulkan-version-control/DESIGN_TEMPLATE.md}
+  - {kind: file, ref: spec/vulkan-version-control/RESEARCH_TEMPLATE.md}
+  - {kind: file, ref: spec/vulkan-version-control/IMPLEMENTATION_TEMPLATE.md}
+  basis: E1
+  evidence: "**本批改判**（原判 `absent`）：O-106 闭环，`superseded（已作废）` 入 3 模板词表 + `docs/FRAMEWORK-INDEX.md` 维护规则 6 登记；★ 但实测**存量 95 位点里 33 不合词表**（已裁「冻结存量」）⇒ 见 DEV-LOG-014 §90"
 
 # ── 域 3: orchestration 编排 / 权限 / 记忆 ─────────────────────────────────
 - id: no-self-review
