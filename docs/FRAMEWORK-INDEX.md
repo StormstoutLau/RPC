@@ -101,3 +101,13 @@
    `G1-continue-spawn-decision.md`）⇒ **凡见 `spec/d7-*/`，一律按 `spec/d6-agent-standard/` 理解**。
 5. 旧「**D7 域例外**」（2026-09-23，原规则 4）**已废** —— 该例外已转为**一般规则**（见规则 1/2 的 **H 类**）。
    处置与依据 = `spec/d6-agent-standard/OPEN-ISSUES.md` 的 **`O-100`**（**已闭环**，2026-09-26）。
+6. ★ **文档状态词表真值 = `spec/vulkan-version-control/` 的模板链**（`O-106`，2026-09-27）：
+   `spec/` + `adr/` 文档的 `status:` 取值**以模板链「状态」行为准**（`adr` 门禁已锚定该链，见 `rpc_check.py` 的 `ADR_TEMPLATE` 锚）——
+   `RESEARCH_TEMPLATE` · `DESIGN_TEMPLATE` · `IMPLEMENTATION_TEMPLATE`（**design 一般档**）= `draft / in-review / verified / superseded`；
+   `ADR_TEMPLATE` = `proposed / accepted / superseded / deferred`；`CHECKLIST_TEMPLATE` = `待验收 / 验收中 / 已验收`。
+   **英文 token 为准**（照姊妹仓 `ADR-0007` D5，**不建双语映射表**）。★ **本索引只指路、不抄词表**（`O-50`）。
+   两颗**触发驱动**裁决（照 `F:\Spec_Workflow` P-050 交付 B）：① **CHECKLIST 档不增** `superseded`（R2：无真实事例前不裁）；
+   ② **不设** `superseded_by` 反向字段（R3：反向字段 = **同一事实两处表达** = 一致性割集）。
+   ⚠ **存量未迁移（冻结存量**，同 `scripts` 断言的处置）：本批实测 `spec/`+`adr/` 头 20 行内 **95 个**状态声明位点 ⇒ **62 合词表 / 33 不合**
+   （`approved` 4 · `active` 4 · `implemented` 3 · `待验收` 3 · `成稿` 2 · `reviewed` 2 · … 共 **18 种**词）⇒ **新件守词表，存量为例外**。
+   ★ 更硬的一层见 **`O-108`**：**同一文件两处状态声明**（39 文件 = 5 模板 + 34 实例，其中**实例 12 处两处不等**）。
