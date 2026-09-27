@@ -48,7 +48,7 @@
 
 > ★★ **2026-09-26 回写 + 裁定**：原文写「**待 D7 进入实施阶段（`D7-P1` 落地）时**
 > 随实现的 spec 域一并迁入 `spec/d7-*/`」。⚠ **该条件早已满足而无人回写**（本索引 2026-09-23 落笔后未再动）。
-> **实况**：`D7-P0~P4` **五阶段全部走完** —— 新增 **13 项可机判断据**（门禁 quick 已到 **34 项**）·
+> **实况**（2026-09-26 当刻；★ 计数是**增长型**的，今日已变 —— 见 DEV-LOG-014 §89.6）：`D7-P0~P4` **五阶段全部走完** —— 新增 **13 项可机判断据**（门禁 quick 当刻 **34 项**）·
 > **7 张真值表**（`model-families` / `conclusion-ledgers` / `review-catalog` / `memory-gates` /
 > `multi-round` / `interruption-and-untrusted` / `rubric-and-blindspots`）·
 > 站上 `agent-cli.ps1` 落了 `Resolve-L1Gate` / `Test-ConclusionContract` / `Resolve-SelfReviewGuard` /
