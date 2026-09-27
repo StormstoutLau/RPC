@@ -1,6 +1,6 @@
 # A/B/C 三站 Agent CLI 插件台账（2026-09-09 起）
 
-> **状态**: A/B/C 三站实盘盘点（opencode/claude 双 CLI 同构，见 §1-5）｜ A 站 Hermes Agent 插件生态盘点（2026-09-10，见 §6）
+> **状态**: active（A/B/C 三站实盘盘点：opencode/claude 双 CLI 同构，见 §1-5；A 站 Hermes Agent 插件生态盘点 2026-09-10，见 §6）
 > **关联**: [ARCHITECTURE.md](ARCHITECTURE.md) §9（记忆层 + DCP 落地）｜ [DEV-LOG-011](../../docs/DEV-LOG-011-d6-agent-standard.md) §8（C 站接入）
 > **落档**: Scott ｜ 2026-09-09（opencode/claude）/ 2026-09-10（Hermes）
 > **2026-09-15 起**: §1 的"三站同构"**不再靠人工核对** —— 已落成可断言的真值

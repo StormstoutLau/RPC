@@ -4,7 +4,7 @@
 id: d6-agent-standard-CROSS-PROJECT-WORK-STANDARD
 type: standard
 version: 1.0
-status: 成稿（集合既有规范；单一真值仍归各源文档）
+status: finalized（成稿；集合既有规范，单一真值仍归各源文档）
 date: 2026-09-12
 scope: RPC(主控 Agent 编排) / Paper(D:\Paper) / Auto_Prover(F:\Auto_Prover) / Cpp_Hub(F:\Cpp_Hub) 等本地任务，跨 A/B/C 三机集群执行
 upstream: [D6 DESIGN v1.3（顶层目标已声明服务上述四项目）]

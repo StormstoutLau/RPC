@@ -1,5 +1,5 @@
 # ============================================================================
-# 文档状态声明：**两处位点**的登记与存量冻结（O-108 · 2026-09-27）
+# 文档状态声明：**两处位点**的登记与存量冻结 + **档位词表**（O-108 / O-109 · 2026-09-27）
 #
 # 为什么需要:
 #   `spec` / `adr` 的文档**同时**在 ① front matter 的 `status:` 与 ② 正文的 `> **状态**:`
@@ -16,7 +16,8 @@
 #   · `freeze` **只装存量**；新增文档**不得**进 freeze（判据会对新不等项直接红）
 #   · 冻结项**自愈**（两处已一致）或**不再是两处都有** ⇒ 判据报「把它删掉」（防腐化，
 #     同 `inventory/ops.yaml` 的「冻结存量」与 `secrets` 的「豁免未命中」）
-#   · 本表**只判两处一致**；**不判**"这个词合不合词表"（词表真值在模板链，见 O-106）
+#   · 本表判**两处一致** + **token 合不合档内词表**（档 → 词表读取位点见 `kind_source`；
+#     有模板档的词表真值在**模板链**、无模板档（ledger / process）在**本表** ⇒ 见 O-106 / O-109）
 # ============================================================================
 version: 1
 updated: 2026-09-27
@@ -28,6 +29,37 @@ semantics:
   rule: "不一致时**先确认真值**：若取证显示 **fm 陈旧** ⇒ **先更新 fm（= 真值更新）**，再让正文跟上。★ 「唯一写入点」的意思是「**只有它『可以』写**」，**不是**「它永远对」；**稳态下**（fm 已确认）修法唯一 = **改正文行**，别改 fm 去迁就正文"
   i10_note: "★ 严格读 I-10：本面仍是**两个位点** ⇒ 本表是**降格处置**，非完全实现；彻底消除 = O-108 案①"
 
+# ── 档位 → 词表（**读取位点**分工，O-109 · 2026-09-27）────────────────────
+# ★ 有模板的档（design / checklist / adr）**真值在模板链**（`*_TEMPLATE.md` 的「状态」行）；
+#   无模板的档（ledger / process）是本仓特有类别、**无模板** ⇒ **真值在此**（`vocab`）。
+# ⚠ 判据侧**按 kind 判**（`kind_rule`）；模板文件自身的「状态」行是**词表本身**，**跳过**判定。
+kind_source:
+  note: "★ 档位 → 词表的**读取位点**分工（**不抄词表**，O-50）：有模板的档（design / checklist / adr）**真值在模板链**；无模板的档（ledger / process）**真值在此**"
+  by_kind:
+    design:    {from: template, ref: spec/vulkan-version-control/DESIGN_TEMPLATE.md}
+    checklist: {from: template, ref: spec/vulkan-version-control/CHECKLIST_TEMPLATE.md}
+    adr:       {from: template, ref: spec/vulkan-version-control/ADR_TEMPLATE.md}
+    ledger:    {from: here, vocab: [active, frozen, retired]}
+    process:   {from: here, vocab: [research, reviewed, finalized]}
+  kind_rule: "判档顺序：① `adr/**` → adr；② 文件名含 `CHECKLIST` → checklist；③ 命中下面 `kinds:` 登记 → 按登记；④ 其余 `spec/**/*.md` → design"
+kinds:
+# ★ 只登记**无模板档**的归属（有模板的按 kind_rule 机械判，不列在此）
+- {file: spec/d6-agent-standard/DEVELOPMENT-LOG.md, kind: ledger}
+- {file: spec/d6-agent-standard/OPEN-ISSUES.md, kind: ledger}
+- {file: spec/upstream-tracker/TRACKER.md, kind: ledger}
+- {file: spec/infer-load/params-ledger.md, kind: ledger}
+- {file: spec/d6-agent-standard/PLUGIN-LEDGER.md, kind: ledger}
+- {file: spec/d6-agent-standard/test-cards/cpphub-001.md, kind: ledger}
+- {file: spec/d6-agent-standard/BLINDSCAN-v2-orchestration.md, kind: process}
+- {file: spec/d6-agent-standard/CLOSED-LOOP-ANALYSIS-2026-09-09.md, kind: process}
+- {file: spec/d6-agent-standard/CROSS-PROJECT-WORK-STANDARD.md, kind: process}
+- {file: spec/d6-agent-standard/HARNESS-SAME-MODEL-BENCH-2026-09.md, kind: process}
+- {file: spec/d6-agent-standard/RESEARCH_2026-09-12_Cpp_Hub_3station.md, kind: process}
+- {file: spec/infer-load/research/C站unsloth推理验证_20260908.md, kind: process}
+- {file: spec/infer-load/research/unsloth引擎对比测试_20260908.md, kind: process}
+- {file: spec/model-eval/questions/domain_matrix.md, kind: process}
+- {file: spec/operator-optimization/research/模型路径统一方案A_20260909.md, kind: process}
+
 # ── 存量冻结（**逐条显式，不静默豁免**）───────────────────────────────────
 # ★ 大小写/中英写法已在判据里归一（`_doc_token`），故此处记**归一后的 token**。
 # ★ 2026-09-27 清账：12 处两处矛盾已逐份取证并统一（取证结论见 DEV-LOG-014 §93）；freeze 现为空 = 无存量豁免
@@ -37,7 +69,7 @@ unverified:
 - 本表的 `semantics` 是**约定**：判据**验不了**「人是否只改 fm」—— 它只能检出**两处不一致**
   ⇒ ★ 这正是 I-10 说的"检不出两处**一致地错**"；本表**不假装**解决了它
 - 12 处的方向性**已逐份取证定案**（2026-09-27，见 DEV-LOG-014 §93）；但**取证依据是"文档正文自述 + 兄弟文档交叉印证"**，其中 **5 份**的置信度为**中**（`d6-agent-standard/DESIGN` · `strong-accept/DESIGN` · vulkan 三档），**未经第二方复核**
-- "**词表符合性不在本判据**（清账后实测：95 位点 ⇒ **80 合 / 15 不合**；余下 15 处是**词表缺档**或**状态位被当成摘要位** ⇒ 另立 `O-109`）"
+- "**词表符合性**自 2026-09-27（`O-109`）起**并入本判据**（按 `kind_source` 的档校验 token 是否在档内）；★ 它**只判 token 在不在档内**，**不判**「这个状态对不对」（状态位的**语义**对不对仍要人读）"
 - 射程**只到文档头 20 行**；正文别处的状态描述**不在射程**（★ 口径写死在此 ——
   `O-108` 取证时同一测量换过三次口径得 55 / 110 / 102 / 95，见 DEV-LOG-014 §90.4）
 - 模板（`*_TEMPLATE.md`）的正文行是**词表**而非实例值 ⇒ **不入对**，只报数

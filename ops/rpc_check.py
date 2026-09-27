@@ -6657,46 +6657,159 @@ def _doc_token(v):
     return _DOC_NORM.get(t.lower(), _DOC_NORM.get(t, t.lower()))
 
 
-def scan_doc_status(root=ROOT, dirs=DOC_STATUS_DIRS, head=DOC_STATUS_HEAD):
-    """扫两处状态声明（★ **纯读，不判**）：返回 `(pairs, n_template)`。
+def _doc_raw_token(v):
+    """状态 token 的**原文**（O-109）—— ★ 与 `_doc_token` 不同：**不做中文↔英文归一**。
 
-    `pairs` 只收**两处都有**的**实例**文档 —— `*_TEMPLATE.md` 的正文行是**词表**而非实例值
-    ⇒ **不入对**，只报数。
+    ★ 词表校验必须用**原文**：若拿归一后的 token 去比词表，`草稿` 会等于 `draft`
+    `Review 中` 会等于 `in-review` ⇒ 明明是**词表外**的写法也会被判为合规（假绿）。
+    ★ 归一只用于**两处比对**（fm ↔ 正文 是同一事实的两种合法写法）。
+    """
+    t = _s(v).strip("*").strip()
+    return re.split(r"[（(—\s]", t)[0].strip("*:：")
+
+
+# ── O-109 (2026-09-27): 档位 → 词表（**读取位点**分工）────────────────────────
+def _parse_template_vocab(path):
+    """从模板的「状态」行解析词表：以 `/` 拆分，每段取 `（` 之前的 token。
+
+    ★ 例 `draft（草稿）/ in-review（Review 中）/ …` ⇒ `[draft, in-review, …]`；
+    纯中文段（checklist 档 `待验收 / 验收中 / 已验收`）⇒ **中文 token 即词表项**。
+    """
+    for line in _read_text(path).splitlines():
+        m = _DOC_BODY_RE.match(line)
+        if not m:
+            continue
+        toks = []
+        for seg in m.group(1).split("/"):
+            tok = re.split(r"[（(]", seg.strip())[0].strip().strip("*:：")
+            if tok:
+                toks.append(tok)
+        return toks
+    return []
+
+
+def _vocab_tokens(tokens):
+    """词表 token 集（原文 + **归一形**）。
+
+    ★ 词表侧补归一形（如 checklist 档的 `待验收` ⇒ 也认 `pending`），而**实例 token 侧不归一**
+    （见 `_doc_raw_token`）—— 于是 fm 写 `accepted` / 正文写 `已验收` **都算合词表**，
+    但**词表外的写法**（如 design 档写 `草稿`、写 `active`）仍会被抓出来。
+    """
+    out = set()
+    for t in tokens:
+        t = _s(t).strip()
+        if t:
+            out.add(t)
+            out.add(_doc_token(t))
+    return out
+
+
+def load_kind_vocab(root=None, doc=None):
+    """**纯函数**（O-109）：档位 → 词表 token 集 `{kind: set(tokens)}`。
+
+    · **有模板的档**（design / checklist / adr）：真值在**模板链** ⇒ 解析
+      `kind_source.by_kind[kind].ref` 指向的模板文件的「状态」行（★ **不把这些词抄进 yaml**）。
+    · **无模板的档**（ledger / process）：本仓特有、**无模板** ⇒ 直接取 `by_kind[kind].vocab`。
+    """
+    root = Path(root) if root else ROOT
+    if doc is None:
+        try:
+            import yaml
+            doc = yaml.safe_load(_read_text(root / "inventory" / "doc-status.yaml")) or {}
+        except Exception:
+            return {}
+    ks = doc.get("kind_source") if isinstance(doc, dict) else None
+    by_kind = ks.get("by_kind") if isinstance(ks, dict) else None
+    if not isinstance(by_kind, dict):
+        return {}
+    out = {}
+    for kind, spec in by_kind.items():
+        if not isinstance(spec, dict):
+            continue
+        src = _s(spec.get("from"))
+        if src == "here":
+            toks = [str(t) for t in (spec.get("vocab") or [])]
+        elif src == "template":
+            ref = _s(spec.get("ref"))
+            toks = _parse_template_vocab(root / ref) if ref else []
+        else:
+            toks = []
+        out[str(kind)] = _vocab_tokens(toks)
+    return out
+
+
+def _doc_kind(fname, kinds_reg):
+    """判档（`kind_source.kind_rule`）：
+
+    ① `adr/**` → adr；② 文件名含 `CHECKLIST` → checklist；
+    ③ 命中 `kinds:` 登记 → 按登记；④ 其余 → design。
+    """
+    f_ = _s(fname)
+    fl = f_.lower()
+    base = fl.rsplit("/", 1)[-1]
+    if fl.startswith("adr/") or "/adr/" in fl:
+        return "adr"
+    if "checklist" in base:
+        return "checklist"
+    if f_ in (kinds_reg or {}):
+        return kinds_reg[f_]
+    return "design"
+
+
+def scan_doc_status(root=ROOT, dirs=DOC_STATUS_DIRS, head=DOC_STATUS_HEAD):
+    """扫两处状态声明（★ **纯读，不判**）：返回 `(pairs, n_template, sites)`。
+
+    · `pairs` 只收**两处都有**的**实例**文档 —— `*_TEMPLATE.md` 的正文行是**词表**而非实例值
+      ⇒ **不入对**，只报数。
+    · `sites` 收**每个位点**（fm / 正文各一条，含模板）—— O-109 的**词表校验按位点**判；
+      模板位点由判据侧**跳过**（见 `validate_doc_status`）。
 
     ★ 射程**写死 `head` 行**：本仓实测，同一测量不写死会把「正文里描述**别的对象**的
     `**状态**:`」（如"某对象状态 = A/B/C"）也算进来 ⇒ 数从 **95 涨到 110**（§90.4）。
     """
-    pairs, n_tpl = [], 0
+    pairs, sites, n_tpl = [], [], 0
     for d in dirs:
         base = root / d
         if not base.is_dir():
             continue
         for p in sorted(base.rglob("*.md")):
-            if p.name.upper().endswith("_TEMPLATE.MD"):
+            rel = p.relative_to(root).as_posix()
+            is_tpl = p.name.upper().endswith("_TEMPLATE.MD")
+            if is_tpl:
                 n_tpl += 1
-                continue
             fm = body = None
             for i, line in enumerate(_read_text(p).splitlines(), 1):
                 if i > head:
                     break
                 m = _DOC_FM_RE.match(line)
-                if m and fm is None:
-                    fm = m.group(1).strip()
+                if m:
+                    if fm is None:
+                        fm = m.group(1).strip()
+                    sites.append({"file": rel, "slot": "fm",
+                                  "value": m.group(1).strip(), "template": is_tpl})
                 m2 = _DOC_BODY_RE.match(line)
-                if m2 and body is None:
-                    body = m2.group(1).strip()
-            if fm is not None and body is not None:
-                pairs.append({"file": p.relative_to(root).as_posix(), "fm": fm, "body": body})
-    return pairs, n_tpl
+                if m2:
+                    if body is None:
+                        body = m2.group(1).strip()
+                    sites.append({"file": rel, "slot": "body",
+                                  "value": m2.group(1).strip(), "template": is_tpl})
+            if fm is not None and body is not None and not is_tpl:
+                pairs.append({"file": rel, "fm": fm, "body": body})
+    return pairs, n_tpl, sites
 
 
-def validate_doc_status(pairs, doc, n_template=0):
-    """**纯函数**（O-108）：两处状态声明 = **一个真值（fm）+ 一个派生位（正文）**。
+def validate_doc_status(pairs, doc, n_template=0, sites=None):
+    """**纯函数**（O-108 / O-109）：① 两处状态声明（一个真值 fm + 一个派生位正文）；
+    ② **词表符合性（按档）**。
 
-    ★★ 为什么它**不是**"被 I-10 禁掉的对账"：**唯一写入点是 front matter**，正文行是**渲染**
+    ★★ ① 为什么它**不是**"被 I-10 禁掉的对账"：**唯一写入点是 front matter**，正文行是**渲染**
     ⇒ 判据检的是「**派生是否过期**」，而**不是**「两处谁对」；★ **修法唯一**（改正文，不改 fm）。
     ⚠ 但**严格读 I-10，本面仍是两个位点** ⇒ 本表是**降格处置**、非完全实现
     （彻底消除 = `O-108` 案①，仍开着）—— 这句如实写在 `semantics.i10_note` 里，**不藏**。
+
+    ★ ② O-109：**每个位点按其「档」**校验 token 是否在**该档词表**内（档 → 词表读取位点见
+    `kind_source`）。★ token 取**原文**（`_doc_raw_token`，**不归一**）；★ 模板文件**跳过**
+    （其「状态」行是**词表本身**）。`sites` 缺省时由 `pairs` 反推两个位点（兼容旧调用）。
     """
     bad, notes = [], []
     if not isinstance(doc, dict):
@@ -6758,14 +6871,65 @@ def validate_doc_status(pairs, doc, n_template=0):
                    f"{', '.join(gone[:5])}{' …' if len(gone) > 5 else ''} ⇒ **删掉它们**"
                    f"（少了一处 ⇒ 该面已只剩一个位点）")
 
+    # ── O-109 ②：词表符合性（**按档**判 token 是否在档内）──────────────────────
+    v_note = ""
+    ks = doc.get("kind_source")
+    if not isinstance(ks, dict):
+        bad.append("缺 `kind_source`（档 → 词表的**读取位点**，O-109）⇒ 判据无法按档校验 token"
+                   "（`by_kind` / `kind_rule` / `kinds` 都无从取）")
+    else:
+        vocab = load_kind_vocab(doc=doc)
+        reg = {_s(e.get("file")): _s(e.get("kind"))
+               for e in (doc.get("kinds") or []) if isinstance(e, dict)}
+        if sites is None:                       # 兼容旧调用：由 pairs 反推两个位点
+            sites = []
+            for p in pairs:
+                f_ = _s(p.get("file"))
+                sites.append({"file": f_, "slot": "fm", "value": p.get("fm"), "template": False})
+                sites.append({"file": f_, "slot": "body", "value": p.get("body"), "template": False})
+        n_ok = n_site = n_tpl_site = 0
+        vbad = []
+        for s in sites:
+            if not isinstance(s, dict):
+                continue
+            f_ = _s(s.get("file"))
+            if s.get("template") or f_.upper().endswith("_TEMPLATE.MD"):
+                # ★★ 模板位点**不入分母**：其「状态」行是**词表本身**，判它 = 自己判自己。
+                #   ⚠ 但**跳过 ≠ 判过且通过**（本仓头号形态：报数型假绿）⇒ 单独报数，不并进分子。
+                n_tpl_site += 1
+                continue
+            n_site += 1
+            kind = _doc_kind(f_, reg)
+            toks = vocab.get(kind)
+            tok = _doc_raw_token(s.get("value"))
+            if toks is None:
+                vbad.append((f_, _s(s.get("slot")), tok, kind, None))
+            elif tok in toks:
+                n_ok += 1
+            else:
+                vbad.append((f_, _s(s.get("slot")), tok, kind, sorted(toks)))
+        for f_, slot, tok, kind, toks in vbad[:20]:
+            if toks is None:
+                bad.append(f"★ `{f_}`（{slot} 位点）token=`{tok}` 属档 `{kind}`，"
+                           f"但 `kind_source.by_kind` **没有这一档** ⇒ 无词表可判（**词表缺档**）")
+            else:
+                bad.append(f"★ `{f_}`（{slot} 位点）token=`{tok}` **不在档 `{kind}` 的词表**"
+                           f" {toks} 内 ⇒ 状态位写了**词表外**的值")
+        if len(vbad) > 20:
+            bad.append(f"…另有 {len(vbad) - 20} 处词表不符（略）")
+        v_note = f" · 词表符合 {n_ok}/{n_site}"
+        if n_tpl_site:
+            v_note += f"（另有模板 {n_tpl_site} 位点**跳过、不入分母**——其「状态」行是词表本身）"
+
     notes.append(f"两处都有 {len(pairs)} · 一致 {eq} · 不等 {len(ne)}"
                  f"（冻结 {len(frz_ne)} / **新增 {len(new_ne)}**）"
-                 f" · 模板 {n_template}（正文行是词表，不入对） · 读数 {_ds(doc.get('updated'))}")
+                 f" · 模板 {n_template}（正文行是词表，不入对）{v_note}"
+                 f" · 读数 {_ds(doc.get('updated'))}")
     return bad, notes
 
 
-def check_doc_status(ctx=None, doc=None, pairs=None):
-    """O-108: 同一文档两处状态声明 —— 判「**派生是否过期**」。"""
+def check_doc_status(ctx=None, doc=None, pairs=None, sites=None):
+    """O-108 / O-109: ① 同一文档两处状态声明（判「**派生是否过期**」）+ ② **词表符合性（按档）**。"""
     try:
         import yaml
     except Exception:
@@ -6780,9 +6944,9 @@ def check_doc_status(ctx=None, doc=None, pairs=None):
 
     n_tpl = 0
     if pairs is None:
-        pairs, n_tpl = scan_doc_status()
+        pairs, n_tpl, sites = scan_doc_status()
 
-    bad, notes = validate_doc_status(pairs, doc, n_template=n_tpl)
+    bad, notes = validate_doc_status(pairs, doc, n_template=n_tpl, sites=sites)
     if bad:
         return "FAIL", " · ".join(notes) if notes else "见明细", bad
     return "PASS", " · ".join(notes), []
@@ -7110,8 +7274,15 @@ CHECKS = [
             "⚠ **它不判什么**：① 它**验不了**「人是否只改 fm」（只能检出两处**不一致**）——"
             "**这正是 I-10 说的「检不出两处一致地错」**；② ★ **本面仍是两个位点** ⇒ "
             "本项是**降格处置**、**非 I-10 的完全实现**（彻底消除 = O-108 案①：只留 front matter）；"
-            "③ **词表符合性不在本项**（存量 95 位点里 33 不合词表 ⇒ 见 O-106 的触发条件）；"
-            "④ 射程**只到文档头 20 行**（口径写死在 `DOC_STATUS_HEAD`，§90.4 的教训）"},
+            "③ **词表符合性**见 ⑤（O-109 起并入本项）；"
+            "④ 射程**只到文档头 20 行**（口径写死在 `DOC_STATUS_HEAD`，§90.4 的教训）；"
+            "⑤ ★ O-109（**第二段判据：词表符合性，按档**）：`inventory/doc-status.yaml` 的 `kind_source`"
+            "登记「档 → 词表读取位点」—— 有模板档（design / checklist / adr）真值**在模板链**、"
+            "无模板档（ledger / process）**在 yaml**；`kinds` 只登记无模板档的归属，判档按 `kind_rule`。"
+            "报『token **不在档内**』= 该位点写了**词表外**的值 ⇒ 改回档内词（词表见报错列的集合）；"
+            "报『**词表缺档**』= `kind_source.by_kind` 少了一档 ⇒ 补档（无模板档要同时补 `kinds` 归属）。"
+            "⚠ **它只判 token 在不在档内**，**不判**「这个状态对不对」（状态位的**语义**对不对要人读）；"
+            "★ **模板文件跳过**（`*_TEMPLATE.md` 的「状态」行是**词表本身**，不是实例值）"},
     # O-63 (2026-09-25): 取号并发夹具。**刻意 quick:False**（要起 8 个独立进程 + 两次 2.5s 共同释放时刻 ⇒ 约 6s）。
     {"id": "ps1-runstamp", "title": "ts 取号并发夹具", "fn": check_ps1_runstamp, "quick": False,
      "fix": "O-63: 跑 `powershell -NoProfile -ExecutionPolicy Bypass -File ops/station-bin/_runstamp_hammer.ps1 -N 8 -SelfTest`。"

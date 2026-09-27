@@ -4,7 +4,7 @@
 id: d6-agent-standard-RESEARCH-CppHub-3station
 type: research
 version: 1.0
-status: 成稿（输入：CROSS-PROJECT-WORK-STANDARD 统一规范）
+status: finalized（成稿；输入 = CROSS-PROJECT-WORK-STANDARD 统一规范）
 date: 2026-09-12
 scope: 仅 F:\Cpp_Hub 主项目跨站执行规范；三项目统一规范见 CROSS-PROJECT-WORK-STANDARD.md
 ------------------------------------------------------------------
