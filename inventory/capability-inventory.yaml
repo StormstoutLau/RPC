@@ -314,11 +314,13 @@ items:
   domain: meta
   what: 语义同源（**禁**「双实现 + 对账」）
   verdict: partial
-  gap: "有**共享模块**先例（姊妹仓抽 `spec_map.py`），但本仓 `multi-round` 的 `cap_sites` 仍是「**各 site 同值**」= **同值对账** ⇒ 正是被禁的形态"
+  gap: "两处都只是**降格处置**，不是同源：① `multi-round` 的 `cap_sites` = 「**各 site 同值**」（**同值对账** = 被禁形态）；② 新落的 `doc-status` 面**唯一写入点 = front matter**（这一半对），但**位点仍有两个** ⇒ 严格读 I-10 **仍不达标**（彻底消除 = `O-108` 案①）"
   carriers:
   - {kind: table, ref: multi-round.yaml}
+  - {kind: table, ref: doc-status.yaml}
+  - {kind: gate, ref: doc-status}
   basis: E1
-  evidence: "姊妹仓论证：对账只能检出「两处不一致」，检不出「**两处一致地错**」"
+  evidence: "姊妹仓论证：对账只能检出「两处不一致」，检不出「**两处一致地错**」；★ 本批 `O-108` 把它落成**首个适用面**（文档状态），并**如实登记**其降格性质 —— 见 DEV-LOG-014 §91"
 
 - id: determinism-idempotence
   domain: meta
