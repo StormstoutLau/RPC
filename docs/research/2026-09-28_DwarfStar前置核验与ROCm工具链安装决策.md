@@ -800,3 +800,40 @@ static bool dist_coordinator_can_pipeline_prefill(..., uint32_t n_tokens, uint32
 - ⇒ 按**时间盒约定收手**：维持 PP 冻结，不做未经裁决的自维护补丁投入。
 
 **已同步上游**：`antirez/ds4#1141` 追加 "Update 2"（含扫描表、两条失败模式、`can_pipeline_prefill` 源码原因、ASan 链接卡点与最小复现）。
+
+---
+
+## 17. 替代路径调研：GLM-5.3-Flash 还能用什么跑（E3 为主）
+
+**缘起**：ADR-0010 v1.1 冻结 ds4 双机后，需回答「当前是否有别的方法 PP/TP 跑 GLM-5.3-Flash」与「AMD 官方对这类模型分布式推理的支持到哪一步」。
+
+### 17.1 AMD 官方进展（E3）
+
+| 维度 | 事实 |
+|---|---|
+| 引擎 | ROCm 10（8/27）宣称经 **vLLM v1 / llm-d / SGLang** 提供 "robust distributed inference … multi-GPU and **multi-node**"；集合通信 **NCCL/RCCL**，由新 **NIXL** 层抽象 |
+| 并行方式 | ROCm 官方文档《vLLM V1 performance optimization》专节 **Parallelism strategies**：**TP / PP / DP / EP** 四类**全部文档化** ⇒ **PP 是 AMD 官方路径，不只 TP** |
+| ★ GLM 系 | 同文档点名 **"DSA models (DeepSeek-V3.2, GLM-5)：`ROCM_AITER_MLA_SPARSE`（自动选择）… `VLLM_ROCM_USE_AITER=1`，由 config `index_topk` 自动识别，需 `--block-size 1`"** ⇒ **AMD 为 GLM-5 系稀疏注意力写了官方 ROCm kernel 路径** |
+| 规模案例 | 官方博客：《Scaling **GLM-5.1**-FP8 to 64× MI300X》·《DP Attention and TBO for **DeepSeek-V4** on MI355X》·《**DeepSeek-V4-Flash** 训练 on MI355X with Primus》 |
+| 量化工具 | **AMD Quark** 开箱架构含 **DeepSeek-V4-Pro/Flash、GLM-5 / 5.1 / 5.2**（★ **不含 GLM-5.3-Flash**）|
+| ★ 我方 GPU | vLLM ROCm 官方支持列表**含 `gfx1151/1150`（Ryzen AI MAX）**，要求 ROCm ≥ 7.0.2 |
+
+⇒ **解读**：AMD 把"分布式"做成**框架层能力**（vLLM/SGLang 的 TP/PP/DP/EP），官方投入集中在 **Instinct 数据中心卡**；`gfx1151` 只列"能跑"。**GLM-5.3-Flash 不在 Quark 官方量化清单** ⇒ 属"新架构 + nightly 级"。
+
+### 17.2 可选替代路径（按可行性）
+
+| # | 路径 | 关键事实 | 判定 |
+|---|---|---|---|
+| ① | **llama.cpp `glm5next` PR 分支 + RPC 层切分** | Flash（`glm5next`）**未进主线**，但 **Unsloth 提供可直接构建的分支**：`git clone -b glm5next/upstream https://github.com/unslothai/llama.cpp`；构建后可用**我方已在运维的** RPC **`-sm layer`** 做多机层切分（= PP 语义），模型用**已有 Unsloth GGUF**（A 站 UD-IQ4_XS 146 GiB / 或 UD-Q2_K_XL 108.7 GiB） | ★ **最贴近现状**（同栈、免新引擎）。风险：跟随 PR 分支；该 GGUF **丢弃 MTP head**（llama.cpp 无 MTP 推理路径）⇒ 无投机解码 |
+| ② | **vLLM / SGLang on ROCm** | 官方路线；vLLM 支持 gfx1151、TP/PP/DP/EP 有文档；但 **Flash 需 nightly + 专用镜像**。**塞得下是硬问题**：官方 FP8 = **321 GB**、NVFP4 = **229 GB（Blackwell 专用）** ⇒ 我方 2×~124 GiB 装不下；4-bit HF ~160–190 GB 仍偏大 ⇒ 需 **2-bit 级 HF 量化（~90–110 GB）** 才可能 TP=2。旁证：NVIDIA 侧同类硬件（2× DGX Spark 128GB）**已用 vLLM TP=2 跑通**（EXL3/W4A16），另有 **TP=3 + NVFP4（35 tok/s）** 配方 | **引擎与并行方式都有官方支撑，卡点在量化格式与权重可得性** |
+| ③ | **ds4 的 ROCm TP** | 源码门禁 `"tensor parallelism requires the Metal backend"` 处于 `#ifndef DS4_HAS_DEEPSEEK41_GPU` 之下 ⇒ **带该宏的构建可能开放 ROCm TP**；kyuz0 fork `CLUSTERING_ROCM.md` 亦声称 ROCm 双机实测（~16.6 TCP / 17.3 RoCE t/s），但其方案**面向 V4.1 Flash** 且明说 **`--layers` 不支持** | **未验证、成本低**的候选（一次带宏构建 + 一次 `--tensor-parallel`），**GLM53 上是否可用未知** |
+| ④ | **GLM-5.3 旗舰（753B）on stock llama.cpp** | 旗舰架构 = **`glm-dsa`**，llama.cpp **自 GLM-5.2 起已支持**（PR #25407 于 7/24 并入，含 DSA lightning indexer）⇒ ★ **反直觉：不支持的是"更小的 Flash"，旗舰反而支持**。但最小量化 **~216.7 GB**（UD-IQ1_S），需多机层切分 | 可做，但需多机 + 大磁盘 |
+| ⑤ | ds4 Metal TP | 需 Mac | 不适用 |
+| ⑥ | ds4 单机 `--ssd-streaming` | 已实测跑通（§16.5） | **当前唯一已验证可用** |
+
+### 17.3 本轮的处置倾向
+
+- 要**立即动手** → 选 **①**：复用最熟的栈（llama.cpp + RPC + 已有 GGUF），是 PP 语义的层切分，且**不受 ds4 堆缺陷与 ADR-0010 冻结牵制**。
+- **②** 留作"拿到 2-bit HF 量化权重后"再评估（装不装得下决定成败）。
+- **③** 作为低成本的**未验证候选**，与「ds4 ROCm TP 调研」合并执行（见 §18）。
+- 渠道纪律：以上若落地，**必须走统一管理入口**（ADR-0004），不得新增散落脚本；llama.cpp 新变体的引入须并入既有的**引擎升级/多版本管理**机制。
