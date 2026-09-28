@@ -917,3 +917,79 @@ glm4moe / glm4-moe.cpp
 **已知代价（须先声明）**：① 跟随**未合并分支**（非主线，随时可能变）；② 该 GGUF 转换**丢弃 MTP head** ⇒ **无投机解码**；③ `--layers` 式的层切分在 llama.cpp 侧是 `-sm layer`，USB4 下收益需实测（前例：DeepSeek 走 RPC 可用但非免费）。
 
 **待裁决**：是否执行第 1–5 步（B 单点构建 + 并存目录 + 入口化）。第 3 步**不动 symlink**，可随时 `rm -rf` 回退，风险面 = 新增一个 /opt 目录 + `infer-load` 一处枚举扩展。
+
+---
+
+## 19. ★★ GLM-5.3-Flash 在 llama.cpp 双机 RPC 上跑通（2026-09-28 夜，E1 全链实测）
+
+> 本轮把 §18 的方案落地，并**首次让 GLM-5.3-Flash 在本集群真正可用**。这是 ds4 双机 PP 失败（§16.9）之后唯一走通的路径。
+
+### 19.1 执行链路（全部 E1）
+
+| 步 | 动作 | 结果 |
+|---|---|---|
+| 1 | B 单点构建 `unslothai/llama.cpp` 分支 `glm5next/upstream`（PR **#27754**，OPEN 未合；codeload tarball `%2F` 转义）| ✅ 37,485,835 B，`gzip -t` OK，`cmake … -DGGML_VULKAN=1 -DGGML_RPC=ON` → **BUILD_RC=0** |
+| 2 | 装为**并存版本目录** `/opt/llama.cpp-glm5next-20260928`（**不切 symlink**）+ MANIFEST（现役格式）+ `patchelf $ORIGIN` | ✅ RUNPATH=`$ORIGIN`；`/opt/llama.cpp` **仍指 `master-91f6a6cf`**（现役零影响）；version `0.4.1-dev` |
+| 3 | 同版分发到 A 站（`tar`+`scp`，RPC 要求两端同版）| ✅ A 站同目录就位，`ARCH_GLM5NEXT=1` |
+| 4 | 架构证据 | ✅ `libllama.so` → `glm5next` · `llama_model_glm5next` · `glm5next MTP: …`（`glm-dsa` 亦在）|
+| 5 | 权重：A 站既有 `UD-IQ4_XS`（146.1 GiB 单文件）→ B（RPC head 需本地持有）| ✅ rsync 逐字节一致：A=B=`156,822,110,624` |
+| 6 | **首次双机 RPC 起跑**（B head `--rpc 10.10.10.1:50052` + A worker，两端变体引擎）| ✅ 见 19.2 |
+
+### 19.2 首跑结果（E1）
+
+- **加载**：`model loaded`，耗时 **≈ 5 min 17 s**（RPC 把张量推到 A；A 侧落 `~/.cache/llama.cpp/rpc/`，**148 G 缓存**供复用）
+- **服务**：`/v1/models` → 200，`listening on http://127.0.0.1:8080`
+- **推理**：`reasoning_content` 输出连贯（"…Let me count carefully. \"Hello there, nice to meet you!\" - that's 6 words…"）
+- **性能**：**prompt 15.32 tok/s · decode 11.78 tok/s**（20 + 48 token / 5.29 s）
+- **内存**：B GTT 72.2 GiB · A GTT 72.7 GiB（146 GiB 模型两站各半）
+- ⚠ 质量/配置提示：`special_eot_id is not in special_eog_ids`、`special_eom_id …`；`system_fingerprint: b0-unknown`（tarball 无 commit）
+
+### 19.3 ★ ds4 那份 Q2 档为何**只能**给 ds4 用（删除判据，结构性）
+
+`GLM-5.3-Flash-Q2.gguf`（96,505,816,384 B）实读元数据：`architecture = **glm5-next**`（带连字符；llama.cpp 为 `glm5next`）、block_count 46、tensors 1412、量化类**全是标准 llama.cpp 类型**（F32/Q8_0/BF16/IQ2_XXS/Q4_K/Q2_K）⇒ 量化层**不**构成障碍。用变体引擎实加载报 **`unknown model architecture: 'glm5-next'`**。
+
+进一步查**张量命名体系**（决定性，非推测）：
+
+| 张量族 | ds4 转换器 | llama.cpp `glm5next.cpp`/`llama-arch.cpp` | 判定 |
+|---|---|---|---|
+| 超连接 | `hc_attn_fn/base/scale`、`hc_ffn_*` | `blk.%d.hc_attn_fn/…` | ✅ 一致 |
+| 线性注意力 | `kda_q/k/v`、`kda_q_conv`、`kda_f_a`、`kda_a_log`、`kda_beta`、`kda_o_norm`、`kda_output` | `attn_q/k/v`、`ssm_conv1d_q`、`ssm_f_a`、`ssm_a`、`ssm_beta`、`ssm_o_norm` | ❌ **不一致** |
+
+⇒ **即使改架构串也会在张量绑定处失败** ⇒ 该档**只有 ds4 能读**。**已按裁决删除**（+ 清 `lm-download` 任务定义）⇒ 磁盘回收 **101→758 G 空闲**。**教训：架构串只是第一道门，转换器命名体系才是真门槛。**
+
+### 19.4 ★ 1M 上下文可行性（实测 + 定标）
+
+**实测**（`-c 1048576` 起服）：`n_ctx_slot = 1048576` → `model loaded` → `/v1/models` **200** ⇒ **内存与引擎层面可行**。
+
+| ctx | B 站 GTT | ΔKV |
+|---|---|---|
+| 8,192 | 72.2 GiB | — |
+| 262,144 | 78.2 GiB | +6.0 GiB |
+| **1,048,576** | **95.9 GiB** | **+23.7 GiB** |
+
+**每 token KV = 24,576 B（24 KiB）**，与实测 Δ 精确吻合。来源（GGUF 真值）：
+
+- `head_count_kv` = `[0,0,0,1, 0,0,0,1, …]` ⇒ ★ **46 层中仅 12 层是注意力层**（3,7,…,43,45），**其余 34 层为线性/循环（KDA）⇒ 常数状态、不随 ctx 增长**
+- 注意力层 `kv heads = 1` + `kv_lora_rank = 512` + `rope.dimension_count = 0` ⇒ **MLA 压缩**，每 token 仅存 512 维潜变量（nope-only）
+- 索引器 `kpool 4 × key_length 128 = 512` ⇒ 每 token 再加 512 维
+- ⇒ 12 × (512+512) × 2 B = **24,576 B/token**
+
+**稀疏注意力已实现且已启用**：`indexer_scoring = (n_ctx > glm5next_n_select())`，`n_select = top_k + kpool − 1 = 2048+4−1 = 2051` ⇒ **ctx > 2051 即启用 top-k(2048) 稀疏**；图构建含 `build_indexer` / `build_attn_sparse` / `build_inp_kpool`。
+
+**三重实际约束**：① **prefill 15.32 tok/s ⇒ 灌满 1M ≈ 19 小时**（真正的瓶颈）；② Unsloth 卡面 **"1M positions in config; evaluated to 300K"** ⇒ >300K 质量无背书；③ 索引器每 token 对**全部历史 key** 打分（O(ctx) 额外算力）⇒ 越长越慢。另：1M 时 B 站 avail 仅 25 G；`n_slots=4 + kv_unified` ⇒ 1M 为四槽共享池。
+
+⇒ **实用甜点区 = 128k–256k**（在 300K 评估范围内、余量 ≥43 G）。
+
+### 19.5 ★ 入口化钩子（已存在，无需新增轴）
+
+[llama-serve-instance](../../ops/llama-serve-instance) L31 已支持：
+```
+exec "${LLAMA_SERVER_BIN:-/opt/llama.cpp/llama-server}" -m "$MODEL_PATH" $RPC_ARGS …
+```
+且已有测试缝隙注释（`CONF_DIR` / `LLAMA_SERVER_BIN`）。⇒ **"引擎变体"应是实例 conf 的一个值，而非新的 backend 轴**（`glm5next` 能同时服务单机与 RPC，与现有 `llama-rpc`/`llama-single` 的"拓扑"轴不正交）。入口化据此实施（见 §20）。
+
+### 19.6 本轮运维事实（值得记）
+
+- ★ **GitHub(codeload) 从 B 站极慢：~40 KB/s**（37.5 MB 走了 ~15 min）；而 `hf-mirror` 为 **56 MB/s**、LAN/ TB 链路 ~106 MB/s。⇒ 将来拉整仓源码应**改本地中继**（这侧取好再推）。
+- 站址真值：A = `192.168.1.33`（LAN）+ **`thunderbolt0 = 10.10.10.1`**（B↔A 直连，RPC 走这条）；USB4 `10.10.11.x` 仅 B↔C。
+- RPC 首跑期间 `infer-load`/systemd 均未介入（手动起停），符合**零自加载纪律**。
