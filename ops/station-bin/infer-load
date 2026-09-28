@@ -1,5 +1,7 @@
 #!/bin/bash
-# infer-load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] [--port N] [--ctx N] [--threads N]
+# infer-load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] [--engine <变体名|绝对路径>] [--port N] [--ctx N] [--threads N]
+#   --engine: 引擎**变体**(与 backend 正交), 落实例 conf 的 LLAMA_SERVER_BIN, 由 llama-serve-instance 既有钩子消费。
+#             名 -> /opt/llama.cpp-<名>/llama-server (例: --engine glm5next-20260928); 也接受绝对路径。
 # 默认后端 = unsloth (unsloth studio run 加载)
 #   引擎真身 (2026-09-17 实测订正): studio 自带 ~/.unsloth/llama.cpp/llama-server
 #     -> ~/.unsloth/llama.cpp/build/bin/llama-server (HIP/ROCm, 0.3.0-dev b10715 / commit 92cedc867)
@@ -13,19 +15,40 @@
 set -uo pipefail
 AWORK="scott-lau@scott-lau-NEX.local"
 
-PREFIX=""; BACKEND=""; PORT=""; CTX=""; THREADS=""
+PREFIX=""; BACKEND=""; PORT=""; CTX=""; THREADS=""; CLI_ENGINE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --backend) BACKEND="$2"; shift 2 ;;
+    --engine|-e) CLI_ENGINE="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
     --ctx) CTX="$2"; shift 2 ;;
     --threads) THREADS="$2"; shift 2 ;;
     *) PREFIX="$1"; shift ;;
   esac
 done
-[ -n "$PREFIX" ] || { echo "用法: infer-load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] [--port N]"; exit 1; }
+[ -n "$PREFIX" ] || { echo "用法: infer-load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] [--engine <变体名|绝对路径>] [--port N]"; exit 1; }
 
 log() { echo "[infer-load] $(date '+%H:%M:%S') $*"; }
+
+# ---- 引擎变体解析 (2026-09-28, GLM-5.3-Flash / glm5next 分支) ----
+# 为什么**不做成新 backend**: "引擎变体"与现有 backend 枚举的轴**不正交** ——
+#   现有 backend 混了"引擎+拓扑"(unsloth=studio单机, llama-rpc=双机, llama-single=单机),
+#   而 glm5next 变体**既能单机也能走 RPC** ⇒ 若加成 backend 会产生组合爆炸。
+# 故表达为实例 conf 的一个值 LLAMA_SERVER_BIN, 由 llama-serve-instance 的**既有钩子**消费
+#   (该文件 L31 已写 `exec "${LLAMA_SERVER_BIN:-/opt/llama.cpp/llama-server}" …`, 注释里本就列为测试缝隙)。
+# 语义: --engine <名> -> /opt/llama.cpp-<名>/llama-server; --engine /abs/path 原样使用。
+ENGINE_BIN=""
+if [ -n "$CLI_ENGINE" ]; then
+  case "$CLI_ENGINE" in
+    /*) ENGINE_BIN="$CLI_ENGINE" ;;
+    *)  ENGINE_BIN="/opt/llama.cpp-${CLI_ENGINE}/llama-server" ;;
+  esac
+  if [ ! -x "$ENGINE_BIN" ]; then
+    echo "ERROR: 引擎变体不存在或不可执行: $ENGINE_BIN"
+    echo "       站上现有变体: $(ls -d /opt/llama.cpp* 2>/dev/null | tr '\n' ' ')"
+    exit 1
+  fi
+fi
 
 # ---- [1] 解析 alias (前缀匹配, **精确匹配优先**) ----
 # 2026-09-16 修 (两个缺陷):
@@ -112,6 +135,23 @@ CLI_BACKEND="${BACKEND:-}"
 # 即 CLI 参数**完全没生效**。与 --backend 同一类 bug (source 覆盖同名变量)。
 CLI_PORT="${PORT:-}"; CLI_CTX="${CTX:-}"; CLI_THREADS="${THREADS:-}"
 source "$CONF"
+
+# ---- 引擎变体落 conf (CLI 优先; 2026-09-28) ----
+# 为什么必须**落 conf** 而不能只 export: llama-rpc/llama-single 实际由 systemd 单元
+#   llama-server@<alias> 驱动, 单元经 llama-serve-instance **重新 source 同一 conf** ——
+#   只改本进程环境对单元无效 (与 [2c] 的 RPC_TARGET `/run` 覆盖是同一类教训)。
+# ds4 另立命名空间 (/etc/ds4-instances), 不写 llama 系键。
+if [ -n "$ENGINE_BIN" ] && [ "${CLI_BACKEND:-}" != "ds4" ]; then
+  if grep -q '^LLAMA_SERVER_BIN=' "$CONF" 2>/dev/null; then
+    sudo sed -i "s|^LLAMA_SERVER_BIN=.*|LLAMA_SERVER_BIN=${ENGINE_BIN}|" "$CONF"
+  else
+    echo "LLAMA_SERVER_BIN=${ENGINE_BIN}" | sudo tee -a "$CONF" >/dev/null
+  fi
+  LLAMA_SERVER_BIN="$ENGINE_BIN"
+  log "引擎变体已落 conf: LLAMA_SERVER_BIN=${ENGINE_BIN}"
+fi
+export LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-}"
+[ -n "$LLAMA_SERVER_BIN" ] && log "使用引擎: ${LLAMA_SERVER_BIN}"
 # conf 优先级: 显式 CLI > conf > 默认
 BACKEND="${CLI_BACKEND:-${BACKEND:-${CONF_BACKEND:-unsloth}}}"
 [ -n "$CLI_PORT" ] && PORT="$CLI_PORT"

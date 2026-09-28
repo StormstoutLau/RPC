@@ -5,7 +5,7 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
 
 用法:
     python ops/cluster.py status [--html] [--frames]
-    python ops/cluster.py load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4]
+    python ops/cluster.py load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] [--engine <变体名|绝对路径>]
     python ops/cluster.py frames
     python ops/cluster.py unload
     python ops/cluster.py estimate <alias> [--station A|B|C] [--ctx N] [--parallel N] [--ctk q8_0] [--ctv q8_0]  # 事前预估 (内存/耗时)
@@ -36,6 +36,10 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
              换后端只需 load <alias> --backend <new> 一次 (infer-load 已做站内互斥), 无需先 unload;
              但显式 --backend 才会改后端, 缺省沿用 conf 旧值。
              对 llama-rpc 类模型: 显式 --backend 单机后端(非 llama-rpc) 视为强制单机加载, 走正常路径。
+            --engine 指定**引擎变体** (与 --backend 的拓扑轴正交): 名 -> /opt/llama.cpp-<名>/, 或绝对路径。
+              例: load glm53 --backend llama-rpc --engine glm5next-20260928
+              用途: 跑未并入主线的特性分支(如 GLM-5.3-Flash 的 glm5next), 而**不动** /opt/llama.cpp symlink。
+              变体路径须已存在(见 vulkan-version-control/UPGRADE_SOP 的并存目录约定); 非法字符会被拒。
              对 ds4 (DwarfStar): 单机按普通 `infer-load --backend ds4` 路径;
                **双机走 PP (DS4_PP_MODELS, 值 = (coordinator 站, worker 站))** —— ds4 在 ROCm 不支持 TP,
                且**必须先起 worker、后起 coordinator** (见 _load_ds4_pp)。
@@ -750,14 +754,31 @@ def _cmd_load_c(alias: str, backend: str = None) -> int:
     return 0
 
 
-def _build_infer_load_cmd(matched: str, backend: str) -> str:
-    """拼装远端 infer-load 命令。backend 来自白名单校验(枚举), 无注入风险。"""
-    return f"infer-load '{matched}'" + (f" --backend {backend}" if backend else "")
+_ENGINE_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._/-")
 
 
-def cmd_load(alias: str, backend: str = None) -> int:
+def _engine_ok(engine: str) -> bool:
+    """引擎变体白名单校验 (仅 字母/数字/./_/-)。
+    为什么必须校验: engine 来自命令行, 会被拼进**远端** ssh 命令 ⇒ 不做校验等于开放注入面。
+    (--backend 无此问题, 因为它先过 BACKENDS 枚举白名单。)"""
+    return bool(engine) and all(c in _ENGINE_CHARS for c in engine)
+
+
+def _build_infer_load_cmd(matched: str, backend: str, engine: str = None) -> str:
+    """拼装远端 infer-load 命令。backend 来自白名单校验(枚举), engine 来自 _engine_ok(), 均无注入风险。
+    engine(引擎变体) 见 infer-load 的 --engine 说明: 名 -> /opt/llama.cpp-<名>/, 或绝对路径。"""
+    cmd = f"infer-load '{matched}'" + (f" --backend {backend}" if backend else "")
+    if engine:
+        cmd += f" --engine '{engine}'"
+    return cmd
+
+
+def cmd_load(alias: str, backend: str = None, engine: str = None) -> int:
     if backend is not None and backend not in BACKENDS:
         print(f"[cluster] 非法 --backend '{backend}'. 可选: {', '.join(sorted(BACKENDS))} (exit 1)")
+        return 1
+    if engine is not None and not _engine_ok(engine):
+        print(f"[cluster] 非法 --engine '{engine}' (仅允许 字母/数字/./_/-; 例: glm5next-20260928) (exit 1)")
         return 1
     try:
         station, matched, is_rpc, how = resolve_alias(alias)
@@ -804,7 +825,7 @@ def cmd_load(alias: str, backend: str = None) -> int:
             print(f"[cluster] 卸载失败 (rc={rc}), 中止。")
             return 1
     print(f"[cluster] 加载中 (站内 load-mem-gate 自动护航) ...")
-    rc = ssh_stream(station, _build_infer_load_cmd(matched, backend))
+    rc = ssh_stream(station, _build_infer_load_cmd(matched, backend, engine))
     if rc != 0:
         print(f"[cluster] 加载失败 (rc={rc})。")
         return 1
@@ -5000,18 +5021,22 @@ def main() -> int:
         return cmd_status("--html" in args[1:], "--frames" in args[1:], "--all" in args[1:])
     if sub == "load":
         tail = args[1:]
-        rest, backend, i = [], None, 0
+        rest, backend, engine, i = [], None, None, 0
         while i < len(tail):
             if tail[i] == "--backend" and i + 1 < len(tail):
                 backend = tail[i + 1]   # 提取值并跳过, 避免污染 alias 前缀
                 i += 2
                 continue
+            if tail[i] == "--engine" and i + 1 < len(tail):
+                engine = tail[i + 1]    # 引擎变体: 名 -> /opt/llama.cpp-<名>/; 或绝对路径
+                i += 2
+                continue
             rest.append(tail[i])
             i += 1
         if not rest:
-            print("用法: cluster.py load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm]")
+            print("用法: cluster.py load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] [--engine <变体名|绝对路径>]")
             return 1
-        return cmd_load(" ".join(rest), backend)
+        return cmd_load(" ".join(rest), backend, engine)
     if sub == "frames":
         return cmd_frames()
     if sub == "unload":
