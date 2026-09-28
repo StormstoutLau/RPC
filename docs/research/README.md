@@ -1,0 +1,58 @@
+# docs/research — 研究/调研文档索引
+
+> **用途**: 本目录全部调研文档的**导航入口**（避免主题混杂与"同一事实多处维护"）。
+> **纪律**: 每个主题**只有一个承载文档**；跨主题内容**建链接、不复制**。上游活数据（PR/引擎基线）的**单一真值**永远是 [spec/upstream-tracker/TRACKER.md](../../spec/upstream-tracker/TRACKER.md)，本目录只引用、不重复维护。
+> **建立**: 2026-09-28 · 新增文档时**请同时在本索引登记一行**。
+
+---
+
+## A. 推理引擎与模型部署
+
+| 文档 | 主题（一句话） |
+|---|---|
+| [2026-09-28_GLM-5.3-Flash本地推理部署.md](./2026-09-28_GLM-5.3-Flash本地推理部署.md) | ★ **GLM-5.3-Flash 在本集群的部署与运维实况**：`glm5next` 分支引擎引入 / `--engine` 入口 / 起停 / **实测吞吐（双机 11.9、三机 11.2 t/s）** / **1M 上下文（KV 24 KiB/token）** / 限制与加速空间 |
+| [2026-09-28_DwarfStar前置核验与ROCm工具链安装决策.md](./2026-09-28_DwarfStar前置核验与ROCm工具链安装决策.md) | ★ **DwarfStar (ds4) 主线执行记录**：前置核验 → ROCm 工具链安装与回退 → 构建 → **双机 PP 崩溃根因（上游 #1141）** → PP 自闭环判定 → ds4 存废与存量裁决 → V4.1/Zrald 核查 |
+| [2026-09-28_DwarfStar部署专项方案.md](./2026-09-28_DwarfStar部署专项方案.md) | ds4 引入的**规划方案**（立项与能力边界，收口于 ADR-0010） |
+| [2026-09-28_V4.1-Flash部署路径调研.md](./2026-09-28_V4.1-Flash部署路径调研.md) | **DeepSeek-V4.1-Flash 的部署路径**调研（arch `deepseek41` 支持矩阵见 tracker §1.2c） |
+| [2026-09-16_分布式推理路线可行性调研_CIRU-Skulk-多机TP.md](./2026-09-16_分布式推理路线可行性调研_CIRU-Skulk-多机TP.md) | 非 llama.cpp 的**多机分布式路线**（CIRU/StrixLink、Skulk）可行性 |
+| [2026-09-17_ROCm三站统一7.2.4_总结报告.md](./2026-09-17_ROCm三站统一7.2.4_总结报告.md) | 三站 **ROCm 7.2.4 统一**的起因、执行与验收 |
+| [2026-09-21_claude备路免登录与后端选型调研.md](./2026-09-21_claude备路免登录与后端选型调研.md) | agent **备路（claude）免登录**与后端选型 |
+| [2026-09-21_D6备路站上化与sensitivity设闸调研与方案.md](./2026-09-21_D6备路站上化与sensitivity设闸调研与方案.md) | D6 **备路站上化** + sensitivity 设闸方案 |
+
+## B. 证据流与可复现性
+
+| 文档 | 主题 |
+|---|---|
+| [2026-09-16_任务卡证据流可重放性调研.md](./2026-09-16_任务卡证据流可重放性调研.md) | 任务卡**证据流的可重放性**（缺口表来源；收口于 ADR-0007） |
+| [2026-09-17_任务卡证据流_协同篡改威胁_补充调研.md](./2026-09-17_任务卡证据流_协同篡改威胁_补充调研.md) | 证据流面对**协同篡改**的威胁模型与上限 |
+| [2026-09-18_证据流审计常跑_触发点与成本严重度调研.md](./2026-09-18_证据流审计常跑_触发点与成本严重度调研.md) | 审计**常跑的触发点与成本/严重度** |
+
+## C. 跨站调用 / D6 agent 框架
+
+| 文档 | 主题 |
+|---|---|
+| [2026-09-14_D6多项目跨站调用与隔离机制分析.md](./2026-09-14_D6多项目跨站调用与隔离机制分析.md) | D6 **多项目跨站调用与隔离**机制 |
+| [2026-09-14_OpenRouter接入与agentic-harness门禁调研.md](./2026-09-14_OpenRouter接入与agentic-harness门禁调研.md) | OpenRouter 接入与 agentic-harness 门禁 |
+| [2026-09-14_暴露问题调研.md](./2026-09-14_暴露问题调研.md) | 早期**暴露问题**清单与调研 |
+
+## D. 其它
+
+| 文档 | 主题 |
+|---|---|
+| [2026-09-28_Textbook并发与派发机制可借鉴性调研.md](./2026-09-28_Textbook并发与派发机制可借鉴性调研.md) | Textbook 的并发/派发机制对本仓的**可借鉴性** |
+
+---
+
+## 单一真值在哪（本目录之外）
+
+| 需要什么 | 去哪（**不要去别处找**） |
+|---|---|
+| **上游 PR/Issue 状态 + 引擎基线** | [spec/upstream-tracker/TRACKER.md](../../spec/upstream-tracker/TRACKER.md)（§1.1 GLM / §1.2c V4.1 / §2.x 引擎基线） |
+| **管理面纪律（唯一管理入口）** | [adr/ADR-0004](../../adr/ADR-0004-统一管理入口为唯一管理面.md) |
+| **引擎升级 SOP / 版本目录 / MANIFEST** | [spec/vulkan-version-control/UPGRADE_SOP.md](../../spec/vulkan-version-control/UPGRADE_SOP.md) |
+| **ds4 引入裁决** | [adr/ADR-0010](../../adr/ADR-0010-DwarfStar第二引擎引入立项.md)（v1.2：观察保留） |
+| **ds4 管理面设计** | [spec/ds4-backend/DESIGN.md](../../spec/ds4-backend/DESIGN.md) |
+| **证据流路线与阶段** | [adr/ADR-0007](../../adr/ADR-0007-证据流阶段推进路线与改动验证闭环.md) |
+| **模型选型/来源** | [spec/model-eval/MODEL-SOURCING-2026-09.md](../../spec/model-eval/MODEL-SOURCING-2026-09.md) · [SOURCING-INDEX](../../spec/model-eval/SOURCING-INDEX.md) |
+| **端口/服务登记** | [inventory/ports.yaml](../../inventory/ports.yaml) |
+| **未决事项** | [spec/d6-agent-standard/OPEN-ISSUES.md](../../spec/d6-agent-standard/OPEN-ISSUES.md) |
