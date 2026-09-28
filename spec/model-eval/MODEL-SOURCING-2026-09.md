@@ -37,7 +37,7 @@
 
 | 模型 | 参数量（MoE active） | ctx | 体积（量化） | 许可 | 强项 |
 |---|---|---|---|---|---|
-| **DeepSeek-V4-Flash** | 284B / 13B | **1M** | MXFP4 146G*；Q4_K_M-XL ~163G；IQ2_XS ~81G | MIT | 长上下文 + 世界知识 + Agent/Coding 平衡 |
+| **DeepSeek-V4-Flash** | 284B / 13B | **1M** | MXFP4 **145.6 GiB**；UD-Q4_K_XL **144.4**；UD-Q2_K_XL **90.2**；UD-IQ2_XXS/M **84.6**；UD-IQ1_S **76.9**（★ 2026-09-28 实测元数据；原「Q4_K_M-XL ~163G / IQ2_XS ~81G」为近似值，**已更正** —— 全档表见 [O-110/O-112 实测](../../docs/research/2026-09-28_O-110同站并发实测与O-112单机容量核验.md) §6.3） | MIT | 长上下文 + 世界知识 + Agent/Coding 平衡 |
 | **Qwen3-Coder-Next** | 80B / 3B | 256K | Q6 62G* | Apache-2.0 | agentic 代码（SWE-Pro 44.3, Terminal 40.5），很轻 |
 | **Qwen3.5-35B-A3B** | 35B / 3B | **262K→1M** | Q4 ~24G | Apache-2.0 | 多模态 + 线性注意力低成本长ctx |
 | gpt-oss-120b | 120B / 12B | 128K | 已在 A 站 | Apache-2.0 | 通用底座（非编程专精） |
@@ -60,7 +60,7 @@
 |---|---|---|---|---|
 | V4-Flash MXFP4 两站分片 | 50/50 | ~68G | ~56G | ✅ 长 ctx 可行（128K+） |
 | V4-Flash Q4_K_M-XL 两站分片 | 50/50 | ~82G | ~42G | ✅ | 
-| V4-Flash IQ2_XS-XL 单机 | C=A/B 单站 | ~76-81G | ~43G | ✅ 单机 1M 轻级路线（IQ2 质量） |
+| V4-Flash UD-IQ2_XXS/M 单机 | A/B 单站 | **84.6 GiB** | ~37G | ✅ 单机 1M 轻级路线（IQ2 质量；原估 ~76-81G **已按 2026-09-28 实测更正**）|
 | Qwen3-Coder-Next 单机 | B 站 | 62G | ~62G | ✅ 富余 |
 | Qwen3.5-35B-A3B 单机 | 任一站 | 24G | ~100G | ✅ 最轻 |
 | GLM-5.2 / K2.6 / V4-Pro | — | >422G | — | ❌ 超 384G 总预算 |
