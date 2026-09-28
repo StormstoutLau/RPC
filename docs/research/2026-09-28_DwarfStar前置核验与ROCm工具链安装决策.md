@@ -976,7 +976,7 @@ glm4moe / glm4-moe.cpp
 
 **稀疏注意力已实现且已启用**：`indexer_scoring = (n_ctx > glm5next_n_select())`，`n_select = top_k + kpool − 1 = 2048+4−1 = 2051` ⇒ **ctx > 2051 即启用 top-k(2048) 稀疏**；图构建含 `build_indexer` / `build_attn_sparse` / `build_inp_kpool`。
 
-**三重实际约束**：① **prefill 15.32 tok/s ⇒ 灌满 1M ≈ 19 小时**（真正的瓶颈）；② Unsloth 卡面 **"1M positions in config; evaluated to 300K"** ⇒ >300K 质量无背书；③ 索引器每 token 对**全部历史 key** 打分（O(ctx) 额外算力）⇒ 越长越慢。另：1M 时 B 站 avail 仅 25 G；`n_slots=4 + kv_unified` ⇒ 1M 为四槽共享池。
+**三重实际约束**：① **prefill** —— ⚠ **本节初稿据"20 token 的极小 prompt"测得 15.32 t/s，进而外推"灌满 1M ≈ 19 小时"，该外推是错的**（小 prompt 被固定开销主导，不可外推）。§20.1 用 1513-token prompt 复测得 **138.90 t/s** ⇒ **灌满 1M ≈ 2.1 小时**。**更正记录见 §20.1**；② Unsloth 卡面 **"1M positions in config; evaluated to 300K"** ⇒ >300K 质量无背书；③ 索引器每 token 对**全部历史 key** 打分（O(ctx) 额外算力）⇒ 越长越慢。另：1M 时 B 站 avail 仅 25 G（**该内存瓶颈已被三节点缓解，见 §20.2**）；`n_slots=4 + kv_unified` ⇒ 1M 为四槽共享池。
 
 ⇒ **实用甜点区 = 128k–256k**（在 300K 评估范围内、余量 ≥43 G）。
 
@@ -993,3 +993,72 @@ exec "${LLAMA_SERVER_BIN:-/opt/llama.cpp/llama-server}" -m "$MODEL_PATH" $RPC_AR
 - ★ **GitHub(codeload) 从 B 站极慢：~40 KB/s**（37.5 MB 走了 ~15 min）；而 `hf-mirror` 为 **56 MB/s**、LAN/ TB 链路 ~106 MB/s。⇒ 将来拉整仓源码应**改本地中继**（这侧取好再推）。
 - 站址真值：A = `192.168.1.33`（LAN）+ **`thunderbolt0 = 10.10.10.1`**（B↔A 直连，RPC 走这条）；USB4 `10.10.11.x` 仅 B↔C。
 - RPC 首跑期间 `infer-load`/systemd 均未介入（手动起停），符合**零自加载纪律**。
+
+---
+
+## 20. 调优、三节点、ds4 存废与 V4.1 支持（2026-09-28 深夜，E1）
+
+### 20.1 32k ctx 下的配置扫描（同 1513-token prompt）
+
+| 配置 | prompt t/s | decode t/s |
+|---|---|---|
+| `-c 32768 -b 512 -ub 512` | 126.58 | 11.85 |
+| `-c 32768 -b 4096 -ub 2048 -fa on` | **138.90** | 11.94 |
+| 同上 + `--tensor-split 1,1` | 140.79 | 11.62 |
+
+**读数**：
+- ★ **`-ub` 放大只给 prefill +10%**，**decode 完全不动（11.6–11.9）** ⇒ 再次印证 **decode 是内存带宽墙**（配置调不动）。
+- `--tensor-split 1,1` ≈ 持平 ⇒ 默认已均衡。
+
+**★ 更正记录（我自己算错并已就地修订 §19.4）**：
+§19.4 初稿用"20 token 的极小 prompt"测得 **15.32 t/s**，据此外推"灌满 1M ≈ 19 小时"。**该外推错在把固定开销主导的极小样本当成了稳态吞吐**。用 1513-token prompt 复测为 **≈138.9 t/s** ⇒ **灌满 1M ≈ 2.1 小时**（差 9 倍）。教训：**prefill 吞吐必须用足够长的 prompt 测**（短 prompt 被调度/图构建/首 token 开销淹没），否则量级级错。
+
+### 20.2 三节点（加 C 站）—— **不提速，但解内存**
+
+C 站装同版变体引擎（`0.4.1-dev`，`ARCH_GLM5NEXT=1`），worker 起在 **`10.10.11.3:50052`**（C 的 `thunderbolt1`；B↔C USB4 段），B head 带**两个** `--rpc` 端点。
+
+| 配置 | B 站 GTT | prompt t/s | **decode t/s** | B 内存余量 |
+|---|---|---|---|---|
+| 两节点（B+A）| 72.2 GiB | 138.90 | **11.94** | 49 G |
+| **三节点（B+A+C）** | **52.5 GiB** | 136.54 | **11.22（−6%）** | **72 G（+23 G）** |
+
+⇒ **加节点分摊权重、但不增加带宽**，且多一段跨站流水线 ⇒ **decode 略降、prefill 持平**。
+★ **真正的收益在内存**：1M ctx 时 B 站原本只剩 25 G（§19.4），三节点下模型份额降至 ~49 GiB ⇒ 配 24 GiB KV 后仍余 ~45 G ⇒ **三节点让 1M 从"勉强"变成"从容"**。
+
+### 20.3 ★ ds4（DwarfStar）在本集群的存在必要性 —— **作为生产引擎，必要性已消失**
+
+| 事实（E1）| 对 ds4 价值的影响 |
+|---|---|
+| llama.cpp **主线已含 `deepseek4`**，变体分支的 dsv4 实现**更完整**（`llama_kv_cache_dsv4`、`llm_graph_input_dsv4`、compress_ratios 0/4/128 校验）| ADR-0010 v1.0 的**核心动因"架构覆盖面"已被吞并** |
+| llama.cpp 双机 RPC 跑 GLM-5.3-Flash **11.2–11.9 t/s** vs ds4 单机 streaming **0.41–0.44 t/s** | ds4 **慢 27×** |
+| ds4 PP 两端夹死（§16.9）· TP 源码门禁（§18.1）| ds4 **分布式能力双重不可用** |
+| ds4 量化白名单仅 **5 类**（源码级：`IQ2_XXS/Q2_K/Q4_K/Q8_0/Q8_K`）| **连 `Q3_K_M` 都读不了** |
+
+**剩余价值（三条，均不值投入）**：① 超内存模型的 **SSD streaming**（190 GB/124 GB 机器；llama.cpp 有 `--n-cpu-moe`/`-ot exps=CPU` 近似替代）；② **第二实现 = 交叉验证价值**（用 ds4 验 llama.cpp 数值，方法学有意义但非生产力）；③ 备援引擎。
+
+⇒ **建议：ADR-0010 从「试点立项」降为「观察保留」** —— 不删（代码 0.4 GB + Q4 模型 190 GB），**不再投入工程时间**，仅在需要"第二意见"时启用。
+
+### 20.4 DeepSeek V4.1（Q3_K_M）支持与后端更新
+
+**★ 硬结论（源码级）**：**ds4 读不了 Q3_K_M**（白名单 5 类不含）⇒ **必须走 llama.cpp**。
+
+| 层 | 状态（E1）|
+|---|---|
+| **主线引擎** `/opt/llama.cpp`(91f6a6cf) | ✅ **已含 `deepseek4`**（`deepseek4.cpp`）⇒ **可能无需更新后端** |
+| **变体引擎**（glm5next 分支）| ✅ 亦有 `deepseek4`，且 dsv4 代码更完整 ⇒ 主线报错时优先用它 |
+| 外部佐证（E3）| 社区已有 `6block/DeepSeek-V4-Flash-0731-GGUF`，**含 Q3_K_M 四片**，卡面直接给 `llama-cli -hf …:Q3_K_M` 用法 |
+
+**后端更新的两条路（均已就绪）**：
+
+| 路 | 做法 | 适用/代价 |
+|---|---|---|
+| **A. 升级主线引擎** | `UPGRADE_SOP` 六步：B 单点构建 → `/opt/llama.cpp-master-<newcommit>`+MANIFEST → 分发 → **原子切 symlink** → 三站冒烟 | 需**全线**换引擎；**影响所有模型** ⇒ 需维护窗口 |
+| **B. 并存变体 + `--engine`**（§19.5 / commit `1ef03cb`）| `cluster.py load <别名> --backend llama-rpc --engine <变体名>` | ★ **仅个别模型需新引擎**时首选；**零影响现役** |
+
+**待确认**：`zrald/DeepSeek-V4.1-Balance-GGUF` 等**四个候选名在 hf-mirror 全返 401**（HF 对"私有"与"不存在"同为 401）⇒ **仓库名未确认**；且该档**体积**未核（决定双机/三机是否装得下）。
+
+### 20.5 本轮待办
+
+1. `zrald` 仓库确切 URL（用户提供）→ 核体积/片数/架构串 → 定"路线 A 还是 B"。
+2. ADR-0010 降级裁决（§20.3 建议）。
+3. 长 ctx 下 **decode 衰减曲线**未测（需数小时 prefill）—— 索引器 O(ctx)/token 的实际代价仍是空白。
