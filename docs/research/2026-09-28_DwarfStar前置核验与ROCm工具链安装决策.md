@@ -604,10 +604,11 @@ dist_coordinator_prefill_prompt (ds4_distributed.c:3815)
 | **1,638,400 B**（25-token prompt 回读量）| `hc_cur->ptr` | ❌ SIGSEGV |
 | **1,638,400 B** | `batch_hc_cur`（**同样崩**）| ❌ SIGSEGV |
 
-⇒ **触发因素是单次 D2H 拷贝 > 1 MiB（2^20），与源缓冲区无关**；≤1 MiB 的单次拷贝稳定成功。
+⇒ **在 ds4 进程内**，触发因素是单次 D2H 拷贝 > 1 MiB（2^20），与源缓冲区无关；≤1 MiB 的单次拷贝稳定成功。
+⚠ **但这不是 HIP/ROCm 的通用尺寸上限** —— 见 §16.8 的**自我否证**（裸 HIP 程序 16 MiB 完全正常）。此表的正确射程是「ds4 coordinator 进程内部」，不是「hipMemcpy 本身」。
 
-**为何单机能跑、双机必崩**：coordinator 的激活回读量 = `n_tokens × N_EMBD × N_HC × 4 = n_tokens × 65,536 B`；prompt 经聊天模板即 **19 token**（`-p "Hi"` 实测）⇒ **1,245,184 B > 1 MiB**，结构性越界。
-单机路径同一函数只回读**末 token** hidden（65,536 B = 64 KiB）或 logits（≈593 KiB），**均在阈值之下**。
+**为何单机能跑、双机必崩**：★ 根本差别是**单机路径根本不做这次回读** —— `output_hc` 只在层切片/分布式路径由 `ds4_session_eval_layer_slice` 传入；单机生成走 `output_hc = NULL`，只回读 logits（≈593 KiB）。
+而 coordinator 必须回读**整段 prompt** 的 hidden：量 = `n_tokens × N_EMBD × N_HC × 4 = n_tokens × 65,536 B`；经聊天模板 **19 token 的 `-p "Hi"`** 即 **1,245,184 B**。
 
 **反证据（已排除的解释）**：
 
@@ -718,6 +719,40 @@ Suggested directions
 
 ### 16.7 本轮证据与关联
 
-- **证据等级**：P-2 三阶段编排通过 / 三个缺陷修复 / gdb 回溯 / 手工 `hipMemcpy` 阈值实验 / 单机 `--ssd-streaming` 跑通 = **E1**；上游支持矩阵（`STRIX_HALO.md` / `MODELS.md` / `DISTRIBUTED.md` 原话）= **E3**；「阈值 = hipMemcpy 大拷贝路径」为 **E1+E3 合成判断**（未反汇编 libamdhip64 证伪）。
+- **证据等级**：P-2 三阶段编排通过 / 三个缺陷修复 / gdb 回溯 / 手工 `hipMemcpy` 阈值实验 / 单机 `--ssd-streaming` 跑通 = **E1**；上游支持矩阵（`STRIX_HALO.md` / `MODELS.md` / `DISTRIBUTED.md` 原话）= **E3**；「阈值 = hipMemcpy 大拷贝路径」的推断**已被 §16.8 对照实验否证**（降级为「ds4 进程内的观测边界」）。
 - **合规**：探针脚本全部落 `tmp/`（已 gitignore）；站上 ds4 进程已清，GTT 归零；未改 `/opt/rocm`、未改系统配置。
 - ★ **门禁副产物（供后续避坑）**：`id-census` 门禁扫描 `*.py` 的 `hexdigest()|md5(|sha256(|sha1(`，**不读 gitignore** ⇒ **新写的 `tmp/*.py` 若含哈希调用会直接红灯**（本轮实测 +3 行/+1 文件）。临时脚本要么去掉哈希调用，要么用非 `.py` 扩展名。
+
+---
+
+## 16.8 ★ 自我否证：那 1 MiB 不是 HIP 的尺寸上限（E1）
+
+§16.3 把「单次 D2H > 1 MiB 必崩」写成了通用规律，**本轮后续两个对照实验把它否证了**，故单列归档 —— 这是本仓反复强调的「报数必须带射程」的又一次实例。
+
+**对照 A：裸 HIP 程序不复现**（同机 / 同 ROCm 10.0 / 同 `gfx1151`，`hipcc` 直编）
+
+| 场景 | 结果 |
+|---|---|
+| 256 MiB 设备分配 → D2H pageable 4 KiB…**16 MiB** | **全部 hipSuccess(0)** |
+| 同上 → D2H pinned（`hipHostMalloc`）4 KiB…16 MiB | **全部 hipSuccess(0)** |
+| 先 `hipMalloc + hipMemset` **32 / 64 / 85 GiB** 占住 GTT，再做 D2H 至 4 MiB | **全部 hipSuccess(0)** |
+
+⇒ **不是 HIP 的尺寸边界，也不是 GTT 压力**。
+
+**对照 B：ds4 的零拷贝 host 登记路径未参与**
+
+`ds4_rocm_runtime.cuh:4651` 有一条对未落设备缓存的模型区间做 `cudaHostRegister(MapPointer|ReadOnly)` 的零拷贝回退（`g_model_ranges[].host_registered`），因崩溃点正是 host 登记区的 `Unlock → MakeMemoryUnresident`，本是头号嫌疑。用 gdb 在复现过程中对该行**计数**：
+
+```
+readback hits         = 1
+hostRegister attempts = 0
+```
+
+⇒ 复现全程**没有**任何 `cudaHostRegister` 调用。该假设出局。
+
+**结论（射程收窄后的事实）**：(a) 崩溃点/回溯稳定；(b) 只在 **ds4 coordinator 进程**内复现，裸 HIP 进程不复现；(c) 在该进程内确定性且随拷贝尺寸变化（≤1 MiB 过、>1 MiB 崩，同地址）。
+⇒ **「1 MiB」是该进程内的观测边界，不是根因**；真正致命的 **ds4 进程态差异尚未定位**（可疑面：多线程 HIP 上下文 · `hipStreamCreateWithPriority` 的非默认 stream · 逐线程 device 设置 · 超大驻留集下的 ROCr 内部记账）。
+
+**已同步上游**：`antirez/ds4#1141` 标题与正文均已更正 —— 加了 "Update — what the '1 MiB' threshold is *not*" 小节（含裸 HIP 对照输出与 `hostRegister attempts = 0`），并把 "Likely mechanism" 从「HIP 侧机制推断」下调为「mechanism is open」。
+
+**下一步候选（未做，留给裁决）**：① 在断点处用**新 `hipMalloc` 的缓冲**做 >1 MiB D2H（区分「ds4 分配方案」与「进程态」）；② `LD_PRELOAD` 包裹 `hipMemcpy`/`hsa_amd_memory_*` 记录序列；③ 把 ds4 源码里零拷贝回退**编译期关掉**重建（`g_model_range_mapping_supported = 0`）—— 本条已被对照 B 降级为低优先；④ 换一个体积小得多的 ds4 系模型做双机 PP，看是否与「超大驻留集」相关。
