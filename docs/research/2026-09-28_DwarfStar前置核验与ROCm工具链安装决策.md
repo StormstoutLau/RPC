@@ -756,3 +756,47 @@ hostRegister attempts = 0
 **已同步上游**：`antirez/ds4#1141` 标题与正文均已更正 —— 加了 "Update — what the '1 MiB' threshold is *not*" 小节（含裸 HIP 对照输出与 `hostRegister attempts = 0`），并把 "Likely mechanism" 从「HIP 侧机制推断」下调为「mechanism is open」。
 
 **下一步候选（未做，留给裁决）**：① 在断点处用**新 `hipMalloc` 的缓冲**做 >1 MiB D2H（区分「ds4 分配方案」与「进程态」）；② `LD_PRELOAD` 包裹 `hipMemcpy`/`hsa_amd_memory_*` 记录序列；③ 把 ds4 源码里零拷贝回退**编译期关掉**重建（`g_model_range_mapping_supported = 0`）—— 本条已被对照 B 降级为低优先；④ 换一个体积小得多的 ds4 系模型做双机 PP，看是否与「超大驻留集」相关。
+
+---
+
+## 16.9 双机 PP「能否自行闭环」的实测判定（E1）：**不能靠配置；硬阻塞在 ds4 自身**
+
+承「双机 PP 当前条件下我们是否能够自行闭环」之问。**方法**：以「每次跨站 span 的回读量」为唯一变量，用**既有** `--dist-prefill-chunk` 扫描（B=coordinator / C=worker，`-c 4096`，其余不变）。
+
+| `--dist-prefill-chunk` | 每 span 回读 | 结果 | 失败模式 |
+|---|---|---|---|
+| 默认（≥ prompt）| 整段 19 token = 1.22 MiB | ❌ exit **139** | ROCm HSA `vm_find_object` SIGSEGV（原始缺陷）|
+| 16 | 1.00 MiB | ❌ **139** | 同上 |
+| 12 | 768 KiB | ❌ **139** | 同上 |
+| 10 | 640 KiB | ❌ **134** | **ds4 堆损坏**（`malloc(): unsorted double linked list corrupted`）|
+| 8 | 512 KiB | ❌ **134** | **ds4 堆损坏**（pipelined 与 `DS4_DIST_DISABLE_PREFILL_PIPELINE=1` fallback **两条路径都复现**）|
+
+**两条结论**：
+
+1. ★ **ROCm 那一面不是硬阻塞 —— 它可从 ds4 侧绕开**：把回读压到 ~768 KiB 以下，HSA SIGSEGV **不再出现** ⇒ 触发面是「该进程内的**大单次 D2H 回读**」，不是「ROCm 做不到」。
+2. ★ **但绕过之后暴露第二、独立缺陷：ds4 在分块 span 路径上写坏自己的堆**。glibc 报三种消息（`unsorted double linked list corrupted` / `malloc_consolidate(): invalid chunk size` / `unaligned fastbin chunk detected`）；**触发线程是 ROCr 的 `AsyncEventsLoop`** ⇒ 它是**受害者**而非元凶。
+
+⇒ **不存在可用的 flag 组合**（两端夹死）。因此问题的性质不是「ROCm 不支持 PP」，而是：
+
+> **ds4 的 PP 实现有两处缺陷：① ROCm 侧触发那处**可绕过**；② ds4 自身的堆破坏**不行**。**
+
+### 附：默认路径为何必然吞整段（源码级原因）
+
+```c
+static bool dist_coordinator_can_pipeline_prefill(..., uint32_t n_tokens, uint32_t chunk_cap) {
+    if (getenv("DS4_DIST_DISABLE_PREFILL_PIPELINE")) return false;
+    ...
+    if (chunk_cap == 0 || n_tokens <= chunk_cap) return false;   /* chunk_cap 默认 = session prefill cap */
+```
+默认 `chunk_cap` = session prefill cap（数千）⇒ 普通 prompt 永远满足 `n_tokens <= chunk_cap` ⇒ **永不走 pipelined**，落回 fallback 循环并**整段一次吞** = 恰好一次 `n_tokens × 65,536` 的 D2H —— 就是死掉的那一次。
+
+### ASan 定位（时间盒一轮，**未取得报告**）
+
+- 尝试：源码副本构建 / 重链接 / 就地构建（构建后立即恢复 release，`md5` 校验一致）。
+- 卡点（已定位到工具链）：**`ld.lld` 拒绝 clang 的 ASan 目标文件** ——
+  `ld.lld: error: ds4_cli.o: SHT_STRTAB string table section [index 37] is non-null terminated`，并伴随 `undefined symbol: __asan_report_store8` 等一串 `__asan_*`。
+- 下一轮的第一步已明确（**非本轮**）：`-fuse-ld=bfd` 换链接器 + 链 `libasan`（或 `LD_PRELOAD` 法）。
+- 最小复现（供后续接手）：`--dist-prefill-chunk 10 -p "Hi"` 于 coordinator。
+- ⇒ 按**时间盒约定收手**：维持 PP 冻结，不做未经裁决的自维护补丁投入。
+
+**已同步上游**：`antirez/ds4#1141` 追加 "Update 2"（含扫描表、两条失败模式、`can_pipeline_prefill` 源码原因、ASan 链接卡点与最小复现）。
