@@ -837,3 +837,83 @@ static bool dist_coordinator_can_pipeline_prefill(..., uint32_t n_tokens, uint32
 - **②** 留作"拿到 2-bit HF 量化权重后"再评估（装不装得下决定成败）。
 - **③** 作为低成本的**未验证候选**，与「ds4 ROCm TP 调研」合并执行（见 §18）。
 - 渠道纪律：以上若落地，**必须走统一管理入口**（ADR-0004），不得新增散落脚本；llama.cpp 新变体的引入须并入既有的**引擎升级/多版本管理**机制。
+
+---
+
+## 18. 三条任务的调研结论（E1，2026-09-28）
+
+### 18.1 任务②：ds4 的 ROCm TP —— **不可用（源码级双门禁）**，上轮"可能可用"被否证
+
+上轮（§17.2 ③）我据「门禁处于 `#ifndef DS4_HAS_DEEPSEEK41_GPU` 之下」推测"带宏构建可能开放 ROCm TP"。**读源码后否证**：
+
+```c
+/* ds4.c:49-52 —— ROCm 构建下该宏被显式排除 */
+#if !defined(DS4_NO_GPU) && !defined(DS4_ROCM_BUILD)
+#define DS4_HAS_DEEPSEEK41_GPU 1
+#endif
+
+/* ds4.c:72479-72493 —— 第一道门（编译期） */
+int ds4_engine_tp_bind(...) {
+#ifndef DS4_HAS_DEEPSEEK41_GPU
+    snprintf(err, errlen, "tensor parallelism requires the Metal backend");   /* ← ROCm 走这里 */
+    return 0;
+#else
+    /* 第二道门（运行期） */
+    if (!e || !tp || (e->backend != DS4_BACKEND_METAL &&
+        (e->backend != DS4_BACKEND_CUDA || DS4_MODEL_FAMILY != DS4_MODEL_FAMILY_DEEPSEEK41))) {
+        snprintf(err, errlen, "tensor parallelism requires Metal or V4.1 CUDA");
+        return 0;
+    }
+```
+
+⇒ **两道门叠加**：① `-DDS4_ROCM_BUILD` 使 `DS4_HAS_DEEPSEEK41_GPU` 不成立 ⇒ 直接报 Metal-only；② 即便强行打开，运行期仍要求 **Metal** 或 **(CUDA 且 family = DEEPSEEK41)** —— **GLM 系不在其中**。
+⇒ **结论**：ds4 的 TP 对 GLM-5.3-Flash **在 ROCm 上不可用**，且**不是"开个构建宏就行"**；要动它等于**改上游 TP 语义**（把 family 白名单扩到 GLM），属自维护补丁范畴 ⇒ **候选 ③ 关闭**。
+（附注：`kyuz0/ds4` 的 `docs/CLUSTERING_ROCM.md` 在**我们的源码树里不存在**（不是 tarball 的一部分）——ADR-0010 替代方案 E 里那条引用来自外部浏览，非本地实证。）
+
+### 18.2 任务③：GLM-5.3 旗舰（753B）—— **现役引擎架构层已支持**，障碍在体积
+
+**E1 实证**（B 站现役 `/opt/llama.cpp` → `llama.cpp-master-91f6a6cf`，version `0.4.0-dev (build 1533)`）：
+
+```
+$ strings /opt/llama.cpp/libllama.so | grep -i glm | sort -u | head
+16llama_model_glm4 / 19llama_model_chatglm / 19llama_model_glm_dsa / 20llama_model_glm4_moe
+glm-dsa / glm-dsa.cpp / GLM_DSA architecture requires MLA
+GLM_DSA MTP: missing both nextn.shared_head_norm and output_norm      ← 连 MTP 都在
+glm4moe / glm4-moe.cpp
+```
+架构名抽样另有 `deepseek2 / glm4moe / glm-dsa / llama / nemotron`；**`glm5next` 无**（⇒ 与 §17 一致：**旗舰支持、Flash 不支持**）。
+
+⇒ **结论**：**旗舰（arch `glm-dsa`）在本集群现役 llama.cpp 上架构层可用**（且 DSA lightning indexer 已并入主线 PR #25407）；**真正的障碍是权重体积与切分**：
+
+| 项 | 数值 | 本集群可行性 |
+|---|---|---|
+| 最小可用量化 | Unsloth `UD-IQ1_S` **≈216.7 GB** | 单站（~124 GiB）装不下 ⇒ **必须多机层切分** |
+| 参考档 | `UD-Q2_K_XL` **253.9 GB** | 同上 |
+| 许可 | ⚠ **Z.ai 自有许可，非 MIT**（Flash 才是 MIT） | 商用需单独判 |
+
+**实现路径（走统一管理入口）**：权重走既有 `lm-download@` 组件（hf-mirror）+ 模型登记进 `inventory/models.yaml` → `infer-load` 生成 conf → **RPC 层切分**（`ggml-rpc-server` on worker + `-sm layer`，与现役 DeepSeek V4-Flash 145G 同法）→ 起停一律 `cluster.py load/unload`。
+
+### 18.3 任务①：llama.cpp `glm5next` 分支引入 —— 方案（**不动 symlink，并存变体**）
+
+**侦察（E1/E3）**：
+- PR **#27754**（`glm5next/upstream`，unsloth）**仍 OPEN、非 Draft、未合并**（updated 2026-09-17）；#27752 亦 OPEN ⇒ **只能从分支构建**。
+- **codeload 可达**：`https://codeload.github.com/unslothai/llama.cpp/tar.gz/refs/heads/glm5next/upstream` → **HTTP/2 200** ✓（B 站 git 协议不可达，走 tarball，与 ds4 源码同法）。
+- 既有设施：`~/build`、`~/dist` 在；**`/tmp/gen_manifest.sh` 已失效**（易失）⇒ 按 `UPGRADE_SOP` 说明从既有版本目录周边复用；MANIFEST 格式已知（含 `patchelf $ORIGIN` 记录）。
+- 引擎布局（`cluster.py versions` 的射程）：**RPC/分布式 = `/opt/llama.cpp`（symlink → `/opt/llama.cpp-master-<commit>`）**；单机 = `~/.unsloth/llama.cpp`（studio, HIP）；另有 `/opt/llama.cpp-9859`。
+
+**为什么不能照搬 UPGRADE_SOP**：SOP 是**主线版本升级**（构建 → `/opt/llama.cpp-<ver>` → **原子切换 symlink** → 三站同步冒烟）。而 `glm5next` 是**特性分支**，若切换全局 symlink 会**替换现役引擎**（违反 ADR-0010「不自动升级」与"不换主栈"原则，也会把未合分支的风险扩散到全部模型）。
+
+**合规方案（并存变体 + 入口化，零散落脚本）**：
+
+| 步 | 动作 | 与既有机制的关系 |
+|---|---|---|
+| 1 | B 单点：`curl codeload` 取 `glm5next/upstream` tarball 到 `~/src/llama.cpp-glm5next-<sha>/` | 复用 SOP 第 2 步的"B 单点构建"形态 |
+| 2 | 构建（`-DGGML_VULKAN=1 -DGGML_RPC=ON -DCMAKE_BUILD_TYPE=Release`），记录 commit 短哈希 | 同上 |
+| 3 | 安装为**并存版本目录** `/opt/llama.cpp-glm5next-<sha>/` + **MANIFEST**（沿用现役格式，含 `patchelf $ORIGIN`）| ★ **不切 symlink** ⇒ 现役引擎零影响 |
+| 4 | 需要双机时，同版分发到配对站（RPC 要求**两端同版**，`cluster.py versions` 会查 `rpc_protocol` 漂移）| 复用 SOP 第 3 步（tar + md5 校验）|
+| 5 | ★ **入口化**：**不写新脚本** —— 在 `infer-load` 的 `BACKENDS` 增一个变体（形如 `llama-glm5next`，与 P-2 加 `ds4` 同形，已有先例），使其选用该版本目录；并让 `cluster.py versions` 的矩阵**能看到该变体** | 承 ADR-0004「新增管理能力加枚举/子命令，不新增并列入口」|
+| 6 | 模型侧：Flash 用**已有 Unsloth GGUF**（A 站 `UD-IQ4_XS` 146 GiB / 或新下 `UD-Q2_K_XL` 108.7 GiB）| 走 `lm-download@` + `inventory/models.yaml` 登记 |
+
+**已知代价（须先声明）**：① 跟随**未合并分支**（非主线，随时可能变）；② 该 GGUF 转换**丢弃 MTP head** ⇒ **无投机解码**；③ `--layers` 式的层切分在 llama.cpp 侧是 `-sm layer`，USB4 下收益需实测（前例：DeepSeek 走 RPC 可用但非免费）。
+
+**待裁决**：是否执行第 1–5 步（B 单点构建 + 并存目录 + 入口化）。第 3 步**不动 symlink**，可随时 `rm -rf` 回退，风险面 = 新增一个 /opt 目录 + `infer-load` 一处枚举扩展。
