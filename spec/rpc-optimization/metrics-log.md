@@ -493,6 +493,8 @@
 - 布防/清理: A(原 gpt-oss)/C(原 nemotron) 先行卸载, load-gate 语义由 wait-gtt-release 确认 avail≥90G; 实测后 head/worker 清理 + GTT 回收
 - 证据: B 站 `/tmp/v4f_before_20260910013818/` `/tmp/v4f_after_20260910021831/` + 主控 `spec/rpc-optimization/v4f-26578-evidence-20260910/`
 - **结论**: #26578 在本集群（Vulkan, gfx1151, 两机层分布）**实测 decode +46.7%（9.56→14.02 t/s）**，与上游声明一致 → **升级闭环**；V4-Flash 现役慢评（tg 6.6 记录）同步更新为 ≥14 t/s 级。
+- ★ **2026-09-28 复核（独立重测，同引擎 `master-91f6a6cf`、同口径、同命令）**: decode **14.06 t/s**（14.06 / 14.02 / 14.07）· prompt **24.6 t/s** ⇒ **复现 14.02**；★ 由此**排除**「本集群双机 ~17 t/s」的说法（~17 是上游 PR **单机**数字 11.16→16.77，E3）。
+- ⚠ **顺带实测（运维事实）**: **`cluster.py load deepseek-v4-flash-0731`（unsloth/HIP + RPC）对该模型 OOM** —— 563 s 后被 SIGKILL（`llama-server was stopped by the operating system (signal 9), most likely out of memory`）⇒ 现役形态仍是**手工 `/opt` 两机**（`ggml-rpc-server --device Vulkan0 -c` worker + head `-sm layer`，**无 `-ngl 99`**），与 TRACKER §2.5「分布式一律 `/opt`」一致。
 
 ### 5.5 qwen3.8-flash-next YaRN → 1M 实测 (2026-08-31 晚, 结论: 当前引擎不支持超 256K)
 
