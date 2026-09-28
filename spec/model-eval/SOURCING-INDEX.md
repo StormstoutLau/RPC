@@ -10,7 +10,7 @@
 | 类别 | 主文档 | 内容 | 状态 |
 |------|--------|------|------|
 | **模型选型** | [MODEL-SOURCING-2026-09.md](./MODEL-SOURCING-2026-09.md) | 三站分布式模型选型总览（四维榜首/候选清单/PR 动态/推荐路线）+ **2026-09-09 附录（附录 A-G：M2.7 & Q3.8F 量化档位/性能损失/社区反馈/契合度/单双站模型池/落地门）** | ✅ 主文档 |
-| **推理框架选型** | [FRAMEWORK-SURVEY-2026-09.md](./FRAMEWORK-SURVEY-2026-09.md) | DwarfStar / vLLM / SGLang / llama.cpp RPC 对比（原 STRIX-HALO-DISTRIBUTED-FRAMEWORK-SURVEY 更名）| ✅ 主文档 |
+| **推理框架选型** | [FRAMEWORK-SURVEY-2026-09.md](./FRAMEWORK-SURVEY-2026-09.md) | DwarfStar / vLLM / SGLang / llama.cpp RPC 对比 + **H.7「非 llama 引擎路线全景」（2026-09-28 归并，含 TensorSharp/MLX/ds4-V4.1/EV-3 立项状态）** | ✅ 主文档（非 llama 路线单一承载）|
 | **实测台账** | [results-ledger.md](./results-ledger.md) | 模型基准/加载/冒烟实测记录（增量**追加**，不覆盖）| ✅ 台账 |
 | **评测题库** | questions/ | 各维度评测 prompt 库 | ✅ 附属 |
 | **spec 主体** | [DESIGN.md](./DESIGN.md) | model-eval 的设计文档（口径/流程）| ✅ |
