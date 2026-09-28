@@ -4,8 +4,8 @@
 
 id: ADR-0010
 type: adr
-version: 1.0
-status: proposed
+version: 1.1
+status: accepted
 date: 2026-09-28
 depends: [ADR-0004]
 upstream: null
@@ -13,8 +13,9 @@ upstream: null
 
 > **Feature**: 在 llama.cpp 主路线之外，**立项引入 DwarfStar（ds4）作为第二推理引擎**，以 **B 站单站试点** 起步，目标 = 跑 **llama.cpp 当前跑不了的前沿架构**（首推 GLM-5.3-Flash `glm5next`）。
 > **创建日期**: 2026-09-28
-> **状态**: proposed（提议）/ accepted（接受）/ superseded（已被取代）/ deferred（推迟）
+> **状态**: accepted（2026-09-28 裁决；v1.1 范围收窄 —— 单机为交付形态，双机 PP 冻结）
 > **适用**: ds4 的引入范围、形态与能力边界；**不改变** llama.cpp 作为主路线的地位
+> ★ **v1.1 裁决（2026-09-28）**: 立项**通过**（原为「提议」），但**决策范围收窄** —— **可交付形态 = 单机（resident / `--ssd-streaming`）**；原「双机 PP 为 ROCm 主线」**被本轮实测推翻**，改为 **冻结（upstream-tracked）**。裁决依据与边界见下方「裁决（v1.1）」。原 v1.0 正文**保留不改**，仅对与实测冲突处就地标注。
 
 ---
 
@@ -24,9 +25,9 @@ upstream: null
 |------|-----|
 | 编号 | ADR-0010 |
 | 日期 | 2026-09-28 |
-| 状态 | proposed |
+| 状态 | **accepted（v1.1 · 2026-09-28 裁决：立项成立，形态收窄为单机）** |
 | 决策者 | Scott (鹏) |
-| 相关文档 | [DwarfStar 部署专项方案](../docs/research/2026-09-28_DwarfStar部署专项方案.md)（规划）· [DwarfStar 前置核验与 ROCm 工具链安装决策](../docs/research/2026-09-28_DwarfStar前置核验与ROCm工具链安装决策.md)（**执行与实测落档，本文证据主源**）· [FRAMEWORK-SURVEY §H.7](../spec/model-eval/FRAMEWORK-SURVEY-2026-09.md)（非 llama 引擎全景）· `O-112`/`O-113`（OPEN-ISSUES）· `EV-3`/`EV-4` |
+| 相关文档 | [DwarfStar 部署专项方案](../docs/research/2026-09-28_DwarfStar部署专项方案.md)（规划）· [DwarfStar 前置核验与 ROCm 工具链安装决策](../docs/research/2026-09-28_DwarfStar前置核验与ROCm工具链安装决策.md)（**执行与实测落档，本文证据主源；§16 为本裁决的直接依据**）· [ds4-backend P-2 设计](../spec/ds4-backend/DESIGN.md)（管理面）· [FRAMEWORK-SURVEY §H.7](../spec/model-eval/FRAMEWORK-SURVEY-2026-09.md)（非 llama 引擎全景）· 上游 [antirez/ds4#1141](https://github.com/antirez/ds4/issues/1141)（双机 PP 崩溃已报）· `O-112`/`O-113`（OPEN-ISSUES）· `EV-3`/`EV-4` |
 | 取代 | 无 |
 
 **证据等级约定**: E1=本会话实测；E2=前会话实测留档；E3=外部文档（官方/社区）；E4=推断。
@@ -39,6 +40,42 @@ upstream: null
 
 - 试点范围 = **仅 B 站**；A/C 站**不动**（E1：本轮全部系统改动都在 B 站）。
 - 本 ADR **不裁**「第二栈的长期生命周期归属」（那属 `EV-4`）；本 ADR 只裁「**以 B 站单站试点的形态立项**」这一步。
+
+---
+
+## 裁决（v1.1 · 2026-09-28）
+
+### 裁决结论
+
+**接受立项（proposed → accepted），同时把可交付形态从「双机 PP 主线」收窄为「单机」；双机 PP 冻结并转上游跟踪。**
+
+| 决策点 | v1.0 原定 | v1.1 裁决 | 依据 |
+|---|---|---|---|
+| 是否引入 ds4 | 立项试点 | ✅ **成立**（升为 accepted）| E1：P-0/P-2 全通，且 **GLM-5.3-Flash 真实生成成功** |
+| 主交付形态 | 双机 PP（`--layers`）| ❌ → **单机**（resident / `--ssd-streaming`）| E1：PP 前向稳定 SIGSEGV |
+| 双机 PP | ROCm 主线 | **冻结**（upstream-tracked，`#1141`）| E1 + E3 |
+| 双机 TP | 已否决（源码门禁）| **维持否决** | E1 |
+
+### 依据（E1，可复算）
+
+1. **单机路径已实证可用**：`GLM-5.3-Flash-Q4_K.gguf` + `--rocm --ssd-streaming --ctx 4096` 在本集群**真实生成**（输出 `Hello there!`）⇒ 「跑 llama.cpp 跑不了的架构」这一**核心动因已兑现**（v1.0 的「待验证：真模型加载与推理」至此闭环）。
+2. **双机 PP 在 ROCm 上不可用**：编排三阶段全通、`distributed route ready` 正常建立，但 coordinator 处理 prompt 即 **SIGSEGV（exit 139 + core）**。崩溃点固定在 ROCm 10.0 `libhsa-runtime64` 的 `hsa_amd_memory_unlock → MemoryRegion::Unlock → MakeMemoryUnresident → hsaKmtUnmapMemoryToGPU → vm_find_object`；已在 `antirez/ds4#1141` 报告（含可复算实验）。
+3. **该组合上游未承诺支持**（E3）：`STRIX_HALO.md` 明示 GLM 在 ROCm 上走**单机 SSD streaming**（原话 "Flash's ROCm resident and pipeline paths should not be confused with the GLM SSD-streaming path"）；`MODELS.md` 中 `glm53-q2` 标 "ROCm also supported"，而双机 GLM 走 **ownership-aware TP（Metal）**（ROCm TP 被源码门禁拒绝）⇒ 「GLM53 + ROCm 双机」属**未支持组合**。
+4. **口径纪律**：崩溃虽以「单次 D2H > 1 MiB」为**进程内观测边界**，但**裸 HIP 对照已否证**其为 HIP/ROCm 尺寸上限（§16.8）⇒ 记为**未定位的进程态缺陷**，**不作机制定论**（避免把一个进程内现象写成库级规律）。
+
+### 本次收窄明确不做
+
+- **不做**：双机 PP（冻结）· 双机 TP（源码门禁）· 把 ds4 当吞吐路径（实测 V4-Flash 单机 ds4 **12.5 t/s** < llama Vulkan **18.33**；双机 16.8 ≈ llama RPC 17）。
+
+### 待测（不阻断立项，属运行面调优）
+
+- **单机 Q2**（官方 Strix Halo 参考档，`lm-download@ds4-glm53-q2` 下载中）吞吐是否到可交互。
+- **`--mtp`**（GLM 内置 draft block 投机解码）增益。
+- ★ **质量自测**：用上游 `gguf-tools/quality-testing/score_official` + `data/glm53-flash-openrouter-zai-fp8-100` 夹具，对 Q2 / Q4（子集）自测，对标上游参考带（Q2 `0.458030/89/7.37`；Q4 `0.299918/90/9.66`）。
+
+### 角色定位（写死，防止被当吞吐栈用）
+
+ds4 在本集群的角色 = **架构覆盖面 + 容量**（跑 llama 跑不了的架构；`--ssd-streaming` 的超内存容量），**不是吞吐引擎**。
 
 ---
 
@@ -73,11 +110,13 @@ upstream: null
 | 可用模型（gfx1151） | **V4-Flash** / **GLM-5.3-Flash**；V4.1 走 fork 专线（见 §替代方案 E） | 本轮源码门禁 + 官方文档 |
 | ★ **GGUF 格式** | ⚠ **专用格式**（非通用加载器）：只认自家量化类型 `q8_0/q8_K/q4_K/q2_K/iq2_xxs`；**通用 GGUF（如 A 站冷存的 Unsloth `GLM-5.3-Flash-UD-IQ4_XS`）不可用**，且**不可从 GGUF 转换**（转换器输入是 **safetensors**）⇒ 必须用 `download_model.sh` 官方档 | E1：`ds4.c:2362-2367` tensor type 枚举 + `gguf-tools` 自述 5 类 + A 站文件实测（146.1 GiB / GGUF v3 / IQ4_XS）|
 | **TP（`--tensor-parallel`）** | ❌ **antirez 主干拒绝**：`"tensor parallelism requires the Metal backend"`（`ds4.c:72484`，受 `#ifndef DS4_HAS_DEEPSEEK41_GPU` 约束） | E1（本地构建二进制 strings 实证）|
-| **PP（`--layers` 层切片）** | ✅ **ROCm 上可用**：源码文案 `"distributed layer slices can run fully resident"`（`ds4.c:70887`） | E1 |
+| **PP（`--layers` 层切片）** | ❌ **ROCm 上不可用（v1.1 实测推翻 v1.0 的"源码文案推断"）**：编排与 route 全通，但前向**稳定 SIGSEGV**（ROCm `libhsa-runtime64` host-unlock 路径）⇒ **冻结** | E1（§16.3/§16.8）+ E3 |
 | GLM-5.3 单机 resident | ✅ 豁免 streaming 要求（`!ds4_model_is_glm53()`，`ds4.c:70879`）| E1 |
+| ★ GLM-5.3 单机 `--ssd-streaming` | ✅ **已实测跑通**（Q4_K 178 GiB → 真实生成；0.41/0.44 t/s 冷缓存）| E1（§16.5）|
 | GLM-5.2 单机 | ⚠ 需 `--ssd-streaming` | E1（错误文案）|
 
-> ★ **对原方案的修正**：部署方案 §1.5/§3 曾写「GLM-5.3-Flash 双机 **RESIDENT TP**」—— **不成立**。ROCm 双机主线应为 **PP（`--layers` 层切片）**。
+> ★ **对原方案的修正（v1.0）**：部署方案 §1.5/§3 曾写「GLM-5.3-Flash 双机 **RESIDENT TP**」—— **不成立**。ROCm 双机主线**名义上**应为 **PP（`--layers` 层切片）**。
+> ★★ **v1.1 二次修正（实测推翻）**：该「PP 主线」**同样不可用**（见上表 PP 行）。且上游文档明示 ROCm 的 resident/pipeline 路径**面向 Flash 系**，GLM 走**单机 SSD streaming** ⇒ **ROCm 上的双机形态整体冻结**（PP 与 TP 皆否）。
 
 **档位实测（E1，hf-mirror `Content-Length`）**：`GLM-5.3-Flash-Q2.gguf` = **89.9 GiB** · `GLM-5.3-Flash-Q4_K.gguf` = **177.8 GiB**。
 **链路（E1）**：B 站有两条 USB4 —— `thunderbolt0`=10.10.10.2（连 A）· `thunderbolt1`=10.10.11.1（连 C）⇒ 三站**菊花链**，B 为中间节点。
@@ -183,13 +222,21 @@ ds4 的窄化（只认自家 GGUF + 专用内核）使其对少数模型家族�
 | **TP 被 ROCm 拒绝 / PP 被 ROCm 支持** | 本轮 E1（源码门禁 + 二进制 strings） | ✅ |
 | GLM 档位尺寸（Q2 89.9 / Q4 177.8 GiB） | 本轮 E1（hf-mirror HEAD） | ✅ |
 | HF 镜像下载链路（`hf download` rc=0） | 本轮 E1（小仓库冒烟） | ✅ 单实例 |
+| ★ **P-2 管理面并入 `cluster.py`**（ds4 后端 · 端口 9911 · 互斥 · 就绪语义）| E1（commit `2054370`）| ✅ |
+| ★ **GLM-5.3-Flash Q4 单机真实生成**（`--rocm --ssd-streaming --ctx 4096`）| E1（§16.5）| ✅ |
+| ★ **双机 PP 首跑**：编排三阶段全通 + `route ready`，但前向 **SIGSEGV** | E1（§16.3/§16.8）| ❌ **冻结** |
+| ★ **上游已报**：`antirez/ds4#1141`（英文详尽，含裸 HIP 对照与自我否证）| E1 | ✅ |
+| Q2 档尺寸（`Content-Length` **96,505,816,384 B**）| E1（hf-mirror HEAD）| ✅ |
 
 ### 待验证项
 
-- **真模型加载与推理**（完整 P-0）：尚**未**下载任何 ds4 GGUF，未做真实 token 生成。
-- **双机 PP 实跑**（`--layers` 在 BD 两站、USB4 链路）：**未做**。
+- ★ **单机 Q2 的吞吐与可交互性**：下载中（`lm-download@ds4-glm53-q2`）；Q2 是上游 **ROCm 参考档**（"ROCm also supported"），预期缓存命中率显著高于 Q4。
+- **`--mtp`（GLM 内置 draft block 投机解码）增益**：**未测**。
+- ★ **质量自测（不靠外推）**：上游 `gguf-tools/quality-testing/score_official` + `data/glm53-flash-openrouter-zai-fp8-100` 夹具已在站上，可对 Q2 / Q4（子集）自测，对标上游参考带（Q2 `0.458030 / 89 / 7.37`；Q4 `0.299918 / 90 / 9.66`，指标 = average NLL / first-token match / average greedy prefix）。**未跑**。
 - **与 llama.cpp 的同题对照**（gold 夹具 / V4-Flash 背靠背）：**未做**。
-- **GLM-5.3-Flash 在本集群的实际质量与吞吐**：**未测**。★ 且**官方数据不覆盖**——`ds4` benchmarks/perf 只给 **V4-Flash 的 Metal(M5 Max)/CUDA(DGX Spark) 两行，无 ROCm、无 GLM**；社区在 gfx1151 上给 V4-Flash 的 ds4 ROCm ≈ **12.5 t/s / prefill 122**（**低于** llama.cpp Vulkan 的 18.33 / 254）⇒ **本集群的 ds4 收益必须自测，不可引用官方数字**。
+- **双机 PP 根因**：崩溃已定位到 ROCm host-unlock 路径，但**ds4 进程态差异未定位**（裸 HIP 对照见 §16.8）；解冻前须先解根因或等上游修。
+- **V4-Pro / V4.1 的 PP**：同属 ROCm PP 路径 ⇒ **一并冻结**。
+- **GLM-5.3-Flash 的实际质量与吞吐**：★ **官方数据不覆盖** —— `ds4` benchmarks/perf 只给 **V4-Flash 的 Metal(M5 Max)/CUDA(DGX Spark) 两行，无 ROCm、无 GLM**；社区在 gfx1151 上给 V4-Flash 的 ds4 ROCm ≈ **12.5 t/s / prefill 122**（**低于** llama.cpp Vulkan 的 18.33 / 254）⇒ **本集群的 ds4 收益必须自测，不可引用官方数字**。
 
 ### 失效条件（何时重审本 ADR）
 
@@ -198,6 +245,8 @@ ds4 的窄化（只认自家 GGUF + 专用内核）使其对少数模型家族�
 - **AMD 发布可验签的 ROCm 10 源 key** ⇒ 可去掉 `trusted=yes`。
 - **上游移除 GLM-5.3-Flash 支持**（ds4 自述"模型可能被移除"）⇒ 本期目标失效。
 - **现役 llama 出现任何因系统 ROCm 变更导致的加载/性能异常** ⇒ 立即回退（回退锚点：删 `rocm-core10.list` + `apt purge amdrocm-*`）。
+- ★ **双机 PP 解冻条件（v1.1 新增）**：上游为 PP 的激活回读做分块/换路径，**或** ROCm 修复 host-unlock 路径，且我们复现通过 ⇒ 重审「双机形态」是否恢复为主线。
+- ★ **本期目标成立性复核（v1.1 新增）**：若 **Q2 自测质量不可接受**（显著偏离上游参考带）**且** **Q4 单机吞吐不可交互** ⇒ 「一个可用的 GLM-5.3-Flash」不成立 ⇒ 须重审是否维持 ds4（可能退回「继续等 llama.cpp 合入」）。
 
 ---
 
@@ -205,4 +254,5 @@ ds4 的窄化（只认自家 GGUF + 专用内核）使其对少数模型家族�
 
 | 日期 | 变更 |
 |------|------|
-| 2026-09-28 | 初始版本（B 站 P-0 已达成；能力边界经源码核验修正：① 双机主线 = **PP 非 TP**；② **GGUF 为专用格式**，通用 GGUF/Unsloth 档不可用亦不可转） |
+| 2026-09-28 | 初始版本 v1.0（B 站 P-0 已达成；能力边界经源码核验修正：① 双机主线 = **PP 非 TP**；② **GGUF 为专用格式**，通用 GGUF/Unsloth 档不可用亦不可转）|
+| 2026-09-28 | **v1.1 裁决：proposed → accepted（范围收窄）**。① 核心动因兑现：**GLM-5.3-Flash Q4 单机 `--ssd-streaming` 真实生成成功**（E1）；② ★ **双机 PP 被实测推翻**（前向稳定 SIGSEGV，崩溃点在 ROCm `libhsa-runtime64` host-unlock 路径）⇒ **双机形态整体冻结**（PP+TP 皆否），新增解冻条件；③ 已上游报警 `antirez/ds4#1141`；④ 新增「角色定位 = 架构覆盖面 + 容量，非吞吐引擎」；⑤ 待测项改为运行面：单机 Q2 · `--mtp` · 上游夹具质量自测 |
