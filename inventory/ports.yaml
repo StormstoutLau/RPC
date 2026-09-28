@@ -107,7 +107,9 @@ managed:
       仅双机 PP 运行时由 coordinator 监听 (ds4 --role coordinator --listen ... 9911); 平时不监听。
       B↔C 走 USB4 直连 10.10.11.x (B=10.10.11.1 / C=10.10.11.3), **非管理网**;
       worker 以 --coordinator 10.10.11.1 9911 连入。
-      承 ADR-0010 / spec/ds4-backend/DESIGN.md (ds4 在 ROCm 不支持 TP, 双机只有 PP)。
+      承 ADR-0010 (v1.1) / spec/ds4-backend/DESIGN.md: ds4 在 ROCm **TP 被源码门禁拒绝**、
+      **PP 实测前向 SIGSEGV** ⇒ **双机形态整体冻结**（上游 antirez/ds4#1141）；本条目**保留登记**
+      （on_demand，冻结期间不监听），解冻条件见 ADR-0010 §失效条件。
 
   - port: 8642
     proto: http
