@@ -305,4 +305,6 @@ make strix-halo -j$(nproc)   # make rocm 别名
 - **E3（外网已证，未本仓复现）**：ds4 支持 V4.1 + ROCm 一等后端；TensorSharp 性能/拒绝 TP；MLX SSD 流式。
 - **未核**：ds4 的 V4.1 **CED 推理在本集群实跑**（只在官网/社区，未本仓验证）· vLLM/gfx1151 对 V4.1· TensorSharp 在 gfx1151。
 
-**关联锚点**：`O-112`（V4 REAP）· `O-113`（V4.1 部署）· `EV-3`/`EV-4` · tracker §1.7（别家栈）· `inventory/plugins.yaml`（引擎现状）。
+**现场部署**（非 llama 引擎接入的统一形态，含"避免环境污染"三铁律 + 前置核验 + 验收判据）：[DwarfStar 部署专项方案](../../docs/research/2026-09-28_DwarfStar部署专项方案.md)
+
+**关联锚点**：`O-112`（V4 REAP）· `O-113`（V4.1 部署）· `EV-3`/`EV-4` · tracker §1.7（别家栈）· `inventory/plugins.yaml`（引擎现状）· `inventory/ports.yaml`（端口分配）。
