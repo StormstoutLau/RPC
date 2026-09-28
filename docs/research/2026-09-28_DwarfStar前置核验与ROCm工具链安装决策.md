@@ -634,6 +634,9 @@ dist_coordinator_prefill_prompt (ds4_distributed.c:3815)
 - **落点说明**：原拟投 `kyuz0/ds4`（我们实际构建的 `main-gfx1151`），但该仓 **`has_issues: false` 且 `has_discussions: false`** ⇒ 无对外报告通道；改用正典上游 `antirez/ds4`（issues 开放），正文明确注明「构建自 kyuz0 fork `main-gfx1151`」。
 - **正文已如实披露**：该组合（`glm53-q4` + ROCm 双机 PP）上游**未承诺支持**；报它的理由是「失败形态剧烈（健康启动 + 完整路由后 SIGSEGV/coredump）且根因与模型无关（纯 D2H `hipMemcpy` > 1 MiB 即可复现）」。
 - **拟反喂上游的实验清单**（正文尾部已声明可随时执行）：缩微复现 · `--dist-activation-bits` · 不同 `--layers` 切分 · 换小模型双机。
+- ★ **更正记录（2026-09-28）**：初稿环境表把 coordinator 写成 **"Ubuntu 26.04"**，**实为两站均 Ubuntu 24.04.5 LTS (noble)** / kernel 6.17.0-23-generic。
+  根因是**把上游的参考环境当成了自己的机器** —— `STRIX_HALO.md` 写 "The Ubuntu 26.04 setup used these packages"，而 §3 讨论的正是「官方 26.04 包名 vs 本地 noble 解析差异」，改写时误合成一句。
+  已用 `gh issue edit` 更正线上正文，并顺带补齐 ROCm 运行时库版本（`libhsa-runtime64.so.1.21.0` / `libamdhip64.so.7.15.26333`）、ROCm apt 轨道（`ubuntu2404` + `trusted=yes`）、模型获取口径（aria2c 直链镜像，非 `download_model.sh` 的 hf CLI 路径）、以及 log 摘录里 `ctx=8192` 行的来源标注。
 
 <details>
 <summary>正文全文（存档，便于后续回复上游时引用）</summary>
@@ -644,8 +647,9 @@ Title: [ROCm] D2H hipMemcpy > 1 MiB segfaults in libhsa-runtime64 on gfx1151
 
 Environment
   HW      : 2x AMD Strix Halo (Radeon 8060S, gfx1151), 128 GB unified memory
-  OS      : Ubuntu 26.04 / 24.04 peers, kernel 6.17
-  ROCm    : 10.0 (amdrocm-core-dev10.0-gfx1151, /opt/rocm/core-10.0)
+  OS      : Ubuntu 24.04.5 LTS (noble) — BOTH ranks; kernel 6.17.0-23-generic, x86_64
+  ROCm    : 10.0.0 — amdrocm-core-dev10.0-gfx1151 10.0.0-4 (ubuntu2404 track)
+            runtime libs: libhsa-runtime64.so.1.21.0 · libamdhip64.so.7.15.26333
   Build   : make strix-halo, source = kyuz0/ds4 branch main-gfx1151 (tarball)
   Model   : GLM-5.3-Flash-Q4_K.gguf (178 GiB, same sha256 on both ranks)
 
