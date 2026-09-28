@@ -5,7 +5,7 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
 
 用法:
     python ops/cluster.py status [--html] [--frames]
-    python ops/cluster.py load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm]
+    python ops/cluster.py load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4]
     python ops/cluster.py frames
     python ops/cluster.py unload
     python ops/cluster.py estimate <alias> [--station A|B|C] [--ctx N] [--parallel N] [--ctk q8_0] [--ctv q8_0]  # 事前预估 (内存/耗时)
@@ -32,10 +32,13 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
     load     自动路由到正确站并执行 infer-load (gpt-oss-120b->A, qwen3.8-27b-mtp->C, 其余->B;
              支持按站路由名 STATION_ROUTES, 如 gpt-oss-120b-c = C 站的 gpt-oss-120b;
              RPC 双机类 (RPC_MODELS) 走 _load_rpc 编排, 已自动化 —— 2026-09-15 P0-3 前为"打印手动步骤, exit 2")
-             --backend 显式指定后端四线切换 (unsloth|llama-rpc|llama-single|vllm)。
+             --backend 显式指定后端五线切换 (unsloth|llama-rpc|llama-single|vllm|ds4)。
              换后端只需 load <alias> --backend <new> 一次 (infer-load 已做站内互斥), 无需先 unload;
              但显式 --backend 才会改后端, 缺省沿用 conf 旧值。
              对 llama-rpc 类模型: 显式 --backend 单机后端(非 llama-rpc) 视为强制单机加载, 走正常路径。
+             对 ds4 (DwarfStar): 单机按普通 `infer-load --backend ds4` 路径;
+               **双机走 PP (DS4_PP_MODELS, 值 = (coordinator 站, worker 站))** —— ds4 在 ROCm 不支持 TP,
+               且**必须先起 worker、后起 coordinator** (见 _load_ds4_pp)。
     frames   三站框架级运行状态一览 (llama-server/unsloth/vllm/litellm/opencode), 恒 exit 0
     unload   三站并行幂等卸载
     estimate 事前预估 (P1-1): 给定 alias 预估加载后的内存/耗时, 不实际加载 (只读)。
@@ -109,7 +112,7 @@ import paramiko
 # 改常量请改 ops/cluster_const.py —— 单一真值在那里。
 from cluster_const import (  # noqa: E402
     STATIONS, STATION_PORT, ROUTE, STATION_ROUTES, BACKENDS,
-    DEFAULT_STATION, RPC_MODELS, HTML_OUT, SSH_TIMEOUT, PANELS,
+    DEFAULT_STATION, RPC_MODELS, DS4_PP_MODELS, HTML_OUT, SSH_TIMEOUT, PANELS,
 )
 
 
@@ -779,6 +782,10 @@ def cmd_load(alias: str, backend: str = None) -> int:
             print(f"[cluster] '{matched}' 为 RPC 双机类, --backend {backend} 视为强制单机加载 (退化为 {station} 站单机)。")
         else:
             return _load_rpc(matched, station or DEFAULT_STATION)
+    # ds4 双机 PP: 别名在 DS4_PP_MODELS 且显式 --backend ds4 ⇒ 走双机编排 (值 = (coordinator 站, worker 站))。
+    # 单机 ds4 (别名不在表里, 或未显式指定 backend) 落到下面的普通路径 (`infer-load --backend ds4`)。
+    if backend == "ds4" and matched in DS4_PP_MODELS:
+        return _load_ds4_pp(matched, *DS4_PP_MODELS[matched])
     st_host = STATIONS[station]["host"]
     # 把"匹配方式"显式打印: default 分支意味着别名未在路由表中, 只是落到了默认站 ——
     # 若站上并无该别名, infer-load 才会失败; 不这样标出来会让它与正常路由外观一致 (见 resolve_alias 注释)。
@@ -859,6 +866,43 @@ def _load_rpc(alias: str, station: str) -> int:
     if ok and hl.strip():
         print(f"[cluster] {station} 站引擎响应: {hl.strip()[:60]}")
     print(f"[cluster] RPC READY ✓  ({alias} 已跨机加载; 收尾用 cluster.py unload)")
+    return 0
+
+
+def _load_ds4_pp(alias: str, coord: str, worker: str) -> int:
+    """ds4 (DwarfStar) 双机 PP 加载编排 (2026-09-28, 见 spec/ds4-backend/DESIGN.md)。
+
+    与 _load_rpc 同构 (零件复用: 站上 infer-load / infer-unload), 但序**不可反**:
+      [1/3] 先在 worker 站起 ds4 (持层片 + KV 分片)
+      [2/3] 再在 coordinator 站起 ds4 (持 prompt/采样/客户端 API)
+      [3/3] 探活 coordinator 的 /v1/models (★ ds4 无 /health 端点, 只能用 /v1/models)
+
+    为什么序不可反: ds4 PP 官方原话 "Start workers first, then start the coordinator."
+    —— coordinator 要等 worker 注册层片路由; 若 worker 起失败仍去起 coordinator, coordinator
+    只会空等 → 挂死。故 worker 非 0 即**中止且不起下游**。
+
+    为什么只有 PP 没有 TP: ds4 在 ROCm 上 TP 被源码门禁拒绝 ("tensor parallelism requires
+    the Metal backend"), 故 DS4_PP_MODELS 只给层切片切分 (--layers, 闭区间, 末段写 :output)。
+    """
+    print(f"[cluster] == ds4 双机 PP 加载编排: {alias} @ worker={worker} 站 → coordinator={coord} 站 ==")
+
+    print(f"[cluster] [1/3] 先在 worker={worker} 站起 ds4 (官方序: 先 worker 后 coordinator) ...")
+    rc = ssh_stream(worker, _build_infer_load_cmd(alias, "ds4"))
+    if rc != 0:
+        print(f"[cluster] worker 启动失败 (rc={rc}) → 中止, 未起 coordinator。")
+        return 1
+
+    print(f"[cluster] [2/3] 再在 coordinator={coord} 站起 ds4 ...")
+    rc = ssh_stream(coord, _build_infer_load_cmd(alias, "ds4"))
+    if rc != 0:
+        print(f"[cluster] coordinator 启动失败 (rc={rc}) → 中止。")
+        return 1
+
+    print("[cluster] [3/3] 探活 coordinator /v1/models (ds4 无 /health 端点) ...")
+    ok, out = ssh_run(coord, "curl -s --max-time 5 http://127.0.0.1:8080/v1/models")
+    if ok and out.strip():
+        print(f"[cluster] {coord} 站引擎响应: {out.strip()[:60]}")
+    print(f"[cluster] ds4 PP READY ✓  ({alias} 已跨机 PP 加载; worker={worker} + coordinator={coord}; 收尾用 cluster.py unload)")
     return 0
 
 

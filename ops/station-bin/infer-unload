@@ -1,5 +1,5 @@
 #!/bin/bash
-# infer-unload — 停两站全部推理实例 (systemd llama + vllm + unsloth) + RPC worker, 等 GTT 释放
+# infer-unload — 停两站全部推理实例 (systemd llama + vllm + unsloth + ds4) + RPC worker, 等 GTT 释放
 set -uo pipefail
 log() { echo "[infer-unload] $(date '+%H:%M:%S') $*"; }
 log "停 B 站 llama-server@*..."
@@ -7,6 +7,13 @@ sudo systemctl stop 'llama-server@*' 2>/dev/null || true
 log "停 B 站 unsloth 实例..."
 pkill -9 -f "[u]nsloth studio run" 2>/dev/null || true
 pkill -9 -x llama-server 2>/dev/null || true
+# 停 ds4 (DwarfStar) 实例 —— 幂等, 防护性字符类 [d] 避免 pkill 自匹配自身命令行:
+#   · ds4-server: 单机 / coordinator 形态   · ds4 主程序 + --role: worker 形态
+#   ★ worker 模式必须是 '[d]s4 .*--role' (非 '[d]s4 --role') —— 真实命令行 'ds4 --rocm --role worker'
+#     中间夹 '--rocm', 连续子串 '[d]s4 --role' 永不命中 (2026-09-28 实测假阴性)。
+log "停 ds4 (DwarfStar) 实例..."
+pkill -9 -f '[d]s4-server' 2>/dev/null || true
+pkill -9 -f '[d]s4 .*--role' 2>/dev/null || true
 if pgrep -f 'vllm.entrypoint[s]' >/dev/null 2>&1; then
   log "停 vLLM..."
   pkill -f 'vllm.entrypoint[s]' 2>/dev/null || true

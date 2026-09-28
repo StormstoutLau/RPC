@@ -40,7 +40,7 @@
 #   - 新增服务 => 改本表
 # ============================================================================
 version: 1
-updated: 2026-09-15
+updated: 2026-09-28
 measured_by: "sudo ss -ltnup + 服务配置核对 + 进程归属反查, 三站实测 2026-09-15"
 
 # ── 本项目自管的服务端口 ────────────────────────────────────────────
@@ -95,6 +95,19 @@ managed:
       对应 cluster.py 的 llama-rpc backend (BACKENDS 里的 "llama-rpc")。
       手册端点表登记为 "A 站 10.10.10.1:50052"; 10.10.10.1 是 USB4 直连网, 非管理网。
       仅 RPC 分布式加载时由 rpc-server@.service 拉起, 平时不监听。
+
+  - port: 9911
+    proto: tcp
+    purpose: ds4 (DwarfStar) 双机 PP coordinator↔worker 通道
+    scope: [B, C]
+    bind: 10.10.11.1
+    owner: ds4 (--role coordinator)
+    mode: on_demand
+    note: |
+      仅双机 PP 运行时由 coordinator 监听 (ds4 --role coordinator --listen ... 9911); 平时不监听。
+      B↔C 走 USB4 直连 10.10.11.x (B=10.10.11.1 / C=10.10.11.3), **非管理网**;
+      worker 以 --coordinator 10.10.11.1 9911 连入。
+      承 ADR-0010 / spec/ds4-backend/DESIGN.md (ds4 在 ROCm 不支持 TP, 双机只有 PP)。
 
   - port: 8642
     proto: http
