@@ -197,8 +197,9 @@ depends: [vulkan-version-control-UPGRADE_SOP v1.0, operator-optimization-DESIGN 
 - **dwarfstar.sh 官网（antirez/ds4）明确列为 Supported**：`DeepSeek V4 / V4.1 Flash + GLM 5.x + Qwen3.8 Flash Next` · 引擎 C 编写，**Metal / CUDA / ROCm 全后端** · MIT。
 - **HN（9 天前）备注**：antirez 刚落地一个 commit，为 **V4.1-Flash 重度量化变体**加支持（M5 Max 128GB SSD 流式运行）。
 - **其专有 GGUF 工具链已出 `deepseek41_quantize.py`**（明确"**V4 template 不兼容**"，V4.1 须专属转换）⇒ **转换 + 推理两端都在跟进**。
-- ★★ **与本集群直接相关的两条硬事实**：① **ROCm 是 ds4 一等后端**（QA_BEFORE_RELEASES.md 用 `make strix-halo` 在 Framework Desktop 上回归测试；本集群就是 **gfx1151 Strix Halo**）⇒ ★ **ds4 的 V4.1 支持“能落在我们硬件上”，而非只是 Apple/CUDA**；② **自带分布式**（RDMA 张量并行 + 跨机 pipeline）⇒ 与现役 `-sm layer` RPC 形态本质相同。
-- ★★ **判断（比 GLM 情况好得多）**：ds4 对 V4.1 是**一个已跑的别家栈对照**（V4 / V4.1 / GLM 5.x / Qwen3.8 一栈），印证"**不外等 llama.cpp 也能跑前沿架构**"；但 ★ 它**不是 llama.cpp** ⇒ 接入 = **新增第二个引擎管理面**（撞 `ADR-0004` D1/D3 + `EV-4`），且项目专属 GGUF、**非通用加载器** ⇒ 我们自己的模型/量化/ledger 语义**不通用**。→ 对 V4.1，若真要本地跑，**ds4 是比等 llama.cpp 更近的一条路**，但**必须先过 ADR 立项**（与 EV-3/EV-4 同族）。
+- ★★ **与本集群直接相关的硬事实（2026-09-28 只读核验后修正）**：① **ROCm 是 ds4 一等后端**（QA 用 `make strix-halo` 回归；本集群 = **gfx1151 Strix Halo**）⇒ **`make strix-halo` route 对 V4-Flash / GLM-5.3-Flash 成立**；② **自带分布式**（RDMA 张量并行 + 跨机 pipeline）⇒ 结构上与现役 RPC 平行。
+- **★★★ 2026-09-28 核验的关键边界（此前判断有误，现更正）**：ds4 官方 `docs/MODELS.md` 白纸黑字「**DSpark, pipeline execution and ROCm are not implemented for V4.1**」⇒ **V4.1 在 ds4 上只有 Metal / CUDA(text) 两条后端，ROCm 与 pipeline 都未实现** ⇒ ★ **ds4 的 V4.1 支持“落不到本集群（gfx1151 ROCm）上”** —— 本集群无 Metal、非 CUDA ⇒ **V4.1 在 ds4 上对本集群不可用**。之前「ROCm 一等后端 ⇒ V4.1 能落硬件」是**把"引擎有 ROCm 后端"与"V4.1 该后端已实现"混为一谈**，特此更正。
+- **★★ 判断（修正后）**：ds4 在本集群（gfx1151 ROCm）**只能跑 V4-Flash 与 GLM-5.3-Flash**，**不能跑 V4.1** ⇒ ① 对 **V4.1**，ds4 在本集群**不是可用路径**，若要本地跑，**回归 llama.cpp `#28696` / vLLM** 路线（`O-113`）；② 对**能跑的模型**（尤其 GLM-5.3-Flash，llama.cpp 跑不了 `glm5next`），ds4 仍是**一个已跑的别家栈对照 / 分布式替代**，但接入仍需过 `ADR-0004`（新引擎管理面）+ 项目专属 GGUF（`O-113`、ds4 部署专项方案）。
 
 ### 1.8 推演：llama.cpp 会不会没落 + 本集群引擎迁移可行性（2026-09-28，**取证级别 = E3 外网 + E1 本仓 ADR**）
 
