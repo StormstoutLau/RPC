@@ -69,7 +69,8 @@ upstream: null
 
 ### 待测（不阻断立项，属运行面调优）
 
-- **单机 Q2**（官方 Strix Halo 参考档，`lm-download@ds4-glm53-q2` 下载中）吞吐是否到可交互。
+- ★ **「双机 PP 能否自行闭环」= 已判定：不能靠配置**（§16.9）。ROCm 侧那处**可从 ds4 侧绕过**（压小回读即不崩），但绕过之后暴露 **ds4 自身在分块 span 路径的堆损坏** ⇒ 硬阻塞在 **ds4 上游代码**。要闭环必须**改 ds4 源码**（即自维护补丁），与**替代方案 C 的否决理由**正面冲突 ⇒ **维持冻结，不投入**；ASan 定位已按**时间盒一轮**执行、未取得报告（卡在 `ld.lld` 拒绝 ASan 目标文件），下一轮首步已写明（`-fuse-ld=bfd` + 链 `libasan`）。
+- **单机 Q2**（官方 Strix Halo 参考档，**已下载完成** 96,505,816,384 B）吞吐是否到可交互。
 - **`--mtp`**（GLM 内置 draft block 投机解码）增益。
 - ★ **质量自测**：用上游 `gguf-tools/quality-testing/score_official` + `data/glm53-flash-openrouter-zai-fp8-100` 夹具，对 Q2 / Q4（子集）自测，对标上游参考带（Q2 `0.458030/89/7.37`；Q4 `0.299918/90/9.66`）。
 
@@ -110,7 +111,7 @@ ds4 在本集群的角色 = **架构覆盖面 + 容量**（跑 llama 跑不了�
 | 可用模型（gfx1151） | **V4-Flash** / **GLM-5.3-Flash**；V4.1 走 fork 专线（见 §替代方案 E） | 本轮源码门禁 + 官方文档 |
 | ★ **GGUF 格式** | ⚠ **专用格式**（非通用加载器）：只认自家量化类型 `q8_0/q8_K/q4_K/q2_K/iq2_xxs`；**通用 GGUF（如 A 站冷存的 Unsloth `GLM-5.3-Flash-UD-IQ4_XS`）不可用**，且**不可从 GGUF 转换**（转换器输入是 **safetensors**）⇒ 必须用 `download_model.sh` 官方档 | E1：`ds4.c:2362-2367` tensor type 枚举 + `gguf-tools` 自述 5 类 + A 站文件实测（146.1 GiB / GGUF v3 / IQ4_XS）|
 | **TP（`--tensor-parallel`）** | ❌ **antirez 主干拒绝**：`"tensor parallelism requires the Metal backend"`（`ds4.c:72484`，受 `#ifndef DS4_HAS_DEEPSEEK41_GPU` 约束） | E1（本地构建二进制 strings 实证）|
-| **PP（`--layers` 层切片）** | ❌ **ROCm 上不可用（v1.1 实测推翻 v1.0 的"源码文案推断"）**：编排与 route 全通，但前向**稳定 SIGSEGV**（ROCm `libhsa-runtime64` host-unlock 路径）⇒ **冻结** | E1（§16.3/§16.8）+ E3 |
+| **PP（`--layers` 层切片）** | ❌ **ROCm 上不可用（v1.1 实测推翻 v1.0 的"源码文案推断"）⇒ 冻结**。详见 §16.9 扫描：**两端夹死** —— 回读 ≥768 KiB ⇒ ROCm HSA SIGSEGV；≤640 KiB ⇒ **ds4 自身堆损坏**（两条路径都复现）⇒ **不存在可用 flag 组合** | E1（§16.3/§16.8/§16.9）+ E3 |
 | GLM-5.3 单机 resident | ✅ 豁免 streaming 要求（`!ds4_model_is_glm53()`，`ds4.c:70879`）| E1 |
 | ★ GLM-5.3 单机 `--ssd-streaming` | ✅ **已实测跑通**（Q4_K 178 GiB → 真实生成；0.41/0.44 t/s 冷缓存）| E1（§16.5）|
 | GLM-5.2 单机 | ⚠ 需 `--ssd-streaming` | E1（错误文案）|
