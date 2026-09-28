@@ -64,9 +64,9 @@ sudo apt-get install hipcc rocminfo rocm-smi libamdhip64-dev libhipblas-dev \
 #   ⚠ 可能需手动补 rocWMMA internal headers（Ubuntu 包缺失，FRAMEWORK-SURVEY §3.2 注明）
 
 # 2. 内核参数（关键，与 llama.cpp 差异不大）：
-#    amd_iommu=off amdgpu.gttsize=126976 ttm.pages_limit=32505856 ttm.page_pool_size=32505856
-#   ⚠ 本集群现状 amdgpu.gttsize=120000（FRAMEWORK-SURVEY 落地路线步骤 3 已点名要改 126974），
-#     须先核：改内核参数 = 重启 + 是否与本集群 ROCm 版本兼容（见 §4 前置核验）
+#    典型参考： amd_iommu=off amdgpu.gttsize=126976 ttm.pages_limit=32505856 ttm.page_pool_size=32505856
+#    ⚠ 但本集群 gttsize=120000 已是 AMD 官方值（§4.1），ds4 官方不强制 126976；
+#     是否改见 §4.1 —— 大概率不改，且要改须脚本化+可回退。
 
 # 3. 构建
 cd ~/ds4 && make strix-halo -j$(nproc)
@@ -90,6 +90,12 @@ cd ~/ds4 && make strix-halo -j$(nproc)
 - **P-落地（单机支线）**：Q4（~100G）单机，用于**快速验证架构/算子无缺陷**（比 Q2 更贴近实际，且不受 80G 极限挤压）。
 - ⚠ `ds4f-q2`（~80G）**仅作 P-0 冒烟**（确认 `make strix-halo` + ds4-server 能起来），**不把 Q2 当部署目标** —— 那违背"靠压缩换装下"的原则。
 
+**★★ 特殊量化格式依赖（用户 2026-09-28 指出，必须注明）**：
+- ds4 是**项目专属 GGUF、非通用加载器** ⇒ 它的"Q2/Q4"**不是** llama.cpp 的通用 `Q2_K`/`Q4_K_M`，而是 **ds4 特制的混合量化布局**（如 asymmetric / 路由专家压缩 + 共享/关键路径保精度；社区实测档位如 `IQ2_XXS ~80.8G`、`Hybrid Q2/Q4 ~97G` 等）。
+- ⇒ **任何"单机 Q4" 的前提 = 该模型的 ds4 专属 Q4 档（或能本地用 `gguf-tools` 转换）已经存在**。llama.cpp 能单机跑 MiniMax-M2.7 / Qwen3.8-Flash-Next / V4-Flash，恰好因为那些是 llama.cpp 的 GGUF；**ds4 路线要跑 GLM / DeepSeek，必须落到 ds4 的 own 格式**。
+- ★ **这是 P-1（单机 Q4）的前置依赖**：部署前须核 ds4 官方/社区是否已提供 目标模型 × 目标档位 的专属 GGUF；本地用 `deepseek41_quantize.py` 自转的成本高（§3 已标），且 `V4 template 不兼容`、`V4.1 须专属转换`。
+- ⚠ 更贴近一个判断：既然"单机 Q4 专用档"本身是非平凡依赖，**分布式 PP 反而是绕开它的更稳路径**（双/三机可负担更大、更接近原始精度的档位）—— 这**再次支撑了【分布式为主线】的排序**。
+
 ---
 
 ## 4. 前置核验（★ 全未做，部署前必须逐项确认）
@@ -99,6 +105,7 @@ cd ~/ds4 && make strix-halo -j$(nproc)
 | **ROCm 版本** | C 站 7.2.x（FRAMEWORK-SURVEY 提过） | ds4 `make strix-halo` 需要的最低 ROCm；`rocminfo` gfx1151 + KFD 可用 | 版本过低则构建/运行失败 |
 | ★★ **内核参数 gttsize** | **本集群 = `120000`（AMD 官方 trillion-cluster 同值）** | ★ **ds4 官方并不强制 126976**（见 §4.1 专项） | ⚠ **大概率不需要改**；若改须按 §4.1 脚本化 + 可回退 |
 | **磁盘空间** | — | V4.1 Q2 ≈ 145G、Q4 ≈ 280G 的 `~/` 空间 | 双机 PP 需再考虑 |
+| ★★ **专属量化格式可用性** | — | **目标模型 × 目标档位 的 ds4 专属 GGUF 是否已存在**（或 `gguf-tools` 可本地转）；ds4 的 "Q4" ≠ llama.cpp 通用 Q4_K_M（见 §3 专项） | 跨模型/跨档位依赖；`V4.1 须专属转换`、自转成本高 |
 | **端口** | 见 §6 | ds4-server 用哪个端口、不冲撞现役 | 端口表 |
 | **KFD / 内存账本** | load-gate / load-mem-gate 已就位 | ds4 加载是否与 `wait-gtt-release` / `backup-memories` 兼容 | 双引擎并存的内存竞争（O-18 铁律） |
 
