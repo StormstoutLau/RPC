@@ -85,10 +85,31 @@ cd ~/ds4 && make strix-halo -j$(nproc)
 | 项 | 现状| 需确认 | 风险 |
 |---|---|---|---|
 | **ROCm 版本** | C 站 7.2.x（FRAMEWORK-SURVEY 提过） | ds4 `make strix-halo` 需要的最低 ROCm；`rocminfo` gfx1151 + KFD 可用 | 版本过低则构建/运行失败 |
-| **内核参数** | `amdgpu.gttsize=120000` | ds4 官方要求 **126976**（FRAMEWORK-SURVEY 步骤 3 已点名） | ⚠ 改需**重启**；且要确认**改完不破坏现役 llama.cpp**（当前 gttsize 可能就是为 llama.cpp 调好的平衡值） |
+| ★★ **内核参数 gttsize** | **本集群 = `120000`（AMD 官方 trillion-cluster 同值）** | ★ **ds4 官方并不强制 126976**（见 §4.1 专项） | ⚠ **大概率不需要改**；若改须按 §4.1 脚本化 + 可回退 |
 | **磁盘空间** | — | V4.1 Q2 ≈ 145G、Q4 ≈ 280G 的 `~/` 空间 | 双机 PP 需再考虑 |
 | **端口** | 见 §6 | ds4-server 用哪个端口、不冲撞现役 | 端口表 |
 | **KFD / 内存账本** | load-gate / load-mem-gate 已就位 | ds4 加载是否与 `wait-gtt-release` / `backup-memories` 兼容 | 双引擎并存的内存竞争（O-18 铁律） |
+
+### 4.1 ★★ 内核参数专项：可脚本化、可回退、且大概率不用改
+
+**回答用户问题「内核参数问题是否可以脚本控制且可回退」= 是，且分三层：**
+
+| 层 | 机制 | 能否脚本化 | 能否回退 |
+|---|---|---|---|
+| gttsize / pages_limit / iommu | `/etc/default/grub` 的 `GRUB_CMDLINE_LINUX_DEFAULT`（**纯文本**）→ `sudo update-grub` → `reboot` | ✅（sed/编辑文本 + update-grub） | ✅（**备份原 grub 文件 → 还原 → update-grub → reboot**）|
+| 内核版本锁定 | GRUB 子菜单索引法（`GRUB_DEFAULT="1>4"`）| ✅ 已固化（手册 L1161-1163）| ✅ 已固化（有回退）|
+| BIOS carveout | UMA Frame Buffer | ❌ 仅 BIOS 手动 | ❌（需进 BIOS）|
+
+**★ 关键澄清（本方案此前抄了过时结论，现修正）**：
+
+1. **本集群 gttsize=`120000` 是正确的、与后端无关**（`.trae/documents/三机群文档升级` L12 取样证：GTT 是内核 amdgpu 驱动"系统内存→GPU 地址空间映射池"上限，**Vulkan/ROCm 后端共用同一池**；A/B/C 三站实测一致 120000 + ttm.pages_limit 30720000/32000000）。
+2. ★ **仓库记忆中 `gttsize=126976` 那条已被标记为"过时错误条目"**（源于 GMKtec EVO-X2 / lemonade #2631，非本集群）。
+3. ★ **ds4 官方 `docs/STRIX_HALO.md` 原文（E3，2026-09-28 取）**：126976 是 "a system-specific starting point, **not an allocation budget** for DwarfStar"，且要求 **"Preserve existing boot options ... Keep RAM available for the OS"**，并警告 **"Do not disable the IOMMU merely to copy another host's configuration"**。
+
+⇒ **结论**：
+- **不一定需要改 gttsize**。本集群 120000 已在 AMD 官方值域；是否调成 126976（多 ~6.8G GPU 可见）只取决于 **ds4 V4.1 Q2 + 上下文**是否真缺这 6.8G。
+- **若 decide 要调**，按 §4.1 的"备份 grub → 改 → update-grub → reboot → 验证 → 需回退则还原 grub → update-grub → reboot"，**完全脚本化且可回退**，不碰 BIOS。
+- **更优先的做法**：先**不改任何内核参数**跑 ds4 V4.1 Q2 单机冒烟（起点用官方现成档）。只有确认"GPU 可见内存不足"才动 grub —— 把"改内核"从**前置**降级为**按需触发**，进一步缩小对现役 llama.cpp 的干扰面。
 
 ---
 
