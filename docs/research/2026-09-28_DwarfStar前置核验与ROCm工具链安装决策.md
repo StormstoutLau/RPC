@@ -1104,3 +1104,65 @@ C 站装同版变体引擎（`0.4.1-dev`，`ARCH_GLM5NEXT=1`），worker 起在 
 | `spec/ds4-backend/DESIGN.md §2.2` | ADR-0010 行 → v1.2（**授权与 D4 不变，但不再有后续 P-x 投入**）|
 
 **v1.2 依据（复述要点）**：① 核心动因「跑 llama.cpp 跑不了的架构」**已被吞并**（主线含 `deepseek4`；glm5next 经变体+双机 RPC 跑通 **11.2–11.9 t/s** vs ds4 **0.41–0.44 t/s**）；② 分布式**双重不可用**（PP 两端夹死 · TP 源码门禁）；③ 量化白名单仅 5 类 ⇒ **连 `Q3_K_M` 都读不了**。
+
+---
+
+## 22. 外部依赖核查：`Zrald/zralddeepseekv4.1`（DeepSeek-V4.1-Flash 748B 社区量化）—— ★ **不结案：阻塞在引擎，不在权重**
+
+> 缘起：用户提供确切仓库 `https://huggingface.co/Zrald/zralddeepseekv4.1`，称 balance(Q3_K_M) 在 **309.2–323.4 GB**。
+> **方法（零大下载）**：README/manifest 直取 + 逐档 `HEAD` 取体积 + ★ **HTTP Range 只取 GGUF 头部**解析 `general.architecture`（对 246 GB 的档也只花了几十 KB）。
+
+### 22.1 仓库真相：**4 个"档"是玩具，只有 compressed 是真货**（E1）
+
+| 文件 | README 声明 | **实测体积** | 真身 |
+|---|---|---|---|
+| `accuracy.gguf` | 414.2 GB | **3,787,552 B（3.6 MiB）** | ❌ **玩具** |
+| `balance.gguf` | **309.2–323.4 GB** | **3,186,912 B（3.0 MiB）** | ❌ **玩具**（头实测 `block_count=6`、`n_tensors=166`）|
+| `q6k.gguf` / `q8_0.gguf` | — | 5.3 / 6.3 MiB | ❌ 玩具 |
+| **`compressed-00001..00007`** | ~245.5 GB | **264,515,279,456 B = 246.3 GiB** | ✅ **真档** |
+
+**玩具档的铁证**：`deepseek_quantization_manifest.json` 直书 `"base_model": "/root/hq21/**tiny-deepseek41.gguf**"`、各 rung `"gib": 0.0`、`"path": "/root/hq21/test_output_deepseek/zraldtest-deepseek-*.gguf"`
+⇒ **那 3–6 MiB 是量化管线在"玩具基座"上的测试输出，被当档上传了**；README 自己亦仅把 `compressed` 标为 **"Category 1 Files (Full Sharded Model)"**。
+
+### 22.2 ★ 目标架构 = `deepseek41`，**两引擎均不支持**
+
+`compressed-00001-of-00007.gguf` 头实测：
+
+```
+general.architecture      = deepseek41
+deepseek41.block_count    = 40          ← 真规模（玩具档为 6）
+deepseek41.context_length = 1048576
+deepseek41.embedding_length = 5120
+deepseek41.attention.head_count = 64 / head_count_kv = 1
+deepseek41.expert_count   = 384         ← 与 README 的 "384-expert MoE" 一致
+deepseek41.rope.dimension_count = 64
+deepseek41.attention.indexer.head_count = 32 / key_length = 128 / top_k = 512   ← 又是 DSA 式稀疏索引器
+```
+
+- `strings libllama.so | grep -x deepseek41` ⇒ **主线 0 · 变体 0**；两引擎已知上限 = `deepseek4`（另有 `deepseek2/3/32/-ocr`）
+- ⚠ **更正我自己**：先前 `grep -c 'deepseek41'` 报的 9 行是**假阳性** —— 来自 C++ mangled 符号 `llama_model_deepseek4` 紧跟长度前缀 `17`（`…deepseek41**7**load_arch…`），**不是架构名**。
+
+### 22.3 内存边界：**三站可装，两站不行**
+
+| 部署 | 每站分摊 | 可用 RAM/站 | 判定 |
+|---|---|---|---|
+| 两站 RPC | **123.2 GiB** | ~110–115 G | ❌ **装不下** |
+| **三站 RPC** | **82.1 GiB** | ~110–115 G | ✅ 留 ~30 G 给 KV |
+
+- 7 片精确体积：43.07 / 44.81 / 14.94 / 44.22 / 44.80 / 44.80 / 27.88 GB ⇒ **合计 246.3 GiB**
+- B 站磁盘余 **612 G** ⇒ 放得下 246 GB
+- 该 arch 的 **KV 量级未测**（层结构/KV 参数未全展开；索引器 `top_k=512` ⇒ 稀疏）
+
+### 22.4 结论与待办（★ **不结案**）
+
+**阻塞点 = 引擎不支持 `deepseek41`，而不是权重不可得** —— 仓库里有一份**真实可下载的 246.3 GiB V4.1-Flash 级量化档**（`compressed`，Q2_K_DS）。
+
+**顺带发现（改变结论）**：README 自述 **`compressed` 保真高于 `balance`**（97.61–99.99% vs 86.32–97.41%）**且小 60 GB** ⇒ **`balance` 未上传并不构成缺口**，`compressed` 本就是更优目标。
+
+**待办**：① 跟踪上游 `deepseek41` 架构支持（进 upstream-tracker；届时用 `--engine` **零影响现役**接入）；② 是否预下 246 GB（磁盘可行）取决于上游时间；③ 支持后再测其 KV/上下文。
+
+### 22.5 方法论副产物：**HTTP Range 读 GGUF 头**
+
+本次对 246 GB 的档只花了几十 KB 就拿到了架构/规模 ⇒ **"支持性判定"不必先下载**。可复用的判据顺序：
+`HEAD 取体积（识破玩具档）→ Range 取前 64 KB 解析 GGUF 头（取 arch/block_count）→ 引擎 strings 精确匹配 arch`
+—— 三次探测（均为秒级/分钟级）即可回答「**这模型我们能不能跑**」，**成本与模型体积无关**。
