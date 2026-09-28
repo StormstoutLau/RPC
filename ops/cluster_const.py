@@ -66,7 +66,8 @@ STATION_ROUTES = {
     "m27-q4ks-c": ("C", "m27-q4ks"),
 }
 # 与路由表解耦: 后端是站内概念, 换后端不改 alias->station 映射。C 专属键应置于本字典尾部以保前缀匹配序
-BACKENDS = {"unsloth", "llama-rpc", "llama-single", "vllm"}   # infer-load --backend 白名单
+# infer-load --backend 白名单; ds4 = DwarfStar (2026-09-28 并入, 见 spec/ds4-backend/DESIGN.md)
+BACKENDS = {"unsloth", "llama-rpc", "llama-single", "vllm", "ds4"}
 DEFAULT_STATION = "B"
 # C 站 (2026-09-09): 常驻引擎为手动 /opt/llama.cpp llama-server (Vulkan, 如 nemotron Q4_K_M :8080),
 # 非 systemd llama-server@*.service 单元。infer-* 工具链已补装 (load 用 infer-load, 含 pkill 兜底),
@@ -75,6 +76,14 @@ DEFAULT_STATION = "B"
 # qwen3.8-flash-next 已移出 (2026-09-15): 它是单机量化加载模型, 用 STATION_ROUTES 的
 # qwen3.8-flash-next-b 走 B 站本地加载, 不再经 RPC 双机通道。
 RPC_MODELS = {"deepseek-v4-flash-0731", "gpt-oss-120b-fable-5-distilled"}
+# ds4 (DwarfStar) 双机 PP 路由表 (2026-09-28, 见 spec/ds4-backend/DESIGN.md)。
+# ★ ds4 在 ROCm 上**不支持 TP** —— 源码门禁原话 "tensor parallelism requires the Metal backend",
+#   故双机**只有 PP** (层切片 --layers), 不提供 --tensor-parallel 路径。
+# 形态对标 RPC_MODELS (别名 -> 双机编排), 但值语义不同: 值 = (coordinator 站, worker 站)。
+#   · RPC 是 "master 发起 + 远端 worker" (见 _load_rpc); ds4 PP 是**对等两进程**:
+#     coordinator 持 prompt/采样/客户端 API, worker 持层片 + KV 分片。
+#   · 官方要求**先起 worker, 再起 coordinator** (coordinator 等 worker 注册层片路由) —— 序不可反。
+DS4_PP_MODELS = {"glm53-q4": ("B", "C")}   # 值 = (coordinator 站, worker 站)
 # LiteLLM 网关服务 :4000 已退役 (2026-09-13): ADR-0002 决策 C 后链路一律直连各站引擎端口。
 # 2026-09-16: opencode provider 名统一为 `local`（三站实况仅 local + openrouter）；旧名 "cluster-litellm" 已不存在。
 # 网关已无活依赖。故移除 LITELLM_BASE / KEY_FILE / read_key 及 status/e2e 对网关的硬依赖。

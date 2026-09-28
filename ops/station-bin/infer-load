@@ -1,5 +1,5 @@
 #!/bin/bash
-# infer-load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm] [--port N] [--ctx N] [--threads N]
+# infer-load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] [--port N] [--ctx N] [--threads N]
 # 默认后端 = unsloth (unsloth studio run 加载)
 #   引擎真身 (2026-09-17 实测订正): studio 自带 ~/.unsloth/llama.cpp/llama-server
 #     -> ~/.unsloth/llama.cpp/build/bin/llama-server (HIP/ROCm, 0.3.0-dev b10715 / commit 92cedc867)
@@ -23,7 +23,7 @@ while [ $# -gt 0 ]; do
     *) PREFIX="$1"; shift ;;
   esac
 done
-[ -n "$PREFIX" ] || { echo "用法: infer-load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm] [--port N]"; exit 1; }
+[ -n "$PREFIX" ] || { echo "用法: infer-load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] [--port N]"; exit 1; }
 
 log() { echo "[infer-load] $(date '+%H:%M:%S') $*"; }
 
@@ -35,6 +35,14 @@ log() { echo "[infer-load] $(date '+%H:%M:%S') $*"; }
 #   修法: 候选集全列出 -> 精确相等者直接胜出 -> 否则才走唯一前缀; 前缀比较用 shell `case` 按**字面**串。
 ALL_ALIASES=$(find -L /data/models/gguf -mindepth 2 -maxdepth 2 -type d 2>/dev/null | \
   sed 's|/data/models/gguf/[^/]*/||; s|-GGUF$||' | tr 'A-Z' 'a-z' | sed 's/^minimax-m2.7.*/m27-q4ks/' | sort -u)
+# ★ ds4 后端: 别名来自另一个命名空间 (2026-09-28, ADR-0010 / spec/ds4-backend/DESIGN.md §2/§4.2)。
+#   为什么必须分家: ds4 是**项目专属 GGUF、非通用加载器**, 其模型刻意**不并入** /data/models/gguf ——
+#   否则 infer-list/models 会扫出一个 llama.cpp 根本加载不了的模型 (DESIGN §2 三条隔离原则之②)。
+#   ds4 的单一命名真值 = conf 文件名 /etc/ds4-instances/<alias>.env ⇒ 别名由文件名派生。
+if [ "$BACKEND" = "ds4" ]; then
+  ALL_ALIASES=$(find /etc/ds4-instances -maxdepth 1 -name '*.env' 2>/dev/null | \
+    sed 's|.*/||; s|\.env$||' | tr 'A-Z' 'a-z' | sort -u)
+fi
 LOWER=$(printf '%s' "$PREFIX" | tr 'A-Z' 'a-z')
 EXACT=""; PFX=""
 while IFS= read -r _a; do
@@ -55,6 +63,18 @@ else
 fi
 
 # ---- [2] 定位模型文件 + 生成 conf (若缺) ----
+# ★ ds4 走独立命名空间 (2026-09-28, ADR-0010 / DESIGN §2/§4.2): 模型在 ~/ds4/gguf,
+#   conf 在 /etc/ds4-instances/<alias>.env。故本段对 ds4 **不生成** llama 系 conf、
+#   **不 source** 它 (两套命名空间刻意隔离), 只做存在性校验; 真正读取在 [4b]。
+if [ "$BACKEND" = "ds4" ]; then
+  CONF="/etc/ds4-instances/${ALIAS}.env"
+  if [ ! -f "$CONF" ]; then
+    echo "ERROR: ds4 conf 不存在: $CONF (见 spec/ds4-backend/DESIGN.md §4.2)"; exit 1
+  fi
+  log "ds4 后端: 跳过 llama 模型库定位/conf 生成 (conf=$CONF)"
+  CLI_BACKEND="${BACKEND}"
+  CLI_PORT="${PORT:-}"; CLI_CTX="${CTX:-}"; CLI_THREADS="${THREADS:-}"
+else
 CONF="/etc/llama-instances/${ALIAS}.env"
 if [ ! -f "$CONF" ]; then
   REPO=$(find -L /data/models/gguf -mindepth 2 -maxdepth 2 -type d 2>/dev/null | \
@@ -97,6 +117,7 @@ BACKEND="${CLI_BACKEND:-${BACKEND:-${CONF_BACKEND:-unsloth}}}"
 [ -n "$CLI_PORT" ] && PORT="$CLI_PORT"
 [ -n "$CLI_CTX" ] && CTX="$CLI_CTX"
 [ -n "$CLI_THREADS" ] && THREADS="$CLI_THREADS"
+fi   # ← 结束 [2] 的 ds4 / llama 两分支
 
 # ---- [2b] 显式 --backend 同时决定 RPC 与否 (2026-09-15 修) ----
 # 早版只切 BACKEND, 却把 conf 里的 RPC_TARGET 留着 → `--backend llama-single` 仍会
@@ -130,7 +151,9 @@ fi
 # 放 /run (tmpfs): 重启自清, 不动 /etc 下的配置。
 # 未显式指定后端 ⇒ 删除该文件, 回归 conf 语义 (避免上一次的覆盖变成陈旧状态)。
 RUN_OVERRIDE="/run/llama-instances/${ALIAS}.env"
-if [ -n "$CLI_BACKEND" ]; then
+if [ "$BACKEND" = "ds4" ]; then
+  :   # ds4 无 systemd 单元 llama-server@<alias>, 该 /run 覆盖对它无意义 ⇒ 不写 (见 [2] 的同名分家)
+elif [ -n "$CLI_BACKEND" ]; then
   sudo install -d -m 0755 /run/llama-instances
   printf 'RPC_TARGET=%s\n' "${RPC_TARGET:-}" | sudo tee "$RUN_OVERRIDE" >/dev/null
   sudo chmod 644 "$RUN_OVERRIDE"
@@ -139,8 +162,8 @@ else
   sudo rm -f "$RUN_OVERRIDE" 2>/dev/null || true
 fi
 
-# ---- [3] 互斥: 停另一后端 (systemd llama + vllm + unsloth) ----
-log "停旧实例 (llama/vllm/unsloth)..."
+# ---- [3] 互斥: 停另一后端 (systemd llama + vllm + unsloth + ds4) ----
+log "停旧实例 (llama/vllm/unsloth/ds4)..."
 sudo systemctl stop 'llama-server@*' 2>/dev/null || true
 # 清理 unsloth studio 进程 (命令行含 'unsloth studio run') 与底层 llama-server (防自匹配)
 pkill -9 -f "[u]nsloth studio run" 2>/dev/null || true
@@ -152,6 +175,13 @@ if pgrep -f 'vllm.entrypoint[s]' >/dev/null 2>&1; then
   /home/scott-lau/vllm-rocm/bin/ray stop -f 2>/dev/null || true
   ssh -o BatchMode=yes "$AWORK" "pkill -f '^ray::' 2>/dev/null; /home/scott-lau/vllm-rocm/bin/ray stop -f 2>/dev/null" 2>/dev/null || true
 fi
+# 清理 ds4 (DwarfStar) 进程 —— 幂等, 防护性字符类 [d] 避免 pkill 自匹配自身命令行:
+#   · ds4-server: 单机 / coordinator 形态 (命令行含 'ds4-server')
+#   · ds4(主程序) + --role: worker 形态。★ 模式必须是 '[d]s4 .*--role' 而非 '[d]s4 --role':
+#     真实命令行是 `ds4 --rocm --role worker`, 'ds4' 与 '--role' 之间夹着 '--rocm'
+#     ⇒ '[d]s4 --role' 这个**连续子串**永不命中 (2026-09-28 首跑实测: 假阴性, 清理失效)。
+pkill -9 -f '[d]s4-server' 2>/dev/null || true
+pkill -9 -f '[d]s4 .*--role' 2>/dev/null || true
 
 wait_gtt() {
   for i in $(seq 1 90); do
@@ -177,6 +207,117 @@ fi
 if [ "$BACKEND" = "vllm" ]; then
   log "vLLM 路径: 调 a4_vllm_launch.sh (仅 m27-awq 验证)..."
   exec bash /home/scott-lau/scripts/a4_vllm_launch.sh
+fi
+
+# ---- [4b] ds4 (DwarfStar) 路径 (2026-09-28, 见 spec/ds4-backend/DESIGN.md) ----
+# 三种形态 (由 conf 的 PP_ROLE 决定):
+#   空          = 单机 ds4-server (带 HTTP 面)
+#   worker      = ds4 --role worker (只持层片 + KV 分片, **无 HTTP 面**)
+#   coordinator = ds4-server --role coordinator (持 prompt/采样 + HTTP 面)
+# ★ ds4 在 ROCm 不支持 TP (源码门禁 "tensor parallelism requires the Metal backend"),
+#   ⇒ 双机**只有 PP** (层切片 --layers, 闭区间, 末段写 :output)。
+# ★ ds4 运行必须注入**进程级** LD_LIBRARY_PATH (core-10.0 的 sysdeps + 本体 so) ——
+#   严禁写 /etc/ld.so.conf.d/ 或系统 profile (见 DESIGN §2.1)。
+# conf 缺省路径 /etc/ds4-instances/${ALIAS}.env; 可用环境变量 DS4_CONF 覆盖 (便于测试)。
+if [ "$BACKEND" = "ds4" ]; then
+  DS4_HOME="${DS4_HOME:-/home/scott-lau/ds4}"
+  DS4_CONF="${DS4_CONF:-/etc/ds4-instances/${ALIAS}.env}"
+  if [ ! -f "$DS4_CONF" ]; then
+    log "ERROR: ds4 conf 不存在: $DS4_CONF (见 spec/ds4-backend/DESIGN.md §4.2) —— 拒绝加载, 不静默回退。"
+    exit 1
+  fi
+  # shellcheck disable=SC1090
+  source "$DS4_CONF"
+  ROCM_PATH="${ROCM_PATH:-/opt/rocm/core-10.0}"
+  CTX="${CTX:-32768}"
+  PP_ROLE="${PP_ROLE:-}"
+  PP_PORT="${PP_PORT:-9911}"
+  HTTP_PORT="${HTTP_PORT:-${PORT_NUM:-8080}}"
+  DS4_LOG_DIR="${DS4_LOG_DIR:-/var/log/ds4}"
+
+  # 模型缺失/非法**响亮失败** —— ds4 不做静默回退 (否则"看似加载成功实则错")。
+  if [ -z "${MODEL_PATH:-}" ] || [ ! -f "$MODEL_PATH" ]; then
+    log "ERROR: ds4 MODEL_PATH 未设或文件不存在: '${MODEL_PATH:-<空>}' (conf=$DS4_CONF) —— 拒绝加载。"
+    exit 1
+  fi
+  # 只在本进程注入库路径 (不落盘、不改全局)。
+  export LD_LIBRARY_PATH="${ROCM_PATH}/lib/rocm_sysdeps/lib:${ROCM_PATH}/lib"
+  # ★ 日志目录必须**可被调用用户写**: 进程以服务用户(scott-lau)跑, 而 sudo mkdir 产出的是
+  #   root:root 755 ⇒ 重定向失败会让进程**连启动都起不来**。2026-09-28 首跑实测踩到:
+  #   日志文件根本没生成, 外在表现只是 "worker 未存活 (立即退出?)" —— 极易误判成 ds4 自身问题。
+  #   故: 建完即 chown 给调用者; 仍不可写则退到用户目录 (WARN 响亮报出, 不静默)。
+  sudo mkdir -p "$DS4_LOG_DIR" 2>/dev/null || mkdir -p "$DS4_LOG_DIR" 2>/dev/null || true
+  [ -w "$DS4_LOG_DIR" ] || sudo chown "$(id -u):$(id -g)" "$DS4_LOG_DIR" 2>/dev/null || true
+  if [ ! -w "$DS4_LOG_DIR" ]; then
+    log "WARN: ${DS4_LOG_DIR} 不可写 → ds4 日志改落 ${HOME}/ds4-logs"
+    DS4_LOG_DIR="${HOME}/ds4-logs"; mkdir -p "$DS4_LOG_DIR"
+  fi
+  DS4_LOG="${DS4_LOG_DIR}/${ALIAS}.${PP_ROLE:-single}.log"
+
+  case "$PP_ROLE" in
+    worker)
+      log "ds4 worker: 起 ds4 --role worker (layers='${PP_LAYERS:-}' coordinator='${PP_COORDINATOR:-}' port ${PP_PORT}) ..."
+      nohup "${DS4_HOME}/ds4" --rocm --role worker --layers "${PP_LAYERS:-}" \
+        --coordinator "${PP_COORDINATOR:-}" "${PP_PORT}" \
+        -m "$MODEL_PATH" -c "$CTX" \
+        > "$DS4_LOG" 2>&1 &
+      ;;
+    coordinator)
+      log "ds4 coordinator: 起 ds4-server --role coordinator (layers='${PP_LAYERS:-}' listen='${PP_LISTEN:-0.0.0.0}' pp=${PP_PORT} http=${HTTP_PORT}) ..."
+      nohup "${DS4_HOME}/ds4-server" --rocm --role coordinator --layers "${PP_LAYERS:-}" \
+        --listen "${PP_LISTEN:-0.0.0.0}" "${PP_PORT}" \
+        -m "$MODEL_PATH" -c "$CTX" --host 127.0.0.1 --port "$HTTP_PORT" \
+        > "$DS4_LOG" 2>&1 &
+      ;;
+    *)
+      log "ds4 单机: 起 ds4-server (port ${HTTP_PORT} ctx ${CTX}) ..."
+      nohup "${DS4_HOME}/ds4-server" --rocm -m "$MODEL_PATH" -c "$CTX" \
+        --host 127.0.0.1 --port "$HTTP_PORT" \
+        > "$DS4_LOG" 2>&1 &
+      ;;
+  esac
+  DS4_PID=$!
+  echo "$DS4_PID" >> "$DS4_LOG" 2>/dev/null || true   # pid 落日志便于排查
+  log "ds4 launched pid=${DS4_PID} role=${PP_ROLE:-single} log=$DS4_LOG"
+
+  if [ "$PP_ROLE" = "worker" ]; then
+    # ★ worker **没有 HTTP 面** (它只等服务端连入) ⇒ 不能用 /v1/models 探活。
+    #   就绪信号 = 日志出现 'distributed worker:' 行 —— 该行只在**模型加载完 + 后端初始化完 +
+    #   层片切好**之后才打印, 是比 "进程还活着" 强得多的**真就绪**判据
+    #   ('进程存活' 只说明没崩, 可能是加载失败前的假绿)。同时监视进程存活: 一旦退出立即报错。
+    #   ★ 注意进程判据的模式是 '[d]s4 .*--role' (非 '[d]s4 --role') —— 见 [3] 段的同因注释。
+    log "ds4 worker 无 HTTP 面, 按日志就绪标记判定 (最多 120s) ..."
+    _DS4_READY=""
+    for i in $(seq 1 60); do
+      grep -q 'distributed worker:' "$DS4_LOG" 2>/dev/null && { _DS4_READY=1; break; }
+      kill -0 "$DS4_PID" 2>/dev/null || break
+      sleep 2
+    done
+    if [ -n "$_DS4_READY" ]; then
+      log "READY ✓ (ds4 worker ${ALIAS}; pid=${DS4_PID}, 已加载层片, 等 coordinator 连入)"
+      exit 0
+    fi
+    log "ERROR: ds4 worker 未就绪/已退出 (未见到 'distributed worker:' 日志) — tail $DS4_LOG 排查"
+    tail -n 20 "$DS4_LOG" 2>/dev/null || true
+    exit 1
+  fi
+
+  # 单机 / coordinator: 有 HTTP 面 ⇒ 轮询 /v1/models (★ ds4 **无 /health 端点**, 最多 60×2s)。
+  for i in $(seq 1 60); do
+    if curl -sf --max-time 2 "http://127.0.0.1:${HTTP_PORT}/v1/models" >/dev/null 2>&1; then
+      log "READY ✓ :${HTTP_PORT} (ds4 ${ALIAS} role=${PP_ROLE:-single})"
+      exit 0
+    fi
+    # 进程若已退出 (缺 so / 模型不支持等) ⇒ 不必等满 120s
+    if ! kill -0 "$DS4_PID" 2>/dev/null; then
+      log "ERROR: ds4 进程已退出 (role=${PP_ROLE:-single}) — tail $DS4_LOG 排查"
+      tail -n 20 "$DS4_LOG" 2>/dev/null || true
+      exit 1
+    fi
+    sleep 2
+  done
+  log "ERROR: ds4 健康检查超时 (:${HTTP_PORT}/v1/models) — tail $DS4_LOG 排查"
+  exit 1
 fi
 
 # ---- [5] RPC 节点 (分布式) ----
