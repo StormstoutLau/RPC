@@ -277,4 +277,32 @@ make strix-halo -j$(nproc)   # make rocm 别名
 
 - [ ] ds4 构建（工具链前提）+ GLM-5.3-Flash 单站验证（H.2/H.4 落地门）
 - [ ] M3 三站层分布吞吐实测 + MSA 长上下文内存曲线（H.3）
-- [ ] 订阅 glm5next 三 PR（#27754/#27752/#27773）合入后整树同步（延续 MODEL-SOURCING §6a P2）
+- [ ] 订阅 glm5next 三 PR（#27754/#27752/#27773）合入后整树同步（延续 MODEL-SOURCING §6a P2)
+
+## H.7 非 llama 引擎路线全景归并（2026-09-28）
+
+> **归并触发**：用户要求「将 vllm / dwarf star / skulk 等非 llama 技术路线统一归并到一个文档集中管理」，**裁定 = 并进本主文档**（遵循 SOURCING-INDEX 维护规则 3「框架变化 → FRAMEWORK-SURVEY」）。
+> **本附录 = 汇总视图**（只引不重述）；逐条细节仍在各自原调研。
+> **与 §2 矩阵的关系**：§2 是 09-08 的选型快照；本节是**归并后全景**（含 09-16/09-28 新证据 + 立项状态）。
+
+| 路线 | 定位 | 本集群相关关键事实（E1/E2/E3） | 原调研 | 立项状态 |
+|---|---|---|---|---|
+| **DwarfStar (ds4)** | DeepSeek/V4 系专用窄引擎，C/Metal/CUDA/**ROCm** | ★ 09-28 已核：**官网列 Supported = V4 / V4.1 / GLM 5.x / Qwen3.8**；antirez 已落地 **V4.1 重度量化** commit（M5 128G SSD 流式）· `deepseek41_quantize.py` 专属转换器（V4 template 不兼容）· **ROCm 一等后端**（`make strix-halo`、QA 用 Strix Halo）· 自带 **RDMA TP + PP** | 本主文档 §3/§5a/§5b/§5c + [V4.1 调研](file:///d:/RPC/docs/research/2026-09-28_V4.1-Flash部署路径调研.md) + tracker §1.7-⑨ | ⏳ O-113（ds4 是否立项上 V4.1 待裁，撞 ADR-0004/EV-4） |
+| **vLLM** | 通用服务化推理，ROCm 支持 | CIRU StrixLink 双机 **GLM-5.3-Flash 320B** 可跑（实测 decode 23.686 t/s = EV-3）· 官方称生产自托管需 **2,000 GPU + 存储集群**（对三机不现实）· sm_121 Strix Halo 有 GLM NoPE 输出 bug | [CIRU-Skulk 调研](file:///d:/RPC/docs/research/2026-09-16_分布式推理路线可行性调研_CIRU-Skulk-多机TP.md) + 本主文档 §4/§5 | ★ **EV-3**（绕开 glm5next 上游依赖的唯一已验证路线）· 撞 ADR-0004 |
+| **Skulk** | 多机 AI 互联 fabric（统一 OpenAI 端点） | **AMD Linux = `skulk-llama-server-vulkan`**（官方支持范围内，可注入自有引擎）· **但后端仍是 llama.cpp ⇒ 不改 glm5next 未合入的事实** · ⚠ 常驻 supervised service 与零自加载/看门狗禁用/唯一管理面冲突 | [CIRU-Skulk 调研](file:///d:/RPC/docs/research/2026-09-16_分布式推理路线可行性调研_CIRU-Skulk-多机TP.md) §4 | ⏳ 引入前先裁"谁管生命周期"（EV-4） |
+| **SGLang** | 通用服务化推理，ROCm | **站上生产运维排除了**（sglang-rocm 依赖重）+ 未在 gfx1151 验证 | 三调研报告审计 + 本主文档 §2/§5b | — |
+| **TensorSharp**（.NET） | 专用推理引擎 | 发布 GLM-5.3-Flash 后 **3 天就并入主干**（`glm5next`+`qwen4exp`），自报 decode **73.5 vs llama.cpp 36.6 t/s**（2.0×）· ⚠ 但 **`--tp` 被拒绝**（GLM 架构不切张量，须层切分）+ NextN/MTP 未实现 · 需接 .NET 新通道 | tracker §1.7-⑤ | 观察（未接入） |
+| **MLX** | Apple Silicon 推理 | 有社区 **V4.1 16GB M1 SSD 流式**跑通（22.8 s/token，证明稀疏流式思路但不可用）· 与三机 x86 无关 | tracker §1.7-⑤ | —（不适用） |
+
+**★ 归并后的关键判断流**：
+1. **对 GLM-5.3-Flash / V4.1 这类"llama.cpp 未合上前沿架构"**，**DwarfStar (ds4) 是当前唯一既支持、又落在我们 gfx1151 硬件上的别家栈**（09-28 已核 V4.1 支持）⇒ 比等 llama.cpp 更近。
+2. **CIRU/vLLM 双机（EV-3）**是第二个可跑选项，但需 ROCm 10 栈 + 2 机在场。
+3. **Skulk 补的是编排 fabric，不改上游事实** ⇒ 对"前沿架构"目标帮助有限。
+4. **任何别家栈接入 = 新增第二个引擎管理面**（撞 ADR-0004 D1/D3 + EV-4）⇒ **逐个（而非一并）立项裁决**。
+
+**判定出清**：
+- **E1（本仓已证）**：现役 llama.cpp RPC 布局/Vulkan/ROCm；CIRU 双机可行性调研（§5a 性能）；ADR-0004/EV-4 治理约束。
+- **E3（外网已证，未本仓复现）**：ds4 支持 V4.1 + ROCm 一等后端；TensorSharp 性能/拒绝 TP；MLX SSD 流式。
+- **未核**：ds4 的 V4.1 **CED 推理在本集群实跑**（只在官网/社区，未本仓验证）· vLLM/gfx1151 对 V4.1· TensorSharp 在 gfx1151。
+
+**关联锚点**：`O-112`（V4 REAP）· `O-113`（V4.1 部署）· `EV-3`/`EV-4` · tracker §1.7（别家栈）· `inventory/plugins.yaml`（引擎现状）。
