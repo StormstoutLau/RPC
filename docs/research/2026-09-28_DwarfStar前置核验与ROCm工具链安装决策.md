@@ -6,9 +6,12 @@
 
 ---
 
-> ★ **文档边界（2026-09-28 整理）**: 本文主题 = **DwarfStar (ds4) 的核验、部署与裁决**。
-> ★ **GLM-5.3-Flash 的本地推理部署内容已独立成文** → [GLM-5.3-Flash 本地推理部署](./2026-09-28_GLM-5.3-Flash本地推理部署.md)（**该主题的新变更请更新那份文档，勿在此处继续追加**）。
-> 本文 §17 / §19 / §20.1 / §20.2 属**当时的执行记录**（保留以维持时间线与证据可追溯）；**结论以新文档为准**（本文档内已知错误已就地更正，见 §19.4 与 §20.1 的更正记录）。
+> ★ **文档边界（2026-09-28 整理；同日二次剥离）**: 本文主题 = **DwarfStar (ds4) 的核验、部署与裁决** —— 即 **§1–§16**（前置核验 / ROCm 工具链安装决策与回退 / 工具链补全与构建 / 官方目标版本 / 依赖核验 / 容器评估 / 原生 10.0 落地 / **双机 PP 起跑与崩溃根因** · `antirez/ds4#1141`）+ **§18.1**（ds4 ROCm TP 源码门禁）+ **§20.3 存废结论** + **§21 存量盘点与裁决**。
+> ★★ **GLM 与 DeepSeek 的内容已于 2026-09-28 分别剥离归档**：
+> 　· **GLM 家族** → [GLM 系列本地推理部署](./2026-09-28_GLM系列本地推理部署.md) —— 原 §17 / §18.2 / §18.3 / §19 / §20.1 / §20.2 已迁出，落在其**正文（§4–§9）+ 附录 A**；
+> 　· **DeepSeek V4 家族 / V4.1 / Zrald** → [DeepSeek V4 系列调研与部署](./2026-09-28_DeepSeek-V4系列调研与部署.md) —— 原 §20.4 / §20.5 / §22 已迁出，落在其 **第三部 §6 / §7**。
+> 　⇒ **这两主题的新变更一律更新那两份文档，勿在此处追加**；本文对应小节**只留指针 + 一行结论**。
+> ⚠ **§12 / §13 / §14 / §16 留在本文**：它们的**主题是 ds4 的双机 PP 前置与实施**（GLM-5.3-Flash 在其中只作为**被测对象**出现）⇒ 归 ds4 一侧。
 > 全部研究文档索引见 [docs/research/README.md](./README.md)。
 
 ## 1. 前置核验（P-0 I，E1 三站实测）
@@ -808,44 +811,17 @@ static bool dist_coordinator_can_pipeline_prefill(..., uint32_t n_tokens, uint32
 
 ---
 
-## 17. 替代路径调研：GLM-5.3-Flash 还能用什么跑（E3 为主）
+## 17. 替代路径调研：GLM-5.3-Flash 还能用什么跑 —— ★ **已迁出**
 
-**缘起**：ADR-0010 v1.1 冻结 ds4 双机后，需回答「当前是否有别的方法 PP/TP 跑 GLM-5.3-Flash」与「AMD 官方对这类模型分布式推理的支持到哪一步」。
-
-### 17.1 AMD 官方进展（E3）
-
-| 维度 | 事实 |
-|---|---|
-| 引擎 | ROCm 10（8/27）宣称经 **vLLM v1 / llm-d / SGLang** 提供 "robust distributed inference … multi-GPU and **multi-node**"；集合通信 **NCCL/RCCL**，由新 **NIXL** 层抽象 |
-| 并行方式 | ROCm 官方文档《vLLM V1 performance optimization》专节 **Parallelism strategies**：**TP / PP / DP / EP** 四类**全部文档化** ⇒ **PP 是 AMD 官方路径，不只 TP** |
-| ★ GLM 系 | 同文档点名 **"DSA models (DeepSeek-V3.2, GLM-5)：`ROCM_AITER_MLA_SPARSE`（自动选择）… `VLLM_ROCM_USE_AITER=1`，由 config `index_topk` 自动识别，需 `--block-size 1`"** ⇒ **AMD 为 GLM-5 系稀疏注意力写了官方 ROCm kernel 路径** |
-| 规模案例 | 官方博客：《Scaling **GLM-5.1**-FP8 to 64× MI300X》·《DP Attention and TBO for **DeepSeek-V4** on MI355X》·《**DeepSeek-V4-Flash** 训练 on MI355X with Primus》 |
-| 量化工具 | **AMD Quark** 开箱架构含 **DeepSeek-V4-Pro/Flash、GLM-5 / 5.1 / 5.2**（★ **不含 GLM-5.3-Flash**）|
-| ★ 我方 GPU | vLLM ROCm 官方支持列表**含 `gfx1151/1150`（Ryzen AI MAX）**，要求 ROCm ≥ 7.0.2 |
-
-⇒ **解读**：AMD 把"分布式"做成**框架层能力**（vLLM/SGLang 的 TP/PP/DP/EP），官方投入集中在 **Instinct 数据中心卡**；`gfx1151` 只列"能跑"。**GLM-5.3-Flash 不在 Quark 官方量化清单** ⇒ 属"新架构 + nightly 级"。
-
-### 17.2 可选替代路径（按可行性）
-
-| # | 路径 | 关键事实 | 判定 |
-|---|---|---|---|
-| ① | **llama.cpp `glm5next` PR 分支 + RPC 层切分** | Flash（`glm5next`）**未进主线**，但 **Unsloth 提供可直接构建的分支**：`git clone -b glm5next/upstream https://github.com/unslothai/llama.cpp`；构建后可用**我方已在运维的** RPC **`-sm layer`** 做多机层切分（= PP 语义），模型用**已有 Unsloth GGUF**（A 站 UD-IQ4_XS 146 GiB / 或 UD-Q2_K_XL 108.7 GiB） | ★ **最贴近现状**（同栈、免新引擎）。风险：跟随 PR 分支；该 GGUF **丢弃 MTP head**（llama.cpp 无 MTP 推理路径）⇒ 无投机解码 |
-| ② | **vLLM / SGLang on ROCm** | 官方路线；vLLM 支持 gfx1151、TP/PP/DP/EP 有文档；但 **Flash 需 nightly + 专用镜像**。**塞得下是硬问题**：官方 FP8 = **321 GB**、NVFP4 = **229 GB（Blackwell 专用）** ⇒ 我方 2×~124 GiB 装不下；4-bit HF ~160–190 GB 仍偏大 ⇒ 需 **2-bit 级 HF 量化（~90–110 GB）** 才可能 TP=2。旁证：NVIDIA 侧同类硬件（2× DGX Spark 128GB）**已用 vLLM TP=2 跑通**（EXL3/W4A16），另有 **TP=3 + NVFP4（35 tok/s）** 配方 | **引擎与并行方式都有官方支撑，卡点在量化格式与权重可得性** |
-| ③ | **ds4 的 ROCm TP** | 源码门禁 `"tensor parallelism requires the Metal backend"` 处于 `#ifndef DS4_HAS_DEEPSEEK41_GPU` 之下 ⇒ **带该宏的构建可能开放 ROCm TP**；kyuz0 fork `CLUSTERING_ROCM.md` 亦声称 ROCm 双机实测（~16.6 TCP / 17.3 RoCE t/s），但其方案**面向 V4.1 Flash** 且明说 **`--layers` 不支持** | **未验证、成本低**的候选（一次带宏构建 + 一次 `--tensor-parallel`），**GLM53 上是否可用未知** |
-| ④ | **GLM-5.3 旗舰（753B）on stock llama.cpp** | 旗舰架构 = **`glm-dsa`**，llama.cpp **自 GLM-5.2 起已支持**（PR #25407 于 7/24 并入，含 DSA lightning indexer）⇒ ★ **反直觉：不支持的是"更小的 Flash"，旗舰反而支持**。但最小量化 **~216.7 GB**（UD-IQ1_S），需多机层切分 | 可做，但需多机 + 大磁盘 |
-| ⑤ | ds4 Metal TP | 需 Mac | 不适用 |
-| ⑥ | ds4 单机 `--ssd-streaming` | 已实测跑通（§16.5） | **当前唯一已验证可用** |
-
-### 17.3 本轮的处置倾向
-
-- 要**立即动手** → 选 **①**：复用最熟的栈（llama.cpp + RPC + 已有 GGUF），是 PP 语义的层切分，且**不受 ds4 堆缺陷与 ADR-0010 冻结牵制**。
-- **②** 留作"拿到 2-bit HF 量化权重后"再评估（装不装得下决定成败）。
-- **③** 作为低成本的**未验证候选**，与「ds4 ROCm TP 调研」合并执行（见 §18）。
-- 渠道纪律：以上若落地，**必须走统一管理入口**（ADR-0004），不得新增散落脚本；llama.cpp 新变体的引入须并入既有的**引擎升级/多版本管理**机制。
-
+> 本节（AMD 官方进展 · 六条可选路径 ①–⑥ · 处置倾向）**主题是 GLM 怎么跑**，已按「一主题一承载文档」迁至
+> **[GLM-5.3-Flash 本地推理部署 §附录 A.1](2026-09-28_GLM系列本地推理部署.md)**。
+> 结论要点（供索引）：① llama.cpp `glm5next` 分支 + RPC 层切分 = **最贴近现状且已执行**；② vLLM 卡在量化格式与权重可得性；③ ds4 ROCm TP **已被源码否证**；④ GLM-5.3 旗舰（`glm-dsa`）**主线本就支持**，卡在体积。
 ---
 
-## 18. 三条任务的调研结论（E1，2026-09-28）
+## 18. 三条任务的调研结论（E1，2026-09-28）—— ⚠ 任务①/③ 已迁出
+
+> 本节原含三条：**① glm5next 分支引入方案 · ② ds4 的 ROCm TP · ③ GLM-5.3 旗舰（753B）**。
+> **① 与 ③ 的主题是 GLM，已迁出**至 [GLM 文档附录 A.3 / A.2](2026-09-28_GLM系列本地推理部署.md)；**本文只保留 ②**（它本身就是 ds4 的能力结论）。
 
 ### 18.1 任务②：ds4 的 ROCm TP —— **不可用（源码级双门禁）**，上轮"可能可用"被否证
 
@@ -875,160 +851,30 @@ int ds4_engine_tp_bind(...) {
 ⇒ **结论**：ds4 的 TP 对 GLM-5.3-Flash **在 ROCm 上不可用**，且**不是"开个构建宏就行"**；要动它等于**改上游 TP 语义**（把 family 白名单扩到 GLM），属自维护补丁范畴 ⇒ **候选 ③ 关闭**。
 （附注：`kyuz0/ds4` 的 `docs/CLUSTERING_ROCM.md` 在**我们的源码树里不存在**（不是 tarball 的一部分）——ADR-0010 替代方案 E 里那条引用来自外部浏览，非本地实证。）
 
-### 18.2 任务③：GLM-5.3 旗舰（753B）—— **现役引擎架构层已支持**，障碍在体积
+### 18.2 / 18.3 GLM-5.3 旗舰支持 · `glm5next` 分支引入方案 —— ★ **已迁出**
 
-**E1 实证**（B 站现役 `/opt/llama.cpp` → `llama.cpp-master-91f6a6cf`，version `0.4.0-dev (build 1533)`）：
-
-```
-$ strings /opt/llama.cpp/libllama.so | grep -i glm | sort -u | head
-16llama_model_glm4 / 19llama_model_chatglm / 19llama_model_glm_dsa / 20llama_model_glm4_moe
-glm-dsa / glm-dsa.cpp / GLM_DSA architecture requires MLA
-GLM_DSA MTP: missing both nextn.shared_head_norm and output_norm      ← 连 MTP 都在
-glm4moe / glm4-moe.cpp
-```
-架构名抽样另有 `deepseek2 / glm4moe / glm-dsa / llama / nemotron`；**`glm5next` 无**（⇒ 与 §17 一致：**旗舰支持、Flash 不支持**）。
-
-⇒ **结论**：**旗舰（arch `glm-dsa`）在本集群现役 llama.cpp 上架构层可用**（且 DSA lightning indexer 已并入主线 PR #25407）；**真正的障碍是权重体积与切分**：
-
-| 项 | 数值 | 本集群可行性 |
-|---|---|---|
-| 最小可用量化 | Unsloth `UD-IQ1_S` **≈216.7 GB** | 单站（~124 GiB）装不下 ⇒ **必须多机层切分** |
-| 参考档 | `UD-Q2_K_XL` **253.9 GB** | 同上 |
-| 许可 | ⚠ **Z.ai 自有许可，非 MIT**（Flash 才是 MIT） | 商用需单独判 |
-
-**实现路径（走统一管理入口）**：权重走既有 `lm-download@` 组件（hf-mirror）+ 模型登记进 `inventory/models.yaml` → `infer-load` 生成 conf → **RPC 层切分**（`ggml-rpc-server` on worker + `-sm layer`，与现役 DeepSeek V4-Flash 145G 同法）→ 起停一律 `cluster.py load/unload`。
-
-### 18.3 任务①：llama.cpp `glm5next` 分支引入 —— 方案（**不动 symlink，并存变体**）
-
-**侦察（E1/E3）**：
-- PR **#27754**（`glm5next/upstream`，unsloth）**仍 OPEN、非 Draft、未合并**（updated 2026-09-17）；#27752 亦 OPEN ⇒ **只能从分支构建**。
-- **codeload 可达**：`https://codeload.github.com/unslothai/llama.cpp/tar.gz/refs/heads/glm5next/upstream` → **HTTP/2 200** ✓（B 站 git 协议不可达，走 tarball，与 ds4 源码同法）。
-- 既有设施：`~/build`、`~/dist` 在；**`/tmp/gen_manifest.sh` 已失效**（易失）⇒ 按 `UPGRADE_SOP` 说明从既有版本目录周边复用；MANIFEST 格式已知（含 `patchelf $ORIGIN` 记录）。
-- 引擎布局（`cluster.py versions` 的射程）：**RPC/分布式 = `/opt/llama.cpp`（symlink → `/opt/llama.cpp-master-<commit>`）**；单机 = `~/.unsloth/llama.cpp`（studio, HIP）；另有 `/opt/llama.cpp-9859`。
-
-**为什么不能照搬 UPGRADE_SOP**：SOP 是**主线版本升级**（构建 → `/opt/llama.cpp-<ver>` → **原子切换 symlink** → 三站同步冒烟）。而 `glm5next` 是**特性分支**，若切换全局 symlink 会**替换现役引擎**（违反 ADR-0010「不自动升级」与"不换主栈"原则，也会把未合分支的风险扩散到全部模型）。
-
-**合规方案（并存变体 + 入口化，零散落脚本）**：
-
-| 步 | 动作 | 与既有机制的关系 |
-|---|---|---|
-| 1 | B 单点：`curl codeload` 取 `glm5next/upstream` tarball 到 `~/src/llama.cpp-glm5next-<sha>/` | 复用 SOP 第 2 步的"B 单点构建"形态 |
-| 2 | 构建（`-DGGML_VULKAN=1 -DGGML_RPC=ON -DCMAKE_BUILD_TYPE=Release`），记录 commit 短哈希 | 同上 |
-| 3 | 安装为**并存版本目录** `/opt/llama.cpp-glm5next-<sha>/` + **MANIFEST**（沿用现役格式，含 `patchelf $ORIGIN`）| ★ **不切 symlink** ⇒ 现役引擎零影响 |
-| 4 | 需要双机时，同版分发到配对站（RPC 要求**两端同版**，`cluster.py versions` 会查 `rpc_protocol` 漂移）| 复用 SOP 第 3 步（tar + md5 校验）|
-| 5 | ★ **入口化**：**不写新脚本** —— 在 `infer-load` 的 `BACKENDS` 增一个变体（形如 `llama-glm5next`，与 P-2 加 `ds4` 同形，已有先例），使其选用该版本目录；并让 `cluster.py versions` 的矩阵**能看到该变体** | 承 ADR-0004「新增管理能力加枚举/子命令，不新增并列入口」|
-| 6 | 模型侧：Flash 用**已有 Unsloth GGUF**（A 站 `UD-IQ4_XS` 146 GiB / 或新下 `UD-Q2_K_XL` 108.7 GiB）| 走 `lm-download@` + `inventory/models.yaml` 登记 |
-
-**已知代价（须先声明）**：① 跟随**未合并分支**（非主线，随时可能变）；② 该 GGUF 转换**丢弃 MTP head** ⇒ **无投机解码**；③ `--layers` 式的层切分在 llama.cpp 侧是 `-sm layer`，USB4 下收益需实测（前例：DeepSeek 走 RPC 可用但非免费）。
-
-**待裁决**：是否执行第 1–5 步（B 单点构建 + 并存目录 + 入口化）。第 3 步**不动 symlink**，可随时 `rm -rf` 回退，风险面 = 新增一个 /opt 目录 + `infer-load` 一处枚举扩展。
+> 两节**主题是 GLM**，已迁至 **[GLM 文档 §附录 A.2（旗舰 753B 支持）/ §附录 A.3（分支引入方案）](2026-09-28_GLM系列本地推理部署.md)**。
+> 一句话：旗舰（arch `glm-dsa`）**现役引擎架构层已支持**，障碍在体积（最小档 ≈216.7 GB ⇒ 必须多机层切分）；
+> `glm5next`（Flash）**未进主线** ⇒ 只能从 PR 分支构建，且**不得切 symlink**（并存版本目录 + 入口化）。
 
 ---
 
-## 19. ★★ GLM-5.3-Flash 在 llama.cpp 双机 RPC 上跑通（2026-09-28 夜，E1 全链实测）
+## 19. ★★ GLM-5.3-Flash 在 llama.cpp 双机 RPC 上跑通 —— ★ **已迁出**
 
-> 本轮把 §18 的方案落地，并**首次让 GLM-5.3-Flash 在本集群真正可用**。这是 ds4 双机 PP 失败（§16.9）之后唯一走通的路径。
-
-### 19.1 执行链路（全部 E1）
-
-| 步 | 动作 | 结果 |
-|---|---|---|
-| 1 | B 单点构建 `unslothai/llama.cpp` 分支 `glm5next/upstream`（PR **#27754**，OPEN 未合；codeload tarball `%2F` 转义）| ✅ 37,485,835 B，`gzip -t` OK，`cmake … -DGGML_VULKAN=1 -DGGML_RPC=ON` → **BUILD_RC=0** |
-| 2 | 装为**并存版本目录** `/opt/llama.cpp-glm5next-20260928`（**不切 symlink**）+ MANIFEST（现役格式）+ `patchelf $ORIGIN` | ✅ RUNPATH=`$ORIGIN`；`/opt/llama.cpp` **仍指 `master-91f6a6cf`**（现役零影响）；version `0.4.1-dev` |
-| 3 | 同版分发到 A 站（`tar`+`scp`，RPC 要求两端同版）| ✅ A 站同目录就位，`ARCH_GLM5NEXT=1` |
-| 4 | 架构证据 | ✅ `libllama.so` → `glm5next` · `llama_model_glm5next` · `glm5next MTP: …`（`glm-dsa` 亦在）|
-| 5 | 权重：A 站既有 `UD-IQ4_XS`（146.1 GiB 单文件）→ B（RPC head 需本地持有）| ✅ rsync 逐字节一致：A=B=`156,822,110,624` |
-| 6 | **首次双机 RPC 起跑**（B head `--rpc 10.10.10.1:50052` + A worker，两端变体引擎）| ✅ 见 19.2 |
-
-### 19.2 首跑结果（E1）
-
-- **加载**：`model loaded`，耗时 **≈ 5 min 17 s**（RPC 把张量推到 A；A 侧落 `~/.cache/llama.cpp/rpc/`，**148 G 缓存**供复用）
-- **服务**：`/v1/models` → 200，`listening on http://127.0.0.1:8080`
-- **推理**：`reasoning_content` 输出连贯（"…Let me count carefully. \"Hello there, nice to meet you!\" - that's 6 words…"）
-- **性能**：**prompt 15.32 tok/s · decode 11.78 tok/s**（20 + 48 token / 5.29 s）
-- **内存**：B GTT 72.2 GiB · A GTT 72.7 GiB（146 GiB 模型两站各半）
-- ⚠ 质量/配置提示：`special_eot_id is not in special_eog_ids`、`special_eom_id …`；`system_fingerprint: b0-unknown`（tarball 无 commit）
-
-### 19.3 ★ ds4 那份 Q2 档为何**只能**给 ds4 用（删除判据，结构性）
-
-`GLM-5.3-Flash-Q2.gguf`（96,505,816,384 B）实读元数据：`architecture = **glm5-next**`（带连字符；llama.cpp 为 `glm5next`）、block_count 46、tensors 1412、量化类**全是标准 llama.cpp 类型**（F32/Q8_0/BF16/IQ2_XXS/Q4_K/Q2_K）⇒ 量化层**不**构成障碍。用变体引擎实加载报 **`unknown model architecture: 'glm5-next'`**。
-
-进一步查**张量命名体系**（决定性，非推测）：
-
-| 张量族 | ds4 转换器 | llama.cpp `glm5next.cpp`/`llama-arch.cpp` | 判定 |
-|---|---|---|---|
-| 超连接 | `hc_attn_fn/base/scale`、`hc_ffn_*` | `blk.%d.hc_attn_fn/…` | ✅ 一致 |
-| 线性注意力 | `kda_q/k/v`、`kda_q_conv`、`kda_f_a`、`kda_a_log`、`kda_beta`、`kda_o_norm`、`kda_output` | `attn_q/k/v`、`ssm_conv1d_q`、`ssm_f_a`、`ssm_a`、`ssm_beta`、`ssm_o_norm` | ❌ **不一致** |
-
-⇒ **即使改架构串也会在张量绑定处失败** ⇒ 该档**只有 ds4 能读**。**已按裁决删除**（+ 清 `lm-download` 任务定义）⇒ 磁盘回收 **101→758 G 空闲**。**教训：架构串只是第一道门，转换器命名体系才是真门槛。**
-
-### 19.4 ★ 1M 上下文可行性（实测 + 定标）
-
-**实测**（`-c 1048576` 起服）：`n_ctx_slot = 1048576` → `model loaded` → `/v1/models` **200** ⇒ **内存与引擎层面可行**。
-
-| ctx | B 站 GTT | ΔKV |
-|---|---|---|
-| 8,192 | 72.2 GiB | — |
-| 262,144 | 78.2 GiB | +6.0 GiB |
-| **1,048,576** | **95.9 GiB** | **+23.7 GiB** |
-
-**每 token KV = 24,576 B（24 KiB）**，与实测 Δ 精确吻合。来源（GGUF 真值）：
-
-- `head_count_kv` = `[0,0,0,1, 0,0,0,1, …]` ⇒ ★ **46 层中仅 12 层是注意力层**（3,7,…,43,45），**其余 34 层为线性/循环（KDA）⇒ 常数状态、不随 ctx 增长**
-- 注意力层 `kv heads = 1` + `kv_lora_rank = 512` + `rope.dimension_count = 0` ⇒ **MLA 压缩**，每 token 仅存 512 维潜变量（nope-only）
-- 索引器 `kpool 4 × key_length 128 = 512` ⇒ 每 token 再加 512 维
-- ⇒ 12 × (512+512) × 2 B = **24,576 B/token**
-
-**稀疏注意力已实现且已启用**：`indexer_scoring = (n_ctx > glm5next_n_select())`，`n_select = top_k + kpool − 1 = 2048+4−1 = 2051` ⇒ **ctx > 2051 即启用 top-k(2048) 稀疏**；图构建含 `build_indexer` / `build_attn_sparse` / `build_inp_kpool`。
-
-**三重实际约束**：① **prefill** —— ⚠ **本节初稿据"20 token 的极小 prompt"测得 15.32 t/s，进而外推"灌满 1M ≈ 19 小时"，该外推是错的**（小 prompt 被固定开销主导，不可外推）。§20.1 用 1513-token prompt 复测得 **138.90 t/s** ⇒ **灌满 1M ≈ 2.1 小时**。**更正记录见 §20.1**；② Unsloth 卡面 **"1M positions in config; evaluated to 300K"** ⇒ >300K 质量无背书；③ 索引器每 token 对**全部历史 key** 打分（O(ctx) 额外算力）⇒ 越长越慢。另：1M 时 B 站 avail 仅 25 G（**该内存瓶颈已被三节点缓解，见 §20.2**）；`n_slots=4 + kv_unified` ⇒ 1M 为四槽共享池。
-
-⇒ **实用甜点区 = 128k–256k**（在 300K 评估范围内、余量 ≥43 G）。
-
-### 19.5 ★ 入口化钩子（已存在，无需新增轴）
-
-[llama-serve-instance](../../ops/llama-serve-instance) L31 已支持：
-```
-exec "${LLAMA_SERVER_BIN:-/opt/llama.cpp/llama-server}" -m "$MODEL_PATH" $RPC_ARGS …
-```
-且已有测试缝隙注释（`CONF_DIR` / `LLAMA_SERVER_BIN`）。⇒ **"引擎变体"应是实例 conf 的一个值，而非新的 backend 轴**（`glm5next` 能同时服务单机与 RPC，与现有 `llama-rpc`/`llama-single` 的"拓扑"轴不正交）。入口化据此实施（见 §20）。
-
-### 19.6 本轮运维事实（值得记）
-
-- ★ **GitHub(codeload) 从 B 站极慢：~40 KB/s**（37.5 MB 走了 ~15 min）；而 `hf-mirror` 为 **56 MB/s**、LAN/ TB 链路 ~106 MB/s。⇒ 将来拉整仓源码应**改本地中继**（这侧取好再推）。
-- 站址真值：A = `192.168.1.33`（LAN）+ **`thunderbolt0 = 10.10.10.1`**（B↔A 直连，RPC 走这条）；USB4 `10.10.11.x` 仅 B↔C。
-- RPC 首跑期间 `infer-load`/systemd 均未介入（手动起停），符合**零自加载纪律**。
+> 本节（执行链路 · 首跑结果 · 双机 RPC 实录）**主题是 GLM 怎么跑**，其**结论与实测数据已在**
+> **[GLM 文档](2026-09-28_GLM系列本地推理部署.md)** 正文（§4 引擎引入 / §5 入口 / §6 起停 / §7 吞吐 / §8 容量 / §9 限制）；
+> **正文未覆盖的两块**（ds4 那份 Q2 档的"只有 ds4 能读"张量命名判据 · 本轮运维事实）已迁至 **GLM 文档 §附录 A.4 / A.5**。
+> 对本 ds4 文档的意义只有一句：**它证否了"ds4 是跑 GLM 的必要路径"** ⇒ 与 §20.3 的存废结论同源。
 
 ---
 
-## 20. 调优、三节点、ds4 存废与 V4.1 支持（2026-09-28 深夜，E1）
+## 20. ds4 存废（其余内容已迁出）
 
-### 20.1 32k ctx 下的配置扫描（同 1513-token prompt）
-
-| 配置 | prompt t/s | decode t/s |
-|---|---|---|
-| `-c 32768 -b 512 -ub 512` | 126.58 | 11.85 |
-| `-c 32768 -b 4096 -ub 2048 -fa on` | **138.90** | 11.94 |
-| 同上 + `--tensor-split 1,1` | 140.79 | 11.62 |
-
-**读数**：
-- ★ **`-ub` 放大只给 prefill +10%**，**decode 完全不动（11.6–11.9）** ⇒ 再次印证 **decode 是内存带宽墙**（配置调不动）。
-- `--tensor-split 1,1` ≈ 持平 ⇒ 默认已均衡。
-
-**★ 更正记录（我自己算错并已就地修订 §19.4）**：
-§19.4 初稿用"20 token 的极小 prompt"测得 **15.32 t/s**，据此外推"灌满 1M ≈ 19 小时"。**该外推错在把固定开销主导的极小样本当成了稳态吞吐**。用 1513-token prompt 复测为 **≈138.9 t/s** ⇒ **灌满 1M ≈ 2.1 小时**（差 9 倍）。教训：**prefill 吞吐必须用足够长的 prompt 测**（短 prompt 被调度/图构建/首 token 开销淹没），否则量级级错。
-
-### 20.2 三节点（加 C 站）—— **不提速，但解内存**
-
-C 站装同版变体引擎（`0.4.1-dev`，`ARCH_GLM5NEXT=1`），worker 起在 **`10.10.11.3:50052`**（C 的 `thunderbolt1`；B↔C USB4 段），B head 带**两个** `--rpc` 端点。
-
-| 配置 | B 站 GTT | prompt t/s | **decode t/s** | B 内存余量 |
-|---|---|---|---|---|
-| 两节点（B+A）| 72.2 GiB | 138.90 | **11.94** | 49 G |
-| **三节点（B+A+C）** | **52.5 GiB** | 136.54 | **11.22（−6%）** | **72 G（+23 G）** |
-
-⇒ **加节点分摊权重、但不增加带宽**，且多一段跨站流水线 ⇒ **decode 略降、prefill 持平**。
-★ **真正的收益在内存**：1M ctx 时 B 站原本只剩 25 G（§19.4），三节点下模型份额降至 ~49 GiB ⇒ 配 24 GiB KV 后仍余 ~45 G ⇒ **三节点让 1M 从"勉强"变成"从容"**。
+> 本节原为「调优、三节点、ds4 存废与 V4.1 支持」的合集，**其中 GLM 与 V4.1 的部分已分别迁出**：
+> **§20.1 配置扫描 / §20.2 三节点 → [GLM 文档 §7.3 / §7.2](2026-09-28_GLM系列本地推理部署.md)**；
+> **§20.4 V4 系支持与后端更新 → [V4.1 文档 §6](2026-09-28_DeepSeek-V4系列调研与部署.md)**。
+> **§20.5 待办的三条归宿**：① zrald 体积/片数/架构 → 已核，见 **V4.1 文档 §7**；② ADR-0010 降级裁决 → 已执行，见本文件 **§21.4**；③ 长 ctx decode 衰减曲线 → 仍是空白，见 **GLM 文档 §8.4**。
+> 下面**只保留属于 ds4 的那一节**。
 
 ### 20.3 ★ ds4（DwarfStar）在本集群的存在必要性 —— **作为生产引擎，必要性已消失**
 
@@ -1043,30 +889,10 @@ C 站装同版变体引擎（`0.4.1-dev`，`ARCH_GLM5NEXT=1`），worker 起在 
 
 ⇒ **建议：ADR-0010 从「试点立项」降为「观察保留」** —— 不删（代码 0.4 GB + Q4 模型 190 GB），**不再投入工程时间**，仅在需要"第二意见"时启用。
 
-### 20.4 DeepSeek V4.1（Q3_K_M）支持与后端更新
+### 20.4 / 20.5 V4 系支持与后端更新 · 待办 —— ★ **已迁出**
 
-**★ 硬结论（源码级）**：**ds4 读不了 Q3_K_M**（白名单 5 类不含）⇒ **必须走 llama.cpp**。
-
-| 层 | 状态（E1）|
-|---|---|
-| **主线引擎** `/opt/llama.cpp`(91f6a6cf) | ✅ **已含 `deepseek4`**（`deepseek4.cpp`）⇒ **可能无需更新后端** |
-| **变体引擎**（glm5next 分支）| ✅ 亦有 `deepseek4`，且 dsv4 代码更完整 ⇒ 主线报错时优先用它 |
-| 外部佐证（E3）| 社区已有 `6block/DeepSeek-V4-Flash-0731-GGUF`，**含 Q3_K_M 四片**，卡面直接给 `llama-cli -hf …:Q3_K_M` 用法 |
-
-**后端更新的两条路（均已就绪）**：
-
-| 路 | 做法 | 适用/代价 |
-|---|---|---|
-| **A. 升级主线引擎** | `UPGRADE_SOP` 六步：B 单点构建 → `/opt/llama.cpp-master-<newcommit>`+MANIFEST → 分发 → **原子切 symlink** → 三站冒烟 | 需**全线**换引擎；**影响所有模型** ⇒ 需维护窗口 |
-| **B. 并存变体 + `--engine`**（§19.5 / commit `1ef03cb`）| `cluster.py load <别名> --backend llama-rpc --engine <变体名>` | ★ **仅个别模型需新引擎**时首选；**零影响现役** |
-
-**待确认**：`zrald/DeepSeek-V4.1-Balance-GGUF` 等**四个候选名在 hf-mirror 全返 401**（HF 对"私有"与"不存在"同为 401）⇒ **仓库名未确认**；且该档**体积**未核（决定双机/三机是否装得下）。
-
-### 20.5 本轮待办
-
-1. `zrald` 仓库确切 URL（用户提供）→ 核体积/片数/架构串 → 定"路线 A 还是 B"。
-2. ADR-0010 降级裁决（§20.3 建议）。
-3. 长 ctx 下 **decode 衰减曲线**未测（需数小时 prefill）—— 索引器 O(ctx)/token 的实际代价仍是空白。
+> 已迁至 **[V4.1-Flash 部署路径调研 §6](2026-09-28_DeepSeek-V4系列调研与部署.md)**（V4 `Q3_K_M` 量化白名单 · 后端更新的两条路 A/B）。
+> ⚠ 该节原文标题写「V4.1（Q3_K_M）」，但内容实为 **V4-Flash（arch `deepseek4`）**；**V4.1（arch `deepseek41`）两引擎均不支持** —— 这一区分已在新文档 §6/§7 钉死。
 
 ---
 
@@ -1086,7 +912,7 @@ C 站装同版变体引擎（`0.4.1-dev`，`ARCH_GLM5NEXT=1`），worker 起在 
 
 - **出处**：ds4 官方档 `glm53-q4`（`download_model.sh`），下载后字节一致 + sha256 双端一致（§14）
 - **内容**：`architecture = glm5-next` · 46 层 · 1412 张量 · 量化类 `F32×614 / BF16×459 / Q8_0×210 / Q4_K×129`（**全部标准 llama.cpp 类型**）
-- ★ **可用性边界（决定性）**：**张量命名是 ds4 转换器体系** —— `kda_like = 510` 处、**`ssm_like = 0`** ⇒ 与那份 Q2 同一来源，**llama.cpp 结构性不可读**（§19.3 的张量命名判据）；且 177.8 GiB **> 单站 124 GB** ⇒ 只能靠 ds4 `--ssd-streaming`（**0.41–0.44 t/s**）
+- ★ **可用性边界（决定性）**：**张量命名是 ds4 转换器体系** —— `kda_like = 510` 处、**`ssm_like = 0`** ⇒ 与那份 Q2 同一来源，**llama.cpp 结构性不可读**（该判据的完整版见 [GLM 文档附录 A.4](2026-09-28_GLM系列本地推理部署.md)）；且 177.8 GiB **> 单站 124 GB** ⇒ 只能靠 ds4 `--ssd-streaming`（**0.41–0.44 t/s**）
 - **与替代品对比**：同一模型在 llama.cpp 侧有 Unsloth `UD-IQ4_XS`（146.1 GiB，A/B 站**已有**）⇒ 速度 **27×**、**零额外下载**、质量同位或更好
 
 ### 21.3 裁决：**保留冷藏（不删）**
@@ -1112,62 +938,8 @@ C 站装同版变体引擎（`0.4.1-dev`，`ARCH_GLM5NEXT=1`），worker 起在 
 
 ---
 
-## 22. 外部依赖核查：`Zrald/zralddeepseekv4.1`（DeepSeek-V4.1-Flash 748B 社区量化）—— ★ **不结案：阻塞在引擎，不在权重**
+## 22. 外部依赖核查：`Zrald/zralddeepseekv4.1` —— ★ **已迁出**
 
-> 缘起：用户提供确切仓库 `https://huggingface.co/Zrald/zralddeepseekv4.1`，称 balance(Q3_K_M) 在 **309.2–323.4 GB**。
-> **方法（零大下载）**：README/manifest 直取 + 逐档 `HEAD` 取体积 + ★ **HTTP Range 只取 GGUF 头部**解析 `general.architecture`（对 246 GB 的档也只花了几十 KB）。
-
-### 22.1 仓库真相：**4 个"档"是玩具，只有 compressed 是真货**（E1）
-
-| 文件 | README 声明 | **实测体积** | 真身 |
-|---|---|---|---|
-| `accuracy.gguf` | 414.2 GB | **3,787,552 B（3.6 MiB）** | ❌ **玩具** |
-| `balance.gguf` | **309.2–323.4 GB** | **3,186,912 B（3.0 MiB）** | ❌ **玩具**（头实测 `block_count=6`、`n_tensors=166`）|
-| `q6k.gguf` / `q8_0.gguf` | — | 5.3 / 6.3 MiB | ❌ 玩具 |
-| **`compressed-00001..00007`** | ~245.5 GB | **264,515,279,456 B = 246.3 GiB** | ✅ **真档** |
-
-**玩具档的铁证**：`deepseek_quantization_manifest.json` 直书 `"base_model": "/root/hq21/**tiny-deepseek41.gguf**"`、各 rung `"gib": 0.0`、`"path": "/root/hq21/test_output_deepseek/zraldtest-deepseek-*.gguf"`
-⇒ **那 3–6 MiB 是量化管线在"玩具基座"上的测试输出，被当档上传了**；README 自己亦仅把 `compressed` 标为 **"Category 1 Files (Full Sharded Model)"**。
-
-### 22.2 ★ 目标架构 = `deepseek41`，**两引擎均不支持**
-
-`compressed-00001-of-00007.gguf` 头实测：
-
-```
-general.architecture      = deepseek41
-deepseek41.block_count    = 40          ← 真规模（玩具档为 6）
-deepseek41.context_length = 1048576
-deepseek41.embedding_length = 5120
-deepseek41.attention.head_count = 64 / head_count_kv = 1
-deepseek41.expert_count   = 384         ← 与 README 的 "384-expert MoE" 一致
-deepseek41.rope.dimension_count = 64
-deepseek41.attention.indexer.head_count = 32 / key_length = 128 / top_k = 512   ← 又是 DSA 式稀疏索引器
-```
-
-- `strings libllama.so | grep -x deepseek41` ⇒ **主线 0 · 变体 0**；两引擎已知上限 = `deepseek4`（另有 `deepseek2/3/32/-ocr`）
-- ⚠ **更正我自己**：先前 `grep -c 'deepseek41'` 报的 9 行是**假阳性** —— 来自 C++ mangled 符号 `llama_model_deepseek4` 紧跟长度前缀 `17`（`…deepseek41**7**load_arch…`），**不是架构名**。
-
-### 22.3 内存边界：**三站可装，两站不行**
-
-| 部署 | 每站分摊 | 可用 RAM/站 | 判定 |
-|---|---|---|---|
-| 两站 RPC | **123.2 GiB** | ~110–115 G | ❌ **装不下** |
-| **三站 RPC** | **82.1 GiB** | ~110–115 G | ✅ 留 ~30 G 给 KV |
-
-- 7 片精确体积：43.07 / 44.81 / 14.94 / 44.22 / 44.80 / 44.80 / 27.88 GB ⇒ **合计 246.3 GiB**
-- B 站磁盘余 **612 G** ⇒ 放得下 246 GB
-- 该 arch 的 **KV 量级未测**（层结构/KV 参数未全展开；索引器 `top_k=512` ⇒ 稀疏）
-
-### 22.4 结论与待办（★ **不结案**）
-
-**阻塞点 = 引擎不支持 `deepseek41`，而不是权重不可得** —— 仓库里有一份**真实可下载的 246.3 GiB V4.1-Flash 级量化档**（`compressed`，Q2_K_DS）。
-
-**顺带发现（改变结论）**：README 自述 **`compressed` 保真高于 `balance`**（97.61–99.99% vs 86.32–97.41%）**且小 60 GB** ⇒ **`balance` 未上传并不构成缺口**，`compressed` 本就是更优目标。
-
-**待办**：① 跟踪上游 `deepseek41` 架构支持（进 upstream-tracker；届时用 `--engine` **零影响现役**接入）；② 是否预下 246 GB（磁盘可行）取决于上游时间；③ 支持后再测其 KV/上下文。
-
-### 22.5 方法论副产物：**HTTP Range 读 GGUF 头**
-
-本次对 246 GB 的档只花了几十 KB 就拿到了架构/规模 ⇒ **"支持性判定"不必先下载**。可复用的判据顺序：
-`HEAD 取体积（识破玩具档）→ Range 取前 64 KB 解析 GGUF 头（取 arch/block_count）→ 引擎 strings 精确匹配 arch`
-—— 三次探测（均为秒级/分钟级）即可回答「**这模型我们能不能跑**」，**成本与模型体积无关**。
+> 全节（仓库真相 · 玩具档铁证 · `deepseek41` 架构 · 内存边界 · HTTP Range 方法论）**主题是 DeepSeek V4.1**，
+> 已迁至 **[V4.1-Flash 部署路径调研 §7](2026-09-28_DeepSeek-V4系列调研与部署.md)**（含 §7.5 的"零下载判支持性"方法论）。
+> 一句话结论：**不结案 —— 阻塞在引擎（`deepseek41` 两引擎均不支持），不在权重**（`compressed` 真档 246.3 GiB 可下载、三站可装）。
