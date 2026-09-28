@@ -628,7 +628,15 @@ dist_coordinator_prefill_prompt (ds4_distributed.c:3815)
 实测 **prefill 0.41 t/s / generation 0.44 t/s**（冷缓存；约 65% 专家走 SSD；缓存预算 60.13 GiB / 4561 experts）。
 官方参考档为 Q2（90 GiB，专家体积减半 ⇒ 命中率显著更高）。
 
-### 16.6 上游 issue 草稿（拟投 `antirez/ds4`；注明构建自 kyuz0 fork `main-gfx1151`）
+### 16.6 上游 issue：已投递 `antirez/ds4#1141`（E1）
+
+- **投递结果**：**https://github.com/antirez/ds4/issues/1141**（英文 · 含完整回溯 + 阈值实验表 + 反证据 + workaround 建议）。
+- **落点说明**：原拟投 `kyuz0/ds4`（我们实际构建的 `main-gfx1151`），但该仓 **`has_issues: false` 且 `has_discussions: false`** ⇒ 无对外报告通道；改用正典上游 `antirez/ds4`（issues 开放），正文明确注明「构建自 kyuz0 fork `main-gfx1151`」。
+- **正文已如实披露**：该组合（`glm53-q4` + ROCm 双机 PP）上游**未承诺支持**；报它的理由是「失败形态剧烈（健康启动 + 完整路由后 SIGSEGV/coredump）且根因与模型无关（纯 D2H `hipMemcpy` > 1 MiB 即可复现）」。
+- **拟反喂上游的实验清单**（正文尾部已声明可随时执行）：缩微复现 · `--dist-activation-bits` · 不同 `--layers` 切分 · 换小模型双机。
+
+<details>
+<summary>正文全文（存档，便于后续回复上游时引用）</summary>
 
 ```
 Title: [ROCm] D2H hipMemcpy > 1 MiB segfaults in libhsa-runtime64 on gfx1151
@@ -701,6 +709,8 @@ Suggested directions
   2. ds4 side (workaround): chunk the coordinator hidden-state readback into
      <= 1 MiB pieces, or stage it through pinned memory.
 ```
+
+</details>
 
 ### 16.7 本轮证据与关联
 
