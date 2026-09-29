@@ -86,6 +86,8 @@ rejected（可从 triage / accepted / plan-review / plan-revise 任一进入）
    站占用窗口，见 `_template/20_plan/`）；驳回 → 写理由 + 标 `rejected`。
 5. **方案复核回环**：`20_plan/` 成型 → 标 `plan-review` 交需求方复核；收到意见 → 标 `plan-revise`，
    意见落 `10_admin/复核意见-N.md`，修订 `20_plan/`（版本 vN）→ 再交 `plan-review`，循环至定稿。
+   ⚠ **轮次上限与超限处置**（含 2026-09-29 所裁之数与升级动作）**不在本行** —— 真值 =
+   [`inventory/multi-round.yaml`](../inventory/multi-round.yaml) 的 `plan-review-loop`（**同一事实只留一处**）。
 6. **执行**：按定稿 `20_plan/` 派发；观测记录落 `30_evidence/`（产物本身在项目根 `agent-out/`）。
 7. **交付 + 验收**：产出回收 → 30_evidence 证据束链死 → 标 `release` 交需求方验收；
    需求方签收 → `accepted-by-requester`；拒收/终止 → `rejected-by-requester`（后续新需求开新 `open`）。
