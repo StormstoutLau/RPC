@@ -116,7 +116,11 @@ $Script:ROUTE_TABLE = @{
     'local/qwen3.8-flash-next'    = @{ id = 'local/qwen3.8-flash-next';    station = 'C' }
     'opencode/nemotron-3.5-lightning-free'  = @{ id = 'opencode/nemotron-3.5-lightning-free';  station = 'B' }
     'opencode/nemotron-3-ultra-free'        = @{ id = 'opencode/nemotron-3-ultra-free';        station = 'B' }
-    # (上面两条 zen full-id 保留: 若将来 `opencode auth login` 恢复凭据, 它们即可用; 当前会静默挂死)
+    # (上面两条 zen full-id **仅作 full-id 解析之用**; ⚠⚠ 触发条件**不是凭据** —— 2026-09-24 实测:
+    #  非 tty ⇒ RC=124 挂死 / 伪 tty(script -qec) ⇒ RC=0, 且 DEBUG 显示请求已发出、**无 401/403**;
+    #  三站 auth.json 空或不存在、auth list = 0 credentials(2026-09-30 复测仍 0)
+    #  ⇒ **它要的是 tty, 不是登录**。原文"补 opencode auth login 即可用"是**已推翻**的旧归因
+    #  (见本表上方 2026-09-24 段, 以及台账 O-43 / O-07 的 2026-09-30 收口)。)
     # 站上 openrouter 的两个档位 full-id (与上面 local/* 同例: 使 `--model <id>` 与 env AGENT_FALLBACK_MODEL 可解析)
     'openrouter/thinkingmachines/inkling:free'          = @{ id = 'openrouter/thinkingmachines/inkling:free';          station = 'B' }
     'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free' = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free'; station = 'B' }

@@ -155,7 +155,7 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0002]
 | sensitivity 冲突（local-only+远端） | 拒绝，无覆写通道                           | 4     | A8              |
 | ssh 断连                      | 重试 1 次（门禁缓存不重审）→ 终败 NETFAIL    | 5     | A13/A15（PS5.1 NativeCommandError 地雷已绕） |
 | 超时                          | kill → failed{timeout} → 释放锁 →        | 6     | A13/A14         |
-| zen 限额（429/quota）            | 不重试远端 → 提示切本地模型命令（降级路径）         | 7     | 定义置位，未真实触发      |
+| zen 限额（429/quota）            | 不重试远端 → 提示切本地模型命令（降级路径）         | 7     | ★ **路径已撤 ⇒ 不适用（2026-09-30）**：触发源 zen **已撤出运行时路由**（2026-09-24 起三档维持 openrouter）⇒ 本行**定义保留为历史**；429/quota 的现实形态已转移到 **OpenRouter free 档**（20 RPM + 指数退避 —— `ADR-0003` / `ops/cluster_egress.py` / `agent-cli.ps1` 的 RPM gate），**不走 exit 7**。见 `OPEN-ISSUES.md` **O-07** |
 | 孤儿（running+死 PID）            | 归档 out/ → orphaned → 允许重取锁          | 0+警告 | A10             |
 | accept 判据                    | agent 完成但任一条判据失败 → 整任务 failed     | 9     | A14（ACCEPT_OK 回收） |
 | agent-out 不可写                | 前置探针失败 → ABORT，提示 Settings UI        | 12    | D-17（PREFLIGHT-FAIL，实测） |
