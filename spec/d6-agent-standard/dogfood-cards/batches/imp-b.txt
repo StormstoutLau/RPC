@@ -1,0 +1,14 @@
+# IMP-B 批 —— A 清单第二批：3 张**提案层**卡（摘要内嵌卡正文，无附件）
+#
+#   imp4 = A2 executor-trace（执行侧过程留痕）设计
+#   imp5 = A3 derived-readonly-view（派生只读视图 + --check）设计
+#   imp6 = A6 失效传播"执行侧"最小形态设计
+#
+# 档位：均 public（摘要已由主控人工切好并**内嵌在卡正文**，不用附件 ⇒ 不触发 attach-egress 义务）。
+# 并发：每卡产物文件名互不相同；跨站各 1（A/B/C）⇒ 无同站锁冲突。
+# 命令: & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/imp-b.txt"
+# 干跑: $env:AGENT_BATCH_DRYRUN=1; & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/imp-b.txt"
+
+spec/d6-agent-standard/dogfood-cards/imp4-executor-trace-design.md station=A model=ultra-a
+spec/d6-agent-standard/dogfood-cards/imp5-derived-view-design.md station=B model=ultra
+spec/d6-agent-standard/dogfood-cards/imp6-invalidation-executor-design.md station=C model=ultra-c

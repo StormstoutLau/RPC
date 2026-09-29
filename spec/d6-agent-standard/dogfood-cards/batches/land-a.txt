@@ -1,0 +1,22 @@
+# LAND-A 批 —— A 清单"落地件"第一批：3 张**产件卡**（跨三站并行）
+#
+#   定位：A 清单剩余 5 项的**落地**（`A-LIST-LANDING-PLAN.md` §2）。本批只做**其中三项**
+#     —— A4 / A5 / A3 = **三个互不共享代码面的新 gate** ⇒ 可并行立项；各派**一站**：
+#       land-a4 = 表格列数守恒判据（落地件：纯函数 + 夹具断言草案 + 边界用例 + 假绿 + 接线）
+#       land-a5 = 确定性/幂等判据（落地件：纯函数 + **噪声真值表** + 夹具断言草案 + …）
+#       land-a3 = 派生只读视图 + --check（落地件：纯函数 + 渲染器形态 + 夹具断言草案 + …）
+#     ⇒ 另两项 A2/A1 同改 `agent-cli.ps1`（关键路径）⇒ **不由本批派**，走主控本地串行。
+#
+#   模型：三站**全 `ultra` 族**（`ultra-a`@A / `ultra`@B / `ultra-c`@C）—— 同一 id、分居三站，
+#     **零代码改动**；产实现件不涉认知多样性，跨族（`inkling`）留给**复核批**。
+#
+#   档位：均 `public`（卡面自含**已勘误底稿**，无附件 ⇒ 不触发 `attach-egress` 义务）。
+#   站：**一站一卡**（A/B/C 各 1）⇒ 无同站锁冲突、站间并行度 = 3。
+#   产物：`out/land-a4.md` / `out/land-a5.md` / `out/land-a3.md`（文件名互不相同）。
+#
+#   命令: & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/land-a.txt"
+#   干跑: $env:AGENT_BATCH_DRYRUN=1; & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/land-a.txt"
+
+spec/d6-agent-standard/dogfood-cards/land-a4-cell-safety.md station=A model=ultra-a
+spec/d6-agent-standard/dogfood-cards/land-a5-determinism.md station=B model=ultra
+spec/d6-agent-standard/dogfood-cards/land-a3-derived-view.md station=C model=ultra-c
