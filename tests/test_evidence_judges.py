@@ -93,6 +93,25 @@ try:
     chk("T9 uncomparable => not judged (no coverage inflation)",
         (not ok) and (not bad), f"ok={ok} bad={bad}")
 
+    # 2026-09-30（O-119）：**传输层失败 / 任务层成功** 的双真相。实测来源 = hang 批首跑 4 张卡
+    #   （O-117：生成件里那条"被推出 `#` 的注释"当命令跑）⇒ **外壳退出码 = 255**（ssh/bash 的
+    #   "远端命令失败"约定），而任务自身的 accept **已跑过并通过**（产物在 runDir、`ACCEPT_OK=1`）。
+    #   两份归档件**都没被改**（不是篡改）⇒ 属**不可判**（与 O-22"上一轮残留"同族：判据记录不可信
+    #   ⇒ 本轮 verdict 不可复核）⇒ **刻意不进 FAIL 集** —— 否则这 4 条一入链就**阻断一切提交**。
+    d = mk(tmp / "t14", META_OK.format(ts="1111").replace("TASK_RC=0", "TASK_RC=0\nRC_DOMAIN=v2"),
+           dict(BASE, exit_code=255, status="failed"))
+    bad, gap, ok = C._verdict_check(d, "1111", "t/1111")
+    chk("T14 O-119 传输层失败/任务层成功 => gap, NOT issue（不得阻断提交）",
+        (not bad) and gap and ok and "O-117" in gap[0], f"bad={bad} gap={gap}")
+
+    # T15 = T14 的**反面**（先验红的另一半）：同样"任务层 0 / 传输层非 0"，但退出码**不是 255**
+    #   ⇒ 豁免**只覆盖实测过的形状**，其余不一致照旧 FAIL（否则改法就只是把门拆掉 —— 本仓最忌假绿）。
+    d = mk(tmp / "t15", META_OK.format(ts="1111").replace("TASK_RC=0", "TASK_RC=0\nRC_DOMAIN=v2"),
+           dict(BASE, exit_code=7, status="failed"))
+    bad, gap, ok = C._verdict_check(d, "1111", "t/1111")
+    chk("T15 非 255 的传输失败 => 仍须 issue（豁免不得泛化）",
+        bool(bad) and "TASK_RC" in bad[0] and not gap, f"bad={bad} gap={gap}")
+
     # ── A2 golden-identity ──
     d = mk(tmp / "t10", META_OK.format(ts="1111"),
            dict(BASE, accept_golden={"cmd": [], "passed": True,
