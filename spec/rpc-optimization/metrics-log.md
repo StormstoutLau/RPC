@@ -198,6 +198,30 @@
 
 **坑记录**: `ssh "pkill -f a3a_echo_server; nohup ... a3a_echo_server.py ..."` — pkill 正则匹配到 bash 自身命令行中的 `a3a_echo_server.py` 字样 → **自杀, ssh 255 空输出**。修复: kill 与 start 拆成两条 ssh 调用, kill 用 `a3a_echo_serve[r]` 括号技巧。
 
+### A3a 补测与结论更正 — 2026-09-29（三机形态）
+
+> **背景**: C 站 2026-09-08/09 入群, **从未应用 A3a**（初始 0/0/1/0 + TB 全 auto）; A/B 两站 08-28 已持久化。本次对 C 逐项增量应用并复测三段六向。
+> **口径**: 与 08-28 同法（TCP 1B 往返 ×5000, python 探针, 非 ICMP）。
+
+**逐项 before/after（TCP-RTT p50, µs）**:
+
+| 阶段 | A→B | B→A | A→C | C→A | B→C | C→B |
+|---|---|---|---|---|---|---|
+| 基线（C 未调优; socket 均早于套件创建） | 20.3 | 18.9 | 130.4 | 130.4 | 130.4 | 130.4 |
+| C + busy_read/busy_poll=100（socket **未重建**） | — | — | 130.7 | **19.6** | 130.6 | **19.4** |
+| C + tcp_fastopen=3 / tcp_low_latency=1 / TB power=on | — | — | 130.5 | 19.4 | — | 18.8 |
+| ★ **重启 C 侧服务进程后**（唯一变量） | 20.2 | 19.8 | **18.5** | 19.4 | **18.1** | 18.8 |
+
+**判定**:
+1. **A3a 有效, 且远大于 08-28 的估计**: 调优 + 重启后 C 相关段 TCP-RTT p50 由 **130.4 → ~19µs（×6.8 削减）**, 六向收敛 18–20µs。
+2. ★★ **机理（08-28 未识别）**: `net.core.busy_read` / `busy_poll` 在 **socket 创建时读取并黏附于该 socket** ⇒ **既有连接不吃参数**。证据链（同机同链路、单变量）: C 的 echo server 建于套件之前 → 应用 sysctl 后 A→C 仍 130.5µs; **仅重启该进程一次** → 立即 19.4µs。
+3. ⚠ **更正 08-28 第 5 条结论**: 原文"p50 130µs 三阶段不变 → 中位数由链路物理延迟主导（20G 协商速率）"**不成立** —— 被测 socket 早于 sysctl 创建, 从未吃到 busy poll。正确表述: 130µs 是**未调优 socket** 的中位值, 调优并重启后 ≈ 19–20µs; "20G 决定 p50 下限"的推论一并撤回。
+4. ★ **对 tg 的含义 — 已实测: 端到端增益为 0（2026-09-29 晚）**: 08-28 的 tg128 +1.0% 是在 **A-B 段**（两端本已调优）上测的, 因而**未包含 C 站的 6.8× 改善**。三机 RPC 拓扑下 C 端点为 `rpc-server` 绑定 10.10.11.3（B-C 段）⇒ C 侧 RPC socket 过去一直是 130µs 档。按 A2 口径（38.7 命令/token）若命令全落 B-C 段, 每 token 约省 4.3ms（对 87ms/token ≈ 5%）。
+   **实测（同口径 `flow bench --go` · `max_tokens=128` · 三机 GLM-5.3-Flash）**: 调优后 **tg 128 tok @ 11.4 t/s**（4 次采样 11.4 / 11.4 / 11.5 / 11.4）; 同日 C **未调优**的锚 = `pp 413 tok @ 85.7 · tg 128 tok @ **11.4**` ⇒ **逐位一致, Δ < 1%（噪声内）**。加载/卸载经统一入口 rc=0, 拓扑 = B head + A/C worker。
+   ⇒ **结论: RTT 税基本身不是 decode 的约束** —— 与既有判读「decode = 内存带宽 bound, 跨链延迟即使压到 7µs 也只能挤出个位数 %」同向; 也说明按"命令数 × RTT"的**线性外推高估**了延迟税在关键路径上的占比。A3a 的真实价值回到: ① **busy-poll 削 socket 唤醒下限**（08-28: pp512 +4.1%）; ② **TB 保活的可靠性**（消 idle retimer 振荡）。**tg 无收益。**
+5. **落体**: C 站本次补齐 `/etc/sysctl.d/99-usb4net-lowlatency.conf` + `usb4net-lowlatency.service`（enabled/active）; A/B 漂回 `auto` 的 TB 设备（`0-2`/`1-2` 等）已重置 `on`; 三站现全部 100/100/3/1 + TB 全 on。测量后探针进程已清理, 三站无引擎在服务。
+6. **部署前提（新增）**: **应用 A3a 后必须重启 llama.cpp 服务 / RPC 端点**, 否则既有 socket 保持旧值 —— 08-28 未写下的部署条件。
+
 ---
 
 ## 附加试验 A4: vLLM TP=2 平行试验 — 环境就绪 + 硬件层根因诊断 (2026-08-28/29)
@@ -590,3 +614,4 @@
 | 2026-09-23 01:01 | studio-upgrade | - | API timings @ 内层端口 (pp/tg 由响应 timings 实测) | FAIL | - |
 | 2026-09-23 01:04 | studio-upgrade | C | rpc_check --only backend,engine 无 FAIL | PASS | - |
 | 2026-09-29 14:27 | bench | B | API timings 口径 · max_tokens=128 · prompt 实测 413 tok | PASS | pp 413 tok 85.7 t/s · tg 128 tok 11.4 t/s |
+| 2026-09-29 16:24 | bench | B | API timings 口径 · max_tokens=128 · prompt 实测 413 tok | PASS | pp 413 tok 86.3 t/s · tg 128 tok 11.4 t/s |

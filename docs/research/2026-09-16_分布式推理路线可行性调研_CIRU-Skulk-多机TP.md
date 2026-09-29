@@ -1,6 +1,6 @@
 # 分布式推理路线可行性调研：CIRU StrixLink / Skulk（含 vLLM 多机 TP 与 AMD 官方路线）
 
-> **日期**: 2026-09-16（**v3 增补 2026-09-17**：新增 **§9「ROCm 6.x vs 7.x on gfx1151 专项调研」** —— 回答"B/C 是否该与 A 站同步装 ROCm 6.4.1 / ROCm 7.x 是否在本显卡退化"；同时补齐 §8 的 ROCm 一手来源。v2，同日修订：用户给出 `jcbtc/GLM5.3-Flash-CIRU-STRIX-IU4` 出处后**重新取证并推翻 v1 的"未证实"结论**）
+> **日期**: 2026-09-16（**v3 增补 2026-09-17**：新增 **§9「ROCm 6.x vs 7.x on gfx1151 专项调研」** —— 回答"B/C 是否该与 A 站同步装 ROCm 6.4.1 / ROCm 7.x 是否在本显卡退化"；同时补齐 §8 的 ROCm 一手来源。v2，同日修订：用户给出 `jcbtc/GLM5.3-Flash-CIRU-STRIX-IU4` 出处后**重新取证并推翻 v1 的"未证实"结论**；**v4 增补 2026-09-29**：新增 **§10「USB4 模拟 RDMA 专项核验（`thunderbolt-ibverbs` / Soft-RoCE）」** —— 回答"社区那条把 USB4 当 RDMA 用的路子本机群能不能做"，并**收窄 §5.1 的"必须 100GbE"前提**为"真正卡的是**每对 rail 数 + 内核 NHI 直通**"；**v5 增补 2026-09-29**：新增 **§11「CIRU 是否比现役 llama.cpp RPC 更快」** —— 结论 = **GLM 那约 2× 的差距主因是「投机解码」而非互联**（`23.69` 与 `11.94` **不同口径，不可相减**）；**DeepSeek 无现成 CIRU 包**，但 vLLM 官方 recipe 同样开投机解码；**同日二次更正（v5 内）**：§11 的归因由"几乎全是投机解码"更正为「**①串行跨链 + ②TP 语义 + ③投机解码**」**三条轴叠乘**（见 **§11.7**），并更正 §10.5 的"换 40G 线"为**可靠性项（非性能项）**；**同日三轮追加**：新增 **§11.8「①轴当前能不能解」** —— 税 = **次数 × RTT** ⇒ **RTT 那半今天可解（A3a，零成本）**、**次数那半只能绕**（`#26610` **对 GLM 无效** / vLLM TP=2 **现在就能试**），触发条件见 TRACKER §W-6）
 > **触发**: 用户提出"当前分布式 llama 对 V4-Flash / GLM-5.3-Flash 支持力度不够"，要求评估 ① **CIRU StrixLink 部署 GLM-5.3-Flash** 与 ② **引入 Skulk 框架** 的可行性。
 > **证据等级**: **E1**=本轮实测/`fetch` 原页核实；**E3**=外部文档；**E4**=未确认（明确标注，不采信）
 > **核查纪律**: 先确认**通道可达**再判定"有无"（v1 的教训见 §3）
@@ -16,8 +16,13 @@
 | **③ Skulk** | 🟠 可评估，但**不解决同一问题** | 官方原页确认 **AMD Linux = `skulk-llama-server-vulkan`**（我们在支持范围内）、引擎可注入；但**后端就是 llama.cpp** ⇒ 不改"上游未合 glm5next"的事实；且其**常驻 supervised service** 与"零自加载/看门狗禁用/唯一管理面"冲突 |
 | **④ vLLM 多机 TP（Ray + 定制 RCCL + RoCE v2）** | 🔴 能力最通用，但**需 100GbE RDMA 硬件** | 合并显存 ~248GB、RDMA 5µs 级延迟；**我们只有 USB4**。**注**：CIRU 路线在某种意义上已用 USB4 + 自有 all-reduce 实现了 TP=2（见 §2），故本条的"必须 100GbE"前提**对 CIRU 不适用** |
 | **⑤ 现状路线（llama.cpp RPC）+ 等上游** | ✅ 已跑通，**有 AMD 官方背书** | 官方 playbook《Clustering Two Ryzen AI Halos with RPC》= llama.cpp RPC + ROCm 跑 GLM-4.7 358B；但我们**只有 9/8 前构建的引擎**，glm5next 未合 |
+| **⑥ USB4 模拟 RDMA（`thunderbolt-ibverbs` / Soft-RoCE）** —— **v4 新增** | 🔴 **不建议做**（项目**真实**、同款硬件跑通过；但对本机群**收益≈0**且与硬约束冲突） | 需 **mainline ≥7.1 + 内核补丁**（本集群 **pin 6.17**）· 作者自述 **"Soft DMA"**、**内核频繁锁死**、**非生产可用**；本栈（llama.cpp RPC）**不消费 IB verbs**，瓶颈已实测是**内存带宽**；本环**每对仅 1 根线** ⇒ **拿不到其头条数字**（那是双线聚合）。详见 **§10** |
 
 **一句话（v2）**：用户诊断的"支持力度不够"**有一条现成解** —— **CIRU StrixLink 双机方案**（GLM-5.3-Flash 320B、UMA 分片权重、USB4 上自有 all-reduce、实测可用吞吐）；代价是**引入 ROCm 10/vLLM 新栈 + 需两机同时在场 + 治理接入**。Skulk 补的是编排，**不改上游事实**。
+
+> ★ **v5 增补（2026-09-29）**：用户追问"CIRU 能否比现役 llama RPC 更快跑 GLM / DeepSeek"⇒ **见 §11**。
+> 一句话：**CIRU 对 GLM 确实约 2× 快，但那 2× 的来源是「投机解码」而不是互联或引擎**；
+> 且 **DeepSeek 没有现成的 CIRU 包**（vLLM 侧同样开投机解码，但要自建栈）。**建议先做零新栈的同口径对照再决定。**
 
 ---
 
@@ -157,6 +162,8 @@
 来源：[kyuz0/amd-strix-halo-vllm-toolboxes](https://github.com/kyuz0/amd-strix-halo-vllm-toolboxes)（含 `rdma_cluster/setup_guide.md`，Fedora 43 实测）：**vLLM（TP=2）+ Ray + 定制 gfx1151 RCCL + RoCE v2**，需 **2×100GbE RDMA NIC（Intel E810-CQDA1）+ DAC**、BIOS/内核参数一整套；收益：合并显存 **~248GB**、跨机延迟 **70-100 µs → ~5 µs**。
 **v2 微调**：CIRU 证明**在 USB4 上也能做 TP=2**（NHI 硬件环 + DMA-BUF，110 µs 组件门）⇒ "TP 必须 100GbE"**不是普适律**，而是"通用 RCCL/TCP 路径下的现实"；若走 CIRU 那套自有 all-reduce，则 100GbE 非必需（但需 NHI 内核）。
 
+**v4 微调（2026-09-29）**：本条"需 100GbE"的**真正硬约束不是"专用网卡"，而是 ① 每对链路数（rail 数）② 内核是否有 NHI/USB4STREAM 直通** —— 见 §10.3/§10.6。★ 且**"装上 ibverbs" ≠ "提速"**：同款 Strix Halo 上 **Soft-RoCE（同一套 verbs 接口、零内核改动）实测 4.3 Gb/s < TCP 8.85 Gb/s**（E3）⇒ **接口兼容与性能等价是两件事**。
+
 ### 5.2 AMD 官方 playbook（我们已在走的路线）
 
 [developer.amd.com/playbooks/clustering-rpc-server](https://developer.amd.com/playbooks/clustering-rpc-server/) = **llama.cpp RPC + ROCm 两机跑 GLM-4.7 358B**（`amd-ttm --set 120` 调 UMA、BIOS 0.5G 起步）⇒ 现路线有官方背书，**瓶颈在上游 PR 与物理链路，不在路线选择**。
@@ -189,6 +196,23 @@
 7. `ciru-ai/CiruStrixLink` GitHub 仓库的版本/变更节奏（判断是否值得跟）。
 8. 权重完整性校验：166.72 GiB / 103 文件的逐文件哈希（对照 HF 侧 sha 或 LFS 指针）。
 
+> **v4 追加（2026-09-29，见 §10）**
+> 9. **USB4 模拟 RDMA 的收益是否为正**：先在 B/C 两台做**零内核改动**的 Soft-RoCE 对照（`rdma link add rxe0 type rxe netdev thunderbolt0`），量 `ib_send_bw` vs `iperf3`；**预期负收益**（同硬件公开实测 4.3 < 8.85 Gb/s）。
+> 10. **`thunderbolt-ibverbs` 的内核前提**：要 **mainline ≥7.1 + LKML 稳定性补丁**；本集群 **pin 6.17**（A `6.17.0-40` / B=C `6.17.0-23`，2026-09-29 实测）且**禁升 7.x**（ROCm 面）⇒ **未评估**"补丁回移 + 模块对 6.17 NHI 内部结构的适配"。
+> 11. **IOMMU 面**：**C 站实测 `iommu=off`** ⇒ 任何 DMA-capable 对端都**无 DMA 保护**；该路径属 **DMA 级**能力 ⇒ 若将来要碰，**必须先解决 IOMMU**。
+
+> **v5 追加（2026-09-29，见 §11）**
+> 12. **"投机解码值多少"的同口径差值**（§11.5-4，§11.8）：在**现役 llama.cpp 路径**上量 spec-on / spec-off ⇒ 决定 CIRU 那 2× 里多少是"引擎"、多少是"那颗头"。★ 且须验"**RPC 上投机解码是否被串行税倒挂**"（§3.2 的赌博判据）。
+> 13. **我方 V4-Flash GGUF 的 MTP 是否可用于投机解码**（§11.4）：头部含 `mtp`/`draft`/`eagle` 字样（E1）**不等于** llama.cpp 能用 ⇒ 须核 `llama.cpp` 对 `deepseek4` 的投机解码支持面（含 `-md` draft 路径）。
+
+> **v6 追加（2026-09-29 第二轮，见 §11.7）**
+> 14. **`#26610` 升级对照**（§11.5-3，§11.8-①B）：llama.cpp RPC 协议异步化的 before/after（社区同构预期 **+32% tg**）；本仓 A6 锚点已建。**零新栈、直击第①-B 轴**（但 **GLM 上无收益**）。
+> 15. **GLM / 三机的"串行跨链往返数"**（§11.7-未实测）：本仓 **38.7 次往返/token 是 M2.7 双机**的数 ⇒ GLM（glm5next、三机）的往返数**未测**。
+
+> **v7 追加（2026-09-29 第三轮，见 §11.8）**
+> 16. **A3a 的实际增益未测** —— 本仓判"收益传导最确定"，但**没有数**；套件是**逐项对照增量应用** ⇒ before/after 可直接落 metrics-log。
+> 17. **A4 的决策门未试**：**单流 tg ≥ 24 t/s 且 16k 上下文无崩溃** —— 两条均未跑。
+
 ---
 
 ## 8. 来源
@@ -209,6 +233,12 @@
 - [AMD Strix Halo 系统优化文档（7.2.0）](https://rocm.docs.amd.com/en/docs-7.2.0/how-to/system-optimization/strixhalo.html)｜[7.0.2 release notes（hipBLAS/RCCL 的 gfx1151 支持）](https://rocm.docs.amd.com/en/docs-7.0.2/about/release-notes.html)｜[AMD 6.4.4 release notes（Strix Halo = Developer Preview）](https://www.amd.com/en/resources/support-articles/release-notes/RN-AMDGPU-LINUX-ROCM-6-4-4.html)
 - Fedora 打包（**soname 证据**）：[rocm-hip @ fedora-43（6.4.2 → `libamdhip64.so.6`）](https://packages.fedoraproject.org/pkgs/rocclr/rocm-hip/fedora-43.html)｜[fedora-rawhide（7.14 → `.so.7`）](https://packages.fedoraproject.org/pkgs/rocclr/rocm-hip/fedora-rawhide.html)
 
+**一手（§10 USB4-RDMA 专项，2026-09-29 抓取）**
+- [IV. thunderbolt-ibverbs（hellas.ai 工程博客）](https://blog.hellas.ai/blog/thunderbolt-ibverbs/4-thunderbolt-ibverbs/)（内核补丁 / 带宽逐层拆解 / **`Soft DMA` 自述**）｜[Bonus Round I: AD/FA57（Apple 的 RDMA-over-Thunderbolt 对照）](https://blog.hellas.ai/blog/thunderbolt-ibverbs/6-ad-fa57/)
+- [Apple TN3205: Low-latency communication with RDMA over Thunderbolt](https://developer.apple.com/documentation/technotes/tn3205-low-latency-communication-with-rdma-over-thunderbolt)（Apple 官方；TB5 起 + 需 IOMMU 保护）
+- [Level1Techs：Ryzen AI Halo — USB4 Clustering with RDMA 实测](https://forum.level1techs.com/t/ryzen-ai-halo-usb4-clustering-with-rdma-testing-notes/253117/1)（**同款 Strix Halo**：TCP 8.85–9.42 Gb/s vs **Soft-RoCE 4.3 Gb/s**）
+- [Linux 内核文档：USB4 和 Thunderbolt](https://linuxkernel.org.cn/doc/html/latest/admin-guide/thunderbolt.html)（**security 级别语义**：`user` ⇒ 软件连接管理器**不建 PCIe 隧道**）
+
 **二手（仅作旁证）**
 - [CIRU 运行时发行说明索引页（Ling-3.0-Flash-CIRU-int4-Strix-native）](https://www.toolify.ai/ai-model/jcbtc-ling-3-0-flash-ciru-int4-strix-native)
 - [kyuz0/amd-strix-halo-toolboxes](https://github.com/kyuz0/amd-strix-halo-toolboxes)（把 `rocm-6.4.4` 标 Stable、`rocm-7-nightlies` 标 Experimental）｜[其 toolbox 说明](https://deepwiki.com/kyuz0/amd-strix-halo-toolboxes/3.1-rocm-toolboxes)
@@ -217,6 +247,7 @@
 
 **本仓**
 - [upstream-tracker §1.4/§1.5](../../spec/upstream-tracker/TRACKER.md)｜[ADR-0004](../../adr/ADR-0004-统一管理入口为唯一管理面.md)
+- ★ **§11 的关键前置（第二轮才发现本仓已有）**：[双机剩余优化空间评估.md](../双机剩余优化空间评估.md)（2026-08-28）—— 已把 RPC 根因量化为**串行跨链税（38.7 次往返/token）**、列出两条攻击路径（**换并行策略 / `#26610`**）、并实测**换线性能 ≈0（利用率 0.02%）**；同文引 Geerling 4×M3 Ultra 的同硬件对照（llama.cpp RPC 负加速 vs TP+RDMA 正加速）｜[ADR-0010](../../adr/ADR-0010-DwarfStar第二引擎引入立项.md)（ds4 = **覆盖面 + 容量**，非吞吐引擎）
 
 ---
 
@@ -335,3 +366,219 @@
 - **统一目标定案 = 7.2.4**（`rocm-hip-sdk` + `--no-dkms` + `--rocmrelease 7.2.4`）。遮蔽判据（§9.7-③，`$ORIGIN` 优先）与版本号无关，**不因本次更正而失效**。
 - **方法论沉淀**：安装目标的**版本号必须以 apt 仓库真实存在为准，官方产品号 ≠ apt 版本段**；起设计前应 `curl` 仓库根目录清单确认该版本目录存在，避免 pin 到不存在的版本导致安装失败。
 - 完整执行设计已落 `spec/rocm-migration/DESIGN.md`（含 8 项验收清单）；TRACKER 变更日志 v2.1。**下一步**：3.0 前置 `apt-cache policy rocm-core` 确认真实候选，待裁决进入实际安装。
+
+---
+
+## 10. 附：USB4 模拟 RDMA 专项核验（2026-09-29）
+
+> **触发**：用户提供一段二手描述 —— "Strix Halo 上用 `thunderbolt-ibverbs` 把 USB4 端口变成 InfiniBand 设备，vLLM/RCCL/NCCL 无需修改即可识别使用"，要求"分析本机群是否可实现"。
+> **证据等级**：**E1** = 本机群实测（本轮）；**E3** = 外部原文（工程博客 / 官方文档 / 第三方实测）；★ **二手转述一律降级并逐条核对**（见 §10.2）。
+
+### 10.1 结论：🔴 不建议做
+
+项目**真实存在**（`hellas-ai/thunderbolt-ibverbs`，作者用的就是**同款 Strix Halo**），但本机群是「**高成本（内核级）+ 收益≈0 + 与硬约束冲突**」。
+
+| 维度 | 判定 | 依据 |
+|---|---|---|
+| 能否跑通 | ◐ **理论上能试，但在本集群须先补两项未评估前提** | 项目要 **mainline ≥7.1 + LKML 稳定性补丁**；本集群 **pin 6.17**（A `6.17.0-40` / B=C `6.17.0-23`，§10.3）且**禁升 7.x**（ROCm 面）⇒ §7-10 |
+| 对本集群收益 | ❌ **≈0** | ① 本栈是 **llama.cpp RPC（Vulkan）**，**不消费 IB verbs**；② 瓶颈**已实测是内存带宽**；③ 本环**每对仅 1 根线** ⇒ 拿不到其头条数字。见 §10.4 |
+| 与硬约束 | ❌ **冲突** | 内核 pin（禁升 7.x）· **C 站 `iommu=off`**（无 DMA 保护）· USB4 同时是**数据面兼 ssh 兜底通道**（内核锁死会一起断） |
+| 项目成熟度 | ❌ **不可用于生产** | 作者自述 *"research code, **not production-ready**; stability and support are **not guaranteed**"*，博客记录**内核频繁锁死**（锁死后需**物理**输入口令恢复） |
+
+### 10.2 ★ 三处二手转述更正（本节的直接产出）
+
+| 转述说法 | 核对结果（E3 原文） |
+|---|---|
+| "直接操作 NHI DMA 环，**把 USB4 的 PCIe 隧道能力转化为 RDMA 语义**" | ❌ **机制描述不成立**。作者原话：*"our implementation is **'Soft DMA'** — even if we're woken on interrupts and only **copy DMA descriptors with the CPU**, it's orders of magnitude higher latency than an ASIC could achieve"*。走的是 **NHI 环**（即 USB4NET/tbnet 那条 DMA 路径），**不是 PCIe 隧道**；且 host↔host 之间**没有 PCIe 设备可枚举**，本集群 `security=user`（§10.3）下软件连接管理器**默认就不建 PCIe 隧道** ⇒ "PCIe 隧道"在本场景本来就无关 |
+| "**成熟的**社区方案验证了可行性" | ❌ **"成熟"不成立**：项目自陈研究代码、稳定性不保证，博客自述内核锁死频繁 |
+| "vLLM/RCCL/NCCL **无需任何修改**即可使用" | ◐ **只有接口面成立**（会注册 `usb4_rdma*`、`ibv_devices` 可见）。它**不解决** RCCL 在 gfx1151 上的支持问题（本仓 [提速调研报告](../提速调研报告.md) 已记 vLLM ❌）；★ 且 **"装上 verbs" ≠ "提速"** —— 同款 Strix Halo 上 **Soft-RoCE**（**同一套 verbs 接口、零内核改动**）实测 **4.3 Gb/s < TCP 8.85 Gb/s** |
+
+### 10.3 本机群实测约束（E1，2026-09-29）
+
+| 项 | 实测值 | 对该路径的意义 |
+|---|---|---|
+| 内核 | A `6.17.0-40` · B/C `6.17.0-23` | 项目要 **≥7.1 mainline**；本集群**内核锁定**，且 ROCm 7.2.4 就验在这套 6.17 上 |
+| USB4 链路 | **Gen2 20Gbps**（`iperf3` `8.8–9.2 Gb/s`，[net.yaml §segments](../../inventory/net.yaml)） | 与第三方同硬件实测（TCP `8.85–9.42`）一致；★ 该项目头条 **`48 Gb/s` 是"同一对机器两根线聚合"** ⇒ 本三角环**每对 1 根线**，**结构上拿不到** |
+| `security` 级别 | 三站均 **`user`** | 软件连接管理器 ⇒ **PCIe 隧道默认禁**（故"PCIe 隧道→RDMA"在本场景无关） |
+| IOMMU | **C 站 `iommu=off`**（A/B cmdline 无显式项） | 该路径是 **DMA 级**能力 ⇒ 无 IOMMU 时对端可**不受保护**地访问本机内存（作者本人亦点出 *"unfettered access"*） |
+| 拓扑 | 三角环、三段各 1 根线（各站 2 个 TB 口已用满） | 无法多 rail 聚合；单 rail 上限即现状 |
+| 退路 | 站间 ssh **兜底走 USB4**（见 [ADR-0006](../../adr/ADR-0006-控制面传输绑定LAN_IPv4.md) 的 `known_hosts` 一节） | 该路径若锁死内核 ⇒ **数据面与退路同时断** ⇒ 实验必须**人在机前** |
+
+### 10.4 就算装上，为什么收益≈0（三条量化理由）
+
+1. **本栈不消费 IB verbs**：分布式路径是 **llama.cpp RPC**（自有协议，不看 `ibverbs`）。要用上必须换引擎栈（vLLM/RCCL）—— 那是 **ADR 级**决策，不是网络层改造。
+2. **瓶颈已实测是内存带宽**：加节点 **decode 反降**（双机 `11.94` → 三机 `11.22`，§7.2）；`-ub` 调参**只动 prefill、decode 纹丝不动**（§7.3）。跨机链路即使压到 7 µs 延迟，能挤的也只是那点**流水线开销** ⇒ **上限个位数百分比**。
+3. **成本侧不对称**：代价 = 往 ROCm-validated 的 6.17 上塞 **out-of-tree 内核模块 + 内核补丁**，换回个位数百分比。
+
+### 10.5 真要做，次序（按性价比）
+
+| 序 | 动作 | 成本/风险 | 说明 |
+|---|---|---|---|
+| **1** | **别动网络层** | 0 | 先证伪"瓶颈在互联"这一前提 —— **本仓已有答案：是内存带宽** |
+| **2** | ~~换 ≤0.8m USB-IF 认证线升 Gen3 40Gbps~~ ⇒ ★ **不是性能项**（2026-09-29 更正） | 低（线材） | ❌ **原写"可升档"易被读成绩效杠杆，已更正**：本仓 A2 实测**利用率 0.02%、20G→40G 无感** ⇒ 它的真实价值是**可靠性**（消除 retimer found/disconnected 振荡），**不是性能** |
+| **3** | **先试 Soft-RoCE（零内核改动）** | 低 | `rdma link add rxe0 type rxe netdev thunderbolt0` ⇒ 量 `ib_send_bw` vs `iperf3`；**预期负收益**（同硬件 4.3 < 8.85）—— 用它**证伪/证实**"verbs 值不值" |
+| **4** | **若仍要碰 `thunderbolt-ibverbs`** | **高** | 只在 **B+C 两台**做**一次性隔离实验**（`ib_send_bw` 即收）；**绝不上控制面**、不动 `/opt/llama.cpp` 与实例 conf、**先解决 IOMMU**、**人在机前** |
+
+### 10.6 与本文既有结论的关系
+
+- **§5.1「vLLM 多机 TP 需 100GbE」的硬约束被收窄**：真正卡的不是"专用网卡"，而是 ① **每对 rail 数**、② **内核是否有 NHI/USB4STREAM 直通**（后者即 §2.2 的 CIRU 直连路径前提）。
+- **§7 待验证清单**新增第 **9–11** 条（1 项可零成本验证 + 2 项未评估前提）。
+- **本节不改** §6 建议表的排序 —— 它**仍未进入**"值得投预算"的那一档。
+- **未实测登记**：本节全部为"**读原文 + 本机群静态实测**"，**未在本机群跑过** `thunderbolt-ibverbs` / `rxe` / `ib_send_bw`；"收益≈0"的判定依据是**本仓既有实测**（内存带宽墙 + 本栈不消费 verbs）+ 拓扑结构，**不是**本路径的实际基准。
+
+---
+
+## 11. 附：CIRU 是否比现役 llama.cpp RPC 更快（2026-09-29）
+
+> **触发**：用户提问 —— "既然 DwarfStar（ds4）框架实测无太多收益，**CIRU StrixLink 是否比现役 llama RPC 更快跑 GLM / DeepSeek 系列**？"
+> **证据等级**：**E1** = 本仓实测；**E3** = 外部原文。★ 本节的核心纪律见 **§11.3：不同口径的数不得直接相减**。
+
+### 11.1 先纠前提：ds4 的失望**不能**外推到 CIRU
+
+| | ds4（DwarfStar） | CIRU StrixLink |
+|---|---|---|
+| 它是什么 | llama.cpp 之外的**第三实现**（ROCm 为其短板） | **vLLM + ROCm 10 + AITER gfx1151 定制内核** |
+| 裁决（[ADR-0010](../../adr/ADR-0010-DwarfStar第二引擎引入立项.md)） | 角色 = **架构覆盖面 + 容量**，**不是吞吐引擎** | 尚未立项 |
+| 实测 | V4-Flash 单机 ds4 **12.5** < llama Vulkan **18.33**；双机 16.8 ≈ llama RPC 17 | GLM-5.3-Flash 双机 decode **23.69**（作者实测，E3，§2.4） |
+
+⇒ ds4 的"收益少"是**定位如此**（它从来不是吞吐路径）；而 CIRU 恰是**把"vLLM 在 gfx1151 上不支持"这件事做通**的那套东西（本仓 [提速调研报告](../提速调研报告.md) 记 vLLM ❌）⇒ **两者不同类，不可互推**。
+
+### 11.2 GLM-5.3-Flash：约 2× 的差距，来源是**投机解码**而非互联
+
+| | 现役 llama.cpp RPC（E1 本仓） | CIRU（E3 作者） |
+|---|---|---|
+| decode · 双机 | **11.94 t/s**（§7.1） | — |
+| decode · 三机 | **11.22**（§7.2）· 统一入口 **11.39–11.45**（§7.5） | — |
+| decode · CIRU 双机 TP=2 | — | **23.69 t/s**（prompt 402.5 / TTFT 5.089 s，§2.4） |
+| **投机解码** | ❌ **结构上不可得** —— GLM 的 **GGUF 转换丢弃 MTP 头**（见 [GLM 文档 §0「主要限制」](./2026-09-28_GLM系列本地推理部署.md)） | ✅ **DFlash2 k7**，draft acceptance **56.6%**（§2.4） |
+
+**倍率估算（★ 估算，非实测）**：α = 0.566、k = 7 ⇒ 每次前向期望接受 token ≈ Σ_{i=0..7} α^i ≈ **2.3**
+⇒ `11.94 × 2.3 ≈ 27`，与 CIRU 的 `23.69` **同量级**（差额 ≈ 流水线 + 引擎开销）。
+⇒ ~~**那 2× 几乎全部由「有没有投机解码」解释**~~ ★★ **第一轮此句属过度归因，第二轮已更正** —— 正确写法见 **§11.7**：
+2× 至少由 **①串行跨链税 + ②TP 语义 + ③投机解码** 三条轴**叠乘**，而上面这条估算**只解释了③那一段**。
+（它**仍成立**的部分：③ 确实是其中一段；且这 2× **不是** NHI 互联红利 —— 本集群**拿不到** NHI，见 §2.5。）
+
+### 11.3 ★★ 口径纪律：`23.69` 与 `11.94` **不可直接相减**
+
+一个是**带**投机解码（DFlash2 k7 + prefix caching + 2,304 batch），一个是**不带**。
+把它读成"引擎快 2×"，是一句**"听起来完全合理、但前提是假的"** ⇒ 与本仓 **"报数必须带射程"** 同一条纪律。
+**要对比，必须把投机解码这两侧拉平**（同开或同关）。
+
+★★ **第二轮追加（同日）**：不止"**不同口径不可相减**"，还有 **"不同轴不可合并归因"** ——
+把 ①串行跨链 + ②TP 语义 + ③投机解码 的**和**当成**单项**（读成"引擎更快"）来读，是同一类错误的**第二个变体**。见 **§11.7**。
+
+### 11.4 DeepSeek V4-Flash：**无现成 CIRU 包**，但"投机解码"在 vLLM 侧同样是**官方一等公民**
+
+- **包面（E3 检索）**：找到的 CIRU 包是 **GLM-5.3-Flash**（另有 Ling）；**未发现** Strix Halo 上的 CIRU DeepSeek 包（DeepSeek 的双机 vLLM 案例均为 **NVIDIA DGX Spark / Ascend**）⇒ "用 CIRU 跑 DeepSeek" = **自建 vLLM + AITER 栈**，不是拉包。
+- ★ **机制面（关键）**：vLLM 官方 recipe 对 V4-Flash **直接给了投机解码** —— `--speculative-config '{"method":"dspark","num_speculative_tokens":7,…}'`（**0731 自带 DSpark** draft；preview 版为 **MTP**）⇒ **7 个 draft token**，与 CIRU 的 GLM 形态一致。
+- 而**我们的 `14.06 t/s`**（[V4 文档](./2026-09-28_DeepSeek-V4系列调研与部署.md) 的 decode 史）**是不带投机解码的** ⇒ **同样是约 2× 量级的缺口，同源**。
+- ⚠ **但兑现难度高于 GLM**：① 无现成包，须自建；② 我方 MXFP4 GGUF **头部 120 MB 内含 `mtp`×5 / `draft`×7 / `eagle`×2 字样**（E1 本仓扫描）—— 但 **"GGUF 里有 MTP 权重" ≠ "llama.cpp 能拿它做投机解码"** ⇒ **未证**（见 §7-13）；③ spec decode 的甜区是**小 batch / 短序列**，高并发长上下文会收窄。
+
+### 11.5 建议（按性价比）
+
+| 序 | 动作 | 成本 | 说明 |
+|---|---|---|---|
+| **1** | ★★ **A3a USB4 低延迟 sysctl 套件**（§11.8-①A） | **零成本** | **三轮更正后的首选**：直击**税基（RTT）**；本仓判"**收益传导最确定**"、原列建议序**第 1 位** ⇒ **今天就能做** |
+| **2** | **vLLM TP=2 平行部署**（本仓 A4 已判"现在就能试"） | 中 | **同时拿第①-B + ②轴**；同款 M2.7 AWQ INT4 社区 **18.5–24.8** vs 现 20；**不动 llama.cpp 服务**；**决策门 tg ≥ 24 且 16k 无崩溃** |
+| **3** | **等/推 `#26610`**（RPC 协议异步化 + tensor split 的 RPC 形态） | **0（升级窗口）** | 直击**次数**；同构社区 **+32% tg**；★ 但 **GLM 上无收益**（架构正交，§11.8-①B） |
+| **4** | 量"投机解码值多少"（同口径 spec-on / spec-off） | **0** | 只解决**第③轴**，且 ★ **依赖②**（§11.8）：RPC 上属"**未验证的赌博**" |
+| **5** | **把 CIRU 定位为「GLM-5.3-Flash 的现成解」** | — | 即 §0 的 🟢；**不是**"替换 llama RPC 的通用后端" —— 其**不可替代点收窄为：GLM 的 MTP 投机解码 + 现成打包 + 已测质量报告**（§11.7） |
+| **6** | ★★ **在 1–3 之前不投 CIRU** | — | 否则会重现 ds4 的形态（见下） |
+
+★ **两次教训同型（本节最该记住的一句）**：
+- **ds4**：以为买的是**吞吐**，实测买到的其实是**容量 / 覆盖面**；
+- **CIRU**：以为买的是**引擎 / 互联**，第二轮**拆轴**后实为 **①串行跨链 + ②TP 语义 + ③投机解码** 叠乘（其中 **① 本仓已有 0 成本路径**，见 §11.7）。
+⇒ 一句话：**"收益不在你以为的那一层"** —— 与本仓 §10.2 的"二手转述必须逐条核对"是同一族纪律。
+
+### 11.6 未实测登记（不静默）
+
+1. **§11.2 的 2.3× 是估算** —— 由作者公开的 acceptance（56.6%）与 k=7 **反推**，**非本机实测**；估算式假设各 draft 独立同分布，实际可能偏低或偏高。
+2. **`mtp` 字样 ≠ 可用于投机解码**：我方 V4-Flash GGUF 头部含 `mtp`/`draft`/`eagle` 字样是 **E1 事实**，但**能否被 llama.cpp 用于投机解码未证**（本次未解析到可下结论的深度）。
+3. **CIRU 的 23.69 未复现** —— 其条件（64K profile / NHI / DFlash2 k7 / prefix caching / 2,304 batch）与本集群现役口径不同 ⇒ **本节不把它当作本集群可达值**。
+4. **未评估**：自建通用 vLLM + AITER 在 gfx1151 上复刻同等投机解码收益的可行性与代价（§11.5-2）。
+
+### 11.7 ★★ 归因更正（2026-09-29 第二轮）：**7 条轴 + 2×2**
+
+> **为什么补这一节**：§11.2 第一轮把约 2× 的差距**几乎全部归给投机解码** ⇒ **过度归因**。
+> 本轮查到本仓**早已**有一份正面打这个问题的分析（[双机剩余优化空间评估.md](../双机剩余优化空间评估.md)，2026-08-28）——
+> 它已把 RPC 根因量化为**串行跨链税**，并明确指出**"投机解码与换线恰恰不是预期收益最高的两项"**。
+> **原文一字未删**，本节做**更正 + 补全**（本文既有留痕纪律）。
+
+**7 条轴（每条附证据与量级）**
+
+| # | 轴 | llama.cpp RPC（现役） | CIRU / vLLM | 量级与证据 |
+|---|---|---|---|---|
+| **①** | **串行跨链税（根因）** | `-sm layer` ⇒ **每 token 串行跨机**：本仓实测 **38.7 次往返/token** | TP=2 ⇒ 每层两机**同时**算 | **大**。旁证：**三机 11.22 < 双机 11.94**（加机只增跳数）；Geerling 4×M3 Ultra **同硬件同线**：llama.cpp RPC **负加速** 20.4→15.2 |
+| **②** | **并行语义** | layer = 买到"**装得下**" | **tensor** = 买到"**算得快**" | **大**；`-sm tensor` 主体已随 **v0.3.0（8/25）** 发布，但 **RPC 形态待 `#26610`** |
+| **③** | **投机解码** | ❌ GLM **结构不可得**（GGUF 丢 MTP 头） | ✅ DFlash2 k7，accept **56.6%** | **大**（估算 ≈2.3×），但在 ①② **之上叠乘** |
+| ④ | 互联 | tbnet TCP（9 Gb/s，RTT ~0.15 ms） | NHI 110 µs（**拿不到**：需 7.2 内核） | **小** —— 其价值主要体现在**①的 RTT 税里**，不是独立一项 |
+| ⑤ | 引擎内核 | llama.cpp Vulkan（glm5next 分支） | vLLM + **AITER / TileLang gfx1151 定制内核** | **未量化**（唯一"引擎本身"的候选差） |
+| ⑥ | 精度/权重体积 | UD-IQ4_XS，**146.1 GiB** | IU4 ≈4.46 bpw，**166.7 GiB** | **反向**：CIRU 权重更大 ⇒ 纯带宽地板更高 ⇒ 2× **不可能**来自"引擎更省带宽" |
+| ⑦ | 调度 | 单序列 + `-ub` 调参 | continuous batching + prefix caching | 对**单序列 decode 小**，对**并发吞吐大** |
+
+**★ 2×2：单点对单点归不了因**
+
+| | 投机解码 off | 投机解码 on |
+|---|---|---|
+| **layer 切分** | ← **本集群在这里**（11.22–11.94） | |
+| **TP=2** | | ← **CIRU 在这里**（23.69） |
+
+⇒ 两个单点差的是 **①+②+③ 的和**；**一个数拆不开三项**。
+
+**★ 三条轴各自怎么拿（本节最有用的一节）**
+
+| 轴 | 怎么拿 | 成本 | 依据 |
+|---|---|---|---|
+| **① 串行跨链（最大的一半）** | ★ **拆两半**（§11.8）：**税基**用 **A3a**（今天可做）· **次数**用 `#26610` 或 vLLM TP | A3a **0** / `#26610` **0（等）** | 同构社区 **+32% tg**；本仓 A6 已建锚点 |
+| **①+② 一起** | **vLLM TP=2 平行部署**（本仓 A4 已判"现在就能试"，且**不动 llama.cpp 服务**） | 中 | 同款 M2.7 AWQ INT4 社区 **18.5–24.8** vs 现 20 |
+| **② 的 RPC 形态** | 卡 `#26610` | 上游门 | TRACKER §1.4 |
+| **③ 投机解码** | ★ GLM 上**只有换运行时**（GGUF 丢 MTP）；llama.cpp 侧可试 **ngram** | 中 | 本仓 A4-4："**不确定，有结构性风险**" |
+| ~~换 40G 线~~ | **不是性能项** | — | A2：利用率 **0.02%** |
+
+**★★ 更正后的判词**
+
+CIRU 的 2× ≈ **①串行跨链（本仓已量化，且有 0 成本路径）× ②TP 语义 × ③投机解码**。
+⇒ **最大的那半（①）不需要 CIRU**：要么等 `#26610`（+32%），要么 vLLM TP=2。
+⇒ **CIRU 的不可替代点收窄为一句**：**GLM-5.3-Flash 的「MTP 投机解码 + 现成打包 + 已测质量报告」**。
+⇒ 对 DeepSeek **同构**：**无现成 CIRU 包**，且其差距里**同样含 ①②**（与我方 RPC 完全同型）。
+
+**未实测（不静默，续 §11.6）**
+
+5. **38.7 次往返/token 是 M2.7 双机**的数 ⇒ **GLM（glm5next、三机）的往返数未测**（"三机 < 双机"支持该机制，但不是该数字的复现）。
+6. **`#26610` 的 +32% 是社区同构**（非本集群、非 GLM）⇒ 只能当**预期量级**。
+7. **第⑤轴（AITER/TileLang vs Vulkan 的引擎效率差）完全未量化** —— 这正是第一轮 §11 想当然排除掉的那一项。
+
+### 11.8 ①轴追问：**串行跨链「当前」能不能解**（2026-09-29 第三轮）
+
+> **触发**：用户追问"① 串行跨链问题**当前**是否可以解决"。
+> **答法**：把税**拆成两半** —— **税 = 往返次数 × 单次 RTT**。本仓 §1 已采证到数字级：
+> 每 token ≈ **38.7 次 RPC 命令 / 903 KB**，带宽占用 **17.6 MB/s = 链路的 0.02%** ⇒ 瓶颈是**延迟 × 命令数**，**不是带宽**。
+
+| 半边 | **现在能解吗** | 依据 |
+|---|---|---|
+| **①-A 减 RTT（税基）** | ✅ **能 —— 今天就能做，零成本** | ★ **A3a USB4 低延迟 sysctl 套件**（TCP 低延迟参数 + TB 保活 + **CPU EPP=performance**；源 = `ayysasha 99-usb4net-lowlatency.conf`，**逐项对照增量应用**）＝**零成本、未做**；本仓判"**压 RTT 税基，收益传导最确定**"，列**建议序第 1 位**。**已有基础**：pm_qos=100 + MTU 9000 已把 RTT **0.619 → 0.100 ms（−84%）**。⚠ 只**线性**改善、**不根治**；地板 = tbnet 往返 + 内核栈（24 µs 级 RDMA 拿不到，见 §10） |
+| **①-B 减往返次数** | ❌ **修不了，只能绕** | **修**：`#26610` **现在不可用** —— TRACKER §W-6 的 **9/27 状态**：*"当日有活动（commits 3→5、37 评论）**但 checks 失败数 1→3**"* ⇒ ★ 本表纪律：**"有新活动"不得当进展读，要看失败数**；且协议 **6.0.0 无向后兼容**。★ **且对 GLM 无效**：GLM 混合架构（KDA 34/45 层 + NoPE MLA + 池化 indexer + ×4 mHC）**与 `-sm tensor` 正交** ⇒ **GLM 只能走 `-sm layer`**；V4 另需等配套 **`#25860`（Draft，停滞）**。<br>**绕**：**vLLM TP=2** —— 本仓已判 **"现在就能试"**（A4，"B 站平行部署**不动** llama.cpp 服务"）；TRACKER 更判 **"值得试点"**（**ROCm 10.0.0 官方矩阵含 `gfx1151`** ⇒ 不是"能不能跑"的问题）。**决策门：单流 tg ≥ 24 t/s 且 16k 上下文无崩溃** |
+
+**★ 触发条件本仓已写死**（TRACKER §W-6）：**"长期死锁 ⇒ 启动 A/B；转 clean ⇒ 等上游（成本 0）"** —— 即 `#26610`/`#27754` 长期不动就上 vLLM，这是**预授权**的转折信号。
+
+**★★ 机制级收获：③ 依赖 ②，不独立**
+
+本仓 §3.2 明写：**"投机解码在双机 RPC 上是**未验证的赌博**"** —— 分布式场景**每步验证会引入额外跨链同步**，
+**方向上与已确认的瓶颈（命令数）相反**（若 ngram 每步多 k 次 `get/set_tensor`，**串行税放大，收益可能被吃掉甚至倒挂**）。
+⇒ 这正是 §11.7 用「**叠乘**」而非"叠加"的**机制解释**：**CIRU 的投机解码收益是在 TP（并行语义）上拿的，不是在 RPC 上**；
+**拆到 layer-split RPC 上大概率被串行税吃掉** ⇒ ③ **不能脱离 ② 单独搬过来**。
+
+**最小行动（照本仓 08-28 原定序，未改）**
+
+```
+A3a sysctl 套件（本周零成本，压 RTT 税基）          ← ①-A，今天可做
+  → A4 vLLM TP=2 平行试验（门: tg≥24 且 16k 无崩溃） ← ①-B + ② 一起拿
+    → A6 #26610（事件驱动，成本 0；GLM 上无收益）
+```
+投机解码（③）**排在最后**，且按 §3.2 属"**未验证的赌博**"。
+
+**未实测（不静默，续 §11.7）**
+
+8. ★ **A3a 的端到端增益已实测 = 0（2026-09-29）** —— 本仓原判"收益传导最确定"**被证伪**：C 段 TCP-RTT 已压到 **130.4→~19µs（×6.8）**，但三机 GLM-5.3-Flash `flow bench` decode = **11.4 t/s**（4 次采样 11.4/11.4/11.5/11.4），与**同日 C 未调优**的锚 **11.4** 逐位一致 ⇒ **RTT 税基本身不是 decode 的约束**（与 §11.1「decode = 内存带宽 bound」同向）。详见 metrics-log §A3a 补测。
+9. **A4 的决策门未试** —— tg ≥ 24 t/s / 16k 无崩溃**两条均未跑**。
+10. **「`#26610` 对 GLM 无效」是 TRACKER 的架构级推断（E3）**，**非本机实测**。
