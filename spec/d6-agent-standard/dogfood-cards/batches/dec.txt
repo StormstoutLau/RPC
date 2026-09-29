@@ -1,0 +1,25 @@
+# DEC 批 —— 决策细化批（3 张卡；跨三站）
+#
+#   为什么起这一批（对应用户两条指令）：用户两问各需一个"决策"，不是再拆解一遍 ——
+#     ① 可重放性审计本轮新增的 1 条缺口 —— 该"先修 / 补录"，还是"推进水印接受"？（证据链机制）
+#     ② 两份已产出的方案该不该落进各自目标档、怎么落（记忆面门禁真值表 / A 清单落地计划）
+#   ⇒ 三张卡 = 三个决策：dec-ev1 / dec-mg2 / dec-al3
+#
+#   卡（3 张）：
+#     dec-ev1 = 新增可重放缺口 1 条：事实认定 + 候选处置 + 决策 + 可执行步骤 + 验收
+#     dec-mg2 = "引擎侧无门通道"的处置方案落进记忆面门禁真值表（含沿革）的落法决策
+#     dec-al3 = 两项运行时验收方案落进落地计划文档（§2.4 / §2.5）的落法决策
+#
+#   档位：均 public（卡面自含抽象化材料、无附件 ⇒ 不触发附件出网义务；
+#     正文按写卡纪律已剔除本仓路径 / 主机名 / 用户名 / 站标识）。
+#   站与模型：dec-ev1 = A · ultra-a；dec-mg2 / dec-al3 = B · lightning
+#     （另一族 = 与产出这两份方案的 ultra 族不同族，照 J-1 精神）；B 站两张站内串行。
+#   ★ 如实登记：本批只有一张跨族（lightning）——因 lightning 别名只钉 B 站（A/C 无同族别名，加别名要改 ROUTE_TABLE）。
+#   产物：out/dec-ev1.md / out/dec-mg2.md / out/dec-al3.md（文件名互不相同）。
+#
+#   命令: & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/dec.txt"
+#   干跑: $env:AGENT_BATCH_DRYRUN=1; & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/dec.txt"
+
+spec/d6-agent-standard/dogfood-cards/dec-ev1-evidence-gap.md station=A model=ultra-a
+spec/d6-agent-standard/dogfood-cards/dec-mg2-landing.md station=B model=lightning
+spec/d6-agent-standard/dogfood-cards/dec-al3-landing.md station=B model=lightning

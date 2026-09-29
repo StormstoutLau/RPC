@@ -1,0 +1,23 @@
+# XREV 批 —— **跨族复核批**：inkling 族（`lightning`）复核 A 清单 6 份设计底稿
+#
+#   为什么起这一批：A 清单原 6 卡**全走 `ultra`（同一 id，仅站不同）** ⇒ 按 D7-P0-3 的 J-1 口径
+#     只算"同族多实例"、**不构成认知多样性**。本批用**另一族**（`thinkingmachines/inkling:free`）
+#     对同一 6 份产物做**独立缺陷复核**（内部矛盾 / 机械缺陷 / 假绿不实 / 未论证断言）。
+#
+#   卡（2 份底稿/卡）：
+#     xrev1 = A4 cell-safety  + A1 boundary-judge
+#     xrev2 = A3 derived-view + A2 executor-trace
+#     xrev3 = A6 invalidation-executor + A5 determinism
+#
+# 档位：均 `public`（底稿原样**内嵌卡正文**，无附件 ⇒ 不触发 attach-egress 义务）。
+# 站：**三张全部钉 B**（`lightning` 的 route station = B，且本批**只**允许 inkling 族）
+#   ⇒ 走 batch 的"**每站串行**"：3 张卡 = **1 个站级 job 内逐张串行**，各自独立取/放锁
+#   ⇒ 预期**不撞**同站互斥锁（`LOCK_HELD exit 3`）；⚠ 仍**先干跑**核实分组，见下。
+# 产物：`out/xrev1.md` / `out/xrev2.md` / `out/xrev3.md`（文件名互不相同）。
+#
+# 命令: & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/xrev.txt"
+# 干跑: $env:AGENT_BATCH_DRYRUN=1; & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/xrev.txt"
+
+spec/d6-agent-standard/dogfood-cards/xrev1-cellsafety-boundary.md station=B model=lightning
+spec/d6-agent-standard/dogfood-cards/xrev2-derivedview-executortrace.md station=B model=lightning
+spec/d6-agent-standard/dogfood-cards/xrev3-invalidation-determinism.md station=B model=lightning

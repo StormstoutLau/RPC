@@ -1,0 +1,15 @@
+# IMP-A 批 —— A 清单（"真·代码未实现"）第一批：3 张**提案层**卡
+#
+# 对应 A 清单 3 项：A3 derived-readonly-view 之外的 A1/A4/A5 三项的设计提案
+#   imp1 = ADR-0009 的 B-1/B-2/B-3 分界判据"机读求值"设计（判定输入未定义）
+#   imp2 = 表单元格竖线安全化判据（列数守恒）设计
+#   imp3 = 确定性 / 幂等判据（同源双跑逐字节一致）设计
+#
+# 为什么能并发：每卡产物**文件名互不相同**；**跨站各 1**（A/B/C）⇒ 无同站锁冲突。
+# 档位：均 public（卡面自含，无附件）⇒ 走 openrouter 出网档；三站 openrouter key 各异 ⇒ 配额独立。
+# 命令: & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/imp-a.txt"
+# 干跑: $env:AGENT_BATCH_DRYRUN=1; & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/imp-a.txt"
+
+spec/d6-agent-standard/dogfood-cards/imp1-boundary-judge-wiring.md station=A model=ultra-a
+spec/d6-agent-standard/dogfood-cards/imp2-cell-safety-judge.md station=B model=ultra
+spec/d6-agent-standard/dogfood-cards/imp3-determinism-idempotence-judge.md station=C model=ultra-c

@@ -1,0 +1,14 @@
+# O-116 反向断言批 —— **首卡必失败 / 末卡成功**，且**两卡同钉 B**（同站串行 ⇒ 同一个站级日志）
+#
+#   为什么必须是这个形状：O-116 的缺陷只在"**一个站级日志里有 ≥2 张卡**"时暴露 ——
+#   缺陷版汇总在**整站**日志里取 `TASK_DONE`/`RUNSTAMP` 的末行 ⇒ 首卡拿到**末卡**的 runDir
+#   ⇒ 用末卡的 `.agent-run.json`（exit_code=0）覆盖首卡的 rc ⇒ 判决级假绿。
+#
+#   首卡 = [neg-o116-batch-failcard.md](../neg-o116-batch-failcard.md)（未登记模型别名 ⇒ 必失败、零触站、零成本）
+#   末卡 = [sanitized.md](../../test-cards/sanitized.md)（回显探针 ⇒ 必成功、带自己的 runDir）
+#
+# 命令: & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/o116-rev.txt"
+# 预期（修好后）: 负控卡 `exit≠0` + `runDir=` 空 · 探针卡自己的 runDir/ts · `BATCH_DONE: 失败或未完成=1`
+
+spec/d6-agent-standard/dogfood-cards/neg-o116-batch-failcard.md station=B
+spec/d6-agent-standard/test-cards/sanitized.md station=B

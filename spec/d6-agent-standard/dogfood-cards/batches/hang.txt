@@ -1,0 +1,28 @@
+# HANG 批 —— **回写复核 + 挂起项拆解**批（4 张卡；跨三站，其中 B 站 1 张独跑）
+#
+#   为什么起这一批（两步，对应用户两条指令）：
+#     ① **复核**：主控刚做的一批"台账 / 真值表回写"（读数刷新 · gap 重写 · 段头与射程声明修正 ·
+#        两条否决的理由分层与反链 · 一条闭环上限由"未定"改 3）**没有第二方看过** ⇒
+#        派**另一族**（`lightning` = inkling 族，与产出路径**不同族**）做**独立缺陷复核**。
+#     ② **拆解**：三个**仍挂着**的项**缺可执行方案** ⇒ 各派一站做**细化拆解**
+#        （分类树 / 最小步骤 / 验收判据 / 失败形态 / 不确定项）。
+#
+#   卡（4 张）：
+#     xrev4 = 上述回写的独立缺陷复核（跨族）
+#     hang1 = 「证据链新增 1 条可重放缺口 ⇒ 该不该推进水印」的拆解
+#     hang2 = 「记忆面 1 条通道闸门在引擎侧、本仓关不掉（现只点名+WARN）」的拆解
+#     hang3 = 「两项已落地但从未实测的运行时验收（过程留痕 / 层级归属）」的拆解
+#
+#   档位：均 `public`（**卡面自含抽象化材料，无附件** ⇒ 不触发 `attach-egress` 义务；
+#     正文按写卡纪律 1 已剔除本仓路径 / 主机名 / 用户名 / 站标识）。
+#   站与模型：xrev4 = B·`lightning`（另一族）· hang1/hang3 = **A·`ultra-a`**（同站串行 2 张）·
+#     hang2 = C·`ultra-c` ⇒ **站间并行度 = 3**，A 站 2 张**站内串行**（batch 语义，各自取放锁）。
+#   产物：`out/xrev4.md` / `out/hang1.md` / `out/hang2.md` / `out/hang3.md`（文件名互不相同）。
+#
+#   命令: & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/hang.txt"
+#   干跑: $env:AGENT_BATCH_DRYRUN=1; & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/hang.txt"
+
+spec/d6-agent-standard/dogfood-cards/xrev4-writeback-audit.md station=B model=lightning
+spec/d6-agent-standard/dogfood-cards/hang1-evidence-gap-accept.md station=A model=ultra-a
+spec/d6-agent-standard/dogfood-cards/hang3-runtime-acceptance.md station=A model=ultra-a
+spec/d6-agent-standard/dogfood-cards/hang2-memorygate-enginechannel.md station=C model=ultra-c

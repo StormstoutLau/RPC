@@ -126,6 +126,182 @@
 > 且 4 格**如实写 `依据不足`**（没猜）⇒ **摘要路线够用、不必起站内引擎**；缺料 6 条已逐条定性（含**原文一处笔误**"五处 vs 8 项"）。
 > 详见 [DEV-LOG-014 §39.4](../../../docs/DEV-LOG-014-decision-refinement.md)。
 
+### 第五批（2026-09-29 起草 · **A 清单：6 个"真·代码未实现"缺口的实现提案**；**三站并行 · 已全部跑完**）
+
+> **定位**：`inventory/capability-inventory.yaml`（2026-09-27 读数）的 `absent` / `partial` 项里，挑出
+> **6 个"登记明确未做"的缺口** ⇒ 出**设计提案**（**本轮不动实现**）。两批各 3 张、**跨站并行**
+> （`batch` 派发器 = O-80）；清单 = [batches/imp-a.txt](batches/imp-a.txt) / [batches/imp-b.txt](batches/imp-b.txt)。
+
+| 批 | 卡（本目录） | 输入 | 档位 / 开关 | 站 / 模型 | run | 结果 |
+|---|---|---|---|---|---|---|
+| IMP-A | [imp1-boundary-judge-wiring.md](imp1-boundary-judge-wiring.md) | 无 | `public` | A / `ultra-a` | `202609291929091622` | ✅ `exit=0`（RUN_S 71） |
+| IMP-A | [imp2-cell-safety-judge.md](imp2-cell-safety-judge.md) | 无 | `public` | B / `ultra` | `202609291929092530` | ✅ `exit=0`（RUN_S 97） |
+| IMP-A | [imp3-determinism-idempotence-judge.md](imp3-determinism-idempotence-judge.md) | 无 | `public` | C / `ultra-c` | `202609291929092399` | ✅ `exit=0`（RUN_S 127） |
+| IMP-B | [imp4-executor-trace-design.md](imp4-executor-trace-design.md) | 无 | `public` | A / `ultra-a` | `202609291939005729` | ✅ `exit=0`（RUN_S 145） |
+| IMP-B | [imp5-derived-view-design.md](imp5-derived-view-design.md) | 无 | `public` | B / `ultra` | `202609291939006123` | ✅ `exit=0`（RUN_S 83） |
+| IMP-B | [imp6-invalidation-executor-design.md](imp6-invalidation-executor-design.md) | 无 | `public` | C / `ultra-c` | `202609291939006697` | ✅ `exit=0`（RUN_S 172） |
+
+> ⚠ **6 张卡走的都是 `ultra`（同一 id `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`）的不同站**
+> ⇒ **只跨了站、没跨族**（同一 `nvidia` 血统）。按 `D7-P0-3` 的 **J-1（跨族）**口径，
+> 这只是"**同族多实例**"、**不构成认知多样性**（口径见 [model-families.yaml](../../../inventory/model-families.yaml) 表头）。
+> ⇒ **后续派发应至少一张换族**：现成改法 = `lightning`（= `thinkingmachines/inkling:free`，钉 **B** 站、走 `opencode`）；
+> 若要在 **A/C** 站也用 `inkling` 且仍走 `opencode`，须新增 `lightning-a` / `lightning-c` 别名
+> （与 `ultra-a` / `ultra-c` **同构**：同一 id、不同 station）。
+
+> ✅ **判读（主控独立复核，不采信模型自报）**：★ `imp1` 暴露 **`ADR-0009` 求值规则非穷尽** ⇒ 登记 **`O-115`（待裁）**；
+> ⚠ `imp2` 参考实现 **2 处缺陷**（`_count_cols` 只数**非空**单元格；分隔行查找**跨空行**）·
+> ⚠ `imp5` **自相矛盾**（`generated-at` 列进"确定性字段" vs `--check` 逐字节一致）·
+> ✅ `imp6` 质量最好（可直接用）· `imp4` 采集点与本机群不符但**如实标注"不可核"**。
+>
+> ★ **`imp4` 的落地（A2，2026-09-29 本地落地 · 无派发）**：`executor-trace` 由"设计提案"落成**可机判件** ——
+> 五采集点进 [`ops/station-bin/agent-cli.ps1`](../../../ops/station-bin/agent-cli.ps1)（`[cmd]/[env]/[fs]/[tool]/[artifact]`，
+> 工具调用链**如实标 `uncore`**）· 新 gate `executor-trace` · Python 夹具
+> [`tests/test_rpc_check_executor_trace.py`](../../../tests/test_rpc_check_executor_trace.py) 9/9 绿 · ps1 离线夹具 409/0。
+> ⚠ 原判"采集点与本机群不符"已**就地核实**并改成可达命令（`uname`/`hostname`/`nproc`/`free -m`，**不读 `/proc`**）；
+> 但 §2.2 的 **runtime 验收**（真派发后留痕件齐 + 与产物哈希交叉锚定）**未实测**（覆盖读数 0 个 run）。
+> 详见 [../A-LIST-LANDING-PLAN.md](../A-LIST-LANDING-PLAN.md) **§2.4** 与 `DEVELOPMENT-LOG.md` `2026-09-29（续④）`。
+>
+> ★ **`imp1` 的落地（A1，2026-09-29 本地落地 · 无派发）**：`d6-d7-boundary` 由"设计提案"落成**可机判件** ——
+> 纯函数 `Resolve-D6D7Boundary` 进 [`ops/station-bin/agent-cli.ps1`](../../../ops/station-bin/agent-cli.ps1)
+> （派发**前**对三键求值 ⇒ 按 [ADR-0009](../../../adr/ADR-0009-D6与D7分界判据.md) §2 **三分支**得唯一归属 ⇒ 落 `run.json` 的 `boundary`）·
+> 三键入 `Get-FrontMatter` **白名单** · ps1 离线夹具
+> [`_fm_golden_test.ps1`](../../../ops/station-bin/_fm_golden_test.ps1) **423/0**（+14 条 `a1-*`）· **无新 gate**（手册计数不变）。
+> ⚠ **不采信模型自报**：原卡 §1.3 的"8 项灰色地带表 4/8 与 `ADR-0009` §3 不符"**已删表改指针**（不复制第二份真值）；
+> 三键采用**下划线**命名（与非 kebab）；三键任一**未声明** ⇒ `resolved=false`（**不假装已判**）。
+> 但 §2.2 的 **runtime 验收**（真派发后 `run.json` 含 `boundary` 键）**未实测**；且 `d6-d7-boundary` 为 **`partial`**
+> （判据已接线留痕但**尚无消费方** ⇒ "算了没人用"；claude 本地备路早返回不带该键）。
+> 详见 [../A-LIST-LANDING-PLAN.md](../A-LIST-LANDING-PLAN.md) **§2.5** 与 `DEVELOPMENT-LOG.md` `2026-09-29（续⑤）`。
+
+### 第六批（2026-09-29 起草 · **跨族复核批**：`inkling` 判 `ultra` 的产物；**已跑完 + 发现 O-116**）
+
+> **定位**：A 清单原 6 卡**全走 `ultra`**（同一 id，仅站不同）⇒ 按 `D7-P0-3` 的 **J-1** 口径只算
+> **"同族多实例"、不构成认知多样性**。本批用**另一族**（`thinkingmachines/inkling:free` = `lightning`，钉 **B** 站）
+> 对同一 6 份底稿做**独立缺陷复核**。清单 = [batches/xrev.txt](batches/xrev.txt)（**三行全 `station=B model=lightning`**）。
+
+| 卡（本目录） | 复核对象（内嵌底稿） | 档位 | 站 / 模型 | run | 结果 |
+|---|---|---|---|---|---|
+| [xrev1-cellsafety-boundary.md](xrev1-cellsafety-boundary.md) | A4 cell-safety + A1 boundary-judge | `public` | B / `lightning` | `202609292037235965` | ✅ `rc=0`（产物 2958 B · `^- ` 12 条） |
+| [xrev2-derivedview-executortrace.md](xrev2-derivedview-executortrace.md) | A3 derived-view + A2 executor-trace | `public` | B / `lightning` | `202609292038295460` → 重派 `202609292046072184` | ⚠ 首跑 `rc=1`/`TASK_RC=9`/**产物缺失**（`O-47` 同族）⇒ 重派 ✅（3347 B · 12 条） |
+| [xrev3-invalidation-determinism.md](xrev3-invalidation-determinism.md) | A6 invalidation-executor + A5 determinism | `public` | B / `lightning` | `202609292039019829` | ✅ `rc=0`（产物 3436 B · `^- ` 12 条） |
+
+> ★ **本批直接暴露 `O-116`（P1 · 判决级假绿）**：官方汇总三行**同一个 runDir**（末卡 `xrev3` 的）+ `exit=0`
+> + `BATCH_DONE: 失败或未完成=0` ⇒ 把 `xrev2` 的真失败**掩盖成成功**。根因 = `Invoke-BatchTask` 汇总段
+> `$done`/`$s2` 取**整站日志**末行（只有 `$mark` 按卡过滤）⇒ 逐卡 `$rc` 被**错 runDir** 的 `.agent-run.json` 覆盖。
+> ⇒ **已闭环（2026-09-29，走 spec workflow）**：修法 = 站级日志**按卡切块**取 `TASK_DONE`/`RUNSTAMP`；
+> 详见 `OPEN-ISSUES.md` **O-116** 与 `DEVELOPMENT-LOG.md` `2026-09-29（续②）` **⑨**。
+> **反向断言件**：[neg-o116-batch-failcard.md](neg-o116-batch-failcard.md)（故意用未登记别名 ⇒ 零触站必失败）·
+> [batches/o116-rev.txt](batches/o116-rev.txt)（两行同钉 B ⇒ 同一站级日志，用于修前/修后 A/B 对照）。
+
+### 第七批（2026-09-29 起草 · **领域件落地批**：3 张产件卡，把已勘误底稿落成"可落地件"；**跨三站并行 · 已全部跑完**）
+
+> **定位**：A 清单剩余 5 项的**落地**（[A-LIST-LANDING-PLAN.md](../A-LIST-LANDING-PLAN.md) §2）。
+> 本批只做**其中三项** —— **A4 / A5 / A3** = 三个**互不共享代码面**的新 gate ⇒ 可并行立项、**各派一站**；
+> 另两项 **A2 / A1 同改 `agent-cli.ps1`（关键路径）** ⇒ **不由本批派**，走主控**本地串行**。
+> 清单 = [batches/land-a.txt](batches/land-a.txt)（三行 = A/B/C 各一卡 = 一站一卡 ⇒ 无同站锁冲突）。
+> **模型 = 三站全 `ultra` 族**（`ultra-a`@A / `ultra`@B / `ultra-c`@C，同一 id、分居三站、**零代码改动**）——
+> 产**实现件**不涉认知多样性，跨族（`lightning`）留给复核批。档位均 `public`（卡面自含**已勘误底稿**、无附件）。
+
+| 卡（本目录） | 落地对象 | 档位 | 站 / 模型 | run | 结果 |
+|---|---|---|---|---|---|
+| [land-a4-cell-safety.md](land-a4-cell-safety.md) | A4 表格列数守恒判据 | `public` | A / `ultra-a` | `202609292125234284` | ✅ `exit=0`（产物 `out/land-a4.md` 5709 B） |
+| [land-a5-determinism.md](land-a5-determinism.md) | A5 确定性/幂等（含噪声真值表） | `public` | B / `ultra` | `202609292125234193` | ✅ `exit=0`（产物 `out/land-a5.md` 6634 B · 7 类噪声） |
+| [land-a3-derived-view.md](land-a3-derived-view.md) | A3 派生只读视图 + `--check` | `public` | C / `ultra-c` | `202609292125235028` | ✅ `exit=0`（产物 `out/land-a3.md` · 6 条不确定项） |
+
+> ✅ **落地结果（主控本地，2026-09-29）**：三项**均已完整闭环**（判据 + 注册 + 手册计数 + 夹具 + 先验红 + 字节级恢复自证）——
+> A4 → gate `md-tables`（28 条冻结）· A5 → gate `determinism`（噪声单表，与 [`inventory/determinism-noise.yaml`](../../../inventory/determinism-noise.yaml) 同批落地）·
+> A3 → gate `derived-view`（[`ops/derived_view.py`](../../../ops/derived_view.py) + [`docs/派生视图_端口分配.md`](../../../docs/派生视图_端口分配.md)）。
+> 逐项读数与先验红证据见 [A-LIST-LANDING-PLAN.md](../A-LIST-LANDING-PLAN.md) **§2.4**。
+> ★ 三份产件里主控**改了 3 处**再落地（**不采信模型自报**）：A4 参考实现 2 处缺陷（只数非空单元格 / 分隔行跨空行查找）·
+> A3 `generated-at` 与逐字节一致**自相矛盾**（照 §1.2 勘误**移除 `generated-at`**）；A5 底稿噪声 7 类**收成单表**（§3.2 已裁）。
+
+### 第八批（2026-09-29 起草 · **回写复核 + 挂起项拆解批**；4 张卡跨三站 · **已全部跑完**）
+
+> **定位**：① 主控刚做的一批"台账 / 真值表**回写**"（读数刷新 · gap 重写 · 段头与射程修正 · 两条否决的理由分层与反链 ·
+> 一条闭环上限由"未定"改 3）**没有第二方看过** ⇒ 派**另一族**（`lightning` = inkling 族）做**独立缺陷复核**（`xrev4`）；
+> ② 三个**仍挂着**的项缺**可执行方案** ⇒ 各派一站拆解（`hang1` / `hang2` / `hang3`）。清单 = [batches/hang.txt](batches/hang.txt)。
+> 档位均 `public`（卡面**自含抽象化材料**、**无附件** ⇒ 不触发 `attach-egress` 义务）。
+> 站与模型：`xrev4` = B·`lightning`（另一族）· `hang1`/`hang3` = **A·`ultra-a`**（站内串行）· `hang2` = C·`ultra-c` ⇒ 站间并行度 3。
+> ⚠ **首跑 4/4 失败**（`exit=255`，同族 `O-117`：PowerShell here-string 把 markdown 反引号当转义 ⇒ 注释被推出 `#`）⇒ 修 `O-117` 后**重派**本表结果。
+
+| 卡（本目录） | 对象（内嵌抽象材料） | 档位 | 站 / 模型 | run | 结果 |
+|---|---|---|---|---|---|
+| [xrev4-writeback-audit.md](xrev4-writeback-audit.md) | 四段"台账 / 真值表回写"的独立缺陷复核 | `public` | B / `lightning` | `202609292327452548` | ✅ `exit=0`（`RUN_S` 107 · 产物 7191 B · `^- ` 23 条） |
+| [hang1-evidence-gap-accept.md](hang1-evidence-gap-accept.md) | 「证据链新增 1 条可重放缺口 ⇒ 该不该推进水印」拆解 | `public` | A / `ultra-a` | `202609292327452588` | ✅ `exit=0`（`RUN_S` 109 · 产物 6290 B） |
+| [hang2-memorygate-enginechannel.md](hang2-memorygate-enginechannel.md) | 「记忆面 1 条通道闸门在引擎侧、本仓关不掉」（现只点名+WARN）拆解 | `public` | C / `ultra-c` | `202609292327453524` | ✅ `exit=0`（`RUN_S` 151 · 产物 5406 B） |
+| [hang3-runtime-acceptance.md](hang3-runtime-acceptance.md) | 「过程留痕 / 层级归属 两项**已落地但从未实测**」的运行验收拆解 | `public` | A / `ultra-a` | `202609292329463549` | ✅ `exit=0`（`RUN_S` 530 · 产物 10320 B） |
+
+> ✅ **判读（主控**逐张独立复核**，不采信模型自报 · 2026-09-29）** —— 4 份均**格式达标**、**实扫无**本仓路径 / 主机名 / 用户名泄露；下述为**复核发现**（产物**可用**，但各有需裁的收尾项）：
+
+> **`xrev4`（对四段回写的缺陷复核）**：4 段齐 · 23 条 · 末尾"无法判断项" 5 条。★ **复核本身有 3 处要裁**：
+> ① ★ **自造数字** —— 修法写"含跳过项则应为 **141**"，而材料只给 `91` 与 `10`（把"5 个模板的 10 个位点"**误读成 5×10=50** 再相加），
+> 按字面应为 **91+10=101**（**它要抓的就是"数字与被引读数不符"，自己却犯了**）；
+> ② **误读门禁** —— 判"`capped` + `max_rounds:3` 与'无执行机制'**直接违反门禁规则**"，而门禁原文只要求"若 `capped`，
+> 则**超限动作可枚举**"（回写已给 `on_exceed_kind: escalate`）⇒ **门禁不违反**；"无牙"是**另一件事**（已登"未实测登记"）；
+> ③ **弱判** —— 指"'真实余缺只剩两条'是未论证断言"，而材料**已逐条列**那两条并说明原 ① 为何不成立（属**信息不足**，非未论证）。
+> ⇒ 结论：**可作缺陷线索**，**不可照抄为结论**（3 处已在上列裁掉 / 改正）。
+
+> **`hang1`（水印 `--accept` 拆解）**：6 节齐 · 37 条 · 5 类分类树（含"不可判 ⇒ 不推进水印"）· 步骤含"**推进水印前必须留记录**"· 验收含反向 —— **覆盖面达标**。
+> ⚠ **一处内部矛盾（高价值）**：`## 判定输入` 第 4/5 条把"**取不到**"与"**无匹配 / 无同族**"混为一谈，写成"**无匹配 ⇒ 不可判**"；
+> 而 `## 分类树` 的 A/B 判据正是"**基线清单无匹配 ⇒ 先修 / 改清单**"、C 判据正是"**历史无同族 ⇒ accept**"
+> ⇒ **同一事实两处给出两种结局**（恰是本仓最忌的"两处表达 ⇒ 迟早一处过期"）。
+> 另有：分类树 C 处置把"`accept`"与"**补录命令**"两个动作塞进一列（口径越界）；验收第 1 条"字段齐 ⇒ 事实完备"与"若干条取不到即不可判"**不闭合**。
+> ⇒ 结论：**方案可用**，但**那两处冲突须先改**再采纳。
+
+> **`hang2`（引擎侧无门拆解）**：6 节齐 · 分界表 8 行 · 候选 5 条（含"**什么都不做并写下理由**"）· 推荐 "候选 2+1+3" 且**失效重审条件已量化** · 反面 2 条 · 验收含反向 + 防假绿 —— **质量较好**。
+> ⚠ 三点：① 分界表"本仓可控?"列出现 **`可控但无效`**，**越出闭集**（`可控` / `不可控` / `可观察但不可改`）；
+> ② **两处表头被写成 `- ` 列表项** ⇒ 会虚增 `^- ` 计数（本卡无实质影响，计数远超阈值）；
+> ③ 推荐里候选 3（影子索引）只给"**视资源启动**"，**未给可机判的启动条件**（对照：失效条件已量化）。
+> ⇒ 结论：**可直接采纳为处置方案**（3 点属收尾项）。
+
+> **`hang3`（两项运行时验收拆解）**：6 节齐 · 前置 7 · 步骤 8（**两项分开走**，明确第二次卡**多声明哪三键**）· 交叉锚定 3 问全答（谁算哈希 / 哪行承载 / 不一致判什么）·
+> 验收 7（含负向 · 空对象 · 未求值 · 穷尽性 8 组合）· 失败形态 6（四条必含全）—— **本批最扎实的一份**。
+> ⚠ 四点：① **射程漏验** —— 项一有一条"留痕件**只进主路**、本地备路**不产**"的已知射程，而步骤**只验了项二的备路射程**（`claude` 记录不含 `resolved`/`tier` 键），**没验项一**；
+> ② **词表两处不一致** —— 步骤判据只查 `verified` **一个词**，验收判据却列 `verified`/`audited`/`validated` **三词**；
+> ③ 自造量化阈值 `timeout_ms >= 3 * P99`（材料未给）；④ 把"哈希不一致"**自造映射**进失败形态②（虽用"推广"自曝，材料未归此类）。
+> ⇒ 结论：**可直接采纳为 runtime 验收方案**（4 点属收尾项）。
+
+> ★ **本批结论**：**无新 `O` 项** —— 4 份产物**未暴露仓库级新缺口**（`hang1`/`hang2`/`hang3` 所述事实面与本仓真值一致、无编造）；
+> `xrev4` 的 3 处系**复核产物自身**的误判 / 数字错 ⇒ 教训 = "**复核也需二次判读**"（本轮已就地裁掉，不写新 `O`）。
+> ⚠ **待裁（3 项）**：① `hang1` 的接受判据是否采纳 ⇒ 决定 **`evidence` 可重放 gap 那 1 条是否 `--accept`**
+> 　（★ 门禁明细 = `dogfood/202609292038295460`：`subject 'xrev2' 声明的 xrev2.md 不在 runDir` —— 该 runDir 是 `xrev2` **首跑失败**那次，
+> 　产物已在**重派** runDir `202609292046072184` ⇒ 按 `hang1` 分类树更像 **A/C（先修 / 补录）**，**不是 `--accept`**）；
+> ② `hang2` / `hang3` 方案是否**落进各自目标档**（`hang2` → 记忆面门禁档；`hang3` → [A-LIST-LANDING-PLAN.md](../A-LIST-LANDING-PLAN.md) §2.4 / §2.5 的 runtime 段）；
+> ③ Codex CLI 路径**甲**（wrapper 侧补"循环检测"判据）还是**乙**（走 `ADR` 裁引入）· 见 `OPEN-ISSUES.md` **`O-118`**。
+
+### 第九批（2026-09-30 跑完 · **决策细化批**：3 张卡；跨两站）
+
+> **定位**：承第八批判读的"**待裁（3 项）**"，**各要一个决策**（不是再拆解一遍）⇒ 三张卡 = 三个决策：
+> `dec-ev1`（那条可重放缺口该不该 `--accept`）· `dec-mg2`（记忆面档**落法**）· `dec-al3`（落地计划档**落法**）。
+> 清单 = [batches/dec.txt](batches/dec.txt)。档位均 `public`（卡面**自含抽象化材料**、**无附件**）。
+> 站与模型：`dec-ev1` = A·`ultra-a`；`dec-mg2`/`dec-al3` = **B·`lightning`**（与产出这两份方案的 `ultra` 族**不同族** ⇒ 照 `J-1` 精神）⇒ B 站两张**站内串行**。
+> ★ **如实登记**：本批**只一张跨族**（`lightning` 只钉 B 站；A/C 无同族别名，加别名要改 `ROUTE_TABLE`）。
+
+| 卡（本目录） | 决策对象 | 档位 | 站 / 模型 | run | 结果 |
+|---|---|---|---|---|---|
+| [dec-ev1-evidence-gap.md](dec-ev1-evidence-gap.md) | 新增可重放缺口 1 条：该不该 `--accept` | `public` | A / `ultra-a` | `202609300003009903` | ✅ `exit=0`（`RUN_S` 219 · 产物 5386 B） |
+| [dec-mg2-landing.md](dec-mg2-landing.md) | 引擎侧无门通道处置方案的**落法** | `public` | B / `lightning` | `202609300003009703` | ✅ `exit=0`（`RUN_S` 144 · 产物 8410 B） |
+| [dec-al3-landing.md](dec-al3-landing.md) | 两项运行时验收方案的**落法** | `public` | B / `lightning` | `202609300005337385` | ✅ `exit=0`（`RUN_S` 162 · 产物 7037 B） |
+
+> ✅ **判读（主控逐张独立复核，不采信模型自报 · 2026-09-30）** —— 三份均**格式达标**、**实扫无**本仓路径 / 主机名 / 用户名泄露。
+
+> **`dec-ev1`（证据缺口决策）**：6 节齐 · 32 条。结论 = **「先查产出方基线清单、再决策」**（非必产出才接受；必产出且失败未产出 ⇒ 保留为缺口、追根因），
+> 含「会不会把**真失败**洗白」专问 + 6 条验收（2 条反向）。⚠ 一处：材料已点明本例是**卡自己声明的产物**（非框架件），
+> 而它把决策压在"该 subject@v2 是否在**基线清单**的必产出集合"上 ⇒ **杠杆可能不对位**（其 `不确定项` 已如实标注该疑）；
+> 且「事实认定」先判死"证据缺陷"，与自承的关键事实未知**有张力**。⇒ 可用作**取证清单**。
+
+> **`dec-mg2`（记忆面档落法）**：6 节齐 · 26 条。落点判定逐条钉"**能不能进本仓 / 落到哪一栏**"，4 条纪律冲突检查，落法要求**只改现有条目 + 只放指针**。
+> ⚠ 一处：目标档**已有**同内容条目（`gate: none` + `controllable_by_us: false` + `why` + `evidence` 全在）⇒ 其"增量修改该条目"**实际净增 ≈ 0**，
+> 真正增量只有 `unverified[]` 两条 + 沿革一行（`不确定项` 已诚实标注"需先读档再定位"）。⇒ **落法可用**。
+
+> **`dec-al3`（落地计划档落法）**：6 节齐 · 33 条。选**就地（§2.4 / §2.5）+ 只加指针 + 不删"未实测"原句 + 指针附注方案已知缺陷**，反转条件齐。
+> ⚠ 一处**实质误读**：其"常驻载体"写"**本决策文件（`dec-al3.md`）为常驻（★ 已裁 = 常驻）**" —— 那是把 §3.3 对**目标计划文档**的裁定
+> **挪用**到自己的**产物文件**上（产物在 `tmp/` 下，**非常驻**）；另两处收尾：验收判据混入"本文件 `^- ` ≥ 12"这类**产物自检**（验收对象应是**落档动作**），
+> 及"并入 §3 ⇒ 造第二份真值"依据偏弱。⇒ **落法可用**（挪用那句须先改）。
+
+> ★ **本批结论**：**无新 `O` 项**（三份均**未暴露仓库级新缺口**；`dec-al3` 那处系**产物自身**误读 ⇒ 采纳前须改）。
+> ⚠ **待裁（3 项，沿用第八批）**：① `dec-ev1` 的**取证步骤**是否执行（决定 `evidence` 那条是否 `--accept`）；
+> ② `dec-mg2` / `dec-al3` 的**落法**是否落地；③ Codex CLI 路径甲 / 乙（`OPEN-ISSUES.md` **`O-118`**）。
+
 ### 批次派发（O-80，2026-09-26）—— "多张不同卡并发"
 
 ```powershell
@@ -134,7 +310,7 @@
 **清单格式**（逐行；`#` 注释、空行忽略）：`<卡路径> [station=A|B|C] [model=<别名>]`，示例 [batches/o80-smoke.txt](batches/o80-smoke.txt)。
 **env 桥**（顶层 `param()` 块在本环境加不了新参数 ⇒ 走既有 env 模式）：`AGENT_BATCH_DRYRUN=1`（干跑，0 个新 runDir）· `AGENT_BATCH_PER_STATION`（v1 只支持 1）· `AGENT_BATCH_TIMEOUT_S`（默认 2400，超时**显式记未完成**）。
 **调度**：**每站内部串行 · 站间并行**（并行度 = 站数 ≤ 3）；未钉站的按"当前最少"轮转 ⇒ 3 张卡 = A/B/C 各一。站是**真钉**的（父进程把站字母换成 host 串）⇒ **计划 == 现实**。
-**产物/日志**：汇总表按 **runDir 为真值**（读 `run.json`）；每站日志在 `tmp/dogfood-ws/agent-out/_batch/<ts>/st-<站>.log`。
+**产物/日志**：汇总表按 **runDir 为真值**（读 **`.agent-run.json`**，**不是** `run.json`）；⚠ **逐卡的 `runDir`/`exit` 取值必须限定在该卡自己的日志块内**（`O-116`：站级日志是"多卡顺序追加"，取整站末行 ⇒ 每卡都拿到末卡的值 ⇒ 判决级假绿，2026-09-29 已修）。每站日志在 `tmp/dogfood-ws/agent-out/_batch/<ts>/st-<站>.log`。
 ⚠ **v1 边界**：只支持**无附件**卡（带附件请单张跑）· 不做失败卡自动换站 · 不做产物归并。
 
 ### 两张卡的设计要点（不是风格，是依据）
