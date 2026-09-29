@@ -221,6 +221,8 @@
    ⇒ **结论: RTT 税基本身不是 decode 的约束** —— 与既有判读「decode = 内存带宽 bound, 跨链延迟即使压到 7µs 也只能挤出个位数 %」同向; 也说明按"命令数 × RTT"的**线性外推高估**了延迟税在关键路径上的占比。A3a 的真实价值回到: ① **busy-poll 削 socket 唤醒下限**（08-28: pp512 +4.1%）; ② **TB 保活的可靠性**（消 idle retimer 振荡）。**tg 无收益。**
 5. **落体**: C 站本次补齐 `/etc/sysctl.d/99-usb4net-lowlatency.conf` + `usb4net-lowlatency.service`（enabled/active）; A/B 漂回 `auto` 的 TB 设备（`0-2`/`1-2` 等）已重置 `on`; 三站现全部 100/100/3/1 + TB 全 on。测量后探针进程已清理, 三站无引擎在服务。
 6. **部署前提（新增）**: **应用 A3a 后必须重启 llama.cpp 服务 / RPC 端点**, 否则既有 socket 保持旧值 —— 08-28 未写下的部署条件。
+7. **坑记录（2026-09-30 定位）**: C 站落体那条**一次性 `ssh` 作业卡死 ~8h 未返回** —— 根因：外层 PowerShell **双引号**串里，送远端 bash 的循环变量 `$f` **先被 PowerShell 吃掉**（变空）⇒ 远端实收 `printf %s= ; cat ; done` ⇒ ★ **`cat` 无参数 ⇒ 读 stdin ⇒ 永久阻塞** ⇒ ssh 永不返回（`state.json` 长期 `Running`）。★ 与 `O-117`（PS 吃掉反引号转义）**同族**：*转义 / 变量在到达远端 shell 之前被本地吃掉*。**修法**：远端命令整体用**单引号**（PS 不展开），或变量写 `\$f`。⚠ 该作业 **C 段其实已完成**（conf + service `enabled`/`active` + `100/100/3/1`）；**A/B 段在 hang 点之后，从未执行**。
+8. **补验（2026-09-30 · 只读探针）**: 第 5 条「A/B 漂回 `auto` 的 TB 设备已重置 `on`」「三站 TB 全 `on`」**原先不由那条卡死作业佐证**（其 A/B 段未跑）⇒ 本轮独立 `cat` 复验：**三站各 6 个 `power/control` 全 `on` · sysctl `100/100/3/1` · `usb4net-lowlatency.service` `enabled`+`active`** ⇒ **该断言成立**（此后有实测依据）。
 
 ---
 
