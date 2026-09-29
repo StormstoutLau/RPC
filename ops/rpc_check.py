@@ -7675,12 +7675,18 @@ EXEC_TRACE_SECTIONS = (
 def check_executor_trace(ctx):
     """A2: 执行侧过程留痕 —— 机制里五采集点齐备；落到 runDir 的留痕件**须含全部五段**。
 
-    两部分（**判的东西不同，不许混**）：
+    三部分（**判的东西不同，不许混**）：
       · **机制**：`agent-cli.ps1` 里 5 个采集点标记**逐个在位**，且不可核项**如实标 `uncore`**
         （出现 `chain=core` / `chain=verified` ⇒ **伪称执行体内部可核** ⇒ FAIL）。
       · **覆盖**：扫到的 runDir 若**有** `executor-trace.txt` ⇒ 内容**须含全部五段**
         （缺段 = 真缺陷 ⇒ FAIL）；**一个都没有** ⇒ **报数不入分母**（本件尚未经真派发 ⇒
         覆盖率是"没验到"，不是"验出问题" —— 不得把它算成通过，也不得算成失败）。
+      · **锚定**（2026-09-30 补：A2 的 runtime 验收要求 = "留痕件齐 **+ 与产物哈希交叉锚定**"，
+        上面两部分只判"五段在不在"、**不判锚**）：① `[artifact] hashes=` 必须是 `main-side`
+        （执行体自报哈希 ⇒ 伪称可核 ⇒ FAIL）；② 留痕件 `ts=` 必须 == runDir 名（归属不符 ⇒ FAIL）；
+        ③ 主控侧须有该 run 的哈希记录（`.agent-run.json` 的 `content_digest` 形如 `sha256:<64hex>`）
+        —— **缺 ⇒ 只报数**（"没验到 ≠ 验出问题"）。
+        ⚠ **不判什么**：**不判留痕内容真伪**（`[cmd]`/`[env]` 的值对不对）、**不判门的效力**。
     """
     detail = []
     if not AGENT_CLI.is_file():
@@ -7709,6 +7715,10 @@ def check_executor_trace(ctx):
         return st, (f"机制：采集点 {mech_ok}/{len(EXEC_TRACE_SECTIONS)}"
                     f" · cluster 不可用({type(e).__name__}) ⇒ 覆盖断言跳过"), detail
     n_run, n_ok, n_bad = 0, 0, []
+    # 锚定段（2026-09-30）：① 执行体不得自报哈希 ② 留痕件必须属这一次 ③ 主控侧须有哈希记录。
+    #   实测（2026-09-30 · 11 个含件 runDir）：ts 11/11 相符 · content_digest 11/11 规范 ·
+    #   hashes 11/11 = main-side ⇒ **存量零违规**（先量后定档）⇒ ①② 判 FAIL；③ 只报数。
+    n_tsok, n_self, n_tsbad, n_noanch = 0, [], [], []
     for ts, proj, run_dir in runs:
         f = run_dir / "executor-trace.txt"
         if not f.is_file():
@@ -7720,10 +7730,31 @@ def check_executor_trace(ctx):
             n_bad.append(f"{proj}/{ts} 的 executor-trace.txt 缺段 {', '.join(miss)}")
         else:
             n_ok += 1
-    detail += n_bad
+        lbl = f"{proj}/{ts}"
+        ma = re.search(r"\[artifact\]\s+hashes=(\S+)", t)
+        if ma and ma.group(1) != "main-side":
+            n_self.append(f"{lbl} 的 executor-trace.txt 写 `[artifact] hashes={ma.group(1)}`"
+                          f" ⇒ **执行体自报产物哈希**（执行体不可信 ⇒ 哈希只能由主控侧回收时算；"
+                          f"伪称可核，与 `chain=uncore` 同族）")
+        mt2 = re.search(r"#\s*executor-trace v1 ts=(\S+)", t)
+        if mt2 and mt2.group(1) != ts:
+            n_tsbad.append(f"{lbl} 的 executor-trace.txt 记 `ts={mt2.group(1)}` ≠ runDir 名"
+                           f" ⇒ **归属不符**（留痕件不属于这一次；与 O-57「归属核对」同族）")
+        else:
+            n_tsok += 1
+        try:
+            _aj = json.loads((run_dir / ".agent-run.json").read_text(
+                encoding="utf-8-sig", errors="replace"))
+        except Exception:
+            _aj = {}
+        if not re.match(r"^sha256:[0-9a-f]{64}$", str(_aj.get("content_digest") or "")):
+            n_noanch.append(lbl)
+    detail += n_bad + n_self + n_tsbad
     note = (f"机制：采集点 {mech_ok}/{len(EXEC_TRACE_SECTIONS)}"
             f" · 覆盖：runDir 含该件 {n_run} 个（齐段 {n_ok}"
-            + (f" · **缺段 {len(n_bad)}**" if n_bad else "") + "）")
+            + (f" · **缺段 {len(n_bad)}**" if n_bad else "") + "）"
+            + f" · 锚定：ts 相符 {n_tsok} · 自报 {len(n_self)} · ts 不符 {len(n_tsbad)}"
+              f" · 无锚记录 {len(n_noanch)}")
     if n_run == 0:
         note += " · 0 个 ⇒ 本件尚未经真派发，覆盖率**未验**（报数不入分母）"
     return ("FAIL" if detail else "PASS"), note, detail
@@ -8109,7 +8140,11 @@ CHECKS = [
             "报『出现 `chain=core` / `chain=verified`』= **伪称执行体内部可核** —— 工具调用链由执行体**内部**产生"
             "（可篡改 / 漏报 / 伪造），**只能如实标 `uncore`**；"
             "报『runDir 的 executor-trace.txt **缺段**』= 落到仓的留痕件不齐（真缺陷）⇒ 查该次派发的采集链路。"
-            "⚠『覆盖 0 个』**不作为 FAIL**（本件尚未经真派发 ⇒ 覆盖率**未验**，报数不入分母）。"
+            "**锚定段**（2026-09-30 补）：报『**自报**』= 留痕件里出现执行体自报的产物哈希"
+            "（`[artifact] hashes=` 必须是 `main-side` —— 执行体不可信，哈希只能由主控侧回收时算）⇒ 改采集点；"
+            "报『**ts 不符**』= 留痕件不属于这一次（`ts=` ≠ runDir 名）⇒ 查归档 / 回收是否张冠李戴（`O-57` 同族）。"
+            "⚠『覆盖 0 个』**不作为 FAIL**（本件尚未经真派发 ⇒ 覆盖率**未验**，报数不入分母）；"
+            "⚠『无锚记录 N』同理**只报数**（主控侧没有该次 `content_digest` ⇒「没验到 ≠ 验出问题」）。"
             "⚠ **它不判什么**：逐条字面细节（两段写入 / `$Script:EV_FILES` 登记 / 主控归档 / `free -m` 而非 `/proc`）"
             "由**离线夹具** `_fm_golden_test.ps1` 守（见 `ps1-golden`）—— 本判据**不抄第二份**。"},
     # O-63 (2026-09-25): 取号并发夹具。**刻意 quick:False**（要起 8 个独立进程 + 两次 2.5s 共同释放时刻 ⇒ 约 6s）。
