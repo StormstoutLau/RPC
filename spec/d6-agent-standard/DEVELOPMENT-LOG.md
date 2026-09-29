@@ -19,6 +19,38 @@ upstream: \[d6-agent-standard-.* 全量文档]
 
 ## 历史回溯（2026-09-03 起）
 
+### 2026-09-30 — **A2 读数刷新 + 锚定段落地**：`executor-trace` 补第三段判据（原「runtime 验收未实测」收口）
+
+> **定位**：接 [A-LIST-LANDING-PLAN.md](./A-LIST-LANDING-PLAN.md) **§2.4 读数刷新**。A2 落地时（2026-09-29）登记的
+> 「runtime 验收**未实测**」有**两半** —— ① 真派发后**留痕件齐** ② **与产物哈希交叉锚定** ⇒ 本次逐半处理。
+
+**① 读数刷新（发现的是一处「同一事实两处、一处过期」）**：§2.4 表 A2 行仍写 `覆盖：runDir 含该件 0 个`，
+而门禁实测已是 **11 个（齐段 11）**（2026-09-29 落地时确为 0；此后经 7 个吃狗粮批真派发 ⇒ 已有对象）
+⇒ 就地改写 + 新增「§2.4 读数刷新」块；**同一条事实的其余副本一并收**（`capability-inventory.yaml` 的
+`executor-trace` 行 · 门禁 `CHECKS` 的 `fix` 自述）。⚠ **本日志旧条目不动**（只增不改）⇒ 旧读数留在
+`2026-09-29（续⑤）` 章内，属「当时的真值」。
+
+**② 锚定段落地（原缺口 = §2.2 要求的后半「与产物哈希交叉锚定」无判据）**：`ops/rpc_check.py` 的
+`check_executor_trace` 由**两段**升为**三段**：
+- ① 执行体**不得自报**哈希（`[artifact] hashes=` 必须 `main-side`；否则 **FAIL** —— 与 `chain=uncore` 同族）；
+- ② 留痕件 `ts=` 必须 **== runDir 名**（归属不符 ⇒ **FAIL**，`O-57` 同族）；
+- ③ 主控侧须有该次哈希记录（`.agent-run.json` 的 `content_digest`；**缺 ⇒ 只报数**，「没验到 ≠ 验出问题」）。
+
+★ **先量后定档**：实施前实测 11 个含件 runDir ⇒ `ts` 11/11 相符 · `content_digest` 11/11 规范 ·
+`hashes` 11/11 = `main-side` ⇒ **存量零违规**，①② 才敢判 FAIL。
+
+**涉及文件**：[ops/rpc_check.py](../../ops/rpc_check.py)（+锚定段 / +`fix` 自述）·
+[tests/test_rpc_check_executor_trace.py](../../tests/test_rpc_check_executor_trace.py)（+4 条，含 2 条**先验红**）·
+[A-LIST-LANDING-PLAN.md](./A-LIST-LANDING-PLAN.md)（§2.4 读数刷新）·
+[inventory/capability-inventory.yaml](../../inventory/capability-inventory.yaml)。
+**验收证据**：夹具 **13/13**（9 → 13）· 门禁 `executor-trace` **PASS** ——
+`机制：采集点 5/5 · 覆盖：runDir 含该件 11 个（齐段 11） · 锚定：ts 相符 11 · 自报 0 · ts 不符 0 · 无锚记录 0` ·
+`--quick` **PASS · 38 绿 / 2 黄 / 0 红** · `doclinks` 失效 0 · `syntax` PASS。
+⚠ **射程（如实）**：锚定段**不**比较「留痕件里的哈希值 == 主控侧哈希值」—— 留痕件**按设计不含哈希值**
+（只声明 `hashes=main-side`）⇒ 其含义是「**同一对象 + 哈希权威在主控侧**」，**不是**「两个哈希值相等」。
+
+**关联条目**：`O-57`（归属核对）· `O-89`（无 RESULT 汇总行 ⇒ 假通过）· A 清单 A2 · §2.2 / §2.4。
+
 ### 2026-09-29（续⑤） — **A 清单落地（A1）：D6/D7 分界判据求值 `Resolve-D6D7Boundary` 完整闭环（A 清单收官）**
 
 > **定位**：接 [A-LIST-LANDING-PLAN.md](./A-LIST-LANDING-PLAN.md) §2.2 建议顺序的**收尾项**（A4 → A5 → A3 → A2 → **A1**）。
