@@ -8,11 +8,14 @@
   · **先验红**（删任一采集点标记 ⇒ 必须 FAIL 且报出该标记）· **变异自证**（桩恒返 PASS ⇒ 先验红断言必红）；
   · **负向自证**（出现 `chain=core`/`chain=verified` ⇒ 伪称可核 ⇒ FAIL）；
   · **覆盖两态**（runDir 有件且齐段 ⇒ PASS；有件缺段 ⇒ FAIL；**0 个 ⇒ PASS 且标"未验"**）；
+  · **锚定段**（2026-09-30 补：执行体自报哈希 ⇒ FAIL · 留痕件 `ts` 与 runDir 不符 ⇒ FAIL ·
+    主控侧无哈希记录 ⇒ **只报数**）；
   · 端到端 + 结构护栏（gate 已注册 · quick）。
 
 ⚠⚠ **本文件自带 `__main__` 入口**：门禁 `py-tests` 以**脚本**方式调用（只认退出码）。
   没有它 ⇒ 被 import、正常退出 0 ⇒ 门禁报 PASS 而**一条都没跑**（O-89 实测过一次）。
 """
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -73,7 +76,9 @@ class _FakeRuns:
 def _trace_text(full=True) -> str:
     lines = ["# executor-trace v1 ts=TS"]
     for lit, _ in R.EXEC_TRACE_SECTIONS:
-        if full or lit != "[tool] chain=uncore":
+        if lit == "[artifact] hashes=":
+            lines.append(lit + "main-side")          # 锚定段要求：哈希由主控侧算（不得自报）
+        elif full or lit != "[tool] chain=uncore":
             lines.append(lit + "x")
     return "\n".join(lines) + "\n"
 
@@ -144,11 +149,61 @@ def test_coverage_zero_is_pass_but_unverified():
     assert "未验" in note, f"必须显式标「未验」: {note}"
 
 
+# ── ④b ★ 锚定段（2026-09-30）：留痕件与主控侧哈希记录须"同一对象、同一权威"──────
+#   为什么单列这一段：A2 的 runtime 验收要求 = "留痕件齐 **+ 与产物哈希交叉锚定**"，
+#   而上面两段只判"五段在不在"，**不判锚**。实测（2026-09-30 · 11 个含件 runDir）：
+#   `ts` 与目录名 11/11 相符 · `content_digest` 11/11 规范 · `hashes` 11/11 = `main-side`
+#   ⇒ **存量零违规**（先量后定档）⇒ 前两条可判 **FAIL**；"主控侧无记录"只**报数**
+#   （"没验到 ≠ 验出问题"，故意不做 FAIL）。
+def _run_dir_with_trace(trace_text, run_json=None):
+    d = Path(tempfile.mkdtemp(prefix="et-anchor-"))
+    (d / "executor-trace.txt").write_text(trace_text, encoding="utf-8", newline="\n")
+    if run_json is not None:
+        (d / ".agent-run.json").write_text(json.dumps(run_json), encoding="utf-8", newline="\n")
+    return d
+
+
+def test_anchor_selfreported_hash_is_red():
+    t = _trace_text(full=True).replace("[artifact] hashes=main-side",
+                                       "[artifact] hashes=sha256:" + "ab" * 32)
+    d = _run_dir_with_trace(t, {"content_digest": "sha256:" + "cd" * 32})
+    with _FakeRuns([d]):
+        st, note, detail = R.check_executor_trace(None)
+    assert st == "FAIL", f"执行体自报产物哈希必须红（伪称可核）: {st} · {note}"
+    assert any("自报" in x for x in detail), f"detail 必须点名「自报」: {detail}"
+
+
+def test_anchor_ts_mismatch_is_red():
+    t = _trace_text(full=True).replace("ts=TS", "ts=别的run")
+    d = _run_dir_with_trace(t, {"content_digest": "sha256:" + "cd" * 32})
+    with _FakeRuns([d]):
+        st, note, detail = R.check_executor_trace(None)
+    assert st == "FAIL", f"留痕件 ts 与 runDir 不符（归属不符）必须红: {st} · {note}"
+    assert any("归属" in x for x in detail), f"detail 必须点名「归属」: {detail}"
+
+
+def test_anchor_missing_main_side_digest_is_gap_not_fail():
+    d = _run_dir_with_trace(_trace_text(full=True), None)      # 无 .agent-run.json
+    with _FakeRuns([d]):
+        st, note, detail = R.check_executor_trace(None)
+    assert st == "PASS", f"缺主控侧记录只报数（没验到 ≠ 验出问题）: {st} · {note}"
+    assert "无锚记录 1" in note, f"note 必须报出无锚记录: {note}"
+
+
+def test_anchor_all_green_on_fake_full_run():
+    d = _run_dir_with_trace(_trace_text(full=True), {"content_digest": "sha256:" + "cd" * 32})
+    with _FakeRuns([d]):
+        st, note, detail = R.check_executor_trace(None)
+    assert st == "PASS", f"齐段 + 锚在 应 PASS: {st} · {detail}"
+    assert "ts 相符 1" in note and "自报 0" in note and "无锚记录 0" in note, f"报数不符: {note}"
+
+
 # ── ⑤ 端到端 + 结构护栏 ─────────────────────────────────────────────────────
 def test_gate_end_to_end_on_real_repo():
     st, note, detail = R.check_executor_trace(None)
     assert st == "PASS", f"本仓留痕机制应当齐备: {st} · {detail}"
     assert "采集点 5/5" in note, f"报数不符: {note}"
+    assert "自报 0" in note and "无锚记录 0" in note, f"锚定读数应全绿（存量零违规）: {note}"
 
 
 def test_missing_cli_is_red():

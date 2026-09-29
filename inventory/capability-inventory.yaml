@@ -383,7 +383,7 @@ items:
   - {kind: gate, ref: executor-trace}
   - {kind: file, ref: ops/station-bin/agent-cli.ps1}
   basis: E2
-  evidence: "A2（2026-09-29）落地：最小充分集**5 项**（cmd / env / fs / tool / artifact）在 `agent-cli.ps1` 采集 —— 命令执行记录取外壳 R0/R1/RC · 环境快照由启动器 fork 前采（`uname`/`hostname`/`nproc`/`free -m`，不读 `/proc`） · 文件系统写入由既有 `find -newer` 派生 · **工具调用链如实标 `uncore`**（执行体内部产生 ⇒ 可篡改/漏报/伪造，**不得伪称已核**） · 产物哈希由**主控侧**回收时算。gate `executor-trace` 判机制（5 采集点逐个在位 + 负向自证 `chain=core`/`chain=verified` 不得出现）与覆盖（runDir 有件则须齐段；**0 个 ⇒ 报数不入分母**）；离线夹具 `_fm_golden_test.ps1` 守逐条字面细节（409/0）；夹具 9/9 绿（含先验红 + 变异自证 + 覆盖三态）。⚠ 覆盖率**未实测**（尚无真派发）"
+  evidence: "A2（2026-09-29）落地：最小充分集**5 项**（cmd / env / fs / tool / artifact）在 `agent-cli.ps1` 采集 —— 命令执行记录取外壳 R0/R1/RC · 环境快照由启动器 fork 前采（`uname`/`hostname`/`nproc`/`free -m`，不读 `/proc`） · 文件系统写入由既有 `find -newer` 派生 · **工具调用链如实标 `uncore`**（执行体内部产生 ⇒ 可篡改/漏报/伪造，**不得伪称已核**） · 产物哈希由**主控侧**回收时算。gate `executor-trace` 判机制（5 采集点逐个在位 + 负向自证 `chain=core`/`chain=verified` 不得出现）与覆盖（runDir 有件则须齐段；**0 个 ⇒ 报数不入分母**）；离线夹具 `_fm_golden_test.ps1` 守逐条字面细节（409/0）；夹具 **13/13** 绿（含先验红 + 变异自证 + 覆盖三态 + 锚定段）。★ **2026-09-30 更新**：① **覆盖率已实测** —— `runDir 含该件 11 个（齐段 11）`（原「未实测 / 尚无真派发」已作废）；② **锚定段已补**（原缺 = §2.2 要求的后半「与产物哈希交叉锚定」）：执行体**不得自报**哈希（`[artifact] hashes=` 必须 `main-side`）· 留痕件 `ts=` 须 **== runDir 名**（归属不符 ⇒ FAIL，与 `O-57` 同族）· 主控侧须有 `content_digest`（缺 ⇒ 只报数）；读数 `ts 相符 11 · 自报 0 · ts 不符 0 · 无锚记录 0`。⚠ 射程：**不**比较哈希值相等（留痕件按设计不含哈希值）—— 锚定 = 同一对象 + 哈希权威在主控侧"
 
 - id: human-context-metric
   domain: meta
