@@ -46,6 +46,7 @@ items:
   - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 4, gist: "line_range 越界未校验（只校形态）；「越界即无效」未裁（升级需读产物）", state: todo, needs_decision: true, refs: []}
   - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 5, gist: "★ 已裁 2026-09-30（O-123）：登记为「能力边界」不裁 —— 阈值是设计选择而非可验结论；若日后要用于自动裁决须先校准", state: boundary, needs_decision: false, refs: [O-123]}
   - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 6, gist: "disagreement 只覆盖「同一锚点下的矛盾」⇒ 跨锚点立场冲突识别不到", state: todo, needs_decision: false, refs: []}
+  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 7, gist: "★ 2026-09-30 新登记（O-123 取证）：契约要求锚点「归一化后」对齐，实现**只做 .Trim()** ⇒ 同位置会裂成多锚点 ⇒ consensus 静默失效（全仓零 review.json ⇒ 后果为推定非实测）", state: todo, needs_decision: false, refs: [O-123]}
 
   # ── U1-ARTIFACT-IDENTITY（8 条；1/2 已被划掉）──────────────────────────────
   - {spec: U1-ARTIFACT-IDENTITY, n: 1, gist: "（已消掉）「规范化 JSON 数组」作哈希输入 —— 移入上方「已消掉的未实测项」", state: retired, needs_decision: false, refs: []}
