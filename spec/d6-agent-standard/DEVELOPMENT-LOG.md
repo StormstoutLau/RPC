@@ -19,6 +19,58 @@ upstream: \[d6-agent-standard-.* 全量文档]
 
 ## 历史回溯（2026-09-03 起）
 
+### 2026-09-30（续③） — **O-07 改判收口**：zen 限额（429/quota）触发源已撤 ⇒ 裁「不适用」
+
+> **定位**：`OPEN-ISSUES.md` **O-07**（验证 · P2 · 事件驱动）。原文 = 「zen 限额真实触发未发生（退出码 7 定义置位）」。
+> ⚠ 本条是**改判**（非落地）：依据已在**台账行内写全**，本节只留索引 —— **不复制第二份**。
+
+**裁定**：**触发源已撤 ⇒ 本条不适用**。依据（三处）：
+- **zen 已撤出运行时路由**（`agent-cli.ps1` ROUTE_TABLE 注释 · 2026-09-24 起三档维持 openrouter）⇒ 该事件**不可能经派发路径触发**；
+- **`exit 7` 在代码里无触发点**（`exit 7` 检索无命中）；429/quota 的**现实形态已转移**到 **OpenRouter free 档**
+  （20 RPM + 指数退避 —— `ADR-0003` / [ops/cluster_egress.py](../../ops/cluster_egress.py) / `agent-cli.ps1` 的 RPM gate），**不走 exit 7**；
+- 复核由用户提问触发（"opencode 是否已默认接 openrouter / 免费档要不要登录"）⇒ 顺带**三站只读实测（2026-09-30）**：
+  `opencode` **1.18.25** 三站同 · `auth list` = **0 credentials** 三站同（A 的 `auth.json` 2 字节空、B/C 不存在）·
+  `~/.config/rpc/openrouter.key` **三站各有**（73 B，2026-09-21）· `opencode.jsonc` **md5 三站全一致** `755975db…`（与 09-24 同值 ⇒ 未变）。
+
+**同日三处同步（同一事实的三个表达，一次收齐）**：[ARCHITECTURE.md](./ARCHITECTURE.md) 退出码表该行
+（`定义置位，未真实触发` → **路径已撤 ⇒ 不适用**）· `agent-cli.ps1` 的 zen full-id 注释
+（原"补 `opencode auth login` 即可用"系**已推翻**的旧归因 ⇒ 改为"**它要的是 tty，不是凭据**"）·
+台账 O-07 状态格（`⏳ 待真实触发` → `✅`）。
+
+**验收**：`ledger-status` 仍开着 **7 → 6** · `ps1-golden` **424/0**（含 `o117` 守卫 —— 新注释**整句无 backtick**，刻意避开 `O-117` 同族）·
+`syntax`（.ps1 15/0）· `--quick` **PASS · 38 绿 / 2 黄 / 0 红** · `doclinks` 失效 0。
+★ **未碰站上**：`agent-cli.ps1` 不在 `STATION_BINS`（9 件）⇒ 不需三站同步。
+
+**关联**：`OPEN-ISSUES.md` **O-07** · `ARCHITECTURE.md` 退出码表 · `agent-cli.ps1` ROUTE_TABLE ·
+`ADR-0003`（OpenRouter 限速与配额）· **`O-43`**（zen 稳定性采样 —— 本条的近邻）· 同日前一条 `2026-09-30（续②）`（O-102 行尾射程闭环）。
+
+### 2026-09-30（续②） — **O-102 行尾漂移闭环**（走 spec workflow：设计 → 实施 → 质量审计 → 回写）
+
+> **定位**：`OPEN-ISSUES.md` **O-102**（工程形态/编码 · P3）。走**同型先例** `O21-ctx-closure-verification.md`
+> 的报告体裁 ⇒ 新增 [O102-line-ending-closure-verification.md](./O102-line-ending-closure-verification.md)。
+> ⚠ 全文（证据表 / 反例 / 射程声明）在报告里，本节只留索引 —— **不复制第二份**。
+
+**复测推翻原登记的一半**：O-102 的三条"值得登记"里，**①「约定未声明」与 ③「既不可判也不可见」在它登记之后才被消掉**
+（`.gitattributes` **2026-09-29 立**，commit `fc1ae8f`；`gates` 按字节比对 + 2026-09-29 实测抓到过假红）
+⇒ 原文那句「**无 `.gitattributes`（`Test-Path` = False）**」**已过期**。
+
+**残留收敛为一个可执行缺口并已修**：`.gitattributes` 射程漏 `ops/` 下其余 shell ——
+`ops/llama-serve-instance`（34 行全 CRLF）· `ops/lm-download/*.sh`（3 个全 CRLF）；
+★ **天然对照**：**同名**的 `ops/station-bin/llama-serve-instance` = 全 LF（在射程内）。
+修复 = **单文件**（`.gitattributes`：`ops/station-bin/*` → `**`；新增那两类）+ 强制重落 4 件
+（修复前 `i/lf w/crlf` ⇒ `git status` **只剩 `.gitattributes`** ⇒ **无内容 diff**）。
+
+**审计（读数）**：先验红 `i/lf w/crlf` 4/4、CRLF=34/7/11/16 ⇒ 后验绿 `w/lf`、CRLF=0 ·
+**变异自证**（`.git/info/attributes` 反向覆盖 `eol=crlf` ⇒ 强制重落 ⇒ **CRLF=34**；撤除 ⇒ 裸 LF=34）·
+门禁 `--quick` **PASS · 38 绿 / 2 黄 / 0 红** · `syntax`(.sh 414/0) · `scripts`(未登记 0) · `doclinks`(失效 0)。
+★ **写下一个反例**：`git checkout --` 与 `git checkout-index -f` **都不会**重落 ⇒ 必须"先移除再检出"。
+
+**射程声明（含"不做"的裁定）**：射程 = 会被部署/执行的件；★ `archive/**` 与 `tests/b5q/**` 已裁**不处理**
+（不面向执行）；⚠ 仍留着：全仓 `w/lf`/`w/crlf` 并存 · `w/mixed` 仍产生 · `ops/` 下 `.py` 仍 `w/crlf`。
+**改判**：原文「未验（推测）⇒ 将来加字节判据会假红」⇒ **已验**（`gates` 就是，且已兑现一次）。
+
+**关联**：`OPEN-ISSUES.md` **O-102**（状态已改 `✅`）· 前置 commit `fc1ae8f` · 判据 `gates` · 报告 `O102-line-ending-closure-verification.md`。
+
 ### 2026-09-30 — **A2 读数刷新 + 锚定段落地**：`executor-trace` 补第三段判据（原「runtime 验收未实测」收口）
 
 > **定位**：接 [A-LIST-LANDING-PLAN.md](./A-LIST-LANDING-PLAN.md) **§2.4 读数刷新**。A2 落地时（2026-09-29）登记的

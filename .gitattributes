@@ -20,8 +20,20 @@
 # ============================================================================
 
 # 站上件（/usr/local/bin/ 部署；含无扩展名的 shell 脚本 —— 由 llama-serve-instance 等）
-ops/station-bin/*      text eol=lf
+# ⚠ 用 `**` 而非 `*`：`ops/station-bin/*` **不跨子目录** ⇒ 会漏掉 `ops/station-bin/golden/*.sh`
+#   （2026-09-30 O-102 闭环时实测发现；`**` 是严格超集，含直接子项）。
+ops/station-bin/**     text eol=lf
 ops/rpc-nodes          text eol=lf
+
+# 2026-09-30（O-102 闭环）补漏 —— `ops/` 下**其它会被执行的 shell** 此前不在射程。
+#   ★ 实测对照（证明缺口是真的，不是推测）：`ops/station-bin/llama-serve-instance`（**在**射程）= 全 LF；
+#     而同名的顶层 `ops/llama-serve-instance`（**不在**射程）= 34 行**全 CRLF**。
+#   另 `ops/lm-download/*.sh` 3 个 `#!/bin/bash` 亦全 CRLF ⇒ 原文风险（从 Windows 工作区拷到 Linux 站）
+#     一旦发生即 `bad interpreter: …bash^M`。
+#   ⚠ 仍**不铺全仓**：`archive/**` 与 `tests/b5q/**` 的 CRLF 已**裁「不处理」**（理由 = 不面向执行）——
+#     该裁定的全文写在 `spec/d6-agent-standard/O102-line-ending-closure-verification.md`。
+ops/llama-serve-instance  text eol=lf
+ops/lm-download/*.sh      text eol=lf
 
 # systemd 单元（scp 到 /etc/systemd/system/）
 ops/*.service          text eol=lf
