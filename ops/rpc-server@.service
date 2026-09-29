@@ -1,0 +1,39 @@
+[Unit]
+Description=llama.cpp RPC worker %i (cache /data/rpccache/%i)
+# ★ 本文件是**站上 `rpc-server@.service` 的仓库快照**（2026-09-29 补登记）。
+#   站上实况 = 本模板，**仅 `RPC_BIND` 不同**（各站走各自直连段）:
+#     A 站: RPC_BIND=10.10.10.1   (A-B thunderbolt0 直连段)
+#     C 站: RPC_BIND=10.10.11.3   (B-C USB4 段)
+#     B 站: 不装本单元（B 是 head）
+#   改这里**不生效** —— 必须按「改仓库 → 核对 → 部署各站」推，与 ops/station-bin/ 同纪律。
+#
+# 2026-09-29 引擎变体钩子（GLM-5.3-Flash 需要）: worker 侧推理引擎**必须与 head 同版**
+#   （RPC 两端版本不匹配即握手失败）⇒ 新增 LLAMA_RPC_SERVER_BIN + 运行时覆盖层 +
+#   `rpc-serve-instance` 包装器（原因见该脚本头部: ExecStart 不接受变量作可执行路径）。
+After=network-online.target
+Wants=network-online.target
+# 原写在 [Service] 段 —— 那是**无效位置**（journal 每次启动都报 "Unknown key name"）,
+# 移回 [Unit]（该键的正确位置）, 意图不变: 关掉启动速率限制, 让 Restart=always 真能兜底。
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=scott-lau
+Group=scott-lau
+SupplementaryGroups=render video
+Environment=LLAMA_CACHE=/data/rpccache/%i
+# 缺省 = 主线引擎（与 head 的 `/opt/llama.cpp/llama-server` 同目录 ⇒ 天然同版）。
+Environment=LLAMA_RPC_SERVER_BIN=/opt/llama.cpp/ggml-rpc-server
+# 绑定地址按站写死（上面 [Unit] 注里列了两个站的值）。
+Environment=RPC_BIND=10.10.10.1
+# 运行时覆盖层（2026-09-29）: `rpc-nodes --start <alias>` 读**实例 conf** 的
+#   LLAMA_RPC_SERVER_BIN（由 infer-load 依 `--engine` 写入），把值写在本文件 ——
+#   head 用哪个引擎变体，worker 就用**同目录**的 ggml-rpc-server。
+#   `-` 前缀 = 文件不存在不算错（主线形态就没有它）。放 /run（tmpfs）重启自清，不动 /etc。
+EnvironmentFile=-/run/llama-instances/rpc-%i.env
+ExecStart=/usr/local/bin/rpc-serve-instance %i
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

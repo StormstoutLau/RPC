@@ -53,6 +53,10 @@ families:
   - id: minimax
     basis: MiniMax 自研权重
     members: [m27-q4ks]
+  - id: glm
+    basis: 智谱 Z.ai 自研权重（GLM 系列）
+    members: [glm-5.3-flash]
+    note: "2026-09-29 入 `models.yaml`（重新启用 ⇒ 本表须同步归类, 否则门禁 `model-families` 双向对账会点名）。★ 架构 `glm5next` **未进主线** ⇒ 需变体引擎"
   - id: sentence-embedding
     basis: 句子嵌入模型（**非生成模型**，用于向量检索而非判官/产出）
     members: [all-minilm-l6-v2-embedding]

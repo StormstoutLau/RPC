@@ -40,8 +40,15 @@ if [ -n "${RPC_TARGET:-}" ]; then
   done
   RPC_ARGS="--rpc ${RPC_TARGET}"
 fi
+# -ngl (2026-09-29, 统一入口 vs 手工形态对齐):
+#   原文为**硬编码 `-ngl 999`**。实测本引擎 `--help` 原文 = "(default: auto)" ⇒ 不传参时
+#   引擎自己按可用设备内存放层, 与显式 999 在本集群**行为等价**(都把放得下的层全放上设备);
+#   而 `-ngl 999` 恰是 9/8 V4-Flash 单机全量持有 → kernel panic 事故里被点名的形态。
+#   ⇒ 缺省**不传**(回归引擎 auto), 需要钉死时在实例 conf 写 `N_GPU_LAYERS=<N>`。
+NGL_ARGS=""
+[ -n "${N_GPU_LAYERS:-}" ] && NGL_ARGS="-ngl ${N_GPU_LAYERS}"
 # EXTRA_FLAGS 有意不加引号 (word-split 展开)
 exec "${LLAMA_SERVER_BIN:-/opt/llama.cpp/llama-server}" -m "$MODEL_PATH" $RPC_ARGS \
-  -ngl 999 -c "${CTX:-32768}" -t "${THREADS:-16}" \
+  $NGL_ARGS -c "${CTX:-32768}" -t "${THREADS:-16}" \
   --n-cpu-moe "${N_CPU_MOE:-0}" ${EXTRA_FLAGS:-} \
   --host 0.0.0.0 --port "${PORT:-8080}"

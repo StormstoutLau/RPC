@@ -201,7 +201,7 @@ function Get-EvSuffix([string]$Ts) {
 
 function Get-TargetHost([string]$station) {
     if ($station -eq 'A') { return 'scott-lau-NEX.local' }
-    if ($station -eq 'C') { return '192.168.1.37' }   # C (seaviv): 无 avahi .local, 用管理网 IP
+    if ($station -eq 'C') { return '192.168.10.37' }   # C (seaviv): 无 avahi .local, 用管理网 IP（2026-09-29 静态化, 见 net.yaml §lan）
     return 'scott-lau-GTR-Pro.local'   # B default (memory master)
 }
 

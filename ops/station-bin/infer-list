@@ -30,9 +30,9 @@
 # 别名规则须与 cluster.alias_of / 站上 infer-load 一致(含 minimax 重映射)。
 
 declare -A NODE=(
-  [A]="scott-lau@192.168.1.33 scott-lau@scott-lau-NEX.local"
-  [B]="scott-lau@192.168.1.32 scott-lau@scott-lau-GTR-Pro.local"
-  [C]="scott-lau@192.168.1.37 scott-lau@seaviv.local"
+  [A]="scott-lau@192.168.10.33 scott-lau@scott-lau-NEX.local"
+  [B]="scott-lau@192.168.10.32 scott-lau@scott-lau-GTR-Pro.local"
+  [C]="scott-lau@192.168.10.37 scott-lau@seaviv.local"
 )
 ORDER=(A B C)
 

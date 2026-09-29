@@ -729,7 +729,8 @@ Suggested directions
 
 - **证据等级**：P-2 三阶段编排通过 / 三个缺陷修复 / gdb 回溯 / 手工 `hipMemcpy` 阈值实验 / 单机 `--ssd-streaming` 跑通 = **E1**；上游支持矩阵（`STRIX_HALO.md` / `MODELS.md` / `DISTRIBUTED.md` 原话）= **E3**；「阈值 = hipMemcpy 大拷贝路径」的推断**已被 §16.8 对照实验否证**（降级为「ds4 进程内的观测边界」）。
 - **合规**：探针脚本全部落 `tmp/`（已 gitignore）；站上 ds4 进程已清，GTT 归零；未改 `/opt/rocm`、未改系统配置。
-- ★ **门禁副产物（供后续避坑）**：`id-census` 门禁扫描 `*.py` 的 `hexdigest()|md5(|sha256(|sha1(`，**不读 gitignore** ⇒ **新写的 `tmp/*.py` 若含哈希调用会直接红灯**（本轮实测 +3 行/+1 文件）。临时脚本要么去掉哈希调用，要么用非 `.py` 扩展名。
+- ★ **门禁副产物（供后续避坑）**：`id-census` 门禁扫描 `*.py` 的 `hexdigest()|md5(|sha256(|sha1(`。**本轮的坑**：口径当时**不排除 `tmp/`** ⇒ **新写的 `tmp/*.py` 若含哈希调用会直接红灯**（本轮实测 +3 行/+1 文件），当时给出的规避是"去掉哈希调用 / 用非 `.py` 扩展名"。
+  ★★ **2026-09-29 已从根上修掉**：`ops/id_site_census.py` 的 `EXCLUDE_DIRS` **加入 `tmp`** —— 依据 = `tmp/` 是 **gitignored 的会话临时目录**（`.gitignore:22`；`git ls-files tmp` 为空），计入它会让真值**在干净 clone 上不可复现**、且随临时件增删**反复漂**（09-29 即因少一个临时脚本而报红）。⇒ **上面那两条规避不再需要**（口径变更已重跑 `--emit` 并复核 [U4 §1](../../spec/d6-agent-standard/U4-INVALIDATION-RULES.md)）。
 
 ---
 

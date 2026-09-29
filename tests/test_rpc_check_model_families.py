@@ -41,10 +41,17 @@ def judge_on(text: str):
 
 GOOD = ORIG.decode("utf-8")
 
-# ── A. 真文件 ⇒ PASS + 报数（并防"空判"：必须真的数出 12 个 alias）──
+# ── A. 真文件 ⇒ PASS + 报数（并防"空判"：必须真的数出 alias，且**两边相等**）──
 st, note, det = R.check_model_families({})
 chk("A1 真文件 ⇒ PASS", st == "PASS", f"{st} · {note}")
-chk("A2 报数含「成员覆盖 12/12」（防 0/0 被读成没问题）", "覆盖 12/12" in note, note)
+# ★ 2026-09-29 由硬编码 `12/12` 改为**按意图断言**（成员覆盖 X/Y ⇒ X == Y 且 Y > 0）。
+#   为什么: 硬编码的数字**每次往 `models.yaml` 加模型都会陈旧**（本次加 `glm-5.3-flash` 即触发），
+#   而它要防的缺陷是 **`0/0` 被读成没问题**（判据对着空集宣 PASS）—— 那与"模型总数是几"**无关**。
+#   改后既堵住原缺陷，又不再随模型增减而假红；A3 另证"族名真的被列出来了"。
+import re as _re
+_mm = _re.search(r"成员覆盖\s*(\d+)\s*/\s*(\d+)", note)
+chk("A2 报数含「成员覆盖 X/Y」且 X == Y > 0（防 0/0 被读成没问题）",
+    bool(_mm) and _mm.group(1) == _mm.group(2) and int(_mm.group(1)) > 0, note)
 chk("A3 判据列出族名（可读）", any("gpt-oss" in d for d in det))
 
 # ── B. **先验红**（每条都要求"红 + 点名"）──

@@ -48,15 +48,19 @@ segments:
     mtu: 9000
     ends:
       - {station: B, iface: thunderbolt1, ip: 10.10.11.1, peer: C}
-      - {station: C, iface: thunderbolt1, ip: 10.10.11.3, peer: B}
+      # ★ 2026-09-29 更正（以站上实况为准）：C 端在 **thunderbolt0**，不是原先记的 thunderbolt1。
+      #   证据：usb4 断言实测 C 站 `thunderbolt0 = 10.10.11.3`；同刻连通性正常(8 向全通) ⇒
+      #   是**标签/登记错**（接口枚举或接线在 09-15 之后换过），**不是**功能故障。
+      #   ⚠ 另见本段下方 A-C 的 note —— 那条 note 当年**记反了**，一并更正。
+      - {station: C, iface: thunderbolt0, ip: 10.10.11.3, peer: B}
 
   - name: A-C
     cidr: 10.10.12.0/24
     mtu: 9000
-    note: "C 站接口编号与 A/B 不同源: C 的 A-C 段落在 thunderbolt0"
+    note: "★ 2026-09-29 更正: 原注写『C 的 A-C 段落在 thunderbolt0』——**记反了**；实测 C 的 A-C 段在 **thunderbolt1**（B-C 段才在 thunderbolt0）"
     ends:
       - {station: A, iface: thunderbolt1, ip: 10.10.12.1, peer: C}
-      - {station: C, iface: thunderbolt0, ip: 10.10.12.3, peer: A}
+      - {station: C, iface: thunderbolt1, ip: 10.10.12.3, peer: A}
 
 # ── 跨段主备回程路由 (D-5) ────────────────────────────────────────
 # 只登记**非直连段**的路由; B 无此项(它直连 A 与 C)。
@@ -91,15 +95,59 @@ cross_checks:
 #   `ssh -G <名>` 的 hostname **必须 == 下表 ip** ⇒ 不符即 FAIL 并提示更新本表与 ~/.ssh/config。
 #   即"IP 绑定对 DHCP 的脆弱性"被转成一条可检出的红灯, 而不是"ssh 连不上"的谜题。
 lan:
+  # ⚠⚠ 2026-09-29：**路由器由桥模式改为路由模式** ⇒ 整张 LAN 重建（`192.168.1.0/24` → `192.168.10.0/24`）。
+  #   本段登记的 ip 即**落体后的静态真值**（末位八位组**不变**、只换网段段 ⇒ 见
+  #   docs/research/2026-09-29_路由器模式切换_LAN寻址重建与静态化方案.md）。
+  #   ★ **四机均已钉静态并双向验证**（三站 `ipv4.method manual` ⇒ `PrefixOrigin=Manual` / `Dhcp=Disabled`；
+  #     主控 WLAN 亦为静态）⇒ **本段与实况一致**；漂移前提（DHCP 租约）已消除，D6 判据转为回归护栏。
   stations:
-    - {station: A, host: scott-lau-NEX.local,     ip: 192.168.1.33, iface: enp195s0}
-    - {station: B, host: scott-lau-GTR-Pro.local, ip: 192.168.1.32, iface: enp193s0}
-    - {station: C, host: null,                    ip: 192.168.1.37, iface: null, note: "一直以 IPv4 直连, 无名别名"}
-  master: {ip: 192.168.1.36, iface: WLAN, note: "主控站; ssh -G 的 hostname 即绑定目标"}
+    - {station: A, host: scott-lau-NEX.local,     ip: 192.168.10.33, iface: enp195s0}
+    - {station: B, host: scott-lau-GTR-Pro.local, ip: 192.168.10.32, iface: enp193s0}
+    - {station: C, host: null,                    ip: 192.168.10.37, iface: eno1, note: "一直以 IPv4 直连, 无名别名（★ 正是这条让 C 不在 D4 判据射程内 —— 见 known_drift）"}
+  master: {ip: 192.168.10.36, iface: WLAN, note: "主控站; ssh -G 的 hostname 即绑定目标"}
+  # ── 不变式（2026-09-29 立 · 见同源方案文档 §5）────────────────────────────────
+  #   ★ 这两条是**静态化方案能成立的前提**：静态地址全落在池外(.2-.99)，一旦池改宽就全会撞。
+  #   ⚠ 目前**无机器判据**（池范围读不到, 需路由器凭据）⇒ 只能靠 D6 在漂移发生后报根因。
+  invariants:
+    - "路由器 LAN 网段 = 192.168.10.0/24（改它 ⇒ 整段真值与 master ~/.ssh/config 全要改）"
+    - "DHCP 池 = .100-.199（**不得改宽进 .2-.99** —— 静态段在那儿）"
   dhcp: |
-    A/B 的 LAN 地址是 **DHCP 租约** (`ip -4 -o addr` 显示 scope global dynamic, valid_lft ~14.5h,
-    网关 192.168.1.1)。⇒ 建议在路由器按 MAC 做 DHCP 保留(固定 .32/.33/.37)以进一步稳定;
-    未做保留时靠上面那条门禁断言兜住漂移。
-  measured_by: "2026-09-16 实测: ip -4 -o addr / 站上 $SSH_CONNECTION / Dns.GetHostAddresses / Stopwatch 计时"
+    ~~A/B 的 LAN 地址是 **DHCP 租约** … 未做保留时靠上面那条门禁断言兜住漂移。~~（**已过时**：见下）
+    ⚠ **2026-09-29 两次更正**：
+    ① **这句"靠门禁兜住"对 C 站不成立** —— 门禁那条断言靠 `ssh -G <别名>`，而 C 的 `host: null`
+       ⇒ **整站被跳过**（ADR-0006 v1.1 已更正该射程漏洞；D6 已落体修好）。
+    ② ★★ **"靠门禁兜住"这个策略本身也不成立** —— 同日路由器**换了工作模式**，整段网换掉，
+       门禁只报「可达 0/3 站」、**不给根因**（判据修好后才会报根因，见 known_drift #2）。
+    ⇒ 结论改为：**不再靠 DHCP + 判据兜**，改为**站上钉静态**(池外) + 判据只看"是否偏离真值"。
+    新池实况（路由器管理面读数）：**池 = .100-.199 · 租期 120 分钟**。
+  # ── 已知漂移（实测记录；处置决定见 ADR-0006 v1.1 的 D5/D6）────────────────────
+  known_drift:
+    - station: C
+      want: 192.168.1.37
+      seen: 192.168.1.8
+      seen_at: "2026-09-29"
+      iface: eno1
+      scope: dynamic            # DHCP 重租
+      effect: "6 项门禁红灯(usb4/gates/engine/backend/models/stations)，明细**一律只报『可达 2/3 站』**、不给根因"
+      why_invisible: "D4 判据的射程靠 `ssh -G <别名>`，C 的 host=null ⇒ 整站跳过（ADR-0006 v1.1 已更正该射程漏洞）"
+      usb4_ok: true             # ★ 同刻 USB4 数据面完好（10.10.11.3 / 10.10.12.3）⇒ 存在不依赖 LAN 的通道
+      pool_check: "2026-09-29 实测: **.37 在 DHCP 动态池内** —— 证据 = 站上 NM 日志 `9月28 22:26:09 dhcp4(eno1): new lease, address=192.168.1.37`(服务器 192.168.1.1 发出); 且**未被 MAC 保留**(同机同网卡本次重租得 .8 而非 .37)"
+      fix: "ADR-0006 v1.1: D5（C 站钉静态）+ D6（判据改为『站上实况 + USB4 降级通道』）"
+      ref: "docs/research/2026-09-29_控制面LAN地址漂移_失效归因与判据升级.md"
+      history: "同型第 3 次: 192.168.1.24(WiFi, 2026-09-08 弃用) → 192.168.1.37(2026-09-09 修正) → 192.168.1.8(本次)"
+      superseded_by: 2         # ★ 本条只保留时间线：同日稍晚整段网就换了 ⇒ 见 #2（旧网段已不存在）
+    - id: 2
+      event: "路由器【桥 → 路由】模式切换 ⇒ 整张 LAN 重建"
+      seen_at: "2026-09-29"
+      old_subnet: 192.168.1.0/24
+      new_subnet: 192.168.10.0/24
+      seen: {A: 192.168.10.105, B: 192.168.10.104, C: 192.168.10.106, master: 192.168.10.102}
+      scope: dynamic            # 三站 + 主控**全在池内**(.100-.199)、租期仅 120min ⇒ 会持续漂
+      effect: "门禁『可达 0/3 站』(比单站漂移更彻底)：usb4/gates/engine/backend/models/stations 6 项红灯"
+      root_cause_visible: "★ D6 判据已能报根因: `★★ master（本机）自身的 LAN 地址已漂移: 192.168.1.36 → 192.168.10.102 —— 这是三站全部不可达的根因`（ADR-0006 §实施记录 v1.2 的 V13）"
+      fix: "站上钉静态(池外 .2-.99) + 主控钉静态 ⇒ 见 docs/research/2026-09-29_路由器模式切换_LAN寻址重建与静态化方案.md §6"
+      status: "★ **已实施（2026-09-29）**：三站 + 主控均钉静态（三站 `ipv4.method manual`，主控 WLAN 同）⇒ 本段 stations.ip 与实况一致、门禁 stations/D6 恢复全绿"
+      usb4_ok: true
+  measured_by: "2026-09-16 实测: ip -4 -o addr / 站上 $SSH_CONNECTION / Dns.GetHostAddresses / Stopwatch 计时；2026-09-29 复核 C 站漂移与整网段重建（经 USB4 段取证 + 路由器管理面读数）"
 
 # 维护约定: 改任何一站的 LAN 地址 => 同步改 ①本段 ②master 的 ~/.ssh/config ③cluster.py 的 STATIONS

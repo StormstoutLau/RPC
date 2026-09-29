@@ -57,6 +57,7 @@ station_runtime:
   - ops/station-bin/infer-unload
   - ops/station-bin/infer-list
   - ops/station-bin/llama-serve-instance
+  - ops/station-bin/rpc-serve-instance
   - ops/station-bin/load-gate
   - ops/station-bin/load-mem-gate
   - ops/station-bin/wait-gtt-release

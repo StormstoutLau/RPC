@@ -47,7 +47,11 @@ METRIC_REGEX = r"hexdigest\(\)|md5\(|sha256\(|sha1\("
 
 # ── 口径 ②：范围 ────────────────────────────────────────────────────────────
 FILE_GLOB = "*.py"
-EXCLUDE_DIRS = (".venv", "venv", "archive", "__pycache__", ".git", "node_modules", "site-packages")
+# ★ 2026-09-29 增 `tmp`（口径变更，已按纪律重跑 `--emit` 并复核下游 U4 §1）：
+#   `tmp` 是 **gitignored 的会话临时脚本目录**（`.gitignore:22` 明写 `tmp/`；`git ls-files tmp` 为空）
+#   —— 计入它会让真值**在干净 clone 上不可复现**，且随临时件增删**反复漂**（本次报红即因少了一个临时脚本）。
+#   ⚠ 与 `archive` 同类：都是"不是 ID 产出点"的目录。
+EXCLUDE_DIRS = (".venv", "venv", "archive", "__pycache__", ".git", "node_modules", "site-packages", "tmp")
 EXCLUDE_TESTS = True          # 测试不是"ID 产出点"⇒ 默认排除（改了这里必须重跑 --emit）
 
 # ── 口径 ③：单位 = 上面的 METRIC_UNIT（"行"而不是"匹配次数"，也不是"文件数"）──────
