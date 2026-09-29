@@ -1,0 +1,32 @@
+# UNTESTED-DEC 批 —— 未实测索引「9 条 needs_decision」取证批 · 第一刀（2026-09-30）
+#
+#   为什么起这一批：`inventory/untested-index.yaml` 是 6 份规范 `## 未实测登记` 节的分诊索引
+#   （51 条：todo 42 / partial 5 / retired 3 / boundary 1；其中 **needs_decision 9 条**）。
+#   用户裁定第一刀 = **先裁那 9 条**（只差一次裁定，占全量的 ~18%）。
+#   ★ 本批**只覆盖 9 条里【可出网面】的 2 条** —— 另 7 条的档位核验未过（见下"覆盖说明"）。
+#
+#   卡（2 张）：
+#     dec-cc = 结论契约里三个自称未定的设计选择（path 相对根 / line_range 越界 / 三分类阈值 ≥2）
+#     dec-u1 = 产物身份「截断长度变更后没有映射路径」（纪律代替判据）
+#
+#   ★★ 覆盖说明（**如实登记，不假装全覆盖**）：
+#     9 条 needs_decision 按**所属规范的档位**分布 ——
+#       · 已登记 public：`U1-ARTIFACT-IDENTITY`（1 条）· `D7-PROTOCOL-CONTRACT`（0 条）  ⇒ 可出网
+#       · 本轮**补登记** public：`U3-EDGE-FORMAT`（0 条）· `D7-PROTOCOL-CONCLUSION-CONTRACT`（3 条）
+#       · ★ **维持 local-only**：`U4-INVALIDATION-RULES`（3 条，原文明写其规则原文来自**他方 RFC**）
+#         · `U5-TRUST-BASIS`（2 条，含**他项目内部实现细节**、且**无 public 载体**可引）
+#     ⇒ **本批 2 张卡覆盖 9 条里的 4 条**（dec-cc 3 条 + dec-u1 1 条）；
+#       **另 5 条（U4×3 + U5×2）暂缓** —— 它们要么走站内卡（需起本地引擎），要么先做人工 public 摘要。
+#     ★ 该补登记与暂缓结论 = Phase 1 档位核验的产出，已回写 `inventory/sensitivity.yaml`。
+#
+#   档位：均 public（卡面自含抽象化材料、无附件 ⇒ 不触发附件出网义务；
+#     正文按写卡纪律已剔除本仓盘符路径 / 主机名 / 用户名 / 站标识；契约字段名属通用设计语汇）。
+#   站与模型：dec-cc = A · ultra-a（出网档）；dec-u1 = B · lightning（**另一族**，照 J-1 精神）
+#     ⇒ 两站并行、无同站锁冲突。
+#   产物：out/dec-cc.md / out/dec-u1.md（文件名互不相同，不同站本就互不覆盖）。
+#
+#   命令: & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/untested-dec.txt"
+#   干跑: $env:AGENT_BATCH_DRYRUN=1; & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/untested-dec.txt"
+
+spec/d6-agent-standard/dogfood-cards/dec-cc-three-undefineds.md station=A model=ultra-a
+spec/d6-agent-standard/dogfood-cards/dec-u1-truncation-mapping.md station=B model=lightning

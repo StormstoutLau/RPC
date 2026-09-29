@@ -44,7 +44,7 @@ items:
   - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 2, gist: "判官是否真按新契约输出未实测（尤其「不得自报 agreement」无样本）⇒ 不合契约即判不通过", state: todo, needs_decision: false, refs: []}
   - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 3, gist: "path 的相对根未定义（runDir / 项目根 / 仓根）—— 自认本契约最大的未定项", state: todo, needs_decision: true, refs: []}
   - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 4, gist: "line_range 越界未校验（只校形态）；「越界即无效」未裁（升级需读产物）", state: todo, needs_decision: true, refs: []}
-  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 5, gist: "三分类阈值（≥2 = 共识）未经验证（从 Council Mode 用途推来的设计选择）", state: todo, needs_decision: true, refs: []}
+  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 5, gist: "★ 已裁 2026-09-30（O-123）：登记为「能力边界」不裁 —— 阈值是设计选择而非可验结论；若日后要用于自动裁决须先校准", state: boundary, needs_decision: false, refs: [O-123]}
   - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 6, gist: "disagreement 只覆盖「同一锚点下的矛盾」⇒ 跨锚点立场冲突识别不到", state: todo, needs_decision: false, refs: []}
 
   # ── U1-ARTIFACT-IDENTITY（8 条；1/2 已被划掉）──────────────────────────────
@@ -55,7 +55,7 @@ items:
   - {spec: U1-ARTIFACT-IDENTITY, n: 5, gist: "namespace 的跨项目唯一性治理：没有注册机制（谁能新增 / 冲突怎么裁）", state: todo, needs_decision: false, refs: []}
   - {spec: U1-ARTIFACT-IDENTITY, n: 6, gist: "version 兜底 0.0.0 会让「同 identifier 不同版本」同哈希 ⇒ 该维度实际失效", state: todo, needs_decision: false, refs: []}
   - {spec: U1-ARTIFACT-IDENTITY, n: 7, gist: "inbox 双轨维护（全 64 MANIFEST.sha256 + 带前缀 32 新索引）双写工作流未跑通", state: todo, needs_decision: false, refs: []}
-  - {spec: U1-ARTIFACT-IDENTITY, n: 8, gist: "截断长度变更的映射路径不存在（无副作用靠「从未被外部消费」的偶然，不是机制）；修法候选 2 条未实现", state: todo, needs_decision: true, refs: [D-25]}
+  - {spec: U1-ARTIFACT-IDENTITY, n: 8, gist: "★ 已裁 2026-09-30（O-123）：采纳候选①（显式标注「旧代」）+ 显式映射表 ⇒ 走哪条路已定；⚠ 实现仍未落地（故 state 仍 todo）", state: todo, needs_decision: false, refs: [D-25, O-123]}
 
   # ── U3-EDGE-FORMAT（9 条）───────────────────────────────────────────────────
   - {spec: U3-EDGE-FORMAT, n: 1, gist: "字段集完整性：无实现 / 无真实边实例 / 与现状的相容解析未试", state: todo, needs_decision: false, refs: []}
