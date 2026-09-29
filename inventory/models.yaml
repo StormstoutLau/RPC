@@ -59,6 +59,21 @@ models:
     conf: [B]
     note: A 站有模型库条目但无 conf
 
+  - alias: glm-5.3-flash
+    engine_id: unsloth/GLM-5.3-Flash-GGUF
+    quant: UD-IQ4_XS
+    stations: [B]
+    conf: [B]
+    note: |
+      2026-09-29 重新启用: 146.1 GiB **单文件** > 单站 124 GiB ⇒ 走 **RPC 双机层切分**
+      (已入 cluster.py 的 RPC_MODELS; 按站路由 glm-5.3-flash-b)。权重在 B 站
+      ~/models/glm53/GLM-5.3-Flash-UD-IQ4_XS.gguf, 经软链进模型库
+      /data/models/gguf/unsloth/GLM-5.3-Flash-GGUF/ (站上别名由目录名派生)。
+      ★ 引擎 = **未进主线**的 glm5next 特性分支 ⇒ 加载**必须**带 `--engine glm5next-20260928`
+      (head 与 worker 两端同版, 由 conf 的 LLAMA_SERVER_BIN/LLAMA_RPC_SERVER_BIN + rpc-nodes 透传)。
+      详见 docs/research/2026-09-28_GLM系列本地推理部署.md。
+      (本条目 2026-09-14 曾因"conf 的 MODEL_PATH 指向不存在的 unsloth/ 目录"被移除; 今次该目录为实建。)
+
   - alias: qwen3.8-27b-mtp
     engine_id: Jackrong/Qwen3.8-27B-MTP-GGUF
     stations: [B, C]
@@ -162,6 +177,7 @@ known_broken_conf: []
 # ── 已知漂移 (登记而非隐瞒; 处置见 spec/d2-cluster-cli/CHECKLIST.md F4) ──
 known_issues:
   - "2026-09-14 已处置两处坏 conf: `glm-5.3-flash` 的 conf 已移除 (权重目录 unsloth/ 不存在); `qwen3.8-flash-next` 的 MODEL_PATH 已修正为实际权重路径"
+  - "2026-09-29 `glm-5.3-flash` **重新启用** (权重就位, 软链进 unsloth/GLM-5.3-Flash-GGUF) ⇒ 上面那条只保留为历史; 见本表 glm-5.3-flash 条目"
   - "B 站 conf 与**模型库(infer-list 反映磁盘 gguf)** 不一致: conf-only = {davidau-q38-27b-q4k}; model-only = {qwen2.5-7b-instruct, qwen3-coder-next, all-minilm-l6-v2-embedding}"
   - "`nodes` 不属该漂移 —— 它是 non_model_conf (RPC 节点清单), 已单列"
   - "A 站 conf 2026-09-14 时只有 1 个 (gpt-oss-120b); 2026-09-16 补入 qwen3.8-flash-next 与 m27-q4ks, 并已有 nvidia-nemotron-3-super-120b-a12b —— 仍缺 deepseek-v4-flash-0731 的 conf"

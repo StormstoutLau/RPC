@@ -20,9 +20,15 @@ STATIONS = {
     #   理由: Windows 解析 `*.local` 需 ~16-17s 且**只返回公网 IPv6**(2409:8a20:...) => 控制面经
     #   ISP IPv6 绕行而非走局域网; 实测按名 16.2s -> 按 LAN IPv4 0.18s (约 90x)。
     #   真值见 inventory/net.yaml 的 lan 段; 漂移会被门禁 stations 断言报 FAIL(不比"ssh 连不上"更难查)。
-    "A": {"host": "192.168.1.33", "user": "scott-lau"},
-    "B": {"host": "192.168.1.32", "user": "scott-lau"},
-    "C": {"host": "192.168.1.37", "user": "scott-lau"},   # seaviv (2026-09-09 IP 修正: 原 192.168.1.24 过期; seaviv.local 可解析但保持 IPv4 规避 paramiko/IPv6)
+    # ★★ 2026-09-29：**路由器由桥模式改为路由模式** ⇒ 整张 LAN 重建（`192.168.1.0/24` → `192.168.10.0/24`），
+    #   三站 LAN **已改为站上静态**（不再是 DHCP 租约）：末位八位组**保持不变**、只换网段段。
+    #   ⇒ 真值 = `inventory/net.yaml` §lan（同源）；改动历史见
+    #     docs/research/2026-09-29_路由器模式切换_LAN寻址重建与静态化方案.md。
+    #   ⚠ 历史勘误（勿回改）：本列表旧值 `.33/.32/.37`（第三段为 `1`）**已随旧网段作废**；
+    #     上一代勘误记录（2026-09-09 的 `.24 → .37`）保留在下方 C 站注释里作为时间线。
+    "A": {"host": "192.168.10.33", "user": "scott-lau"},
+    "B": {"host": "192.168.10.32", "user": "scott-lau"},
+    "C": {"host": "192.168.10.37", "user": "scott-lau"},   # seaviv (2026-09-29 静态化; 沿革: 2026-09-09 原 192.168.1.24 过期 → .37; seaviv.local 可解析但保持 IPv4 规避 paramiko/IPv6)
 }
 # 各站引擎 /health 端口 (A/B/C 均 8080; 原 C=18080 为过时值)
 STATION_PORT = {"A": 8080, "B": 8080, "C": 8080}
@@ -54,6 +60,7 @@ STATION_ROUTES = {
     "nvidia-nemotron-3-super-120b-a12b-b": ("B", "nvidia-nemotron-3-super-120b-a12b"),
     "nvidia-nemotron-3-super-120b-a12b-c": ("C", "nvidia-nemotron-3-super-120b-a12b"),
     "deepseek-v4-flash-0731-b": ("B", "deepseek-v4-flash-0731"),
+    "glm-5.3-flash-b": ("B", "glm-5.3-flash"),   # 2026-09-29: 146.1 GiB 单文件 ⇒ RPC 双机 (见 RPC_MODELS)
     "qwen3.8-27b-mtp-b": ("B", "qwen3.8-27b-mtp"),
     "qwen3.8-27b-mtp-c": ("C", "qwen3.8-27b-mtp"),
     "qwen3.8-flash-next-b": ("B", "qwen3.8-flash-next"),
@@ -75,7 +82,14 @@ DEFAULT_STATION = "B"
 # 走 RPC 双机通道的模型 (resolve_alias 据此判 is_rpc)。
 # qwen3.8-flash-next 已移出 (2026-09-15): 它是单机量化加载模型, 用 STATION_ROUTES 的
 # qwen3.8-flash-next-b 走 B 站本地加载, 不再经 RPC 双机通道。
-RPC_MODELS = {"deepseek-v4-flash-0731", "gpt-oss-120b-fable-5-distilled"}
+RPC_MODELS = {"deepseek-v4-flash-0731", "gpt-oss-120b-fable-5-distilled", "glm-5.3-flash"}
+# ★ glm-5.3-flash 入表 (2026-09-29): 146.1 GiB 单文件 > 单站 124 GiB ⇒ **必须**双机层切分
+#   (`-sm layer`), 与 V4-Flash 同形态。★ 但它比另两个多一条前置: `glm5next` **未进主线**
+#   ⇒ head 与 worker **两端都要** `/opt/llama.cpp-glm5next-20260928` 变体引擎,
+#   加载时必须 `cluster.py load glm-5.3-flash --engine glm5next-20260928`
+#   (不带 --engine 会在 head 侧 `unknown model architecture: 'glm5next'` 响亮失败)。
+#   引擎变体的两端一致性由 `infer-load --engine` 落 conf 的 LLAMA_RPC_SERVER_BIN +
+#   `rpc-nodes --start` 透传给各 worker 保证 (见 ops/rpc-nodes)。
 # ds4 (DwarfStar) 双机 PP 路由表 (2026-09-28, 见 spec/ds4-backend/DESIGN.md)。
 # ★ ds4 在 ROCm 上**不支持 TP** —— 源码门禁原话 "tensor parallelism requires the Metal backend",
 #   故双机**只有 PP** (层切片 --layers), 不提供 --tensor-parallel 路径。
@@ -95,5 +109,5 @@ PANELS = [
     ("Beszel 监控", "http://scott-lau-GTR-Pro.local:8090"),
     ("Cockpit B", "https://scott-lau-GTR-Pro.local:9095"),
     ("Cockpit A", "https://scott-lau-NEX.local:9095"),
-    ("Cockpit C", "https://192.168.1.37:9095"),
+    ("Cockpit C", "https://192.168.10.37:9095"),
 ]

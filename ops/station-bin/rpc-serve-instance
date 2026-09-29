@@ -1,0 +1,33 @@
+#!/bin/bash
+# rpc-serve-instance <alias> — 起本机 RPC worker (head 侧 llama-serve-instance 的**对称件**)
+#
+# 为什么必须用包装器, 而不是把二进制路径直接写进 ExecStart:
+#   ★ systemd 的 ExecStart **不接受变量作为可执行路径** —— 2026-09-29 实测
+#     `ExecStart=$LLAMA_RPC_SERVER_BIN -H ... ` 得到
+#     `Main process exited, code=exited, status=203/EXEC` (变量根本没被展开, 当成字面路径去 exec)。
+#   而"用哪个引擎变体"由运行期参数决定 ⇒ 必须由 shell 解析。
+#
+# 引擎的**单一真值链** (RPC 两端必须同版, 否则握手失败):
+#   ① 实例 conf `/etc/llama-instances/<alias>.env` 的 `LLAMA_RPC_SERVER_BIN`
+#      (由 `infer-load --engine` 写入 = 该变体目录里的 ggml-rpc-server)
+#   ② `rpc-nodes --start <alias>` 读①并写本机覆盖层 `/run/llama-instances/rpc-<alias>.env`
+#      (tmpfs; conf 无该键时**删除**该文件, 防旧变体残留)
+#   ③ 单元的 `EnvironmentFile=-/run/llama-instances/rpc-%i.env` 把它读成同名环境变量
+#   ④ 本包装器 exec 它; 缺省 = 单元的 `Environment=LLAMA_RPC_SERVER_BIN=/opt/llama.cpp/ggml-rpc-server`
+#
+# 测试缝隙: LLAMA_RPC_SERVER_BIN / RPC_BIND / RPC_PORT
+set -u
+ALIAS="${1:?用法: rpc-serve-instance <alias>}"
+BIN="${LLAMA_RPC_SERVER_BIN:-/opt/llama.cpp/ggml-rpc-server}"
+BIND="${RPC_BIND:?FATAL: RPC_BIND 未设 (应来自单元的 Environment=)}"
+PORT="${RPC_PORT:-50052}"
+
+[ -x "$BIN" ] || {
+  echo "FATAL: rpc 引擎不存在或不可执行: ${BIN} (alias=${ALIAS}, conf=${CONF_DIR:-/etc/llama-instances}/${ALIAS}.env)" >&2
+  echo "       站上现有引擎变体: $(ls -d /opt/llama.cpp* 2>/dev/null | tr '\n' ' ')" >&2
+  exit 1
+}
+
+# 起服前把"用的是哪个引擎"打进 journal —— 双机加载失败时第一眼要能看出是不是引擎不同版
+echo "[rpc-serve-instance] alias=${ALIAS} engine=${BIN} bind=${BIND}:${PORT} cache=${LLAMA_CACHE:-default}"
+exec "$BIN" -H "$BIND" -p "$PORT" -c

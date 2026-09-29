@@ -17,6 +17,7 @@ metric:
   - node_modules
   - site-packages
   - tests
+  - tmp
   - venv
   exclude_tests: true
 projects:
@@ -68,5 +69,5 @@ projects:
 - id: RPC
   root: D:\RPC
   reachable: true
-  files: 20
-  hits: 41
+  files: 5
+  hits: 22

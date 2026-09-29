@@ -37,9 +37,12 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
              但显式 --backend 才会改后端, 缺省沿用 conf 旧值。
              对 llama-rpc 类模型: 显式 --backend 单机后端(非 llama-rpc) 视为强制单机加载, 走正常路径。
             --engine 指定**引擎变体** (与 --backend 的拓扑轴正交): 名 -> /opt/llama.cpp-<名>/, 或绝对路径。
-              例: load glm53 --backend llama-rpc --engine glm5next-20260928
+              例: load glm-5.3-flash --engine glm5next-20260928   (RPC 双机必需, 见下)
               用途: 跑未并入主线的特性分支(如 GLM-5.3-Flash 的 glm5next), 而**不动** /opt/llama.cpp symlink。
               变体路径须已存在(见 vulkan-version-control/UPGRADE_SOP 的并存目录约定); 非法字符会被拒。
+              ★ RPC 类模型 (RPC_MODELS) 也透传本参数: 变体引擎要求 **head 与 worker 同版**
+                (infer-load 落 conf 的 LLAMA_SERVER_BIN + LLAMA_RPC_SERVER_BIN, 后者由
+                 rpc-nodes --start 透传到各 worker 的 rpc-server@<alias> 单元)。
              对 ds4 (DwarfStar): 单机按普通 `infer-load --backend ds4` 路径;
                **双机走 PP (DS4_PP_MODELS, 值 = (coordinator 站, worker 站))** —— ds4 在 ROCm 不支持 TP,
                且**必须先起 worker、后起 coordinator** (见 _load_ds4_pp)。
@@ -802,7 +805,7 @@ def cmd_load(alias: str, backend: str = None, engine: str = None) -> int:
             station = station or DEFAULT_STATION
             print(f"[cluster] '{matched}' 为 RPC 双机类, --backend {backend} 视为强制单机加载 (退化为 {station} 站单机)。")
         else:
-            return _load_rpc(matched, station or DEFAULT_STATION)
+            return _load_rpc(matched, station or DEFAULT_STATION, engine)
     # ds4 双机 PP: 别名在 DS4_PP_MODELS 且显式 --backend ds4 ⇒ 走双机编排 (值 = (coordinator 站, worker 站))。
     # 单机 ds4 (别名不在表里, 或未显式指定 backend) 落到下面的普通路径 (`infer-load --backend ds4`)。
     if backend == "ds4" and matched in DS4_PP_MODELS:
@@ -838,7 +841,7 @@ def cmd_load(alias: str, backend: str = None, engine: str = None) -> int:
     return 0
 
 
-def _load_rpc(alias: str, station: str) -> int:
+def _load_rpc(alias: str, station: str, engine: str = None) -> int:
     """RPC 双机类加载编排 (2026-09-15, 方案 v2 P0-3)。
 
     把原先"打印手动步骤并 exit 2"升级为**一条命令端到端**。零件全部复用既有资产:
@@ -849,11 +852,19 @@ def _load_rpc(alias: str, station: str) -> int:
 
     为什么 master 固定 B 站: `nodes.env` 与 `rpc-nodes` 都在 B 站, 且既有设计是
     "B 站发起 + A 站承载张量分片"(见 spec/cluster-bench/DESIGN §2)。指定其他站会被纠正。
+
+    engine = 引擎变体 (见 infer-load --engine), 2026-09-29 起**必须透传到此**:
+      未透传时 `--engine` 只对 `_cmd_load_c`(C 站) 与最终 infer-load 生效 —— 而 RPC 类的加载
+      入口正是本函数, 于是 `load glm-5.3-flash --engine glm5next-20260928` 会在 head 侧
+      `unknown model architecture: 'glm5next'` 失败。worker 侧同版引擎由 conf 键
+      LLAMA_RPC_SERVER_BIN + `rpc-nodes --start` 透传 (见 ops/rpc-nodes)。
     """
     if station != "B":
         print(f"[cluster] RPC 类由 B 站(master)发起 (nodes.env/ rpc-nodes 均在其上), 已忽略指定的 {station} 站。")
         station = "B"
     print(f"[cluster] == RPC 双机类加载编排: {alias} @ {station} 站 (master) ==")
+    if engine:
+        print(f"[cluster] 引擎变体: {engine} (head 与 worker 必须同版, 由 conf + rpc-nodes 透传)")
 
     print("[cluster] [1/4] 卸载本站现存实例 (幂等, 释放 GTT) ...")
     ssh_stream(station, "infer-unload")
@@ -878,7 +889,15 @@ def _load_rpc(alias: str, station: str) -> int:
         return 1
 
     print("[cluster] [4/4] 加载权重 (conf RPC_TARGET=auto 展开为上式清单) ...")
-    rc = ssh_stream(station, _build_infer_load_cmd(alias, None))
+    # ★★ 2026-09-28 修: 这里原为 `_build_infer_load_cmd(alias, None)` —— **backend 漏传**。
+    #   后果(实测复现): 远端收到 `infer-load '<alias>'`(不带 --backend) ⇒ infer-load 落到
+    #   默认 BACKEND=unsloth ⇒ **studio 单机加载**, 把"双机 RPC"变成"单机全量持有" ⇒
+    #   V4-Flash 这种 146 GiB 模型必然 OOM(SIGKILL, signal 9)。
+    #   ⚠ 且**显式 `--backend llama-rpc` 也救不了**: cmd_load 的 is_rpc 分支里
+    #   `backend == "llama-rpc"` 仍走 _load_rpc, 而本行恒传 None ⇒ 无论用户怎么传都落到 unsloth。
+    #   ⇒ 这便是"RPC 类模型只能手工起"的真因, 不是能力缺失。
+    #   兄弟函数 _load_ds4_pp 传的是 "ds4"(见下方), 本处漏传属**不一致**, 非设计。
+    rc = ssh_stream(station, _build_infer_load_cmd(alias, "llama-rpc", engine))
     if rc != 0:
         print(f"[cluster] 加载失败 (rc={rc}) → 可用 journalctl -u 'llama-server@*' 排查。")
         return 1
@@ -968,11 +987,19 @@ def cmd_unload_on(station: str) -> int:
 
 
 def cmd_unload() -> int:
+    """三站并行卸载。★ 单站连不上**只记该站失败** —— 不吞掉其余站的结论, 也不让整条命令崩。"""
     results = {}
     threads = []
 
     def run(st):
-        results[st] = ssh_stream(st, "infer-unload")
+        # 异常**必须在现场转成"该站失败"**: 一旦逃出线程, results 就缺键 ⇒ 主循环
+        # `results[st]` 抛 KeyError ⇒ 整条 unload 崩掉, 连 A/B 已成功的结论都拿不到。
+        # (2026-09-29 实测形态: C 站 LAN 192.168.1.37 不通 —— 命令直接 traceback, 只回显了 A/B。
+        #  与 P1-4「解析失败不能表现成业务全错」同一原则。)
+        try:
+            results[st] = ssh_stream(st, "infer-unload")
+        except Exception as e:          # 连接级异常: 超时 / 认证 / 端口不可达
+            results[st] = f"{type(e).__name__}: {e}"
 
     for st in ("A", "B", "C"):
         t = threading.Thread(target=run, args=(st,))
@@ -981,10 +1008,13 @@ def cmd_unload() -> int:
         t.join()
     rc = 0
     for st in ("A", "B", "C"):
-        r = results[st]
-        print(f"[cluster] {st} 站 infer-unload: {'OK' if r == 0 else f'rc={r}'}")
-        rc |= (r if r != 0 else 0)
-    return 0 if rc == 0 else 1
+        r = results.get(st, "线程未回填")
+        if r == 0:
+            print(f"[cluster] {st} 站 infer-unload: OK")
+        else:
+            print(f"[cluster] {st} 站 infer-unload: FAIL ({r})")
+            rc = 1
+    return rc
 
 
 # ── estimate (事前预估) ─────────────────────────────────

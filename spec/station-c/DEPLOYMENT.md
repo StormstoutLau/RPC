@@ -10,13 +10,13 @@
 | 项 | 值 |
 |---|---|
 | 主机名 / 用户 | `seaviv` / `scott-lau` |
-| 管理 SSH | `scott-lau@192.168.1.37`（eno1 网线，DHCP；WiFi 192.168.1.24 已弃用，2026-09-08） |
+| 管理 SSH | `scott-lau@192.168.10.37`（eno1 网线，2026-09-29 起钉静态〔原 DHCP〕；WiFi 192.168.1.24 已弃用，2026-09-08） |
 | 硬件 | AMD Ryzen AI Max 395（Strix Halo），128G UMA，Radeon 8060S（gfx1151） |
 | 集群定位 | 第三推理节点（A/B 现役，C 扩容）；RPC 节点、后续 ROUTE_TABLE 候选 |
 | 内核（最终） | `6.17.0-23-generic`（对齐 B；HWE 7.0.0-28/-31 保留可回滚） |
 | 引擎 | `llama-server(qwen3.8-27b-mtp)` systemd，PORT 18080，nothink 档 ctx8192；`llama-server(gpt-oss-120b-MXFP4)` HIP llama-systemd，PORT 8080，ctx131072（2026-09-12） |
 | ROCm | `/opt/rocm` 7.2.1 用户态就位，`rocminfo` 在 6.17 下探到 gfx1151×2 |
-| 管理面板 | Cockpit `https://192.168.1.37:9095`（socket drop-in 端口=9095，eno1）；Beszel agent→B hub `10.10.11.1:8090` |
+| 管理面板 | Cockpit `https://192.168.10.37:9095`（socket drop-in 端口=9095，eno1）；Beszel agent→B hub `10.10.11.1:8090` |
 
 ---
 
@@ -70,7 +70,7 @@
 - **✅ 「下载文件夹 7.X AMD 驱动」= ROCm 安装器遗留**：`/home/scott-lau/下载/amdgpu-install_7.2.1.70201-1_all.deb` 即 D-8 当初安装 `/opt/rocm 7.2.1` 用的安装器，非待升级驱动，无需处理。
 
 ### 3.6 管理面板（Cockpit / Beszel）
-- **Cockpit**：Ubuntu 自带 cockpit.socket→按 B 站模式 drop-in `/etc/systemd/system/cockpit.socket.d/10-port.conf`（`ListenStream=` 清 9090 + `=9095`，A 站 9090 被 mihomo 占用故全集群统一 9095）→ `https://192.168.1.37:9095` http_code 200。⚠️ 勿用 `/etc/cockpit/cockpit.conf` 改端口（实测不生效，须 socket drop-in）。
+- **Cockpit**：Ubuntu 自带 cockpit.socket→按 B 站模式 drop-in `/etc/systemd/system/cockpit.socket.d/10-port.conf`（`ListenStream=` 清 9090 + `=9095`，A 站 9090 被 mihomo 占用故全集群统一 9095）→ `https://192.168.10.37:9095` http_code 200。⚠️ 勿用 `/etc/cockpit/cockpit.conf` 改端口（实测不生效，须 socket drop-in）。
 - **Beszel agent**：`/usr/local/bin/beszel-agent` + systemd `beszel-agent.service`（Environment：TOKEN + HUB_URL=`http://10.10.11.1:8090`(B hub) + KEY=hub 签发 ed25519）。**KEY 含空格/`+`，Environment= 整行须用引号包整赋值**（`Environment="KEY=ssh-ed25519 …+"`），行尾反斜杠续行会吞掉下一行 `ExecStart=` 导致 `Refusing`（踩坑 2 次）。
 - 生效验证：`journalctl` `WebSocket connected host=10.10.11.1:8090` ✓；网络接口探测 wlp195s0 + thunderbolt0/1 ✓；`rocm-smi deprecated` WARN 为适配 F2K 的常见噪音，无碍。
 
@@ -82,7 +82,7 @@
 |---|---|---|
 | O1 | **A-C 直连段 down（retimer 抖动）** | ✅ **已关闭（重插线缆）**：用户物理重插后两侧 tbt1 回归，路由恢复直连优先（A↔C ttl=64、引擎可达）。恢复流程：C 侧 tbt1 自动激活；A 侧 `nmcli con up 'thunderbolt1'` |
 | O2 | **静态路由无自动 failover** | 主 nexthop 不可达不回落备路由（工程教训）；环网冗余硬化待做（多路径/监控切换） |
-| O3 | C 站未纳入 agent-cli ROUTE_TABLE | **部分收口（2026-09-15 核实）**：统一入口侧已纳入 —— `cluster.py STATION_ROUTES` 有 `gpt-oss-120b-c` / `nvidia-nemotron-3-super-120b-a12b-c` / `qwen3.8-27b-mtp-c`，`STATIONS["C"]`/`STATION_PORT["C"]` 均已修正；C 站 station_runtime 工具链 11/11 实装（infer-load/unload/llama-serve-instance/load-gate/load-mem-gate/wait-gtt-release/cluster-ttl/cluster-watchdog/reqlog/plugin-probe/gguf-meta）。**剩**：agent-cli `$ROUTE_TABLE`（模型别名→站）仍无 C 条目 —— 现行派发走 `--RemoteHost 192.168.1.37`，是否需要给 C 加模型别名待定 |
+| O3 | C 站未纳入 agent-cli ROUTE_TABLE | **部分收口（2026-09-15 核实）**：统一入口侧已纳入 —— `cluster.py STATION_ROUTES` 有 `gpt-oss-120b-c` / `nvidia-nemotron-3-super-120b-a12b-c` / `qwen3.8-27b-mtp-c`，`STATIONS["C"]`/`STATION_PORT["C"]` 均已修正；C 站 station_runtime 工具链 11/11 实装（infer-load/unload/llama-serve-instance/load-gate/load-mem-gate/wait-gtt-release/cluster-ttl/cluster-watchdog/reqlog/plugin-probe/gguf-meta）。**剩**：agent-cli `$ROUTE_TABLE`（模型别名→站）仍无 C 条目 —— 现行派发走 `--RemoteHost 192.168.10.37`，是否需要给 C 加模型别名待定 |
 | O4 | ROCm HIP llama 后端未实测 | ✅ **已实测（2026-09-12）**：gpt-oss-120b-MXFP4 经 HIP llama-server 加载 (PORT 8080, ctx131072)，health ok + 推理冒烟通过 |
 | O5 | `claude` base URL/auth 未配 | ✅ **已解决（2026-09-09）**：C 站 `~/.claude/settings.json` baseURL = `http://127.0.0.1:8080/v1`（直连本地引擎，不经网关），claude 会话实测 `end_turn` ✅（见 [双端点调研 §2.2](../../docs/双端点部署与opencode混合框架调研.md)） |
 | O7 | gpt-oss 引擎已就绪，未纳入 agent-cli ROUTE_TABLE | **同 O3**：统一入口 `STATION_ROUTES` 已含 C 站条目、`STATION_PORT["C"]=8080`；agent-cli `$ROUTE_TABLE` 仍无 C 模型别名（走 `--RemoteHost`） |

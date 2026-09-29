@@ -109,7 +109,7 @@ fi
 
 # ---------------------------------------------------------------- C 站
 if [ "$SCOPE" = "ALL" ] || [ "$SCOPE" = "C" ]; then
-  HOST_C=scott-lau@192.168.1.37
+  HOST_C=scott-lau@192.168.10.37
   LOADED=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST_C" "pgrep -c -f llama-server" 2>/dev/null || echo 0)
   if [ "${LOADED:-0}" -lt 1 ]; then
     report C-backend SKIP "llama-server 未运行, 先 cluster.py load gpt-oss-c"

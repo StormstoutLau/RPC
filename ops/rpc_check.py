@@ -22,10 +22,12 @@ import ast
 import concurrent.futures
 import fnmatch
 import hashlib
+import ipaddress
 import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -3587,11 +3589,23 @@ def check_aliases(ctx):
 #   而 infer-list 反映模型库(下载即变), 全量比对必然天天误报 —— 故只做定点查询。
 WATCHED = ["~/.config/opencode/opencode.jsonc", "~/.claude/settings.json"]
 
+# 站上 LAN 地址采集命令 —— ★ **单一实现**：直连探针（本 STATION_CMD 的 [lanip] 段）与
+#   USB4 降级通道（`_lanip_via_usb4` 经邻站中转）**共用同一条**，避免"同一事实两个定义点"。
+#   · `scope global` 天然排除 `lo` 的 `scope host`（**不要**用 `grep -v lo` —— "global" 里就含 `lo`）；
+#   · 整串**不含任何引号** ⇒ 可安全嵌进 `ssh <ip> "<cmd>"` 的双引号里（引号嵌套是本仓反复踩的坑）。
+_LANIP_CMD = "ip -4 -o addr show scope global 2>/dev/null | cut -c1-160"
+
 STATION_CMD = (
     "printf '\\n[cfg]\\n'; sha256sum " + " ".join(WATCHED) + " 2>/dev/null | cut -c1-16; "
     "printf '\\n[conf]\\n'; ls -1 /etc/llama-instances/*.env 2>/dev/null "
     "| xargs -r -n1 basename | sed 's/\\.env$//' | tr '\\n' ' '; echo; "
     "printf '\\n[bind]\\n'; ss -ltn 2>/dev/null | awk 'NR>1{print $4}' | tr '\\n' ' '; echo; "
+    # (i) LAN 地址实况 (ADR-0006 v1.1 · D6, 2026-09-29): 站上**实际**的 global-scope IPv4。
+    #   为什么必须从站上取（而不是像旧版那样只看 master 侧 `ssh -G` 的绑定）:
+    #     旧判据的射程靠"别名"，C 站 `host: null` ⇒ **整站被跳过**，于是 2026-09-29 C 的
+    #     LAN 由 .37 漂到 .8 时，门禁只报"可达 2/3 站"、**给不出根因**。
+    #   ⚠ 本段**不新增连接** —— 搭在同一次合并 ssh 上（与 [bind]/[conf] 同源）。
+    "printf '\\n[lanip]\\n'; " + _LANIP_CMD + "; "
     # UDP 侧单独一段 (P1-4): 系统里长期监听的 UDP 端口并不少 (nmbd/avahi/NetworkManager/
     # wsdd/netconsole/rpc.statd), 只查 TCP 会让它们对账时"看不见"。
     "printf '\\n[ubind]\\n'; ss -lun 2>/dev/null | awk 'NR>1{print $4}' | tr '\\n' ' '; echo; "
@@ -3707,6 +3721,202 @@ def _ssh_g_hostname(alias):
         if line.lower().startswith("hostname "):
             return line.split(None, 1)[1].strip()
     return None
+
+
+# ── LAN 地址对账（ADR-0006 v1.1 · D6，2026-09-29）──────────────────────────────
+# 背景（一句话）：D4 的判据靠 `ssh -G <别名>`，于是 `host: null` 的 C 站**整站不在射程内**；
+#   2026-09-29 C 的 LAN 由 .37 漂到 .8 时，6 项断言只报"可达 2/3 站"、**不给根因**
+#   —— 正是 ADR-0006 D4 自己要消灭的那个"ssh 连不上的谜题"。
+# 本节把判据换成"**站上实况** vs net.yaml 真值"，并在 LAN 不可达时**经 USB4 段向邻站中转**去问。
+#
+# 为什么判据与 IO **分开**：① 门禁侧只判不做 IO ⇒ **可先验红**（本仓纪律，见
+#   tests/test_rpc_check_lan_drift.py）；② 直连与降级通道产出**同一种** `seen` ⇒ 判据只有一份。
+def _local_lan_ip(probe_ip):
+    """取**本机通往 probe_ip 那条路**上使用的源地址（= 本机的 LAN 管理面地址）。
+
+    为什么用 UDP-connect 这个怪招：① **不发任何包**（UDP connect 只做路由选择），零流量、不打扰；
+    ② 只用 stdlib（`ipconfig` 解析在中文 Windows 上字段名会变、且不可移植）；
+    ③ 它回答的正是我们要问的问题 —— "**我用哪个地址去够那些站**"（而不是"本机一共配了哪些地址"）。
+    失败返回 None（调用方按"无法判定"处理，**不猜**）。
+
+    ★ 为什么主控也要判（2026-09-29 实测新增）：本轮排查中**主控自己的 LAN 先漂了**
+      （`192.168.1.36` → `192.168.10.102`，整段换网），表现就是"三站全不可达" —— 又一个
+      "可达 0/3 却不给根因"的谜题，且它比单站漂移**更彻底**（控制面全断）。
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect((str(probe_ip), 9))
+        return s.getsockname()[0]
+    except Exception:
+        return None
+    finally:
+        s.close()
+
+
+def _parse_lanip(text):
+    """解析 `ip -4 -o addr show scope global` 的原始输出 ⇒ [{iface, ip, cidr, dynamic}]。
+
+    样例: `2: eno1    inet 192.168.1.8/24 brd 192.168.1.255 scope global dynamic noprefixroute eno1\\ ...`
+    ⇒ 取行首的 `序号: 接口`、`inet <地址>/<前缀>`，并看整行里有没有 `dynamic`（DHCP）。
+    ★ **这里也丢回环**（defense in depth）：真值源命令已用 `scope global` 过滤掉 `lo`，
+      但**判据不该依赖调用方那半条 shell** —— 若将来有人动 `_LANIP_CMD`，`lo` 会变成
+      "非 USB4 网段的唯一地址"而被误当成 LAN 地址。故解析层再过一遍。
+    解析不出的行**忽略**（不猜）；全空 ⇒ 调用方走降级通道/报"无法判定"。
+    """
+    rows = []
+    for ln in (text or "").splitlines():
+        m = re.match(r"^\s*\d+:\s+(\S+)\s+inet\s+(\d+\.\d+\.\d+\.\d+)/(\d+)\s+(.*)$", ln)
+        if not m or m.group(1) == "lo" or m.group(2).startswith("127."):
+            continue
+        rows.append({"iface": m.group(1), "ip": m.group(2),
+                     "cidr": f"{m.group(2)}/{m.group(3)}",
+                     "dynamic": "dynamic" in m.group(4)})
+    return rows
+
+
+def pick_lan_addr(rows, iface_hint, seg_nets):
+    """从站上所有 global 地址里挑出**LAN 管理面**那一个。返回 ({...} | None, 原因串)。
+
+    为什么需要挑：站上同时有 USB4 三段地址，都算 `scope global`。挑法（**先精后宽**）：
+      ① 登记了 `iface` ⇒ **认接口**（最精确，且与 net.yaml 的声明同源）；
+      ② 否则排除 USB4 各段的网段，剩下的**唯一**一个才算 LAN 地址；
+      ③ 剩 0 个或多个 ⇒ **不猜**，返回原因（同本仓"解析失败不能表现成业务全错"纪律）。
+      ④ ①命中但与②的候选集不一致（登记接口 ≠ 非 USB4 地址）⇒ 也返回原因 —— 那说明
+         net.yaml 的 `iface` 与 `segments` 至少有一个是错的。
+    """
+    rows = rows or []
+    lan_rows = [r for r in rows if not any(ipaddress.ip_address(r["ip"]) in n for n in (seg_nets or []))]
+    if iface_hint:
+        hit = [r for r in rows if r["iface"] == iface_hint]
+        if len(hit) == 1:
+            if lan_rows and hit[0]["ip"] not in {r["ip"] for r in lan_rows}:
+                return None, (f"net.yaml 登记的 iface={iface_hint} 上的地址 {hit[0]['ip']} "
+                              f"落在 USB4 网段内（与 segments 冲突）⇒ net.yaml 自相矛盾, 不猜")
+            return hit[0], None
+        if len(hit) > 1:
+            return None, f"iface={iface_hint} 上有多个 global 地址 ({[r['ip'] for r in hit]}) ⇒ 不猜"
+        return None, (f"net.yaml 登记的 iface={iface_hint} 在站上不存在（实测接口: "
+                      f"{sorted({r['iface'] for r in rows})}）")
+    if len(lan_rows) == 1:
+        return lan_rows[0], None
+    if not lan_rows:
+        return None, "站上没有任何非 USB4 网段的 global 地址 ⇒ 该站 LAN 可能已断"
+    return None, f"非 USB4 网段的 global 地址有 {len(lan_rows)} 个 ({[r['ip'] for r in lan_rows]}) ⇒ 不猜"
+
+
+def validate_lan_addr(lan_doc, seen, seen_master=None):
+    """★ 纯判据（D6）：`net.yaml §lan` 真值 vs **实测** LAN 地址。返回 (detail, warn, info)。
+
+    detail(FAIL) = 实测 ≠ 真值 —— ★ 这里必须**带根因与修法**（本次改判据的全部意义所在）
+    warn         = 判定**不成立**（探不到 / 解析不出 / 登记自相矛盾）或接口漂移
+    info         = 射程声明：哪些站"没有可判的东西"必须**显式说出来**（不得像旧版那样静默跳过）
+
+    seen        : {station: {"ip","iface","dynamic"} | {"error": "<原因>"} | None}
+                  （None = 该站根本没采集到 ⇒ 也算"判定不成立"，**不是**通过）
+    seen_master : {"ip": ...} | {"error": ...} | None —— **主控自身**的 LAN 地址。
+      ★ 射程含主控的理由（2026-09-29 实测）：主控的 LAN 一漂，**三站全不可达** ——
+        那是"可达 0/3 却不给根因"的最坏形态。主控地址就登记在 net.yaml §lan 的 `master.ip`。
+    """
+    detail, warn, info = [], [], []
+
+    # ⓪ **主控自身**（先判它：它错了，下面三站的"不可达"是**同一个根因**，不是三个问题）
+    m_want = ((lan_doc.get("master") or {}) or {}).get("ip")
+    if m_want:
+        if not seen_master:
+            warn.append(f"master 自身 LAN 地址**无法判定**（net.yaml §lan.master 登记 {m_want}）")
+        elif seen_master.get("error"):
+            warn.append(f"master 自身 LAN 地址**无法判定**：{seen_master['error']}")
+        elif seen_master.get("ip") and seen_master["ip"] != m_want:
+            detail.append(
+                f"★★ **master（本机）自身的 LAN 地址已漂移**: {m_want} → {seen_master['ip']} "
+                f"—— ★ 这是**三站全部不可达**的根因（控制面源地址变了）；"
+                f"先修 master（接到正确的网 / 或更新 net.yaml §lan.master 的登记），再谈各站")
+        elif seen_master.get("ip"):
+            info.append(f"master 自身 LAN 地址与真值一致: {seen_master['ip']}")
+    for ent in (lan_doc.get("stations") or []):
+        if not isinstance(ent, dict):
+            continue
+        st, want, iface_hint = ent.get("station"), ent.get("ip"), ent.get("iface")
+        if not st or not want:
+            warn.append(f"net.yaml §lan 有条目缺 station/ip, 本项无法判: {ent!r}")
+            continue
+
+        # ① master 侧**名字绑定**（ADR-0006 D1 的资产）—— 与站上实况是**两个不同的面**，都留着。
+        alias = ent.get("host")
+        if not alias:
+            # ★ 射程**显式化**：旧版这里是一句 `continue`，于是"C 不在射程内"**无人知道**。
+            info.append(f"{st} 站在 net.yaml 里无别名(host: null) ⇒ 无 master 侧绑定可判；"
+                        f"该站由下面的『站上实况』覆盖（射程声明, 非跳过）")
+        else:
+            got = _ssh_g_hostname(alias)
+            if got is None:
+                warn.append(f"`ssh -G {alias}` 不可用 —— 无法核对 master 侧绑定 (该名应绑定到 {want})")
+            elif got != want:
+                detail.append(f"master 侧绑定漂移: `ssh -G {alias}` 的 hostname={got}, "
+                              f"而 net.yaml §lan 登记 {want} ⇒ 同步 master ~/.ssh/config 与 net.yaml")
+
+        # ② ★ 站上实况（D6 新增；不依赖别名 ⇒ 三站全覆盖）
+        s = seen.get(st)
+        if not s:
+            warn.append(f"{st} 站 LAN 地址**无法判定**：直连采集不到，USB4 降级通道也没取回 ⇒ "
+                        f"本项对该站**不成立**（不是通过）")
+            continue
+        if s.get("error"):
+            warn.append(f"{st} 站 LAN 地址**无法判定**：{s['error']}")
+            continue
+        got, got_iface, dyn = s.get("ip"), s.get("iface"), s.get("dynamic")
+        if not got:
+            warn.append(f"{st} 站 LAN 地址**无法判定**：采集到但解析不出 (原始: {str(s)[:80]})")
+            continue
+        if got != want:
+            detail.append(
+                f"★ {st} 站 LAN 地址**已漂移**: {want} → {got} "
+                f"(iface={got_iface}, scope={'dynamic/DHCP' if dyn else 'static'}) —— "
+                f"这与「{st} 站不可达 / 依赖它的断言红灯」是**同一件事**, 根因在此。"
+                f"修法: 同步三处真值 (inventory/net.yaml §lan · ops/cluster_const.py 的 STATIONS · "
+                f"master ~/.ssh/config); 要**根治**见 ADR-0006 v1.1 的 D5")
+        else:
+            info.append(f"{st} 站 LAN 地址与真值一致: {got} (iface={got_iface})")
+        if iface_hint and got_iface and iface_hint != got_iface:
+            warn.append(f"{st} 站 LAN 地址所在接口已变: 实测 {got_iface}, net.yaml 登记 {iface_hint} "
+                        f"⇒ 更新 net.yaml §lan 的 iface")
+    return detail, warn, info
+
+
+def _lanip_via_usb4(target, segs, live, ssh_run):
+    """LAN 直连采集失败时，经**与该站有 USB4 直连的邻站**中转，去问它自己的 LAN 地址。
+
+    ★ 这是 D6 的关键一步：它让「站不可达」与「地址漂移」**可区分**。
+      2026-09-29 实测：C 的 LAN 已断（.37 消失），但经 `B → 10.10.11.3` 完全可达
+      ⇒ 能问出它当时的真实地址（.8）—— 旧判据在这里只会吐一句"可达 2/3 站"。
+    邻站与目标站的 USB4 地址**全部从 net.yaml §segments 派生**（不硬编码拓扑）。
+    返回 (rows, err)：err=None 表示取回；否则是**响亮**的原因串（不静默、不降级成"通过"）。
+    """
+    cands = []
+    for sg in (segs or []):
+        if not isinstance(sg, dict):
+            continue
+        for e in (sg.get("ends") or []):
+            if isinstance(e, dict) and e.get("station") == target and e.get("peer") and e.get("ip"):
+                cands.append((e["peer"], e["ip"]))
+    if not cands:
+        return [], f"net.yaml §segments 里没有 {target} 站的 USB4 端点 ⇒ 无降级通道可走"
+    errs = []
+    for peer, ip in cands:
+        if not live.get(peer):
+            errs.append(f"邻站 {peer} 自身不可达")
+            continue
+        try:
+            ok, out = ssh_run(peer, f'ssh -o BatchMode=yes -o ConnectTimeout=6 {ip} "{_LANIP_CMD}"',
+                              timeout=40)
+        except Exception as e:
+            errs.append(f"经 {peer}→{ip}: {type(e).__name__}: {str(e)[:60]}")
+            continue
+        rows = _parse_lanip(out)
+        if ok and rows:
+            return rows, None
+        errs.append(f"经 {peer}→{ip}: {'取回但解析不出' if ok else 'ssh 未成功'}")
+    return [], f"降级通道全失败 ({'; '.join(errs)})"
 
 
 def check_stations(ctx):
@@ -3979,27 +4189,51 @@ def check_stations(ctx):
                     detail.append(f"{st} 站 {iid} ({it.get('purpose', '?')}) "
                                   f"实得 {got!r} · 基线 {it.get('expect')!r} · 差异 {diff[1]}")
 
-    # (h) LAN 传输面绑定 (ADR-0006) —— master 侧 `ssh -G <名>` 的 hostname 必须 == net.yaml 的 lan 段真值。
-    #     为什么放这里: 这是"控制面走哪条路"的唯一可断言点, 造价近 0 (纯本地展开, 不建连),
-    #     却能把"DHCP 漂移 ⇒ 走公网 IPv6 + 每次多付 ~16s + 最终连不上"变成一条明确的 FAIL。
+    # (h) LAN 地址对账 (ADR-0006 v1.1 · D6, 2026-09-29) —— 两个面：
+    #     ① master 侧**名字绑定**（`ssh -G <别名>` == net.yaml 的 ip；D1 的资产，纯本地展开）；
+    #     ② ★ **站上实况**（站上 `ip -4 -o addr` 的 LAN 地址 == net.yaml 的 ip；D6 新增）。
+    #   为什么加②: ①的射程靠"别名"，`host: null` 的 C 站**整站被跳过** —— 2026-09-29 C 由
+    #     .37 漂到 .8 时，6 项断言只报"可达 2/3 站"、**不给根因**（正是 D4 要消灭的谜题）。
+    #   代价: ②搭在同一次合并 ssh 上（零新增连接）；**只有某站直连采集失败**时才多一次
+    #     `邻站 → USB4` 的中转 ssh —— 而那种情况本来就已经在报红灯。
     try:
-        lan_doc = (_net_doc() or {}).get("lan") or {}
+        net_doc = _net_doc() or {}
+        lan_doc, segs = net_doc.get("lan") or {}, net_doc.get("segments") or []
     except Exception as e:
-        lan_doc = {}
-        warn.append(f"net.yaml 解析失败, LAN 绑定对账跳过 —— {type(e).__name__}: {str(e)[:120]}")
+        lan_doc, segs = {}, []
+        warn.append(f"net.yaml 解析失败, LAN 地址对账跳过 —— {type(e).__name__}: {str(e)[:120]}")
+    seg_nets = []
+    for sg in segs:
+        try:
+            seg_nets.append(ipaddress.ip_network(str(sg.get("cidr")), strict=False))
+        except Exception:
+            warn.append(f"net.yaml §segments 的 cidr 不可解析, 已忽略: {sg.get('cidr')!r}")
+    seen_lan = {}
     for ent in (lan_doc.get("stations") or []):
-        if not isinstance(ent, dict):
+        if not isinstance(ent, dict) or not ent.get("station"):
             continue
-        alias, want = ent.get("host"), ent.get("ip")
-        if not alias or not want:
-            continue                    # 仅以 IP 直连的站(如 C) 无别名, 跳过
-        got = _ssh_g_hostname(alias)
-        if got is None:
-            warn.append(f"`ssh -G {alias}` 不可用 —— 无法核对 LAN 绑定 (该名应绑定到 {want})")
-        elif got != want:
-            detail.append(f"{alias} 的 ssh 绑定 hostname={got}, 而 net.yaml lan 段登记 {want} "
-                          f"—— DHCP 可能已漂移, 请同步更新 ~/.ssh/config 与 net.yaml 的 lan 段; "
-                          f"不更新则连该站要走公网 IPv6 且每次多付 ~16s")
+        st = ent["station"]
+        rows, src = _parse_lanip((live.get(st) or {}).get("lanip")), "直连"
+        if not rows:                                    # 直连采集不到 ⇒ 走 USB4 降级通道
+            rows, err = _lanip_via_usb4(st, segs, live, cluster.ssh_run)
+            src = "USB4 降级通道"
+            if err:
+                seen_lan[st] = {"error": err}
+                continue
+            info.append(f"{st} 站直连采集不到（LAN 不通?）, 已**经 USB4 降级通道**取回其真实地址")
+        got, perr = pick_lan_addr(rows, ent.get("iface"), seg_nets)
+        seen_lan[st] = got if got else {"error": f"{src}: {perr}"}
+    # 主控自身：探针 = 真值里**第一个站的 ip**（UDP-connect 只做路由选择, 不发包）
+    probe = next((e.get("ip") for e in (lan_doc.get("stations") or [])
+                  if isinstance(e, dict) and e.get("ip")), None)
+    seen_master = {"ip": _local_lan_ip(probe)} if probe else \
+        {"error": "net.yaml §lan.stations 里没有可用的 ip ⇒ 无法判断本机走哪条路"}
+    if probe and not seen_master.get("ip"):
+        seen_master = {"error": f"无法确定本机通往 {probe} 的源地址（socket 失败）"}
+    d_lan, w_lan, i_lan = validate_lan_addr(lan_doc, seen_lan, seen_master)
+    detail += d_lan
+    warn += w_lan
+    info += i_lan
 
     # (h) 长龄 orphan (O-58, 2026-09-25) —— 站上 ad-hoc 探针/派发留下的僵尸 / 长龄进程。
     #   判据: comm ∈ {opencode, claude, timeout, defunct} 且 etimes ≥ 阈值。
@@ -4111,11 +4345,16 @@ RESIDUAL_WARN_MB = 1024
 #     (只靠 `ops/station-bin/README.md` 的**手工 md5 约定**) ⇒ 本清单把那条约定变成可判。
 # ⚠ **期望值不在此处写死**: 真值源 = 仓库副本 `ops/station-bin/<name>` 自身(运行期算 md5)
 #   ⇒ 不立第二定义点, 也免掉"改了仓库忘改表"这种漂移(与本仓"判据只在一处定义"同一条纪律)。
-# 为什么只列这 8 个: 它们是 `ops/station-bin/README.md` 文件清单里声明的站上件。
+# 为什么只列这些: 它们是 `ops/station-bin/README.md` 文件清单里声明的站上件。
 # ⚠ 为什么敢判 FAIL(而非 WARN): 接入前实测过**误报面** —— 8 个件 × 三站里 7 个本来就逐字节一致,
 #   唯一不一致的 `wait-gtt-release` 是**真漂移**(A/B 落后一版且带 BOM), 已单独立项。
+# 2026-09-29 补第 9 件 `rpc-serve-instance`(RPC worker 包装器, GLM-5.3-Flash 引擎变体需要)。
+# ⚠⚠ 同日本项**顺带抓到一类系统性假红**: `core.autocrlf=true` 使仓库工作树里
+#   `infer-load` / `infer-unload` 是 CRLF, 而站上是 LF ⇒ 逐字节比对必然 FAIL(内容其实一致)。
+#   判据是对的(CRLF 的 shell 脚本在 Linux 上**真的**语法错误, 2026-09-29 部署时实测 203/EXEC 同类),
+#   错的是**仓库工作树**: 已把这 2 件归一为 LF。改这几个件时务必确认行尾是 LF。
 STATION_BINS = ("infer-load", "infer-unload", "infer-list", "llama-serve-instance",
-                "cluster-ttl", "load-mem-gate", "wait-gtt-release", "load-gate")
+                "rpc-serve-instance", "cluster-ttl", "load-mem-gate", "wait-gtt-release", "load-gate")
 
 _HEALTH_CMD = (
     "echo '===ADDR==='; ip -o -4 addr show 2>/dev/null "

@@ -100,7 +100,7 @@ $neg = @(
     @{ n = '裸长十六进制串(无 Bearer 上下文 ⇒ 不收窄就会吃)'; s = 'token=8f3a29c7d1b04e6f9a2c5b8d7e0f1a3c' },
     @{ n = '★ run ID(18 位数字 = 本项目证据句柄)'; s = '复现 run 202609180952112524 的结论' },
     @{ n = '★ 站主机名(.local = 项目主要寻址方式)'; s = 'ssh scott-lau-GTR-Pro.local' },
-    @{ n = '★ 内网 IP(inventory/net.yaml 真值)';   s = 'C 站 192.168.1.37 / A-B 段 10.10.10.0/24' }
+    @{ n = '★ 内网 IP(inventory/net.yaml 真值)';   s = 'C 站 192.168.10.37 / A-B 段 10.10.10.0/24' }
 )
 foreach ($c in $neg) {
     $out = Scrub $c.s
@@ -150,7 +150,7 @@ $probe = @(
     @{ n = 'OpenSSH 私钥块';     s = (Sam '-----BEGIN ', 'OPENSSH PRIVATE KEY-----') },
     @{ n = 'Linux 绝对路径';     s = '/home/scott-lau/.config/rpc/openrouter.key' },
     @{ n = 'UNC 路径';           s = '\\fileserver\share\secrets.key' },
-    @{ n = '内网 IP';            s = '192.168.1.32' },
+    @{ n = '内网 IP';            s = '192.168.10.32' },
     @{ n = '主机名(.local)';     s = 'scott-lau-GTR-Pro.local' },
     @{ n = '用户名';             s = 'scott-lau' },
     @{ n = '中国大陆手机号';      s = '13800138000' },

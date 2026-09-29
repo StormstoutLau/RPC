@@ -10,7 +10,8 @@
 | infer-load           | /usr/local/bin/infer-load           | 加载入口（默认后端 unsloth；--backend 回退 llama-rpc/single/vllm；显式后端同时决定 RPC 与否 + 写运行时覆盖层） |
 | infer-unload         | /usr/local/bin/infer-unload         | 卸载（含 unsloth 清理 + F2：rpc-server 未运行时跳过 GTT 等待 + 2026-09-15：停**全部** worker 的 rpc-server） |
 | infer-list           | /usr/local/bin/infer-list           | 模型清单（建议后端=unsloth，embedding/AWQ 特殊）          |
-| llama-serve-instance | /usr/local/bin/llama-serve-instance | systemd 实例包装器（回退路径用）                        |
+| llama-serve-instance | /usr/local/bin/llama-serve-instance | systemd 实例包装器（回退路径用；head 侧，消费 conf 的 `LLAMA_SERVER_BIN`/`N_GPU_LAYERS`） |
+| rpc-serve-instance   | /usr/local/bin/rpc-serve-instance   | **RPC worker 包装器**（2026-09-29 新增；`rpc-server@<alias>` 单元调它，消费 conf 的 `LLAMA_RPC_SERVER_BIN` —— head 与 worker **同版引擎**这一条就靠它落地） |
 | cluster-ttl          | /usr/local/bin/cluster-ttl          | 空闲 TTL 自动卸载检查器（60s oneshot，**默认关**；见下 P2-5）  |
 | load-gate            | /usr/local/bin/load-gate            | **加载前内存门禁**（4 条硬规则：used+need+12G≤total / avail≥need+12G / 已有 llama RSS+need+12G≤total / loadavg1>8 WARN）；默认查本机，可传 peer 站 |
 | load-mem-gate        | /usr/local/bin/load-mem-gate        | 内存门（12G 垫）                                 |
@@ -19,11 +20,23 @@
 ## 两站一致性
 
 修改后核对：`md5sum /usr/local/bin/<file>`（两站必须一致）。
-当前（2026-09-17，**三站一致**）：infer-load `e474b761...`、infer-unload `6ff2a3b3...`、llama-serve-instance `0cf134f6...`。
-（下表 2026-09-04 的旧值已作废，保留仅为历史：infer-load `229c1328...`(B)/`09e8b60e...`(A)、infer-unload `dc948d63...`、infer-list `5b6d40fc...`。）
+**当前（2026-09-29，站上件 9 件 · 三站一致）**：infer-load `a2e8604f...`、infer-unload `a9f8f3f0...`、
+llama-serve-instance `df8f7bbb...`、**rpc-serve-instance `24a3e592...`**、infer-list `74033ef1...`。
+（`gates` 门禁按仓库副本逐站比对 md5 ⇒ 上表值可由 `ops\rpc.ps1 check -Only gates` 复算，
+无需手工核 —— 改了仓库副本就必须部署，否则当场判红。）
+
+★★ **行尾陷阱（2026-09-29 踩到两次，必读）**：本仓 `core.autocrlf=true` ⇒ **任何**重写工作树的
+git 操作（`checkout` / `stash pop` / `reset --hard`）都会把文本文件落成 **CRLF**。而这些件在 Linux 上
+由 **bash 执行** ⇒ ① 部署后 `bash -n` 报 `未预期的记号 $'in\r'`（脚本全坏）；② `gates` 的**逐字节**
+比对判红（内容其实一致 ⇒ **假红**，会诱导人去"修"没坏的东西）。
+实测两次：首次部署当场语法错误；同日 `git stash pop` 后门禁从 `站上件一致 18/18` 掉回 `10/18`。
+⇒ **已由 [`.gitattributes`](../../.gitattributes) 结构性锁死**（`ops/station-bin/*` · `ops/rpc-nodes` ·
+`ops/*.service` · `ops/*.timer` ⇒ `text eol=lf`），删文件重新检出**实测仍是 LF**。
+不再依赖"改的时候记得检查"这种人工承诺。**部署仍一律用「SFTP 上传 + `install -m 755`」**。
+（下表 2026-09-17 / 2026-09-04 的旧值已作废，保留仅为历史：infer-load `229c1328...`(B)/`09e8b60e...`(A)、infer-unload `dc948d63...`、infer-list `5b6d40fc...`。）
 （infer-load `e474b761` = 2026-09-17 遗留 1+2 修复版：头部注释改为实测口径 + **移除 `LLAMA_SERVER_PATH` 注入**；前一版 `d57a9021...` 已备份为 `/usr/local/bin/infer-load.bak-20260917-llamaserverpath`。详见 [TRACKER §2.6](../../spec/upstream-tracker/TRACKER.md)。）
 **2026-09-22 补登记 `load-gate`**（此前本表漏列 ⇒ 该件无部署记录、无 md5 基线）：当前值 **`07ad7e01...`**（**三站一致**，且 == 仓库副本 [load-gate](./load-gate)，0 个 CR）。本次改动 = 4 处 peer ssh 补 `-o BatchMode=yes`；改法是"先改仓库副本 → 三站 `cp -a` 备份（备份 md5 == 原 `6acec519...`，逐站核过）→ `install -m 755` → 逐站核新 md5 + `bash -n` + 跑 `load-gate 1` 回归"；回滚 = 三站 `sudo cp -a /usr/local/bin/load-gate.bak-20260922 /usr/local/bin/load-gate`。
-**2026-09-22 再补 `wait-gtt-release`，并把本表的"手工 md5 约定"升级为机器判据**：该件仓库副本 = `a60b1877...`（判据是 `TOTAL*0.82` 相对总内存的新版）；**A/B 当时仍是旧版 `40d6cfe4...`（`-ge 102400` 绝对 100G）且首行带 UTF-8 BOM** ⇒ 已按同一闭环推 A/B（备份 → `install -m 755` → 核新 md5 + **`FIRST3=23212f` 证明 BOM 已消除** → 回归 `timeout 20 wait-gtt-release` rc=0）。⇒ 门禁 `gates` 现按 [`rpc_check.py`](../rpc_check.py) 的 `STATION_BINS`（**8 件**）**逐站比对仓库副本 md5，不一致即 FAIL**（复用健康探针、零额外连接；期望值运行期取仓库副本 ⇒ 不立第二定义点）。**改这 8 个件时必须走「改仓库 → 核对 → 部署三站」**；只改仓库或只推一站都会被门禁当场点名。
+**2026-09-22 再补 `wait-gtt-release`，并把本表的"手工 md5 约定"升级为机器判据**：该件仓库副本 = `a60b1877...`（判据是 `TOTAL*0.82` 相对总内存的新版）；**A/B 当时仍是旧版 `40d6cfe4...`（`-ge 102400` 绝对 100G）且首行带 UTF-8 BOM** ⇒ 已按同一闭环推 A/B（备份 → `install -m 755` → 核新 md5 + **`FIRST3=23212f` 证明 BOM 已消除** → 回归 `timeout 20 wait-gtt-release` rc=0）。⇒ 门禁 `gates` 现按 [`rpc_check.py`](../rpc_check.py) 的 `STATION_BINS`（**9 件**，2026-09-29 补 `rpc-serve-instance`）**逐站比对仓库副本 md5，不一致即 FAIL**（复用健康探针、零额外连接；期望值运行期取仓库副本 ⇒ 不立第二定义点）。**改这些件时必须走「改仓库 → 核对 → 部署三站」**；只改仓库或只推一站都会被门禁当场点名。
 
 ## 空闲 TTL 自动卸载（2026-09-15, P2-5，**默认关**）
 

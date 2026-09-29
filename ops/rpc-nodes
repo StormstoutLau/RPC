@@ -35,10 +35,42 @@ case "$MODE" in
     ;;
   --start)
     [ -n "$ALIAS" ] || { echo "FATAL: --start 需 <alias>" >&2; exit 3; }
+    # ── 引擎变体透传 (2026-09-29, GLM-5.3-Flash) ────────────────────────────────
+    # 为什么由本脚本做: worker 的推理引擎**必须与 head 同版**(RPC 版本不匹配即握手失败),
+    #   而"本实例用哪个引擎"的单一真值是 **head 站的实例 conf**(键 `LLAMA_RPC_SERVER_BIN`,
+    #   由 `infer-load --engine` 写入) —— 只有本脚本既在 head 站、又能 ssh 到各节点。
+    # 形态: 写 `/run/llama-instances/rpc-<alias>.env`。选 /run 而非 /etc 有两条硬理由:
+    #   ① 与既有 RPC_TARGET 覆盖层同族(tmpfs, 重启自清, 不动 /etc 配置);
+    #   ② 门禁按 `ls /etc/llama-instances/*.env` 对账 conf 集合 ⇒ 往 /etc 放会凭空多出
+    #      一个"未登记 conf"。
+    # conf 无该键 ⇒ **删除**覆盖文件(而不是留着) —— 防上一次变体加载把旧引擎留给主线实例。
+    RCONF="${RCONF:-/etc/llama-instances/${ALIAS}.env}"
+    RPC_BIN=""
+    if [ -f "$RCONF" ]; then
+      RPC_BIN="$(sed -n 's/^LLAMA_RPC_SERVER_BIN=//p' "$RCONF" | tail -1 | tr -d '"')"
+    fi
+    OVR="/run/llama-instances/rpc-${ALIAS}.env"
+    if [ -n "$RPC_BIN" ]; then
+      echo "[rpc-nodes] 引擎变体透传: LLAMA_RPC_SERVER_BIN=${RPC_BIN}" >&2
+    else
+      echo "[rpc-nodes] 实例 conf 无 LLAMA_RPC_SERVER_BIN (主线引擎) → 清除节点覆盖层" >&2
+    fi
     for node in $RPC_NODES; do
       ip="${node%%:*}"
       echo "[rpc-nodes] start rpc-server@${ALIAS} @ ${node}" >&2
-      "$RPC_SSH" "$ip" "sudo systemctl start rpc-server@${ALIAS}" >&2 || exit 4
+      # 覆盖层必须**先落地再 restart** —— systemd 只在启动时读 EnvironmentFile。
+      if [ -n "$RPC_BIN" ]; then
+        printf 'LLAMA_RPC_SERVER_BIN=%s\n' "$RPC_BIN" | "$RPC_SSH" "$ip" \
+          "sudo install -d -m 0755 /run/llama-instances && sudo tee '${OVR}' >/dev/null && sudo chmod 644 '${OVR}'" >&2 || exit 4
+      else
+        "$RPC_SSH" "$ip" "sudo rm -f '${OVR}'" >&2 || exit 4
+      fi
+      # ★ `restart` 而非 `start`: 本脚本在**同一次加载流程里会被调用两次** ——
+      #   `cluster.py _load_rpc` 的 [2/4] 前置探活, 以及 infer-load 的 [5] 写 conf 之后再起。
+      #   而 `start` 对**已运行**单元是空操作 ⇒ 第二次调用不会应用新写的引擎覆盖层,
+      #   worker 会停在旧引擎上与 head 握手失败(且是在模型加载几分钟后才炸)。
+      #   对未运行的单元 `restart` ≡ `start`, 故无副作用。
+      "$RPC_SSH" "$ip" "sudo systemctl restart rpc-server@${ALIAS}" >&2 || exit 4
       wait_port "$ip" "${node##*:}" || { echo "FATAL: ${node} 端口未就绪" >&2; exit 4; }
     done
     # start 成功 → 输出存活列表 (与默认模式一致, 供调用方直接用作 --rpc 值)

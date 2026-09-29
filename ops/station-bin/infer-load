@@ -113,7 +113,12 @@ if [ ! -f "$CONF" ]; then
     case "$ALIAS" in all-minilm*) BACKEND="llama-single";; *) BACKEND="unsloth";; esac
   fi
   RPCV=""; [ "$BACKEND" = "llama-rpc" ] && RPCV="auto"
-  NCM=0; [ "$BACKEND" = "llama-rpc" ] && NCM=8
+  # N_CPU_MOE 缺省 (2026-09-29 改): 原为 `llama-rpc ⇒ 8` —— 那是**单机**省 VRAM 的腾挪手段
+  #   (把前 8 层 MoE 专家压到 CPU); 在**双机 RPC** 形态下它把前 8 层专家压到 head 的 CPU 上算
+  #   ⇒ 实测 decode 掉约 22%(V4-Flash 双机 10.90 vs 手工形态 14.06 t/s)。
+  #   对齐目标是**手工成功形态**(完全不给 `--n-cpu-moe`, 等价于 0) ⇒ 缺省改 0。
+  #   ⚠ 本行只在**首次生成 conf** 时生效; 已存在的 conf 不会被改写(要改请直接编辑 conf)。
+  NCM=0
   EMB=""; case "$ALIAS" in all-minilm*) EMB="--embedding";; esac
   sudo tee "$CONF" >/dev/null <<CEOF
 # B5i 自动生成 ($(date '+%F %T')) [默认后端 unsloth] — 可编辑后 infer-load(重载) 或 systemctl 回退
@@ -141,14 +146,33 @@ source "$CONF"
 #   llama-server@<alias> 驱动, 单元经 llama-serve-instance **重新 source 同一 conf** ——
 #   只改本进程环境对单元无效 (与 [2c] 的 RPC_TARGET `/run` 覆盖是同一类教训)。
 # ds4 另立命名空间 (/etc/ds4-instances), 不写 llama 系键。
-if [ -n "$ENGINE_BIN" ] && [ "${CLI_BACKEND:-}" != "ds4" ]; then
-  if grep -q '^LLAMA_SERVER_BIN=' "$CONF" 2>/dev/null; then
-    sudo sed -i "s|^LLAMA_SERVER_BIN=.*|LLAMA_SERVER_BIN=${ENGINE_BIN}|" "$CONF"
+#
+# 2026-09-29 扩到**两个键**(GLM-5.3-Flash 分布式) —— 一个实例的"引擎变体"其实有**两个**消费者:
+#   · head   → `<dir>/llama-server`      (键 LLAMA_SERVER_BIN, llama-serve-instance 消费)
+#   · worker → `<dir>/ggml-rpc-server`   (键 LLAMA_RPC_SERVER_BIN, 由 rpc-nodes --start 透传给
+#     各节点的 rpc-server@<alias> 单元)。★ 必须落 conf: RPC **两端版本必须一致**, 而 worker
+#     站在别的机器上, 只有 conf 是全流程(read→透传)唯一的真值点。
+# 注意**不做反向清理**: 未给 --engine 时不动已存在的键 —— 引擎变体是**实例属性**(可由人手工
+#   编辑 conf 钉死), `--engine` 只是"顺手设置它"的入口(与 conf 头注释"可编辑后重载"一致)。
+_set_conf_key() {  # _set_conf_key <KEY> <VALUE> — 幂等写/改实例 conf 的一行
+  if grep -q "^$1=" "$CONF" 2>/dev/null; then
+    sudo sed -i "s|^$1=.*|$1=$2|" "$CONF"
   else
-    echo "LLAMA_SERVER_BIN=${ENGINE_BIN}" | sudo tee -a "$CONF" >/dev/null
+    echo "$1=$2" | sudo tee -a "$CONF" >/dev/null
   fi
+}
+if [ -n "$ENGINE_BIN" ] && [ "${CLI_BACKEND:-}" != "ds4" ]; then
+  _set_conf_key LLAMA_SERVER_BIN "$ENGINE_BIN"
   LLAMA_SERVER_BIN="$ENGINE_BIN"
   log "引擎变体已落 conf: LLAMA_SERVER_BIN=${ENGINE_BIN}"
+  # worker 侧引擎 = 同目录成对的 ggml-rpc-server (变体目录是一个整体)
+  RPC_ENGINE_BIN="${ENGINE_BIN%/*}/ggml-rpc-server"
+  if [ -x "$RPC_ENGINE_BIN" ]; then
+    _set_conf_key LLAMA_RPC_SERVER_BIN "$RPC_ENGINE_BIN"
+    log "worker 引擎已落 conf: LLAMA_RPC_SERVER_BIN=${RPC_ENGINE_BIN}"
+  else
+    log "WARN: 引擎目录内无 ggml-rpc-server (${RPC_ENGINE_BIN}) —— 该变体只能单机, RPC 双机会在 worker 侧失败"
+  fi
 fi
 export LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-}"
 [ -n "$LLAMA_SERVER_BIN" ] && log "使用引擎: ${LLAMA_SERVER_BIN}"
@@ -485,12 +509,17 @@ log "B 站起 llama-server@${ALIAS} (port ${PORT_NUM})..."
 sudo systemctl start "llama-server@${ALIAS}"
 
 # ---- [7] 健康检查 ----
-for i in $(seq 1 120); do
+# 预算 15min (原 6min) —— 2026-09-29 实测: 146 GiB 级模型**冷启动**(首跑, worker 侧 rpccache 全空,
+#   要跨机推全部张量 + 落盘) 三机形态实测 **9 分 07 秒**; 双机(手册记 5min17s)也逼近旧上限。
+#   旧上限的后果不是"多等一会", 而是**统一入口把成功的加载报成失败**
+#   (`[cluster] 加载失败 (rc=1)`, 而 head 一分钟后就绪、decode 正常) —— 这正是"整合进统一入口"
+#   最容易被误判成"跑不通"的形态。(V4-Flash 双机有 A 站 rpccache 命中, 只需 ~3min, 故旧值长期没暴露。)
+for i in $(seq 1 300); do
   if curl -sf --max-time 2 "http://127.0.0.1:${PORT_NUM}/health" >/dev/null 2>&1; then
     log "READY ✓ :${PORT_NUM} (llama-server@${ALIAS})"
     exit 0
   fi
   sleep 3
 done
-log "ERROR: 健康检查 6min 超时 — journalctl -u llama-server@${ALIAS} 排查"
+log "ERROR: 健康检查 15min 超时 — journalctl -u llama-server@${ALIAS} 排查"
 exit 1
