@@ -19,6 +19,45 @@ upstream: \[d6-agent-standard-.* 全量文档]
 
 ## 历史回溯（2026-09-03 起）
 
+### 2026-09-30（续⑩） — **O-123 续**：`D7-CC #3/#4` 两条的**取证已完成**，并**取证出一条第 7 项新缺口**
+
+> **定位**：承 `续⑨` 的「待下一步 2 条」。用户裁「#3 先跑取证 / #4 先裁语义」⇒ 本轮**执行取证**。
+
+**③ `D7-CC #3`（`path` 相对根）—— ★★ 取证把"文档没写清"升级为"机制会静默失效"**
+
+| 面 | 读数（E1） |
+|---|---|
+| **契约要求** | 本文 §3：以 `path` + `line_range`（**归一化后**）对齐成"锚点" |
+| **实现** | `Merge-JudgeFindings` 的键 = `("{0}\|{1}" -f path.Trim(), line_range.Trim())` ⇒ ★ **只有 `.Trim()`** |
+| **全仓归一化函数** | ★ **0 个**（`agent-cli.ps1` 内 `Normalize-` / `归一化` **零命中**） |
+| **判据对 `path`** | `Test-FindingShape` **只判 `IsNullOrWhiteSpace`** ⇒ 绝对路径 / `./x` / 裸名 `a` **全部合法** |
+| **提示词** | `judge-prompt.tmpl` 只写 `"path": "相对路径"` ⇒ **未说相对谁** |
+| ★ **夹具实证** | 同一套 `cc-*` 里 `cc-1` 用 `'ops/a.py'`、`cc-2…cc-12` 用 `'a'` —— **两者都通过** |
+| **真实产物** | ★ **全仓零个 `review.json`** ⇒ 契约**从未产出过真实产物** |
+
+⇒ ★★ **后果（可证，非推测）**：`./ops/a.py` 与 `ops/a.py`、`Ops/A.py` 与 `ops/a.py` **会各自成为不同锚点**
+⇒ 同一处意见**永不合并** ⇒ **`consensus` 静默失效、三分类退化为全 `unique`** —— 而"区分共识与孤例"正是本契约存在的理由。
+
+★★★ **【超出规范原记的新缺口 ⇒ 已登记为第 7 条】**：原文只记"相对根**未定义**"；取证发现 **「契约要求归一化、实现只做 `Trim()`」= 契约↔实现不一致** —— **即使把相对根定死，缺归一化仍会裂开**。
+⇒ 已就地写入 [`D7-PROTOCOL-CONCLUSION-CONTRACT.md`](./D7-PROTOCOL-CONCLUSION-CONTRACT.md) §未实测登记 **第 7 条** + 索引同步（**51 → 52 条**）。
+
+**④ `D7-CC #4`（`line_range` 越界）—— ★★★ 取证发现它【与 #3 耦合】，这改变了裁定结构**
+
+| 面 | 读数（E1） |
+|---|---|
+| 实现 | `Test-FindingShape` 正则 `^L\d+(-(L\d+)?)?$` ⇒ **纯形态** |
+| ★ 代码注释 | **自己写明**「**不读文件核对行数** —— 见契约 §未实测登记 4」⇒ **该缺口有明确代码主** |
+| 函数签名 | `param([object]$Finding)` ⇒ **无文件/行数入参**（纯函数） |
+| 夹具 | `cc-1..cc-16` **无一条测越界**（纯函数无从测）⇒ 要做"越界即无效"，**夹具形态也得变** |
+
+⇒ ★★★ **关键推论**：**在相对根未定之前，「越界」根本无从判定** —— **校验器不知道该打开哪个文件**
+⇒ **「无效」与「警告」两个语义在本架构下都落地不了，只剩「不可判」可用**（与「**不可判 ≠ 通过**」同族，`O-22`/`O-119` 同口径）。
+
+★ **如实标注**：全仓**零个真实 `review.json`** ⇒ 上述后果**系从实现与夹具推定，不是跑出来的**。
+
+**验收**：`py-tests` **47/47**（含 `test_untested_index_sync.py` 双向对账 **PASS**，索引 **51 → 52**）· `--quick` **PASS 38 绿/2 黄/0 红** · `ledger-status` 仍开着 **6**。
+**关联**：`OPEN-ISSUES.md` **O-123** · [D7-PROTOCOL-CONCLUSION-CONTRACT.md](./D7-PROTOCOL-CONCLUSION-CONTRACT.md) §未实测登记（**新增第 7 条**）· [inventory/untested-index.yaml](../../inventory/untested-index.yaml) · `ops/station-bin/agent-cli.ps1` 的 `Test-FindingShape` / `Merge-JudgeFindings` · `ops/station-bin/review/judge-prompt.tmpl` · `ops/station-bin/_fm_golden_test.ps1` 的 `cc-*` · 同日前九条 `续①–⑨`。
+
 ### 2026-09-30（续⑨） — **O-123 登记**：`untested-index` 的 9 条 `needs_decision` 取证（第一刀）⇒ **◐ 部分闭环（裁定待人）**
 
 > **定位**：`OPEN-ISSUES.md` **O-123**（文档治理/未实测 · P2）—— 用户指令「分析如何闭环」，并裁定**第一刀 = 先裁那 9 条 `needs_decision`**。★ 本轮做的是 **Phase 1 档位核验 + Phase 2 派发取证**；**Phase 3 = 你逐条裁**（下表即摊开面）。
