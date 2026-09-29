@@ -19,6 +19,107 @@ upstream: \[d6-agent-standard-.* 全量文档]
 
 ## 历史回溯（2026-09-03 起）
 
+### 2026-09-30（续⑨） — **O-123 登记**：`untested-index` 的 9 条 `needs_decision` 取证（第一刀）⇒ **◐ 部分闭环（裁定待人）**
+
+> **定位**：`OPEN-ISSUES.md` **O-123**（文档治理/未实测 · P2）—— 用户指令「分析如何闭环」，并裁定**第一刀 = 先裁那 9 条 `needs_decision`**。★ 本轮做的是 **Phase 1 档位核验 + Phase 2 派发取证**；**Phase 3 = 你逐条裁**（下表即摊开面）。
+
+**★ Phase 1（档位核验）—— 它推翻了"3 卡"的预估**
+
+`inventory/sensitivity.yaml` 里 **U3 / U5 / U4 / D7-CONCLUSION-CONTRACT 四份原未登记** ⇒ 按 `default_tier: local-only`（fail-closed）兜住 ⇒ 9 条里只有 1 条在已登记 public 面。逐份核验后：
+
+| 规范 | 处置 | 依据 |
+|---|---|---|
+| `U3-EDGE-FORMAT` | ★ **补登记 public** | 内容源自**已登记 public 的卡面**（`dogfood-cards/` 整目录 = public）⇒ 与 `U1` **同款定档理由** |
+| `D7-PROTOCOL-CONCLUSION-CONTRACT` | ★ **补登记 public** | 与已 public 的 `D7-PROTOCOL-CONTRACT` **同族同批**；主体为本仓自产契约设计；唯一外引 = **arXiv 公开论文** |
+| `U4-INVALIDATION-RULES` | ⚠ **维持 local-only** | 原文明写「规则原文 = **Ontoly RFC-0002**」⇒ **他方材料** |
+| ★ `U5-TRUST-BASIS` | ⚠ **维持 local-only**（**推翻我上一轮的初判**） | 含**他项目内部实现细节**（`FixMemory` / `discoveries/` / `run_p0a_v2_batch`）**且无 public 载体可引** ⇒ **先例不适用**，fail-closed |
+
+⇒ **public 11 → 13**；**出网卡从 3 张修正为 2 张**。
+
+**★ Phase 2（第十批 · 2 卡跨两站 · 已跑通）**
+
+| 卡 | 覆盖 | 站 / 模型 | run | 结果 |
+|---|---|---|---|---|
+| [dec-cc-three-undefineds.md](./dogfood-cards/dec-cc-three-undefineds.md) | D7-CC 三条（`path` 相对根 / `line_range` 越界 / 三分类阈值 ≥2） | **A · `ultra-a`** | `202609300531207317` | ✅ `exit=0` |
+| [dec-u1-truncation-mapping.md](./dogfood-cards/dec-u1-truncation-mapping.md) | U1-8（截断长度变更无映射路径） | **B · `lightning`**（**跨族**，照 J-1） | `202609300531207402` | ✅ `exit=0` |
+
+⇒ `BATCH_DONE: 卡=2 · 失败或未完成=0`，**两卡各有自己的 runDir**（`O-116` 按卡切块在成功侧亦成立）。★ **本批覆盖 9 条里的 4 条**；**另 5 条（U4×3 + U5×2）暂缓**。
+
+**★★ 主控独立复核（不采信模型自报）**
+- `dec-u1` **可用**：6 节齐 · `^- ` 36 条 · 候选**逐条标了「判据 vs 纪律」**（卡要求）· 不确定项 6 条如实。⚠ 2 处表述瑕疵（步骤 2 把"要新建文件"与卡约束"只写一个文件"写在同一句再自我纠正）。
+- ★ `dec-cc` **1 处实质错误 + 1 处内部矛盾 + 1 处与卡约束冲突**：**把给定材料的数字改错** —— 材料逐字写「生日阈值约 `2^64`，比 16 字符的 `2^32` 强」，产物写成「32 字符 ≈ **`2^128`**（比 16 字符 `2^64` 强）」⇒ **两数各放大 `2^64` 倍**（按 hex 字符数 n ⇒ 4n bit ⇒ 生日阈值 `2^(2n)` 复算：**材料对、产物错**）；且**同句**自述"具体数值未给出"⇒ **自相矛盾**；其步骤 5 要写 `out/dec-cc-evidence.md`，违反卡的"只产一个文件"。⇒ **可作线索、不可照抄**。
+
+**★ Phase 3 —— 摊开给你逐条裁（7 条）**
+
+| # | 条目 | 现状问题 | 候选（含 agent 建议，**仅供参考**） |
+|---|---|---|---|
+| 1 | D7-CC **`path` 相对根** | 契约要求 `path` 必填但**没规定相对谁**；文档自认最大未定项 | 甲：规定相对**仓根**（无 git 回退运行目录）· 乙：新增 **`root` 字段**显式声明 · 丙：什么都不做+写明约定 |
+| 2 | D7-CC **`line_range` 越界** | 只校**形态**不校**行数**；"越界即无效"未裁 | 甲（**agent 建议**）：**保持纯函数**、越界降**警告 + 标记**（`out_of_bounds_suspected`）· 乙：**改为读文件、越界即无效**（代价：纯函数 → 需 I/O）· 丙：校验器**分两层**（配置开关） |
+| 3 | D7-CC **三分类阈值 `≥2`** | 数值从**另一用途**推来，**无实测支撑** | 甲（**agent 建议**）：保留 2 + 新增可配 `consensus_min_judges` + 文档记"无实测支撑" · 乙：改为**动态 `ceil(J/2)`** · 丙：**跑最小实测**（历史夹具） |
+| 4 | U1-8 **截断长度映射** | 无任何实现能把旧 `:16:` 映射到新 `:32:`；只能靠**口头纪律** | 甲（**agent 建议**）：**候选①（显式标注"旧代"）+ 显式映射表**（两阶段：无标注即**拒绝**不是警告）· 乙：候选②去自描述（⚠ **与 `D-25` 冲突**）· 丙：什么都不做 |
+| 5-7 | **U4×3 + U5×2** | ★ **本批未取证**（档位未过） | 待选路线：**站内卡**（需 load 本地引擎）或 **人工 public 摘要** |
+
+**验收**：`ledger-status` 数据行 **118 → 119**、**仍开着 5 → 6**（O-123 为 ◐）· `sensitivity` PASS（**public 11 → 13**）· 本批 `BATCH_DONE: 卡=2 · 失败或未完成=0`。★ **未起任何本地引擎**（两卡均走出网档）。
+**关联**：`OPEN-ISSUES.md` **O-123** · [inventory/untested-index.yaml](../../inventory/untested-index.yaml) · [inventory/sensitivity.yaml](../../inventory/sensitivity.yaml)（补登记 2 条）· [tests/test_untested_index_sync.py](../../tests/test_untested_index_sync.py) · `O-80` / `O-116`（派发链）· `D7-P0-3` J-1（跨族）· 同日前八条 `续①–⑧`。
+
+### 2026-09-30（续⑧） — **O-122 登记**：A 站 Docker/容器栈盘查 ⇒ **◐ 部分闭环（处置待裁）**
+
+> **定位**：`OPEN-ISSUES.md` **O-122**（运维/治理 · P2）—— 用户指令「A 站 Docker daemon 检查一下是什么东西在跑」。★ 全部读数与三条风险**写在台账行内**，本节**只留索引** —— **不复制第二份**。
+
+**一句话**：★ **A 站只有 `dockerd` 本体在空转（`Running: 0`，无任何容器）** —— 三个 unit（`docker.service`/`docker.socket`/`containerd.service`）**均 enabled**，自 **2026-09-16** 起 active ≈13 天，内存 50.9 M、13 天 CPU **2 min 42 s**。
+
+**用途已查清（四条证据链）⇒ 它是「Agent 检索基础设施」的宿主**：`~/searxng/docker-compose.yml`（自建 SearXNG）· `~/.hermes/hermes-agent/optional-skills/research/searxng-search/`（hermes 的 searxng 检索技能，读 `SEARXNG_URL`）· 镜像 `mcp/paper-search` · hermes-agent 本体编排。★ 与本仓对得上：`PLUGIN-LEDGER` 的 **`web-searxng`**（⭐⭐⭐ 检索层）。
+
+**三条风险/缺口**：**① 端口双重声明（latent）** —— searxng compose 写死 **`8080:8080`**，而 8080 是 **A 站推理引擎**的登记端口；★ 当前无冲突（8080 空闲 + searxng **容器已删** ⇒ 无自动重启风险），但**下次 `compose up` 会撞**。**② dockerd 与 containerd 生命周期不同步（根因未查）** —— dockerd 13 天 vs containerd 仅 1 d 19 h，且 **2026-09-28 09:45** dockerd 报 containerd 连接 **EOF**。**③ 两套 Docker 并存 + 配置双源** —— `docker-ce`（在跑）与 `docker-desktop`（装了未跑）；`daemon.json` 有**两份且 mirror 列表不同**（「同一事实两处表达」同族）。
+
+★ **顺带结清 `O-121` 一条"未验"**：两份 `daemon.json` 均配了**国内 registry mirror** ⇒ 「直连 huggingface 不通但仍可能拉镜像」的**可能路径**。⚠ 仍只到"有配置"，**未实测拉取**。
+
+★★ **本项最要紧的裁定 = `ports.yaml` 刻意【不登记】**：按该表自己的维护约定「**只登记实测过的端口；不确定的宁可不登记**」，searxng 当前**无监听且容器已删** ⇒ 现在登记**违反本表约定**；且按门禁「**跨组不得重叠**」约束，**searxng 一旦重起，8080 即变成跨 `managed`/`unmanaged` 的重叠声明 ⇒ 登记即 FAIL**。⇒ **必须先裁"谁让位"，才谈得上登记**（不能两个都写）。
+
+**待裁两项**：① **8080 谁让位**（改 searxng 端口 / 接受现状并写明 / 删该 compose）；② **A 站 Docker 栈是否纳管**（与 `ADR-0004` 直接相关，现**不在任何管理面内**）。
+
+**验收**：`ledger-status` 数据行 **117 → 118**、★ **仍开着 4 → 5**（O-122 为 **◐**，如实计入开着）。★ **本项只读**：未起/停服务、未删镜像容器、未改 compose、**未动 `ports.yaml`**；临时脚本在 `tmp/`（未入库）。
+**关联**：`OPEN-ISSUES.md` **O-122** · 同域 **`O-121`**（kyuz0 容器路线）/ **`O-120`**（换栈）· `ADR-0004`（唯一管理面）· `inventory/ports.yaml` · `PLUGIN-LEDGER` · 同日前七条 `续①–⑦`。
+
+### 2026-09-30（续⑦） — **O-121 登记**：`kyuz0/vllm-therock-gfx1151` 容器方案评估 ⇒ 裁「当前不引入」
+
+> **定位**：`OPEN-ISSUES.md` **O-121**（栈/容器 · P2）—— 用户问「这个方案在本集群可行性 / 对比原生 vLLM」。★ 分析与对比**全在承载文档**里（[kyuz0 容器方案评估与现役 venv 对比](../../docs/research/2026-09-30_kyuz0容器方案评估与现役venv对比.md)），本节**只留索引** —— **不复制第二份**。
+
+★★★ **本项最值钱的一条（纠正对比框架）**：**kyuz0 的容器与集群现役 `~/vllm-rocm` 不是"两条路线"，而是【同一条路线（TheRock）的两种封装】** —— 实测现役 venv 内含 `rocm_sdk` wheel **7.15.0** + **`amd_torch_device_gfx1151`** device 包 + `_rocm_sdk_libraries/lib/`（libhipblas/hipdnn/hipsolver/**librccl** 等整套 ROCm 库）。⇒ 真问题不是"容器 vs 原生"，而是「**社区策展的补丁容器**」vs「**AMD 官方渠道的 ROCm SDK wheel（三站逐字一致）**」。
+
+**增量对账（6 条）⇒ 4 条无增量/封闭 · 2 条"可能有但未证"**：
+**① 补丁 RCCL** ⇒ ❌ 无增量（本集群 RCCL **2.30.4** 已含官方 `gfx1151` 目标 + `rccl_lib_gfx1151.kpack`，**跨机 collective 已实测跑通**，见 `续⑥`）· **② vLLM gfx1151 device 补丁** ⇒ ❌ 无明确增量（venv 有 AMD 官方 device 包；⚠ **未逐行比对，属推断**）· **③ `tcmalloc` 防 shutdown 崩溃** ⇒ ◐ 可能有，**但本仓无对应症状** · **④ 策展模型表/benchmark** ⇒ ◐ 不可替代本仓 `model-eval` + `results-ledger` · **⑤ 容器化可复现** ⇒ ❌ 本集群以 venv + 三站逐字一致 + 门禁达成；且容器 = **新实体**（`ADR-0004`）· **⑥ RDMA 集群 TP=2** ⇒ ❌ 封闭（需 E810 + PCIe 槽）。
+
+**E1 前置盘点（三站）**：**Ubuntu 24.04**（**非 Fedora**）⇒ 走 kyuz0 须先补 **Distrobox**（三站均无）· `docker` CLI 三站全有（**29.8.1**）但 **daemon 仅 A 站 active**（B inactive / C 无 unit）· 磁盘 **773 G / 790 G / 1.1 T** 可用 · `podman`/`toolbox` 全无 · HF 缓存仅剩 **48 KB 元数据**（权重已删）。
+
+★ **判定**：**技术可行，但当前不必要** —— 核心增量已被 AMD 官方渠道覆盖。★ **若日后"容器化 vLLM"成真需求：应先评 `ROCm 官方容器`（`rocm/vllm-dev`，官方文档明载支持 gfx1151/gfx1150）**，而非此第三方镜像。★ **再触发条件**：① `ADR-0004` 立项 + `ADR-0011` 解除暂缓；② 容器化成为真需求；③ 出现 vLLM shutdown 崩溃症状。
+
+**验收**：`--quick` **PASS · 38 绿 / 2 黄 / 0 红** · `ledger-status` 数据行 **116 → 117**、**仍开着 4**（★ O-121 **出生即闭环**）。★ **未碰站上任何配置**（未起容器服务、未拉镜像、未装 Distrobox）；临时脚本在 `tmp/`（未入库）。
+**关联**：`OPEN-ISSUES.md` **O-121** · **`O-120`/RCCL 评估**（共用底层事实，不复制）· **`ADR-0011`**（vLLM 决策真值源 + 共同第一道门「零 GGUF 支持」）· **`ADR-0004`**（治理闸）· `AMD395 互连调研 §2.3` · `model-eval` · 同日前六条 `续①–⑥`。
+
+### 2026-09-30（续⑥） — **O-120 登记**：RCCL（AMD 集合通信库）三问调研 ⇒ 裁「当前不部署（无消费方）」
+
+> **定位**：`OPEN-ISSUES.md` **O-120**（栈/并发 · P2）—— 用户问「AMD 官方 RCCL 部署方案 / 模型支持度 / 当前集群是否有必要部署」。★ 数据与三问结论**全在承载文档**里（[RCCL 部署方案与本集群必要性评估](../../docs/research/2026-09-30_RCCL部署方案与集群必要性评估.md)），本节**只留索引** —— **不复制第二份**。
+
+**三问一句话**：① **部署方案** = 非独立产品，随 ROCm 组件交付；ROCm 10 起 TheRock **按架构分包** ⇒ 本集群实装 `amdrocm-rccl10.0-gfx1151`（设备侧 kernel 在 `rccl_lib_gfx1151.kpack`）；传输面含 `socket` ⇒ **无 RDMA 也能跑**。② **模型支持度 = 伪命题** —— RCCL 在**框架层**被调用、不感知模型；真正变量是**引擎**（本集群只有 vLLM 会用，而它已由 `ADR-0011` 暂缓）。③ **必要性 = 当前不必要**（**不是做不到，是没有消费方**）。
+
+**三条 E1 读数（站上实跑）**：
+- ★ **装机盘面**：**B/C 已装**（`amdrocm-rccl10.0-gfx1151` 10.0.0-4，2026-09-28 随 rocm-migration 落地）· **A 站未装** ⇒ **三站不同构**（新登记的不一致面）。
+- ★★ **单机能用**：`init_process_group('nccl')` + `all_reduce` **跑通**（`ALLREDUCE_OK sum=8.0`，RCCL **2.30.4** / gfx1151）。
+- ★★ **跨机也能用（v2.0 修正）**：双机 B+C 经 USB4 直连段（`10.10.11.0/24`）**实测跑通** —— 双 rank `ALLREDUCE_OK sum=98304.0`、`exit=0`、**9 个 channel** 全走 `NET/Socket`、接口正确选中 `thunderbolt1/0`、延迟 **median 182.0 / 181.2 µs**（n=20，64 KiB bf16）。
+
+★★★ **本轮最重要的一条：v1.0 的"跨机挂死"是【本测自身】的缺陷，不是环境问题（已就地更正）**
+Scott 提供外部诊断清单后，我按第 2 条（**网卡绑定 ⇒ 静默挂死**）回头查自己的测试，发现：**v1.0 设的 `RCCL_SOCKET_IFNAME` 在 librccl 里根本不存在**（实测 `NCCL_SOCKET_IFNAME` 出现 3 次、`RCCL_SOCKET_IFNAME` **0 次**）⇒ 接口走**自动选择** ⇒ **静默挂死**。改用 **`NCCL_SOCKET_IFNAME`** 后**立刻跑通**。
+★ **方法教训（已写进承载文档 §2.3）**：**设环境变量前必须先在库里 grep 名字** —— **"变量不存在"不报错、只静默失效**，并把人引向错误的根因。
+★ 清单其余条目**逐条对账**（承载文档 §6）：**实测排除 1**（"RCCL 缺 gfx1151 原生支持" —— 本集群已被 ROCm 10 跨过）· **命中并据此修好 1**（网卡绑定）· **版本命中但形态未验 2**（CWSR 需 6.19-rc1：本机 6.17 在风险区间；**ROCr 1.21：实测命中该版本**）· **部分不成立 1**（`iommu=pt` 非本集群 collective 必要条件）· **不适用 3**（RCCL 2.27.7/gfx1201 死锁 · GIN 0 字节 · Ray 僵尸 Raylet —— 本测**不用 Ray**）· **未验 3**。
+
+★★ **另一条就地更正**：[AMD395 互连调研](../../spec/rpc-optimization/research/AMD395分布式推理高性能互连方案调研.md) §2.3 的「**定制 librccl.so 补丁**（RCCL 对 gfx1151 仍有补丁需求）」**已过期** —— 那只对 **ROCm 7.x 线**成立（社区记录 2026-02）；本集群 ROCm 10.0 / RCCL 2.30.4 **有官方 gfx1151 目标 + 分架构包**。★ 顺带澄清一处易误读：ROCm 7.1.0 release notes 的"gfx1150/gfx1151 support enabled"归属 **ROCgdb**，**不是 RCCL**。
+
+★ **两条 RCCL 自报前置（未修，如实登记）**：内核命令行**缺 `iommu=pt`**（RCCL 逐字警告"可致 hang 或不稳"；**B 缺、C 是 `amd_iommu=off`** ⇒ **非单变量**）· `RCCL_USE_AMD_SMI_LIB` 未设 ⇒ fabric 未启用。★ **但 v2.0 实测：未修 `iommu=pt` 也跑通了** ⇒ 它**不是**本集群 collective 的必要条件。
+
+**验收**：`--quick` **PASS · 38 绿 / 2 黄 / 0 红** · `ledger-status` 数据行 **115 → 116**、**仍开着 4**（★ O-120 **出生即闭环** ⇒ **不改变开着数**，只增一行）。★ **未碰站上任何配置**（未装/未卸包、未改内核参数）；临时脚本在 `tmp/`（未入库），站上临时件与进程已清。
+**关联**：`OPEN-ISSUES.md` **O-120** · **`ADR-0011`**（换栈前提 = 再触发条件）· **AMD395 互连调研 §2.3**（就地更正）· **CIRU/Skulk 调研 §2.2**（RCCL socket 341 µs 参照）· `rocm-migration DESIGN` D3 · `ADR-0004` · 同日前五条 `续①–⑤`。
+
 ### 2026-09-30（续⑤） — **O-110 闭环**（走 spec workflow：**补测 → 质量审计 → 逐条裁定 → 回写**）
 
 > **定位**：`OPEN-ISSUES.md` **O-110**（并发/判据 · P2）—— 「`O-18` 的适用性未经『换栈 / 换模型规模』复核」。★ 数据与推演**全在承载文档**里（[O-110/O-112 实测文档](../../docs/research/2026-09-28_O-110同站并发实测与O-112单机容量核验.md) §3.3–§3.4 / §4.1 / §5 / §8），本节**只留索引** —— **不复制第二份**。
