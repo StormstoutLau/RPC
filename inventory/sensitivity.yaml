@@ -197,6 +197,34 @@ documents:
       指向 `inventory/dialect.yaml`）。
       ⚠ 同样带扩张条件: 内容一旦扩张到卡面摘要之外（例：补入各项目 ID 的完整源码实现）⇒ **须重裁**
 
+  # ── 2026-09-30 补登记（`O-123` 档位核验：本表原先**未收**这两份，一直靠 `default_tier: local-only` 兜住）──
+  #   ★ 起因：为 `untested-index.yaml` 的 9 条 `needs_decision` 派发取证卡 ⇒ 逐份核档位时发现漏登记。
+  #   ★ 与 2026-09-29 的 CIRU 补登记**同口径**："兜住" ≠ "已登记"；本表的价值是**显式留痕**。
+  - path: spec/d6-agent-standard/U3-EDGE-FORMAT.md
+    tier: public
+    fails: []
+    why: >-
+      D7-P1-3 的产出: 统一依赖边格式 `src/dst/kind/provenance` + 「`provenance` 缺 ⇒ 边无效」的可机判形式。
+      定档依据 = 与 `U1-ARTIFACT-IDENTITY.md` **同款** —— 该文自述其内容
+      **「由吃狗粮卡 `d7-p1-3-u3-edge-format-draft` 从（本仓 D7 调研）§12.1/§12.3 与 **Ontoly RFC-0002 的两条 invariant** 的
+      卡面内联摘要定案」，且明写「摘要是**已剔除他方仓库路径与内部文件名**的版本」**；
+      而 `spec/d6-agent-standard/dogfood-cards/` **整目录已登记 `tier: public`** ⇒
+      **内容来自已登记为 public 的载体（卡面）⇒ 无超出该卡面的新披露**（无 IP / 主机名 / 用户名 / 凭据形态）。
+      ⚠ **扩张条件**：§1.1 的方向约定系 2026-09-26 **补写**（O-83）、§7.1 记了新增的**真实边实例** ——
+      若日后内容扩张到该卡面之外（例：补入更多边实例 / 他方 invariant 原文）⇒ **须重裁**。
+  - path: spec/d6-agent-standard/D7-PROTOCOL-CONCLUSION-CONTRACT.md
+    tier: public
+    fails: []
+    why: >-
+      D7-P2-2 的产出: 结论契约形状（`verdict` 四枚举 / `findings` 字段约束 / `agreement` 不得自报）
+      + 综合三分类规则 + 本仓校验器落体。
+      定档依据 = ① 与 `D7-PROTOCOL-CONTRACT.md`（**已登记 public**）**同族同批**（D7 契约面）；
+      ② 内容主体为**本仓自产契约设计**（字段名 / 规则 / 本仓函数名 `Test-FindingShape` 等）；
+      ③ 唯一外部引用是 **arXiv 公开论文**（Council Mode）⇒ 不构成他方未发表内容的披露。
+      C3 类（本仓盘符路径 / 文件名）**已随本仓公开**（见本表表头「已生效的事实」）⇒ 不属**新增**类别。
+      ⚠ **扩张条件**：若补入**他方未发表材料**（例：Council Mode 之外的私有评审规范、他项目内部数据）
+      或**站上实况**（IP / 主机名 / 用户名）⇒ **须重裁**。
+
 # ── 2026-09-29 新增（控制面 LAN 地址漂移 / 路由器模式切换 两篇）──
   - path: docs/research/2026-09-29_控制面LAN地址漂移_失效归因与判据升级.md
     tier: local-only
