@@ -19,6 +19,237 @@ upstream: \[d6-agent-standard-.* 全量文档]
 
 ## 历史回溯（2026-09-03 起）
 
+### 2026-09-29（续⑤） — **A 清单落地（A1）：D6/D7 分界判据求值 `Resolve-D6D7Boundary` 完整闭环（A 清单收官）**
+
+> **定位**：接 [A-LIST-LANDING-PLAN.md](./A-LIST-LANDING-PLAN.md) §2.2 建议顺序的**收尾项**（A4 → A5 → A3 → A2 → **A1**）。
+> A1 = `d6-d7-boundary` —— 治 [ADR-0009](../../adr/ADR-0009-D6与D7分界判据.md) §待验证项
+> 「判据在**派发引擎中的实际求值 = 无代码**」：§2 的三条判据（B-1/B-2/B-3）此前**只有散文**，无机械求值。
+> **载体 = `agent-cli.ps1`**（关键路径）⇒ 与 A2 **串行**（本项**后落**）。
+> ★ 本项落地 ⇒ **A1–A6 六项全部落地**（§2.3/§2.4 的"设计底稿已勘误、代码未动"表述作废）。
+
+- **① 三处代码改动（[ops/station-bin/agent-cli.ps1](../../ops/station-bin/agent-cli.ps1)）**：
+  ㈠ **纯函数 `Resolve-D6D7Boundary`**（插于 `Select-Reviewer` 后 / `Invoke-Review` 前）——
+  按 [ADR-0009](../../adr/ADR-0009-D6与D7分界判据.md) §2 **三分支（互斥且穷尽）**求值：
+  `B-1∨B-2 ⇒ D7`（branch `B-1orB-2`）/ `B-3 ∧ ¬B-1 ∧ ¬B-2 ⇒ D6`（branch `B-3`）/
+  **`¬B-3 ∧ ¬B-1 ∧ ¬B-2 ⇒ D6`（branch `convention`，约定归属，2026-09-29 由 `O-115` 补入）**。
+  ㈡ **`Get-FrontMatter` 白名单登记三键**（`needs_non_producer_verdict` / `needs_multi_round_review` /
+  `is_intra_dispatch_quality_gate`，默认 `''` = 未声明）—— ⚠ 该函数是**白名单解析**（未知键静默丢弃）⇒ 漏登记 = 假防线（O-81 同族）。
+  ㈢ **`Invoke-Task` 派发前求值**（`require-gate` 块后）⇒ 结果落 `run.json` 的 `boundary` 键。
+- **② 三处设计决定**：㈠ **纯函数 + 派发前求值** —— 三键**全部来自卡**、与运行结果**无关** ⇒ 可在产出开始前算
+  （ADR-0009 §机制原理：判据问的是**流程形态**，不问产物主题）；㈡ **fail-soft 诚实性** —— 三键任一**未声明**
+  （空串 / 非 `true|false`）⇒ `resolved=$false`、`layer` 空，**不假装已判**（"没判" ≠ "判了且归 D6"；
+  与 `Resolve-SelfReviewGuard` 的"读不出 ⇒ 不默认放行"同族）⇒ **存量卡不带三键 ⇒ 归属不变**，只多一条 `unresolved` 留痕；
+  ㈢ **命名口径 = 下划线**（与 §2 行 L117-118 及 [xrev1 卡](./dogfood-cards/xrev1-cellsafety-boundary.md) 一致）。
+- **③ 夹具（离线黄金夹具，单条真函数 + 实际调用）**：[_fm_golden_test.ps1](../../ops/station-bin/_fm_golden_test.ps1)
+  **409 → 423**（**+14 条** `a1-*`：8 组合逐个 + **穷尽自证**（`$miss.Count -eq 0`）+ 计数 2/6 +
+  未声明/非枚举值 ⇒ 未求值 + 行为断言（写临时卡 ⇒ `Get-FrontMatter` 解析 ⇒ 喂求值）+ 接线断言 + 存量卡缺省 ⇒ `resolved=false`）。
+  ℹ **A1 无新 gate** ⇒ **无新 Python 夹具**（本项判据本体即 `agent-cli.ps1` 的纯函数，由 `ps1-golden` 判据自动读该夹具）。
+- **④ 先验红（改坏真对象 ⇒ 断言必须红）**：把 §2 **第三分支**改成 `return $null` ⇒ **3 条红**
+  （`FAIL a1: ★否/否/否 ⇒ D6` / `★8 种取值组合全命中（落空者: false/false/false）` / `互斥穷尽 ⇒ D6/D7 计数 = 2/6`，
+  `pass=420 fail=3`）⇒ **字节级恢复**后复跑 **423/0**（删第三分支 = §3 表 3 行灰项 `否/否/否`
+  「受理阶段协商回环 / 需求方验收签收 / 跨站派发」求值落空 —— 正是 §1.3 点的 `O-115` 补丁要覆盖的形态）。
+- **⑤ 连带改动**：**手册计数不变**（A1 无新 gate ⇒ 仍 **48 = quick 40 + 全量 8**）；
+  [capability-inventory.yaml](../../inventory/capability-inventory.yaml) 新增能力项 `d6-d7-boundary`（`orchestration`，`partial`，carrier 仅 `{kind: file}`）
+  + `pre-red` 的 evidence 读数 **409 → 423** + `unverified` 项数 **32 → 34**。
+- **⑥ 读数**：`py ops/rpc_check.py --quick` = **PASS · 37 绿 / 3 黄 / 0 红**（**不变**，无新 gate）；
+  `capabilities` = **能力 34 项 · present 22 / partial 9 / absent 3**；`py tests/run_py_tests.py -k rpc_check` = **36/36 ALL PASS**。
+- **⑦ 如实标注**：§2.2 的 A1 **runtime 验收**（"1 次真派发后 `run.json` 含 `boundary` 键"）**未实测**（与 A2 同）；
+  且 **`d6-d7-boundary` 是 `partial`** —— 判据**已接线并留痕**但**尚无消费方**（派发引擎不据此分流、无判据核 `run.json` 归属 ⇒ **算了没人用**）；
+  **claude 本地备路**在 `Invoke-Task-Claude` 分支早返回，其 run 记录**不带**本键（另一条写入路径，未纳入 A1）。
+- **⑧ 待裁（旧，未动）**：`evidence` 的**可重放 gap 新增 1 条**仍待用户裁定（同续③ ⑦ / 续④ ⑧）。
+
+### 2026-09-29（续④） — **A 清单落地（A2）：执行侧过程留痕 gate `executor-trace` 完整闭环**
+
+> **定位**：接 [A-LIST-LANDING-PLAN.md](./A-LIST-LANDING-PLAN.md) §2.2 建议顺序的**下一项**（A4 → A5 → A3 → **A2**）。
+> A2 = `executor-trace`（能力盘点为 **absent**）—— 治「判据**只能看产物**，看不到**过程**」：
+> 既有两件与"过程"最近的证据都不顶用（① 输出字节时间序列每 5 秒一行 = **吞吐曲线**，不记"做了什么"；
+> ② 工作区改动摘要**实测为空**）⇒ 站上执行体**改过哪些文件 / 跑过哪些命令**，主控侧**查不到**。
+> **载体 = `agent-cli.ps1`**（关键路径）⇒ 与 A1 串行；本项**先落**。
+
+- **① 五采集点（最小充分集，口径 = [imp4 卡](./dogfood-cards/imp4-executor-trace-design.md)）**：
+  在 [ops/station-bin/agent-cli.ps1](../../ops/station-bin/agent-cli.ps1) 五处落地 ——
+  `$Script:EV_FILES` 登记 `.executor-trace.txt`（batch 拉回清单唯一真值）·
+  body **启动器段**（fork 前）采 `[env]`（`uname`/`hostname`/`nproc`/`free -m`，**不读 `/proc`**）·
+  body **尾部**追加 `[cmd]`（外壳 R0/R1/RC）`[fs]`（既有 `find -newer` 派生）`[tool]` `[artifact]` ·
+  主控 **collect 段**归档为 `executor-trace.txt` · `Get-FrameworkSubjects` **基线**加该件（**只进主路**，claude 备路不产）。
+- **② 两处设计决定**：㈠ **工具调用链如实标 `uncore`**（执行体内部产生 ⇒ 可篡改/漏报/伪造，**不得伪称已核**）；
+  ㈡ **覆盖 0 个不作为 FAIL**（尚无真派发 ⇒ "没验到" ≠ "验出问题"，**报数不入分母**）。
+- **③ 门禁 `executor-trace`**（`ops/rpc_check.py`，`quick: True`）：判**机制**（5 采集点逐个在位 + **负向自证**
+  `chain=core`/`chain=verified` 不得出现）与**覆盖**（runDir 有件则须齐段；0 个只报数）。
+  ⚠ **逐条字面细节**（两段写入 `>`/`>>` · `EV_FILES` 登记 · 主控归档 · `free -m` 而非 `/proc`）**留在离线夹具**
+  `_fm_golden_test.ps1` ⇒ 门禁**不抄第二份**（本仓头号失败形态）。
+- **④ 夹具双轨**：Python 夹具 [tests/test_rpc_check_executor_trace.py](../../tests/test_rpc_check_executor_trace.py) **9/9 绿**
+  （**先验红** = 逐个删采集点 ⇒ 必须红且点名该标记 · **变异自证** · 负向自证 · 覆盖三态）；
+  ps1 离线夹具 **409/0**（A2 加 **7 条**断言：5 采集点 + `uncore` 恰 1 处 + 两段写入 + 主控归档 + 负向）。
+- **⑤ 连带改动**：手册计数 **47 → 48**（quick 39 → 40，[三机推理集群使用手册.md:258](../../docs/三机推理集群使用手册.md#L258)）；
+  `capability-inventory.yaml` 的 `executor-trace` `absent → present`（carriers = gate + `agent-cli.ps1`）+
+  `pre-red` 的 evidence 读数 **402 → 409**。
+- **⑥ 读数**：`py ops/rpc_check.py --quick` = **PASS · 37 绿 / 3 黄 / 0 红**（36 → 37 = 新增 `executor-trace` 绿）；
+  `capabilities` = 能力 33 项 · **present 22** / partial 8 / absent 3。
+- **⑦ 如实标注**：§2.2 的 A2 **runtime 验收**（"1 次真派发后留痕件齐 + 与产物哈希**交叉锚定**"）**未实测**
+  ⇒ 登记为**未实测**（覆盖读数 0 个 run 含该件）。
+- **⑧ 待裁（旧，未动）**：`evidence` 的**可重放 gap 新增 1 条**仍待用户裁定（同续③ ⑦）。
+- ⚠ **剩余 A1**（`boundary-judge` 派发前三分支求值，同改 `agent-cli.ps1`）⇒ 本地**串行**，下一步。
+
+### 2026-09-29（续③） — **A 清单落地（A4 → A5 → A3，`land-a` 批）：三个新 gate 完整闭环**
+
+> **定位**：接 [A-LIST-LANDING-PLAN.md](./A-LIST-LANDING-PLAN.md) §2.2 的**建议顺序**，把三份设计底稿
+> （**已勘误**，见 §1）**落成可机判件**。三项 = 三个**互不共享代码面**的新 gate ⇒ 可并行立项。
+> **执行方式（用户裁定）**：三项并行派**三站**产"落地件"（`ultra` 族零代码改动），主控则**本地**落地 + 独立复核。
+
+- **① 吃狗粮：`land-a` 批（3 张产件卡 · 跨三站并行）**：[batches/land-a.txt](./dogfood-cards/batches/land-a.txt)（一站一卡）。
+  三站**全部 `exit=0`**：`land-a4`@A `202609292125234284` · `land-a5`@B `202609292125234193` · `land-a3`@C `202609292125235028`
+  （档位均 `public`、无附件）。卡与产件登记见 [dogfood-cards/README.md](./dogfood-cards/README.md) **第七批**。
+- **② A4 → gate `md-tables`**（表格**列数守恒**）：`ops/rpc_check.py` 加纯函数 `md_table_scan` + `check_md_tables`；
+  真值 = [inventory/md-tables.yaml](../../inventory/md-tables.yaml)（**28 条存量违规逐条冻结**，覆盖 13 个文件）。
+  **修掉产件的 2 处参考实现缺陷**（只数**非空**单元格 ⇒ 漏空单元格；分隔行查找**跨空行**）。
+  实测 `扫描 270 篇 · 表 1881 张 · 违规 28（冻结 28 · 新增 0）`；夹具 [tests/test_rpc_check_md_tables.py](../../tests/test_rpc_check_md_tables.py) **14/14 绿**；
+  **先验红** = 向 `docs/分布式推理.md` 注入 2 列表头 + 3 格数据行 ⇒ `FAIL · 新增 1`（点到 `:612 row 行 3 格 ≠ 表头 2 格`）⇒ 字节级恢复（sha256 前后一致）。
+- **③ A5 → gate `determinism`**（确定性/幂等 · **噪声口径单表**）：真值 = [inventory/determinism-noise.yaml](../../inventory/determinism-noise.yaml)
+  （**7 类噪声**，可机检 5 类逐类带自证样本；含 `line-ending: LF` 归一策略）+ 消费侧纯函数 `det_manifest_diff`（**逐字节，比对端不归一化**）。
+  夹具 [tests/test_rpc_check_determinism.py](../../tests/test_rpc_check_determinism.py) **14/14 绿**（含**真管线双跑实测** = 真读 `inventory/*.yaml` 两次 ⇒ 差异为空）；
+  **先验红** = 坏正则 ⇒ `FAIL` 点名到该条 ⇒ 恢复后 sha256 一致。
+- **④ A3 → gate `derived-view`**（派生**只读视图**）：新建 [ops/derived_view.py](../../ops/derived_view.py)（渲染 + `--check`，**三态退出码** 0 一致 / 1 过期·漂移 / 2 渲染链路故障）
+  + 落档视图 [docs/派生视图_端口分配.md](../../docs/派生视图_端口分配.md)（真值 = `inventory/ports.yaml`）。
+  **两处设计决定**：㈠ 档内**移除 `generated-at`**（§1.2 勘误：非确定字段入档 ⇒ 逐字节比对永远失败）；
+  ㈡ `source-hash` 在**生产端**归一化行尾/BOM —— 否则 `core.autocrlf=true/false` 两台机器算出不同哈希 ⇒ 视图"**互相过期**"
+  （正是 §3.2 旁证那条 `rpc_check.py:4429` 假红的机器版）。夹具 [tests/test_rpc_check_derived_view.py](../../tests/test_rpc_check_derived_view.py) **12/12 绿**
+  （含**跨行尾/BOM 可复现**、先验红"改真值 ⇒ rc=1"、变异自证）；★ 途中实测发现 renderer 的**故障分支自己会崩**
+  （`VIEW.relative_to(ROOT)` 在 VIEW 被指到仓外时抛 `ValueError`）⇒ 加 `_rel()` 兜底。
+- **⑤ 连带改动（照纪律，不是"顺手"）**：手册计数 **46 → 47**（quick 38 → 39，[三机推理集群使用手册.md:258](../../docs/三机推理集群使用手册.md#L258)）；
+  `py ops/id_site_census.py --emit` 重出真值（本仓 RPC **23 → 25** 行 / **5 → 6** 文件，因 `ops/derived_view.py` 贡献 `hashlib.sha256()` + `h.hexdigest()` 两行）
+  + [U4-INVALIDATION-RULES.md](./U4-INVALIDATION-RULES.md) §1 表同步；`capability-inventory.yaml` 三项 `absent → present`。
+  ★ **勘误一条**：§3.2 原写"新 `inventory/*.yaml` 必须登记进 `artifacts.yaml` 否则 FAIL" —— **是错的**（读码核实：`check_artifacts` **只遍历 `items`**，
+  对 `inventory/*.yaml` 只要求"可解析"）。实证 = A4/A5 两个新 yaml **未登记**而 `artifacts` 仍 PASS。
+- **⑥ 读数**：`py ops/rpc_check.py --quick` = **PASS · 36 绿 / 3 黄 / 0 红**（基线 35 → 36 = 新增 `derived-view` 绿）。
+  ⚠ **剩余 A2 / A1**（同改 `agent-cli.ps1` 关键路径）⇒ 本地**串行**，未起。
+- **⑦ 待裁（旧，未动）**：`evidence` 的**可重放 gap 新增 1 条**（`dogfood/202609292038295460` 的 `xrev2` 首跑失败 run 缺 subject）
+  ⇒ 是否 `cluster.py agent audit --accept` 推进水印，仍待用户裁定。
+
+### 2026-09-29（续②） — **跨族复核批（`inkling`）起批 + 模型族约束入册**
+
+> **定位**：接上一章的"待裁项"，处置**最要紧的那一条**（§3.1 跨族复核批的形态）并**真的起批**。
+> **背景（用户裁定）**：后续派发**不再全是 `ultra`**（nvidia 族），**至少换一个 `inkling`**
+> （`thinkingmachines` 族）；落法 = **只用 `lightning`、钉 B 站**（**零代码改动**）。
+
+- **① 模型族约束（新，长期）**：跨族复核类派发**一律走 `lightning`**（`openrouter/thinkingmachines/inkling:free`，站 B）——
+  依据 = `D7-P0-3` 的 **J-1** 口径：原 A 清单 6 卡**全走 `ultra`（同一 id，仅站不同）**⇒ 只算"同族多实例"、**不构成认知多样性**。
+  ⚠ 该约束**目前是行为约定**（写在批次文件注释 + 本文 + `A-LIST-LANDING-PLAN` §3.1），**未做机判**（如实标注）。
+- **② 起跨族复核批（3 张卡 · 6 份底稿）**：新建
+  [xrev1-cellsafety-boundary.md](./dogfood-cards/xrev1-cellsafety-boundary.md)（A4 + A1）·
+  [xrev2-derivedview-executortrace.md](./dogfood-cards/xrev2-derivedview-executortrace.md)（A3 + A2）·
+  [xrev3-invalidation-determinism.md](./dogfood-cards/xrev3-invalidation-determinism.md)（A6 + A5）；
+  批次文件 = [batches/xrev.txt](./dogfood-cards/batches/xrev.txt)（**三行全 `station=B model=lightning`**）。
+  卡面形态：底稿**原样内嵌卡正文**（`===== BEGIN/END =====` 标记，避开围栏嵌套）· 均 `public` · **无附件**（不触发 `attach-egress` 义务）·
+  只读复核、产物文件名互不相同（`out/xrev{1,2,3}.md`）。
+- **③ 形态裁定 = 候选 ①（单批 3 卡全钉 B）**，**依据 = 干跑 + 读码，非断言**：
+  · 干跑（`AGENT_BATCH_DRYRUN=1`）逐字回显 `站分配 A=0 B=3 C=0` + 三行 `-> B (…) model=lightning`；
+  · 机制依据：`batch` 分派 = "**每站一个 job、站内串行**"（[agent-cli.ps1:5121-5164](file:///d:/RPC/ops/station-bin/agent-cli.ps1#L5121-L5164)），
+    站级 job 对每张卡**各起一次 `agent-cli task` 子进程** ⇒ 锁**每次子进程内取、退出即释放**
+    ⇒ 3 张全钉 B 等价于 **3 次独立串行派发**（与候选 ② 同序）⇒ **不撞 `LOCK_HELD`**。
+  ⚠ **两点如实标注**：(a) 干跑**只打印分配表、不取锁** ⇒ "不撞锁"**未被本次干跑实测**；
+  (b) 三张全钉 B ⇒ **站间并行恒为 1** ⇒ 候选 ①/② **墙钟相同**，选①只为**一条命令**。
+- **④ 派发**：`& ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/xrev.txt"`
+  —— ⚠ **产物判读必须以 runDir / `out/xrev*.md` 为真值，模型自填不作证据**（本仓"看件不看日志"）。
+- **⑤ `A-LIST-LANDING-PLAN.md` §3 细化**：§3.1 记入裁定 + 干跑回显 + 机制依据；
+  §3.2/§3.3/§3.4 各补**主控建议**（统一噪声口径 / 本文常驻 / 单列一条 `invalidation-executor`），**均待用户点头**。
+  ★ **§3.4 原判被本轮实测更正**：原写"新增能力项须同步 `capabilities` 计数断言与 `mirror` 的 `manual-counts`"
+  ⇒ **不成立**：`capabilities` 判据（[rpc_check.py:6926](file:///d:/RPC/ops/rpc_check.py#L6926)）只核**结构 / 载体存在性 / 封闭集**，
+  `manual-counts` 对的是 **`CHECKS` 断言项数** ⇒ **新增一条能力项零连锁改动**。
+- **⑥ 批次结果（主控逐块核对 · `看件不看日志`）**：**2 成 1 败**（★ 官方汇总不可信，见 ⑦）——
+  · `xrev1` `rc=0` → run `202609292037235965`，产物 `xrev1.md`（2958 B，`## 底稿一/底稿二/无法判断项` 齐，`^- ` **12 条**）；
+  · `xrev3` `rc=0` → run `202609292039019829`，产物 `xrev3.md`（3436 B，`^- ` **12 条**）；
+  · ⚠ `xrev2` **`rc=1` / `TASK_RC=9` / `ACCEPT_OK=0`** → run `202609292038295460`，**产物缺失**
+    （`COLLECT_FAIL: … dogfood/out/xrev2.md: No such file or directory` ⇒ 模型未落文件；与 `O-47`（`inkling` B 站偶发停滞）同族）
+    ⇒ **已单卡重派 ⇒ 成功**（run `202609292046072184` · `TASK_RC=0` · `ACCEPT_OK=1` · 产物 `xrev2.md` 3347 B · `^- ` **12 条**）
+    ⇒ ★ **本批最终 3/3 到位**（`xrev2` 命中点与主控勘误一致：A3 的 `generated-at` ↔ "逐字节一致"冲突 · A2 的"不可核项列入可核条件"）。
+- **⑦ ★ 发现并登记 `O-116`（P1 · 判决级假绿 · `batch` 汇总器）**：官方汇总三行**同一个 runDir**（末卡 xrev3 的）`exit=0`
+  + `BATCH_DONE: 卡=3 · 失败或未完成=0` ⇒ **把 `xrev2` 的真失败掩盖成成功**。根因 = `Invoke-BatchTask` 汇总段
+  `$done`/`$s2` 取**整站日志**末行（**只有 `$mark` 按卡过滤**）⇒ 逐卡 `$rc` 被**错 runDir** 的 `.agent-run.json` 覆盖。
+  **未修**（在派发关键路径，须走 spec workflow）；证据 = `_batch/20260929203720/st-B.log` 逐块 vs 汇总。
+  ⇒ ★ 再次印证本仓纪律 **"看件不看日志"**：若照抄官方汇总，本批会被误报成 **3/3 成功**。
+- **⑧ 跨族复核的实质产出**：`xrev1`/`xrev3` 对 4 份底稿各给 **≥6 条**（等级 + ≤30 字原文依据 + 一句话修法），
+  命中点与主控独立判读的勘误**一致**（A4「假绿条目与实现矛盾」· A5「逐字节一致 vs 排除临时目录」= §1 已删 `generated-at` 同族）
+  ⇒ **J-1 跨族（`inkling` 判 `ultra` 的产物）确有增量**（`cross_family_verdict(ultra, inkling)` = `cross`，实测）。
+- **⑨ `O-116` 闭环（用户裁定"先修" ⇒ 插到 A 清单落地批次之前）**：`Invoke-BatchTask` 汇总段**按卡切块取值**，
+  修法 = 站级日志**一次切成"卡 → 块"**（块首 = 派发段写的 marker `=== CARD <卡> rc=<rc> ===`），
+  逐卡的 `TASK_DONE`/`RUNSTAMP` **只在【本卡块内】取**（[agent-cli.ps1:5187-5216](file:///d:/RPC/ops/station-bin/agent-cli.ps1#L5187-L5216)）——
+  原取**整站日志**末行 ⇒ **每张卡都拿到末卡的值** ⇒ 用**末卡** runDir 读 `.agent-run.json` ⇒ **覆盖逐卡 `rc`**（判决级假绿，同族 = `O-57` 跨 run 证据错配）。
+  · **先验红（改码前）**：新夹具 `o80⑩`/`⑩b`/`⑩c` ⇒ `FM_GOLDEN_TEST pass=399 fail=3`（三红，其余 399 全绿）。
+  · **改码后**：`pass=402 fail=0`。
+  · **变异自证**（字节级备份 → 把 `$clines` 改回 `$txt` → 跑 → 恢复 `sha256` 逐字节一致 = True）：`pass=400 fail=2`（`⑩b`/`⑩c` 红）。
+  · **runtime A/B（同批 `o116-rev.txt`，只差代码）**：修前 = 两卡同 `runDir` + `exit=0` + `失败或未完成=0` + batch `exit 0`（**假绿复现**）；
+    修后 = 负控卡 `exit=2 src=log runDir=`（空）/ 探针卡自己 `ts` + `runDir` + `src=.agent-run.json` ⇒ `失败或未完成=1` + batch `exit 1`。
+  · **验证组合**：`ps1-golden pass=402 fail=0` · `_scrubber_coverage_test 43/43` · `rpc check` 全量/`--quick` 均 `PASS · 33 绿 / 3 黄 / 0 红`。
+  · **反向断言件（新）**：[neg-o116-batch-failcard.md](./dogfood-cards/neg-o116-batch-failcard.md)（故意未登记别名 ⇒ 零触站必失败）+
+    [batches/o116-rev.txt](./dogfood-cards/batches/o116-rev.txt)（两行同钉 B ⇒ 同一站级日志）。
+  · 状态格已回填 `OPEN-ISSUES.md` O-116 = **`✅ 已闭环（2026-09-29）`**。
+
+### 2026-09-29（续） — **`O-115` 闭环 + 6 份产物勘误收敛 + `A-LIST-LANDING-PLAN.md` 建立**
+
+> **定位**：接上一章"吃狗粮两批"的判读四条，处置 `O-115` 并**把 6 份提案收敛为可用设计底稿 + 落地排期**。
+> **本轮仍未动实现**：交付物是**勘误结论 + 排期表 + 待裁项**，不是代码。
+
+- **① `O-115` 闭环（用户裁"补第三分支"）**：`ADR-0009` §2 求值规则由**两分支改三分支**
+  （新增 `B-3=否` 且 `B-1=否` 且 `B-2=否` ⇒ 归 D6）；`§3 自洽检查` 同步改判 ⇒ **无冲突行 · 无落空行**；
+  `## 失效条件` 第一条追加"**已于 2026-09-29 被触发一次**"记录（**保留不放宽**）；`## 修订历史` 追加。
+  ⚠ **第三分支的归属是"约定"而非判据推导**（该 3 项当前均由 D6 承载）；日后若改由 D7 承载须改落点并**整体重算 §3 表**。
+  `OPEN-ISSUES.md` `O-115` 状态格 `⏳ 待裁` ⇒ `✅ 已闭环`。
+- **② 6 份产物勘误（3 处，均"删第二定义点"而非打补丁）**：详见新建
+  [A-LIST-LANDING-PLAN.md](./A-LIST-LANDING-PLAN.md) **§1**。
+  · **`imp2`（A4）两处缺陷 + 一处自报不实**：`_count_cols` 末行 `return sum(1 for p in parts if p.strip() != "")`
+  ⇒ **`return len(parts)`**（空单元格仍是"格"）；分隔行查找由**跨空行**改为**必须紧邻**；`## 假绿` 第 2 条与实现矛盾 ⇒ 替换用例。
+  **实测证据**：勘误后 `check_table_columns` 过 **6/6 用例**（边界 1–4 + 勘误①②），临时验证脚本已跑通并删除。
+  · **`imp5`（A3）矛盾**：处置 **A（推荐）——从档内移除 `generated-at`**（生成时间只进构建日志），
+  "含确定性字段"改为"**只含**确定性字段（`source-hash` / `generator`）"；**不采用** B 案（比对前归一化该行，会造第二定义点）。
+  · **`imp1`（A1）8 项灰色地带表 4/8 与 `ADR-0009` §3 不符** ⇒ **删表改指针**（不复制真值，防把模型幻觉升格为真值）。
+- **③ 新建 [A-LIST-LANDING-PLAN.md](./A-LIST-LANDING-PLAN.md)**：A1–A6 ↔ 卡 ↔ 站·模型 ↔ run ↔ 产物行数一览（§0）·
+  三处勘误（§1）· 逐项落地排期含**先验红点 / 验收判据 / 建议载体**（§2，建议顺序 **`A4 → A5 → A3 → A6 → A2 → A1`**）·
+  三项待裁（§3）。
+- **④ 承接上一章第 ④ 条（覆盖面偏窄）**：本轮**已裁定跨族落法 = 只用 `lightning`（`thinkingmachines` 族）钉 B 站**，
+  **零代码改动**（不新增别名）；但**跨族复核批若排 3 张卡会全落 B 站**，是否撞同站互斥锁（`LOCK_HELD exit 3`）
+  **尚未核实** ⇒ 须先 `AGENT_BATCH_DRYRUN=1` 干跑再定形态（**不许凭断言**）。
+- **⑤ A6 落地：U-4 执行侧**（用户裁定"落地 imp6"）—— 把 `--invalidate` 的"**只产出决策**"补成"**决策 → 执行报告**"：
+  · `ops/rpc_check.py` 新增纯函数 `execute_invalidation()`（**非 CHECKS 项**，与 `decide_invalidation` 同）
+  + 两个封闭枚举 `U4_EXEC_STATUS`（`executed` / `partial-failed` / `not-executed` / `no-op`）· `U4_ITEM_STATUS`（`success` / `failed` / `n/a`）。
+  · `ops/id_storage_census.py`：`--invalidate` 由**三段扩为四段**（④ 执行报告），新增**故意为空**的注册表 `EXECUTORS = {}`
+  （空表即"执行侧未落地"的**机读证据**）。产出行由「⚠ 本命令只产出决策，不执行重算」改为**结构化执行报告**。
+  · **防假绿硬约束**（imp6 稿）：整体成功**仅当**全部项 `success` ∧ 成功项 `version` **严格单调递增** ∧ 成功项数 > 0；
+  否则一律 `partial-failed`（**禁报成功**）。执行器**抛异常 / 返回非法状态** ⇒ 落失败（fail-closed）。
+  · **验收证据**：`tests/test_rpc_check_u4.py` 新增 **9 条执行侧用例 + 1 条先验红自证**（改坏 1 项 ⇒ `executed` 落回 `partial-failed`）⇒ **ALL PASS**；
+  **runtime 实测三条路径**（原文逐字见 [U4-INVALIDATION-RULES.md](U4-INVALIDATION-RULES.md) §8）：
+  真实 CLI（Open_Data 探针）⇒ `status=not-executed · 不适用 3` · 注入假执行器（全成功 + 版本递增）⇒ `executed` ·
+  注入假执行器（1 项失败）⇒ `partial-failed · 成功 2 / 失败 1`。
+  · ⚠ **射程**：`executed` **≠**"失效传播跑通"——注册表**为空** ⇒ 九项目 **0/9 未变**；只证明**汇总/门控框架**工作。
+- **关联**：`O-115`（闭环）· `A-LIST-LANDING-PLAN.md`（新建）· `inventory/capability-inventory.yaml`（A 清单来源）·
+  `inventory/model-families.yaml`（族口径）· `O-80`（`batch` 派发器）· `U4-INVALIDATION-RULES.md` §8（执行侧）。
+
+### 2026-09-29 — **吃狗粮两批（`IMP-A` / `IMP-B`）：把 A 清单 6 个"真·代码未实现"缺口派给三站出设计提案**
+
+> **定位**：从 `inventory/capability-inventory.yaml`（2026-09-27 读数）的待办项里挑出
+> **6 个"登记明确未做"的实现缺口**（A 清单），用 `batch` 派发器（`O-80`）**跨站并行**出**设计提案**。
+> **本轮只出提案、不动实现** ⇒ 产物先落 `tmp/dogfood-ws/agent-out/<run>/`，**逐份判读**（模型自填不作为证据）。
+
+- **① 两批 6 卡全部跑通**（`batch` 派发器；每站串行 · 站间并行；**6/6** `exit=0` · `accept.passed=true` · `collect=ok`）：
+  · **IMP-A**（19:29）—— `imp1` A/`ultra-a` run `202609291929091622`（RUN_S **71**，`boundary-judge-design.md` 31 行）·
+    `imp2` B/`ultra` run `202609291929092530`（RUN_S **97**，`cell-safety-design.md` 94 行）·
+    `imp3` C/`ultra-c` run `202609291929092399`（RUN_S **127**，`determinism-design.md` 28 行）。
+  · **IMP-B**（19:38）—— `imp4` A/`ultra-a` run `202609291939005729`（RUN_S **145**，`executor-trace-design.md` 32 行）·
+    `imp5` B/`ultra` run `202609291939006123`（RUN_S **83**，`derived-view-design.md` 38 行）·
+    `imp6` C/`ultra-c` run `202609291939006697`（RUN_S **172**，`invalidation-executor-design.md` 41 行）。
+  · 6 卡均 `sensitivity: public` · **无附件** · `readonly: false`；清单 = `dogfood-cards/batches/imp-a.txt` / `imp-b.txt`。
+  · 墙钟 ≈ max(单片) ⇒ **跨站并行成立**（`O-67` 的 fan-out 假设再得一次正面佐证，仍非定论）。
+- **② 判读四条（主控独立复核）**：★ `imp1` 暴露 **`ADR-0009` 求值规则非穷尽** ⇒ 新登记 **`O-115`（待裁）**；
+  ⚠ `imp2` 参考实现 **2 处缺陷**（`_count_cols` 只数**非空**单元格 ⇒ 空单元格被误判；分隔行查找**跨空行** ⇒ 可把不合法表判合格）；
+  ⚠ `imp5` **自相矛盾**（`generated-at` 列进"确定性字段" vs `--check` 要求**逐字节一致**）；
+  ✅ `imp6` 质量最好（失败/降级三态 + 防假绿硬约束可直接用）· `imp4` 采集点与本机群不符，但**如实标注"不可核"**。
+- **③ 证据链补录**：批次派发**不走** pre-commit 钩子 ⇒ 6 条未自动入链 ⇒ `cluster.py agent chain` 补录（**246 → 252 · 未入链 0**）。
+- **④ ⚠ 为"本轮覆盖面"留一处已知偏窄的记录**：6 卡全走 `ultra`（**同一 id** `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`）的**不同站**
+  ⇒ **只跨了站、没跨族**（同一 `nvidia` 血统）⇒ 按 `D7-P0-3` 的 **J-1（跨族）**口径只是"**同族多实例**"，
+  **不构成认知多样性**（依据见 `inventory/model-families.yaml` 表头）。⇒ **后续派发须至少一张换族**。
+- **关联**：`O-115`（新登记）· `O-80`（`batch` 派发器）· `O-67`（fan-out）· `inventory/capability-inventory.yaml`（A 清单来源）·
+  `dogfood-cards/README.md` **「第五批」**。
+
 ### 2026-09-26 — **`D7-P1~P4` 实施回填**（本册此前只记到 09-23，**D7 全程未回填**）
 
 > 本册规则写的是「每次重要落地/闭环后由执行体回填」，而 **`D7` 从 `P1` 到 `P4` 全程没回填**

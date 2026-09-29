@@ -106,6 +106,15 @@ frozen_ops_scripts:
   #      ⇒ 本仓门禁读不到 ⇒ 不加这个消费者，它们就一直是"判据库、没人用";
   #   ③ 不挂门禁的另一条：它要遍历**可达项目**（跨机器、几百个 runDir）⇒ 属审计级而非 committing 级。
   - ops/agent_pair_audit.py
+  # 2026-09-29 (A3): **派生只读视图**的渲染器 + 校验器（真值 → 渲染 → 逐字节比对）。
+  #   与 id_site_census.py **同一条理由**（ADR-0004 要求写明为何不能并入入口）:
+  #   ① 门禁 `derived-view` 与"重渲染真值"必须用**同一份代码** —— 渲染口径分两份写就是本仓头号形态
+  #      （"同一事实两个定义点"）;
+  #   ② 它有**写入动作**（`--emit` 重渲染并落档视图），而 `rpc_check.py` 是**门禁**（应当只读）⇒
+  #      把写盘能力挂到门禁上是职责相反;
+  #   ③ 它被门禁以**子进程**调用（`py ops/derived_view.py --check`，三态退出码 0/1/2）⇒ 与
+  #      `_fm_golden_test.ps1` 同类: **受治理的夹具**，而非并列管理入口。
+  - ops/derived_view.py
   - ops/llama-serve-instance
   - ops/lm-download/speedtest_asset.sh
   - ops/lm-download/speedtest_codeload.sh

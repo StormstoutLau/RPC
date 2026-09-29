@@ -77,6 +77,13 @@ STORES = (
 
 EXIT_OK, EXIT_MISMATCH, EXIT_DEGRADED = 0, 1, 2
 
+# ── U-4 **执行侧**注册表（A6，2026-09-29）────────────────────────────────────
+# ⚠ **故意为空**：本仓与九项目**都没有**失效传播实现（实测 **0/9**）⇒ 没有执行器可注册。
+#   有活（`incremental` / `full_rebuild`）时会落到 `not-executed`（**不适用，带理由**），
+#   **绝不**在无执行器时报成功 ⇒ 这张空表本身就是"执行侧未落地"的**机读证据**，不是遗漏。
+#   注册形态：{action: callable(target) -> {"status": "success"|"failed"|"n/a", "version": int|None}}
+EXECUTORS = {}
+
 
 def classify(value):
     """一个 ID 值的**形态**（★ U-1 那一档调 `u1_parse`，与实现同源）。"""
@@ -267,11 +274,14 @@ def check():
 def invalidate(changed_paths):
     """★ **消费者**：把 changed（本仓**已登记 U-1 的文件**）接到 `decide_invalidation()`。
 
-    链条（三段各自有产出者，不再是手工）：
+    链条（四段各自有产出者，不再是手工）：
       ① **changed_ids**：由 `--changed <path>` 给出的文件 → 取其 `u1:` **声明**里的身份
          （⚠ 身份**由声明给出**，不靠反推 —— U-1 是哈希，反推不出 namespace）
       ② **affected**：`id_storage_census` 实测的存储面，按 **namespace** 归集
       ③ **判据 + 呈现位**：`rpc_check.decide_invalidation()` → `action / class / reason`，逐行打印
+      ④ **执行侧**：`rpc_check.execute_invalidation()` → 执行报告（`status` 四档 + 逐项三态）
+         ⚠ 重算交给注册表 `EXECUTORS`；本仓注册表**故意为空**（九项目 0/9）⇒ 有活时报 `not-executed`，
+         **不假装已执行**（`A6`，2026-09-29）
     """
     import yaml
     changed = []
@@ -310,15 +320,28 @@ def invalidate(changed_paths):
     #   空列表 = "**已判定**为空"（`affected_is_closure=True` 时 = 真的没有下游）
     #   None   = "**判不了**"（H-3 的触发条件）
     #   写成 `affected or None` 会把"已知为空"错误升格成"判不了"，从而**白白付一次全量**。
+    affected_labels = [f"{s['project']}.{s.get('table')}.{s['column']}" for s in aff]
     action, class_, reason = R.decide_invalidation(
         changed_ids=[d["identity"] for d in changed],
-        affected=[f"{s['project']}.{s.get('table')}.{s['column']}" for s in aff],
+        affected=affected_labels,
         affected_is_closure=True,
         incremental_equivalent=False,     # ⚠ H-1 的证明**不存在** ⇒ 不敢说 True（说 True 就是编）
         build_failed=False,
     )
     print(f"[③ 处置] action={action} · class={class_}\n         reason={reason}")
-    print("⚠ 本命令**只产出决策**，不执行重算（执行侧仍未实现 —— U4 未实测第 10 条）")
+
+    # ④ 执行侧（A6，2026-09-29）：把决策落成【执行报告】—— 重算交给注册表 `EXECUTORS`；
+    #   本仓注册表为空 ⇒ 有活时如实报 `not-executed`（不适用，带理由），**不假装已执行**。
+    rep = R.execute_invalidation(action, class_, reason, affected=affected_labels, executors=EXECUTORS)
+    agg = rep["aggregate"]
+    print(f"[④ 执行] status={rep['status']} · 成功 {agg['n_success']} / 失败 {agg['n_failed']} / "
+          f"不适用 {agg['n_na']} · 版本单调={agg['version_monotonic']}")
+    if rep["status"] == "not-executed":
+        print("⚠ 有活但**无注册执行器** ⇒ 整体未执行（**不适用，带理由**）—— 执行侧仍缺，**不假装已接**")
+    elif rep["status"] == "no-op":
+        print("· 无需动作（决策已判定：无变更 / 无下游）")
+    for it in rep["items"]:
+        print(f"      [{it['status']}] {it['target']} — {it['detail']}")
     return EXIT_OK
 
 
@@ -331,7 +354,7 @@ def main():
     ap = argparse.ArgumentParser(description="ID 存储面普查 / affected 生产者（U-4）")
     ap.add_argument("--emit", action="store_true", help="重写 inventory/id-storage-census.yaml")
     ap.add_argument("--check", action="store_true", help="复算比对（默认行为）")
-    ap.add_argument("--invalidate", action="store_true", help="★ 消费者：changed → affected → 处置")
+    ap.add_argument("--invalidate", action="store_true", help="★ 消费者：changed → affected → 处置 → 执行报告")
     ap.add_argument("--changed", action="append", default=[],
                     help="内容变了的文件（可多次；须带 `u1:` 声明）")
     a = ap.parse_args()

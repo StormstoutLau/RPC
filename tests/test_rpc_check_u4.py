@@ -139,6 +139,64 @@ def main() -> int:
     else:
         print("  ok   结构护栏：U-4 是判据库、**不是** CHECKS 项（本仓无对象，已如实登记）")
 
+    # ── ★ U-4 **执行侧**（A6，2026-09-29）：逐项三态 + 防假绿硬约束 ────────────────
+    # 决策（③）之后落成执行报告（④）；重算交给注册表 ⇒ 这里用**假执行器**注入三态。
+    E = R.execute_invalidation
+
+    def _ok(t):        # 全成功、版本递增
+        return {"status": "success", "version": {"a": 1, "b": 2, "c": 3}.get(t, 1)}
+
+    def _one_fail(t):  # 只有 b 失败
+        return ({"status": "failed", "detail": "故意让 1 项失败"} if t == "b"
+                else {"status": "success", "version": 1})
+
+    def _flat_ver(t):  # 成功但版本**不递增**
+        return {"status": "success", "version": 1}
+
+    def _no_ver(t):    # 成功但**没有版本证据**
+        return {"status": "success"}
+
+    def _boom(t):
+        raise RuntimeError("boom")
+
+    EXEC_CASES = [
+        ("执行侧 正例 全成功 + 版本递增 ⇒ executed",
+         "incremental", None, "四条规则全过", ["a", "b", "c"], {"incremental": _ok}, "executed"),
+        ("★执行侧 反例 **1 项失败** ⇒ 必须 partial-failed（禁报成功）",
+         "incremental", None, "r", ["a", "b"], {"incremental": _one_fail}, "partial-failed"),
+        ("★执行侧 反例 版本**不严格递增** ⇒ partial-failed",
+         "incremental", None, "r", ["a", "b"], {"incremental": _flat_ver}, "partial-failed"),
+        ("★执行侧 反例 成功但**无版本证据** ⇒ partial-failed（fail-closed）",
+         "incremental", None, "r", ["a"], {"incremental": _no_ver}, "partial-failed"),
+        ("★执行侧 反例 执行器返回**非法状态** ⇒ 按失败 ⇒ partial-failed",
+         "incremental", None, "r", ["a"], {"incremental": lambda t: {"status": "???"}}, "partial-failed"),
+        ("★执行侧 反例 执行器**抛异常** ⇒ 算失败（不静默吞）",
+         "incremental", None, "r", ["a"], {"incremental": _boom}, "partial-failed"),
+        ("★执行侧 反例 **无注册执行器**（有活）⇒ not-executed（**绝不报 executed**）",
+         "full_rebuild", "WARN", "H-3 影响面无法安全判定", ["a"], {}, "not-executed"),
+        ("执行侧 无动作 MODE_SKIP ⇒ no-op（**不算成功**）",
+         "none", "MODE_SKIP", "无需动作", [], {}, "no-op"),
+        ("★执行侧 H-4 失败（SKIP_FAILED）⇒ partial-failed（**算失败**，不与 no-op 同档）",
+         "none", "SKIP_FAILED", "H-4 重算失败", ["a"], {}, "partial-failed"),
+    ]
+    for desc, action, cls, reason, affected, execs, want in EXEC_CASES:
+        rep = E(action, cls, reason, affected=affected, executors=execs)
+        bad_items = [it["status"] for it in rep["items"] if it["status"] not in R.U4_ITEM_STATUS]
+        ok = (rep["status"] == want and rep["status"] in R.U4_EXEC_STATUS and not bad_items)
+        print(f"  {'ok  ' if ok else 'FAIL'} {desc}\n        → status={rep['status']}（期望 {want}）")
+        if not ok:
+            fails.append(f"{desc} ⇒ status={rep['status']} bad_items={bad_items}")
+
+    # ── ★ 先验红自证（执行侧）：防假绿硬约束**非恒真** ────────────────────────
+    # 同一假执行器：全成功 ⇒ executed；**只把一项改成失败** ⇒ 必须落回 partial-failed。
+    # 若两处都得 executed，则"1 项失败不得报整体成功"这条约束就是装饰。
+    _r_ok = E("incremental", None, "r", affected=["a", "b"], executors={"incremental": _ok})
+    _r_bad = E("incremental", None, "r", affected=["a", "b"], executors={"incremental": _one_fail})
+    red = (_r_ok["status"] == "executed" and _r_bad["status"] == "partial-failed")
+    print(f"  {'ok  ' if red else 'FAIL'} 先验红自证（执行侧）：改坏 1 项 ⇒ 整体从 executed 落回 partial-failed")
+    if not red:
+        fails.append("先验红自证（执行侧）失败：防假绿硬约束可能恒真（装饰）")
+
     print(f"RESULT: {'ALL PASS' if not fails else f'失败 {len(fails)} 条'}")
     for f in fails:
         print("  FAIL " + f)

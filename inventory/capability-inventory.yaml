@@ -30,7 +30,7 @@
 #   · `updated` 是**读数日期** —— 本表是**增长型载体**，没有日期，读者无法判断它是哪一天的树
 # ============================================================================
 version: 1
-updated: 2026-09-27
+updated: 2026-09-29
 self_id: capability-inventory
 
 metric:
@@ -66,7 +66,7 @@ items:
   carriers:
   - {kind: file, ref: ops/rpc_check.py}
   basis: E2
-  evidence: "本轮实测 `rpc check --quick` 34 项（全量 43）"
+  evidence: "2026-09-29 实测：`rpc check --quick` **40 项**（全量 **48**）—— 与手册 §2.4 的 `# 48 项断言 (quick 40 + 全量 8)` 一致"
 
 - id: pre-red
   domain: verify
@@ -75,7 +75,7 @@ items:
   carriers:
   - {kind: file, ref: ops/station-bin/_fm_golden_test.ps1}
   basis: E2
-  evidence: "离线黄金夹具实测 pass=399 fail=0"
+  evidence: "离线黄金夹具实测 pass=423 fail=0（2026-09-29 · A1 加 14 条断言后；读数以 `_fm_golden_test.ps1` 实跑为准）"
 
 - id: judge-selfcheck
   domain: verify
@@ -112,7 +112,7 @@ items:
   - {kind: gate, ref: model-families}
   - {kind: table, ref: model-families.yaml}
   basis: E2
-  evidence: "族 6 · 成员覆盖 12/12 · 出网 8/8 键"
+  evidence: "2026-09-29 实测：族 **7** · 成员覆盖 **13/13** · 未归类 0 · 出网 8/8 键"
 
 - id: cross-input
   domain: verify
@@ -130,7 +130,7 @@ items:
   carriers:
   - {kind: gate, ref: ledger-status}
   basis: E2
-  evidence: "数据行 103 · 可机读 103"
+  evidence: "2026-09-29 实测（`rpc check --only ledger-status`）：数据行 **112** · 状态可机读 **112** · ✅ 闭环 105 · **仍开着 7**"
 
 # ── 域 2: identity 身份 / 规范（U-1~U-5）─────────────────────────────────
 - id: u1-artifact-identity
@@ -173,6 +173,17 @@ items:
   basis: E2
   evidence: "存储 5 处 · 一致 5 · 存量 598982 行；★ 姊妹仓承认四件套缺此机制"
 
+- id: invalidation-executor
+  domain: identity
+  what: U-4 失效传播的**执行侧**（决策 → 重算执行报告）
+  verdict: partial
+  gap: "框架**已落地**（`execute_invalidation()` + 三态 `U4_EXEC_STATUS` + 版本单调）但**执行器注册表 `EXECUTORS` 为空** ⇒ 本仓与九项目 **0/9**（有活时如实报 `not-executed`，不假装已执行）；★ carriers **只写 `kind: file`** —— `execute_invalidation()` 是**非 CHECKS 项**，写 `kind: gate` 会被判挂名假判"
+  carriers:
+  - {kind: file, ref: ops/rpc_check.py}
+  - {kind: file, ref: ops/id_storage_census.py}
+  basis: E2
+  evidence: "2026-09-29 落地；`tests/test_rpc_check_u4.py` 9 条执行侧用例 + 1 条先验红；runtime 三条路径（not-executed / executed / partial-failed）"
+
 - id: u5-promotion
   domain: identity
   what: U-5 信任基座（晋升门 schema）
@@ -187,13 +198,15 @@ items:
   domain: identity
   what: 文档级失效态（`superseded` / `deprecated`）
   verdict: partial
-  gap: "词表**已入**（3 个 design 档模板的「状态」行），但 ① **零判据**（`status` 取值**未做**封闭集校验 ⇒ 谁自造一个词也不会红）② **零实例**（仓内**无一份文档**真的标了 `superseded`）⇒ **有词无牙**"
+  gap: "★★ **2026-09-29 本项 gap 重写（原文与实现相反，属「读数滞后」）** —— 原文写「① **零判据**（`status` 取值**未做**封闭集校验 ⇒ 谁自造一个词也不会红）② 零实例」：其中 **① 已不成立**（`O-109` 已把门禁 `doc-status` 升为**双段** = 两处一致 + **按档词表符合**，自造词会红）。**真实余缺只剩两条**：① **零实例** —— 仓内**无一份文档**真的标了 `superseded`（判据有牙，但**该词从未被使用** ⇒ 效力未被实例检验）；② 按姊妹仓 **I-10 严格读**，本面**位点仍是两个**（fm 为唯一写入点、正文行为派生 ⇒ **降格处置**，非消除）—— 与 `semantic-single-source` 同源"
   carriers:
+  - {kind: gate, ref: doc-status}
+  - {kind: table, ref: doc-status.yaml}
   - {kind: file, ref: spec/vulkan-version-control/DESIGN_TEMPLATE.md}
   - {kind: file, ref: spec/vulkan-version-control/RESEARCH_TEMPLATE.md}
   - {kind: file, ref: spec/vulkan-version-control/IMPLEMENTATION_TEMPLATE.md}
   basis: E1
-  evidence: "**本批改判**（原判 `absent`）：O-106 闭环，`superseded（已作废）` 入 3 模板词表 + `docs/FRAMEWORK-INDEX.md` 维护规则 6 登记；★ 但实测**存量 95 位点里 33 不合词表**（已裁「冻结存量」）⇒ 见 DEV-LOG-014 §90"
+  evidence: "`O-106` 立词表（照姊妹仓补 `superseded`）→ `O-109` **落判据**（`doc-status` 双段，2026-09-27 闭环）。★ 2026-09-29 实测读数：`两处都有 37 · 一致 37 · 不等 0（冻结 0 / 新增 0）· 词表符合 91/91`（另有 5 个模板的 10 个位点**跳过、不入分母**）⇒ 原文『存量 95 位点里 **33** 不合词表』**已陈旧**（那是 `O-108` 清账前的 09-27 实况）。⚠ **仍未测**：`superseded` **零实例** ⇒ 「有词有牙但从未开火」"
 
 # ── 域 3: orchestration 编排 / 权限 / 记忆 ─────────────────────────────────
 - id: no-self-review
@@ -204,6 +217,16 @@ items:
   - {kind: file, ref: ops/station-bin/agent-cli.ps1}
   basis: E2
   evidence: "D7-P3-1/P3-2 落地；夹具 sel-1~sel-11"
+
+- id: d6-d7-boundary
+  domain: orchestration
+  what: D6/D7 层级归属的**机械求值**（派发前对三条判据求值 ⇒ 唯一归属，非事后人工归档）
+  verdict: partial
+  gap: "判据**已接线并留痕**（`Resolve-D6D7Boundary` 在派发前求值 ⇒ 落 run.json `boundary`），但**尚无消费方** —— 派发引擎不据此分流、也没有判据核 run.json 里的归属 ⇒ **算了没人用**；另 **无 gate**（故 carriers 只写 `kind: file`），且 claude 本地备路早返回、其 run 记录**不带**此键"
+  carriers:
+  - {kind: file, ref: ops/station-bin/agent-cli.ps1}
+  basis: E2
+  evidence: "A1 / ADR-0009 §2 落地（2026-09-29）：纯函数三分支（互斥穷尽，第三分支=约定归属修 O-115）+ 三键入 front-matter 白名单 + 派发前求值落 run.json；离线夹具 a1-*（8 组合穷尽自证 · 删第三分支**先验红** `false/false/false` 三条 · `_fm_golden_test.ps1` 423/0）"
 
 - id: round-cap
   domain: orchestration
@@ -303,12 +326,12 @@ items:
 - id: cell-safety
   domain: meta
   what: 承载安全（表单元格竖线安全化 · 长无断点 token 不入格）
-  verdict: absent
-  basis: E1
-  why_kind: not-done
-  why: "本会话 O-102 行的竖线安全化事故即此类（转义的竖线在字节里仍是竖线 ⇒ 列数被拆）⇒ 尚无判据；姊妹仓有 I-9 与断言 S32（口径 = **列数守恒**）"
-  evidence: "本会话 O-102 事故实测：转义后的竖线在**字节里仍是竖线** ⇒ 台账列数被拆（人工发现，非判据报出）；姊妹仓侧有不变式 I-9 + 断言 S32"
-  # 注: 本表**不复制**姊妹仓的实现，只登记缺口与可借来源
+  verdict: present
+  carriers:
+  - {kind: gate, ref: md-tables}
+  - {kind: table, ref: md-tables.yaml}
+  basis: E2
+  evidence: "A4（2026-09-29）落地：gate `md-tables` 判**列数守恒**（口径唯一实现 = `md_table_scan`），扫描 270 篇 · 表 1881 张 · 违规 28（全为存量、逐条冻结在 md-tables.yaml，新增 0）；先验红实测（注入 2 列表头 + 3 格数据行 ⇒ FAIL 精确点到 `docs/分布式推理.md:612`）"
 
 - id: semantic-single-source
   domain: meta
@@ -325,21 +348,23 @@ items:
 - id: determinism-idempotence
   domain: meta
   what: 确定性与幂等（**禁 wall clock** · 同源双跑**逐字节一致** · 内容未变不写盘）
-  verdict: absent
-  basis: E1
-  why_kind: not-done
-  why: "本仓有保字节纪律（行尾 / 二进制推送），但**没有**『同源双跑逐字节一致』这条判据 ⇒ 也就没有可机判的确定性"
-  evidence: "43 项 CHECKS 中**无**『同源双跑逐字节一致』判据；只有保字节纪律经人工/脚本复现过（O-102 收敛用了 **6 次**复现才定下机制）"
-  # 注: 姊妹仓有此不变式（I-2）与 selftest S15
+  verdict: present
+  carriers:
+  - {kind: gate, ref: determinism}
+  - {kind: table, ref: determinism-noise.yaml}
+  basis: E2
+  evidence: "A5（2026-09-29）落地：gate `determinism` 判**噪声口径单一真值表**（7 类噪声，其中可机检 5 类逐类带自证样本 12/12）+ 消费侧纯函数 `det_manifest_diff`（逐字节，**不做行尾归一化** —— 归一化只在生产端）；夹具含**真管线双跑实测**（真读 `inventory/*.yaml` 两次 ⇒ 差异为空）与先验红（把时间戳写进产物 ⇒ 必须报）"
 
 - id: derived-readonly-view
   domain: meta
   what: 派生只读视图（**可 diff** · 过期即红 · 不增真值）
-  verdict: absent
-  basis: E1
-  why_kind: not-done
-  why: "本仓派生物是**运行时渲染**（`cluster_web.py`）、**不留档** ⇒ **无 diff 对象**；姊妹仓的 `CONSOLE.md` + `--check` 是该形态的现成样板（§86）"
-  evidence: "派生出口均为运行时渲染（`cluster_web.py` 页面 / `cluster*.py` 终端输出）⇒ 仓内**无留档的派生只读文档**；`ops/cluster_console.py` 经查只是**显示宽度**共用件（`disp_width`/`pad`），**不是视图**"
+  verdict: present
+  carriers:
+  - {kind: gate, ref: derived-view}
+  - {kind: file, ref: ops/derived_view.py}
+  - {kind: file, ref: docs/派生视图_端口分配.md}
+  basis: E2
+  evidence: "A3（2026-09-29）落地：`ops/derived_view.py` 从**单一真值**（当前 = `inventory/ports.yaml`）渲染留档视图 `docs/派生视图_端口分配.md`，gate `derived-view` 做**重渲染 vs 落档逐字节比对**（三态退出码 0 一致 / 1 过期·漂移 / 2 渲染链路故障，**口径单一定义点**）；档内**只含确定性字段**（勘误移除 `generated-at`）；`source-hash` 在**生产端**归一化行尾/BOM（LF 与 CRLF 版算出同一哈希，实测）⇒ **不增真值、可 diff、过期即红**；夹具 12/12 绿（含先验红 + 变异自证 + 跨行尾可复现）"
 
 - id: fault-tree
   domain: meta
@@ -353,11 +378,12 @@ items:
 - id: executor-trace
   domain: meta
   what: 执行侧**过程**留痕（改过哪些文件 / 跑过哪些命令）
-  verdict: absent
-  basis: E1
-  why_kind: not-done
-  why: "判据只能看**产物**，看不到**过程** ⇒ 幻觉抑制最缺的证据（它怎么得出这个结论）在视野外（§85.5）"
-  evidence: "43 项 CHECKS 的输入源**只有仓内文件与命令产物** ⇒ 无进程级采集点（站上 agent 改过哪些文件 / 跑过哪些命令，仓里查不到）"
+  verdict: present
+  carriers:
+  - {kind: gate, ref: executor-trace}
+  - {kind: file, ref: ops/station-bin/agent-cli.ps1}
+  basis: E2
+  evidence: "A2（2026-09-29）落地：最小充分集**5 项**（cmd / env / fs / tool / artifact）在 `agent-cli.ps1` 采集 —— 命令执行记录取外壳 R0/R1/RC · 环境快照由启动器 fork 前采（`uname`/`hostname`/`nproc`/`free -m`，不读 `/proc`） · 文件系统写入由既有 `find -newer` 派生 · **工具调用链如实标 `uncore`**（执行体内部产生 ⇒ 可篡改/漏报/伪造，**不得伪称已核**） · 产物哈希由**主控侧**回收时算。gate `executor-trace` 判机制（5 采集点逐个在位 + 负向自证 `chain=core`/`chain=verified` 不得出现）与覆盖（runDir 有件则须齐段；**0 个 ⇒ 报数不入分母**）；离线夹具 `_fm_golden_test.ps1` 守逐条字面细节（409/0）；夹具 9/9 绿（含先验红 + 变异自证 + 覆盖三态）。⚠ 覆盖率**未实测**（尚无真派发）"
 
 - id: human-context-metric
   domain: meta
@@ -366,7 +392,7 @@ items:
   basis: E1
   why_kind: not-done
   why: "初衷**第一条**却**零判据** —— 载体全在（台账 / DEV-LOG / 不适用登记 / 口径声明），但『有没有真被管住』从未被测（§85.4）"
-  evidence: "载体实测都在（台账 **103 数据行** · DEV-LOG **§1~§88** · 不适用登记 · 口径声明），但『恢复一个决策要几步』这类**读数 0 条**（从未采过）"
+  evidence: "2026-09-29 重取读数：载体都在（台账 **112 数据行** · DEV-LOG-014 **§1~§94** · 不适用登记 · 口径声明），但『恢复一个决策要几步』这类**读数 0 条**（从未采过）"
 
 - id: plugin-project-axis
   domain: meta
@@ -383,4 +409,4 @@ unverified:
 - 「partial」的 `gap` 与「absent」的 `why` / `evidence` 均为**人工判断**（读数由我手取，**未经第二方复核**）
 - 多数「absent」项的「**本仓该不该补**」**未裁**（其中 1 项是 `pending-decision`，需用户定；
   其余 `not-done` 项只是"还没做"，**不等于"应该做"**）
-- 本表的**项数选取**（32 项）没有权威清单可比对 ⇒ 「**漏了哪项能力**」**不可判**（只能靠新增时补）
+- 本表的**项数选取**（34 项）没有权威清单可比对 ⇒ 「**漏了哪项能力**」**不可判**（只能靠新增时补）
