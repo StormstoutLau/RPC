@@ -1463,6 +1463,9 @@ def check_u1_identity(ctx):
 #     那正是"静默 skip"的形态（把"判不了"悄悄变成"没事"）。用例 `u4⑦` 专门钉这一条。
 U4_ACTIONS = ("none", "incremental", "full_rebuild")
 U4_CLASSES = (None, "MODE_SKIP", "SKIP_FAILED", "WARN")
+# ── U-4 **执行侧**（2026-09-29，A6 / `U4-INVALIDATION-RULES.md` 未实测第 10 条）──────────────
+U4_EXEC_STATUS = ("executed", "partial-failed", "not-executed", "no-op")
+U4_ITEM_STATUS = ("success", "failed", "n/a")
 
 
 def decide_invalidation(changed_ids=None, affected=None, affected_is_closure=False,
@@ -1508,6 +1511,80 @@ def decide_invalidation(changed_ids=None, affected=None, affected_is_closure=Fal
         # H-2：失效必须保守 ⇒ 未闭包化的结果集只许扩大
         return "full_rebuild", "WARN", "H-2 影响面未闭包化 ⇒ 保守起见取全量（宁可多算）"
     return "incremental", None, "四条规则全过：可安全增量"
+
+
+def execute_invalidation(action, class_, reason, affected=None, executors=None):
+    """U-4 **执行侧**：把 `decide_invalidation()` 的决策落成一份**执行报告**（`A6`，2026-09-29）。
+
+    ⚠ 与 `decide_invalidation` 同：**不是 CHECKS 项**（本仓没有可判的对象）。
+    ⚠ 它**自己不重算** —— 重算由**注册表**里的执行器做；本仓与九项目 **0/9** ⇒ 调用方默认传**空注册表**
+      ⇒ 有活时整体报 `not-executed`（**不适用，带理由**）—— **绝不**在无执行器时报成功（防假绿）。
+
+    入参：
+      · `action` / `class_` / `reason` = `decide_invalidation()` 的三元输出（**原样传入**，本函数不重算决策）
+      · `affected` = 同一份结果集（**必须与决策同源**）；`None`/空 = 全量（`full_rebuild` 射程）
+      · `executors` = `{action: callable}`；`callable(target) -> {"status": ..., "version": int|None, "detail": ...}`
+
+    返回 dict（键名即契约）：
+      · `status` ∈ `U4_EXEC_STATUS`（**封闭枚举**：`executed` / `partial-failed` / `not-executed` / `no-op`）
+      · `items` = 逐项 `{"target", "status"(∈ U4_ITEM_STATUS), "detail"}`
+      · `aggregate` = `{n_success, n_failed, n_na, version_monotonic}`
+
+    ★ 防假绿硬约束（imp6 设计稿）：**整体成功**仅当
+      「**所有受影响项均 `success`** ∧ 成功项 `version` **严格单调递增** ∧ 成功项数 > 0」；
+      否则**一律** `partial-failed`（**禁报成功**）。⚠ 无动作（`action=none`）**不算**"执行成功" ⇒ 单列 `no-op`。
+    """
+    if action not in U4_ACTIONS:
+        raise ValueError(f"action={action!r} 不在封闭枚举 {U4_ACTIONS}")
+    if class_ not in U4_CLASSES:
+        raise ValueError(f"class={class_!r} 不在封闭枚举 {U4_CLASSES}")
+
+    rep = {"action": action, "class": class_, "reason": reason, "items": [],
+           "aggregate": {"n_success": 0, "n_failed": 0, "n_na": 0, "version_monotonic": None}}
+
+    if action == "none":
+        # 三种 `action=none` 的决策**语义不同**，不能同档：`MODE_SKIP` = 无需动作；`SKIP_FAILED`(H-4) = **算失败**
+        rep["status"] = "no-op" if class_ == "MODE_SKIP" else "partial-failed"
+        return rep
+
+    # 有活（incremental / full_rebuild）：先看有没有注册执行器 —— 没有就**整体未执行**（不假装）
+    executors = executors or {}
+    runner = executors.get(action)
+    targets = list(affected) if affected else ["<全量>"]
+    if runner is None:
+        rep["items"] = [{"target": t, "status": "n/a", "detail": f"无注册执行器（action={action}）⇒ 未执行"}
+                        for t in targets]
+        rep["aggregate"]["n_na"] = len(targets)
+        rep["status"] = "not-executed"
+        return rep
+
+    versions = []
+    for t in targets:
+        try:
+            r = runner(t) or {}
+        except Exception as e:                      # 执行器抛异常 = **算失败**（绝不静默吞）
+            r = {"status": "failed", "detail": f"{type(e).__name__}: {e}"}
+        st = r.get("status")
+        if st not in U4_ITEM_STATUS:                # 非法/缺失状态 ⇒ 落失败（fail-closed）
+            st = "failed"
+            r = dict(r, detail=f"执行器返回非法状态 {r.get('status')!r} ⇒ 按失败处理")
+        rep["items"].append({"target": t, "status": st, "detail": r.get("detail", "")})
+        if st == "success":
+            rep["aggregate"]["n_success"] += 1
+            if isinstance(r.get("version"), int):
+                versions.append(r["version"])
+        elif st == "failed":
+            rep["aggregate"]["n_failed"] += 1
+        else:
+            rep["aggregate"]["n_na"] += 1
+
+    agg = rep["aggregate"]
+    agg["version_monotonic"] = (all(a < b for a, b in zip(versions, versions[1:]))
+                                if versions else None)
+    agg["all_success"] = (agg["n_failed"] == 0 and agg["n_na"] == 0 and agg["n_success"] > 0)
+    rep["status"] = ("executed" if (agg["all_success"] and agg["version_monotonic"] is True)
+                     else "partial-failed")
+    return rep
 
 
 # ── D7-P1-5 (2026-09-26)：U-5 信任基座四问 V-1~V-4 + 晋升门 schema ────────────
@@ -2767,11 +2844,12 @@ def family_of(raw, index):
 
 
 def load_family_index():
-    """读 `inventory/model-families.yaml` ⇒ `{alias: family_id}`（供 J-1 用）。
+    """读 `inventory/model-families.yaml` ⇒ `{候选键: family_id}`（供 J-1 用）。
 
-    ⚠ **覆盖边界（如实）**：本表当前**只覆盖本地模型库的 12 个 alias**
-      （来源 = `models.yaml`）⇒ **出网模型**（`openrouter/...` / `station:X/...`）**不在表里**
-      ⇒ `cross_family_verdict` 对它们会返回 **`unknown`**（**不可判**，fail-closed）。
+    ⚠ **覆盖边界以 yaml 为准，本函数不复制它**（防"同一事实两个定义点"）：
+      覆盖 = `families[].members`（本地 alias）+ `outbound_models[].keys`（**出网/传输档**已登记键）
+      + `endpoint_aliases_na` **不在索引里**（端点别名 ⇒ 查不到 ⇒ J-1 恒 `unknown`，是**有意**的）。
+      2026-09-29 实测 `len(index)=21`；夹具 `tests/test_rpc_check_cross_family.py` 的 `C5` 就钉这一条。
     """
     import yaml
     F = yaml.safe_load((ROOT / "inventory" / "model-families.yaml").read_text(encoding="utf-8")) or {}
@@ -7191,6 +7269,466 @@ def check_doc_status(ctx=None, doc=None, pairs=None, sites=None):
     return "PASS", " · ".join(notes), []
 
 
+# ── A4（2026-09-29）: md 表格**列数守恒** ────────────────────────────────────
+# 事故形态（真实、已抽象）：某个字段的文本里**出现了一个竖线**（作者以为转义了，其实没有）⇒
+#   该行**被拆成了比表头更多的格**，字段错位，而且**长期无人发现**（此前**没有任何检查器读"列数"**）。
+# 口径（照 `spec/d6-agent-standard/dogfood-cards/land-a4-cell-safety.md` 的**已勘误**底稿，**单一实现**）：
+#   ① **空单元格计入**列数（`| a |  | c |` 是 3 格，不是 2）；
+#   ② 分隔行必须**紧邻**表头行的下一行 —— **不跨行去找**（否则会判一张 GFM 里并不存在的表）；
+#   ③ 代码围栏（``` 或 ~~~）内**整段跳过**；GFM 缩进码块（≥4 空格）**跳过**；
+#   ④ 单元格内容里的 `\|` 是**转义** ⇒ 不算分隔符（这正是「拆格的分隔符」与「内容里的竖线」之别）。
+MD_TABLES_INV = ROOT / "inventory" / "md-tables.yaml"
+
+
+def _md_cols(line):
+    """一行 markdown 表格的**格数**（**含空单元格**）。`\\|` 计为内容，不拆格。"""
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    parts, cur, esc = [], "", False
+    for ch in s:
+        if esc:
+            cur += ch
+            esc = False
+        elif ch == "\\":
+            esc = True
+        elif ch == "|":
+            parts.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    parts.append(cur)
+    return len(parts)
+
+
+def _md_is_sep(line):
+    """分隔行（`|---|:--:|`）：只由 `-`/`|`/`:`/空白组成且**含** `---`。"""
+    s = line.strip()
+    return "---" in s and all(c in "|-: \t" for c in s)
+
+
+def _md_is_fence(line):
+    """代码围栏开/关行（``` 或 ~~~ —— 后者是底稿勘误①补入的形态）。"""
+    t = line.lstrip()
+    return t.startswith("```") or t.startswith("~~~")
+
+
+def md_table_scan(text):
+    """**纯函数**：扫一篇 md 的表格 → `(violations, n_tables)`。
+
+    violations = `[(行号(1 起), kind, 格数, 表头格数)]`，kind ∈ `{"sep", "row"}`。
+    ★ 先验红点（A4）：往某数据行塞一个**未转义**竖线 ⇒ 本函数**必须**报出该行（见 `tests/`）。
+    """
+    lines = text.splitlines()
+    out, i, in_code, n_tbl = [], 0, False, 0
+    while i < len(lines):
+        raw = lines[i]
+        if _md_is_fence(raw):
+            in_code = not in_code
+            i += 1
+            continue
+        if in_code or raw[:4] == "    ":          # 围栏内 / GFM 缩进码块 ⇒ **不是**表格
+            i += 1
+            continue
+        head = raw.strip()
+        if not head.startswith("|") or _md_cols(head) == 0:
+            i += 1
+            continue
+        if i + 1 >= len(lines) or not _md_is_sep(lines[i + 1].strip()):
+            i += 1
+            continue                              # 口径②：分隔行必须**紧邻**表头
+        n_tbl += 1
+        hc = _md_cols(head)
+        sc = _md_cols(lines[i + 1].strip())
+        if sc != hc:
+            out.append((i + 2, "sep", sc, hc))
+        k = i + 2
+        while k < len(lines) and lines[k].strip().startswith("|"):
+            s = lines[k].strip()
+            if not _md_is_sep(s) and _md_cols(s) != hc:
+                out.append((k + 1, "row", _md_cols(s), hc))
+            k += 1
+        i = k
+    return out, n_tbl
+
+
+def _md_line_hash(raw):
+    """违规**原始行**（不含换行）的 sha256 前 16 位 —— 冻结的指纹键（**不用行号**，防漂移）。"""
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def check_md_tables(ctx):
+    """A4: md 表格**列数守恒** —— 防「某行被拆错格」这类**静默错位**。
+
+    ★ 判什么：同一张表里 **分隔行 / 数据行** 的格数 == **表头**格数；不符 ⇒ 该行**错位**。
+    📊 报数：`扫描 N 篇 · 表 T 张 · 违规 V（冻结 F · **新增 D**）` —— 命中冻结的**不判 FAIL**。
+    ⚠⚠ **不判什么**：不判表格**内容**对不对，也不判「文档该不该有表」。
+      ★ 但 **`表 T 张` 为 0 ⇒ FAIL**（判据**没有对象** = 退化空判，本仓头号形态）——
+      因此**「整篇没有表格 ⇒ 空集恒真」这类假绿在本项被显式堵住**（底稿 §假绿 第 1 条）。
+    ⚠ 假绿（完整清单见 `dogfood-cards/land-a4-cell-safety.md`）：缩进码块 / `~~~` 围栏内的伪表格
+      —— 已按 GFM 跳过（**跳过 ≠ 判过且通过**，故底稿要求它们显式登记）。
+    """
+    try:
+        import yaml
+    except Exception:
+        return "WARN", "缺 pyyaml, 跳过 md 表格列数断言", []
+    if not MD_TABLES_INV.exists():
+        return "FAIL", "inventory/md-tables.yaml 缺失（本断言的**存量冻结**依据）", []
+    try:
+        inv = yaml.safe_load(_read_text(MD_TABLES_INV)) or {}
+    except Exception as e:
+        return "FAIL", f"inventory/md-tables.yaml 解析失败: {type(e).__name__}: {e}", []
+
+    fr = inv.get("frozen")
+    if not isinstance(fr, list):
+        return "FAIL", "`frozen` 不是列表（本表退化成一张豁免清单？）", []
+    inv_bad, frozen = [], {}
+    for idx, e in enumerate(fr):
+        at = f"frozen[{idx}]"
+        if not isinstance(e, dict):
+            inv_bad.append(f"{at} 不是映射")
+            continue
+        f_ = str(e.get("file") or "")
+        lh = str(e.get("line_sha256") or "")
+        if not f_ or not (ROOT / f_).exists():
+            inv_bad.append(f"{at} 的 `file`={f_!r} **不在仓里** ⇒ 登记腐化（已删 / 改名 / 路径写错）")
+            continue
+        if not lh or not str(e.get("why") or ""):
+            inv_bad.append(f"{at} 缺 `line_sha256` 或 `why` ⇒ **冻结是一种豁免，两样都要写**")
+            continue
+        frozen[(f_, lh)] = str(e.get("why"))
+
+    n_md = n_tbl = 0
+    new_v, hit = [], set()
+    for p in sorted(ROOT.rglob("*.md")):
+        rel = p.relative_to(ROOT)
+        if any(s in rel.parts for s in DOCLINK_SKIP_PARTS):
+            continue
+        n_md += 1
+        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        vs, nt = md_table_scan("\n".join(lines))
+        n_tbl += nt
+        rp = rel.as_posix()
+        for (ln, kind, dc, hc) in vs:
+            lh = _md_line_hash(lines[ln - 1])
+            if (rp, lh) in frozen:
+                hit.add((rp, lh))
+            else:
+                new_v.append((rp, ln, kind, dc, hc))
+
+    detail = []
+    for (rp, ln, kind, dc, hc) in new_v[:20]:
+        detail.append(f"★ {rp}:{ln} **{kind} 行 {dc} 格 ≠ 表头 {hc} 格** ⇒ 该行**错位**"
+                      f"（单元格里的裸竖线多半没转义 —— 写成反斜杠 + 竖线）")
+    if len(new_v) > 20:
+        detail.append(f"…另有 {len(new_v) - 20} 处（略）")
+    detail += inv_bad
+
+    missing = [(f_, lh) for (f_, lh) in frozen if (f_, lh) not in hit]
+    rot = sorted(f_ for (f_, _) in missing if not (ROOT / f_).exists())
+    healed = sorted({f_ for (f_, _) in missing if (ROOT / f_).exists()})
+    if rot:
+        detail.append(f"冻结条目**指向已不存在的文件** {len(rot)} 条 ⇒ 删掉它们（登记腐化）: "
+                      + ", ".join(rot[:6]) + (" …" if len(rot) > 6 else ""))
+    if healed:
+        detail.append(f"冻结条目**已失配** {len(healed)} 处（那行已改：修好了，或又改坏成别的指纹）"
+                      f" ⇒ **请从 inventory/md-tables.yaml 删掉对应条目**（只减不增，防腐化）: "
+                      + ", ".join(healed[:6]) + (" …" if len(healed) > 6 else ""))
+
+    note = (f"扫描 {n_md} 篇 · 表 {n_tbl} 张 · 违规 {len(new_v) + len(hit)}"
+            f"（冻结 {len(hit)} · **新增 {len(new_v)}**）")
+    if rot or healed:
+        note += f" · 冻结失配 {len(rot) + len(healed)}"
+    if n_tbl == 0:
+        return "FAIL", note + " · **表 0 张 ⇒ 判据无对象**（防退化空判）", detail
+    fail = bool(new_v) or bool(inv_bad) or bool(rot) or bool(healed)
+    return ("FAIL" if fail else "PASS"), note, detail
+
+
+# ── A5（2026-09-29）: 确定性 —— 噪声口径**单一真值表** + 双跑逐字节比对 ──────────────────
+# 事故形态（真实、已抽象）：某判据做"**同源双跑逐字节一致**"，但**没定义哪些差异不算内容差异**
+#   ⇒ 时间戳 / 运行 ID / 绝对路径 / CRLF 把**真一致**打成**假红**，或把**真不一致**洗成**假绿**。
+# 口径（照 `spec/d6-agent-standard/dogfood-cards/land-a5-determinism.md` 的**已勘误**底稿，单一实现）：
+#   ① 噪声口径**统一为单表**（非每条判据各写一份）；② 适用面由表的 `applies_to` 声明；
+#   ③ 归一化（CRLF→LF）**只允许在生产端固化**（比对端妥协 = 把噪声洗成假绿）；
+#   ④ `determinism: n/a`（天然不可双跑）**必须显式标记 + 给 reason**，缺 reason ⇒ 违规（禁止静默跳过）。
+DET_NOISE_INV = ROOT / "inventory" / "determinism-noise.yaml"
+# 每类**可机检**噪声的**代表样本** —— 用于证明表里的正则**真能匹配**（防塞一条永远匹配不上的正则）。
+# ⚠ 样本是判据的**夹具**，**不是**噪声表的第二定义点（噪声表仍在 yaml 里）。
+_DET_SAMPLES = {
+    "timestamp": ["2026-09-29T12:00:00", "1700000000"],
+    "run-id": ["550e8400-e29b-41d4-a716-446655440000", "01ARZ3NDEKTSV4RRFFQ69G5FAV"],
+    "absolute-path": ["/home/u/x", "/tmp/abc123", r"C:\Users\x"],
+    "temp-dir": ["tmpabc123", "temp_xyz789"],
+    "env-context": ["PWD=/work", "HOSTNAME=node1", "USER=me"],
+}
+
+
+def det_manifest_diff(a, b):
+    """**纯函数**：两份 `{路径: sha256}` **逐字节**比对 → 差异清单（**不排序、不归一化换行符**）。
+
+    ★ 先验红点（A5）：把**时间戳写进产物** ⇒ 两份哈希不等 ⇒ 本函数**必须**报出该路径（见 `tests/`）。
+    ⚠ CRLF→LF 的归一化**只允许在生产端固化** —— 比对端妥协 = 把噪声洗成假绿（本仓已踩过一次）。
+    """
+    out = []
+    for k in sorted(set(a) | set(b)):
+        if a.get(k) != b.get(k):
+            out.append({"path": k, "a": a.get(k), "b": b.get(k)})
+    return out
+
+
+def det_scan_noise(text, entries):
+    """**纯函数**：按噪声表扫一段文本 → 命中的噪声类 `id` 清单（供先验红 / 自检）。"""
+    hits = []
+    for e in entries:
+        for p in (e.get("match") or []):
+            try:
+                if re.search(p, text):
+                    hits.append(e["id"])
+                    break
+            except re.error:
+                hits.append(str(e.get("id")) + "(正则非法)")
+                break
+    return hits
+
+
+def _det_walk_na(node, path, bad):
+    """递归找 `determinism: n/a` 声明 ⇒ 返回条数；缺 `reason` 的追加进 `bad`。"""
+    n = 0
+    if isinstance(node, dict):
+        if str(node.get("determinism") or "").strip().lower() in ("n/a", "na"):
+            n += 1
+            if not str(node.get("reason") or "").strip():
+                bad.append(f"{path}: `determinism: n/a` 缺 `reason` ⇒ 判违规（天然不可双跑者必须写理由，禁止静默跳过）")
+        for k, v in node.items():
+            n += _det_walk_na(v, f"{path}.{k}", bad)
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            n += _det_walk_na(v, f"{path}[{i}]", bad)
+    return n
+
+
+def check_determinism(ctx):
+    """A5: 确定性 —— 噪声口径**单一真值表**的健康 + **`n/a` 纪律**的机械义务。
+
+    ★ 判什么：① 表结构（7 类噪声各带 `id/why/applies_to` · 行尾策略 · `updated` 读数日期）；
+      ② `applies_to` 的**消费者 id 必须真实存在**（**孤儿消费者** = 无消费者的真值表会腐化，本仓纪律）；
+      ③ **每类可机检噪声的正则必须真能匹配代表样本**（防表里塞一条永远匹配不上的坏正则而无人察觉）；
+      ④ `determinism: n/a` 声明**必须带 `reason`**（`n/a` 不是静默通过的许可）。
+    📊 报数：`噪声 N 类（可机检 M · 无字面模式 K）· 消费者 C 个 · 正则样本自证 P/Q · n/a 声明 A 条`。
+    ⚠⚠ **不判什么**：本项**不**真的跑某条管线双跑（那要具体管线接入）——
+      只钉住**口径单一真值 + 表的可用性**；`match` 为空的类（并发键序 / 文件系统元数据）
+      **无字面模式** ⇒ **单列报数**（跳过 ≠ 判过且通过）。
+    """
+    try:
+        import yaml
+    except Exception:
+        return "WARN", "缺 pyyaml, 跳过确定性噪声表断言", []
+    if not DET_NOISE_INV.exists():
+        return "FAIL", "inventory/determinism-noise.yaml 缺失（本断言的**噪声口径单一真值**依据）", []
+    try:
+        tbl = yaml.safe_load(_read_text(DET_NOISE_INV)) or {}
+    except Exception as e:
+        return "FAIL", f"inventory/determinism-noise.yaml 解析失败: {type(e).__name__}: {e}", []
+
+    detail = []
+    if not str(tbl.get("updated") or ""):
+        detail.append("表头缺 `updated`（读数日期）⇒ 增长型真值表必须带（否则无法判断读数时效）")
+    le = tbl.get("line-ending") or {}
+    if str(le.get("normalize_to") or "").upper() != "LF":
+        detail.append("`line-ending.normalize_to` 必须是 `LF`（逐字节比对要求二进制一致；归一化在生产端固化）")
+    if not str(le.get("why") or ""):
+        detail.append("`line-ending` 缺 `why`（归一化/豁免必须写理由）")
+
+    types = tbl.get("noise_types")
+    if not isinstance(types, list) or not types:
+        return "FAIL", "`noise_types` 缺失或为空（噪声表退化成空 ⇒ 恒真）", detail
+
+    known = {c["id"] for c in CHECKS}
+    consumers, machine, no_match, sample_ok, sample_tot = set(), 0, 0, 0, 0
+    seen = set()
+    for i, e in enumerate(types):
+        at = f"noise_types[{i}]"
+        if not isinstance(e, dict):
+            detail.append(f"{at} 不是映射")
+            continue
+        tid = str(e.get("id") or "")
+        if not tid:
+            detail.append(f"{at} 缺 `id`")
+        elif tid in seen:
+            detail.append(f"{at} 的 `id`={tid!r} **重复**（同一噪声两个定义点）")
+        seen.add(tid)
+        if not str(e.get("why") or ""):
+            detail.append(f"{at}({tid}) 缺 `why`（为什么排除它必须写）")
+        ap = e.get("applies_to")
+        if not isinstance(ap, list) or not ap:
+            detail.append(f"{at}({tid}) 缺 `applies_to` ⇒ 消费者未声明（适用面必须**由表声明**）")
+        else:
+            for cid in ap:
+                consumers.add(cid)
+                if cid not in known:
+                    detail.append(f"{at}({tid}) 的 `applies_to` 含 {cid!r} —— **不是真实断言 id**"
+                                  f"（孤儿消费者 = 无消费者的真值表会腐化）")
+        pats = e.get("match") or []
+        if not pats:
+            no_match += 1
+            continue
+        machine += 1
+        for p in pats:
+            try:
+                re.compile(p)
+            except re.error as ex:
+                detail.append(f"{at}({tid}) 的正则 {p!r} **非法**: {ex}")
+        samples = _DET_SAMPLES.get(tid)
+        if not samples:
+            detail.append(f"{at}({tid}) 有 `match` 但**无自证样本** ⇒ 无法证明该正则真能匹配"
+                          f"（防塞一条永远匹配不上的正则）")
+            continue
+        for s in samples:
+            sample_tot += 1
+            if tid in det_scan_noise(s, [e]):
+                sample_ok += 1
+            else:
+                detail.append(f"{at}({tid}) 正则**匹配不上代表样本** {s!r} ⇒ 该噪声类实际检不出（坏正则）")
+
+    if not consumers:
+        detail.append("`applies_to` 全空 ⇒ **无消费者的真值表**（会腐化：没人用就没人维护）")
+
+    # n/a 纪律：扫 inventory/*.yaml 里声明的 `determinism: n/a`（目前应为 0 条 ⇒ **显式报出**，不静默）
+    na_items, na_bad = 0, []
+    for p in sorted((ROOT / "inventory").glob("*.yaml")):
+        try:
+            data = yaml.safe_load(_read_text(p)) or {}
+        except Exception:
+            continue
+        na_items += _det_walk_na(data, p.name, na_bad)
+    detail += na_bad
+
+    note = (f"噪声 {len(types)} 类（可机检 {machine} · 无字面模式 {no_match}）"
+            f" · 消费者 {len(consumers)} 个 · 正则样本自证 {sample_ok}/{sample_tot}"
+            f" · `determinism: n/a` 声明 {na_items} 条（缺 reason {len(na_bad)} 条）"
+            f" · updated={tbl.get('updated')}")
+    if sample_tot == 0:
+        return "FAIL", note + " · **样本自证 0 条 ⇒ 判据无对象**（防退化空判）", detail
+    fail = bool(detail)
+    return ("FAIL" if fail else "PASS"), note, detail
+
+
+# ── A3（2026-09-29）：派生**只读视图** —— 清单类文档的"第二定义点"正解 ──────────────
+#   为什么需要它：本仓头号失败形态是**同一事实两处表达**（第二定义点）。但清单类文档
+#   天生要在多处出现（手册 / README / 看板）—— 手抄必漂。正解不是禁抄，而是把抄的那份
+#   变成**派生件**：从真值**渲染**出来，并用 `--check` **逐字节**验证"没被手改、也没过期"。
+#   ★ 判据 = **退出码 0**（三态互不混淆，由 `ops/derived_view.py` 定义）：
+#       0 = 一致 · 1 = 过期/漂移（`source-hash` 不符 或 正文逐字节不一致）· 2 = 渲染链路故障。
+#   ⚠ 1 与 2 **绝不可混为一谈**：把"渲染器坏了"算成"视图过期"会让人去重渲染（掩盖故障），
+#     把"视图过期"算成"渲染器坏了"会让人去查代码（实则只需 `--emit`）。故两种都 FAIL，但 note 分开报。
+DERIVED_VIEW = ROOT / "ops" / "derived_view.py"
+
+
+def check_derived_view(ctx):
+    """A3: 跑 `ops/derived_view.py --check`（重渲染 vs 落档视图**逐字节**比对）—— **退出码 0 才算过**。
+
+    子进程而非 import：视图渲染器是**独立可跑**的工具（人也会手跑 `--emit`），门禁只做**消费者**，
+    复用它的三态退出码 ⇒ 口径**单一定义点**（不在这里再实现一遍比对 —— 那正是本仓头号形态）。
+    """
+    if not DERIVED_VIEW.is_file():
+        return "WARN", f"{DERIVED_VIEW.name} 不存在（本断言的登记依据）", []
+    try:
+        p = subprocess.run([sys.executable, str(DERIVED_VIEW), "--check"], cwd=ROOT,
+                           capture_output=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return "FAIL", "派生视图校验超时（>120s）⇒ 可能挂死", []
+    out = _decode_out(p.stdout or b"") + _decode_out(p.stderr or b"")
+    lines = [ln.rstrip() for ln in out.splitlines() if ln.strip()]
+    msg = lines[-1] if lines else "（无输出）"
+    rc = p.returncode
+    if rc == 0:
+        return "PASS", msg, lines[-5:]
+    kind = "渲染链路故障(rc=2)" if rc == 2 else f"视图过期/漂移(rc={rc})"
+    return "FAIL", f"{msg} · **{kind}**", lines[-8:]
+
+
+# ── A2（2026-09-29）: 执行侧**过程留痕** —— 「判据只能看产物，看不到过程」的正解 ─────────────
+#   事故形态（真实、已抽象）：判据**只看得到产物**，看不到**过程**。既有两件与"过程"最近的证据
+#   都不顶用 —— ① 输出字节时间序列（每 5 秒一行）只记**吞吐曲线**，不记"做了什么"；
+#   ② 工作区改动摘要**实测为空**（0 行）。⇒ 执行体**改过哪些文件 / 跑过哪些命令**，主控侧
+#   **查不到**。这正是幻觉抑制最缺的一类证据：**它怎么得出这个结论**，在视野之外。
+#   口径（照 `dogfood-cards/imp4-executor-trace-design.md`，**单一实现**）：最小充分集**5 项**，
+#   每项尽量由**执行体外 / 主控侧**产生（可核）；唯一做不到"不信任仍可核"的**工具调用链**
+#   必须**如实标 `uncore`**（执行体内部产生 ⇒ 可篡改 / 漏报 / 伪造），**不得伪称已核**。
+#   ★ 先验红点（A2）：删掉任一个采集点标记 ⇒ 本判据**必须**红（见 `tests/`）。
+#   ⚠ 本处**只判**「5 个采集点在不在」与「不可核项有没有如实标」——**逐条字面细节**
+#     （两段写入 / `$Script:EV_FILES` 登记 / 主控归档 / `free -m` 而非 `/proc`）由**离线夹具**
+#     `ops/station-bin/_fm_golden_test.ps1` 守（那是 ps1 的黄金夹具，见 `ps1-golden`）⇒ **不抄第二份**
+#     （本仓头号失败形态 = 同一事实两处表达）。
+EXEC_TRACE_SECTIONS = (
+    ("[cmd] cmd=",               "命令执行记录（执行体外壳）"),
+    ("[env] caught_at=launcher", "环境快照（执行体启动器 fork 前）"),
+    ("[fs] diff_pointer=",       "文件系统写入集合（既有 find -newer 派生）"),
+    ("[tool] chain=uncore",      "工具调用链（执行体内部 ⇒ 如实标不可核）"),
+    ("[artifact] hashes=",       "产物哈希清单（主控侧回收时算）"),
+)
+
+
+def check_executor_trace(ctx):
+    """A2: 执行侧过程留痕 —— 机制里五采集点齐备；落到 runDir 的留痕件**须含全部五段**。
+
+    两部分（**判的东西不同，不许混**）：
+      · **机制**：`agent-cli.ps1` 里 5 个采集点标记**逐个在位**，且不可核项**如实标 `uncore`**
+        （出现 `chain=core` / `chain=verified` ⇒ **伪称执行体内部可核** ⇒ FAIL）。
+      · **覆盖**：扫到的 runDir 若**有** `executor-trace.txt` ⇒ 内容**须含全部五段**
+        （缺段 = 真缺陷 ⇒ FAIL）；**一个都没有** ⇒ **报数不入分母**（本件尚未经真派发 ⇒
+        覆盖率是"没验到"，不是"验出问题" —— 不得把它算成通过，也不得算成失败）。
+    """
+    detail = []
+    if not AGENT_CLI.is_file():
+        return "FAIL", "缺 agent-cli.ps1 ⇒ 留痕机制不可判（**不可判 ≠ 通过**）", []
+    txt = _read_text(AGENT_CLI)
+    mech_ok = 0
+    for lit, why in EXEC_TRACE_SECTIONS:
+        if lit in txt:
+            mech_ok += 1
+        else:
+            detail.append(f"缺采集点标记 {lit!r} ⇒ {why} **没被采集**"
+                          f"（假绿：看着有留痕，实际缺该维度）")
+    for fake in ("chain=core", "chain=verified"):
+        if fake in txt:
+            detail.append(f"出现 {fake!r} ⇒ **伪称执行体内部可核**"
+                          f"（工具调用链在执行体内部，executor 可篡改 / 漏报 / 伪造 ⇒ 只能 `uncore`）")
+
+    # ── 覆盖：落到 runDir 的留痕件（存在则须齐段；一个都没有只报数）──────────────────
+    sys.path.insert(0, str(ROOT / "ops"))
+    try:
+        import cluster
+        roots, _note = cluster._agent_proj_roots()
+        runs = cluster._chain_runs(roots)
+    except Exception as e:
+        st = "FAIL" if detail else "WARN"
+        return st, (f"机制：采集点 {mech_ok}/{len(EXEC_TRACE_SECTIONS)}"
+                    f" · cluster 不可用({type(e).__name__}) ⇒ 覆盖断言跳过"), detail
+    n_run, n_ok, n_bad = 0, 0, []
+    for ts, proj, run_dir in runs:
+        f = run_dir / "executor-trace.txt"
+        if not f.is_file():
+            continue
+        n_run += 1
+        t = f.read_text(encoding="utf-8", errors="replace")
+        miss = [lit for lit, _ in EXEC_TRACE_SECTIONS if lit not in t]
+        if miss:
+            n_bad.append(f"{proj}/{ts} 的 executor-trace.txt 缺段 {', '.join(miss)}")
+        else:
+            n_ok += 1
+    detail += n_bad
+    note = (f"机制：采集点 {mech_ok}/{len(EXEC_TRACE_SECTIONS)}"
+            f" · 覆盖：runDir 含该件 {n_run} 个（齐段 {n_ok}"
+            + (f" · **缺段 {len(n_bad)}**" if n_bad else "") + "）")
+    if n_run == 0:
+        note += " · 0 个 ⇒ 本件尚未经真派发，覆盖率**未验**（报数不入分母）"
+    return ("FAIL" if detail else "PASS"), note, detail
+
+
 CHECKS = [
     {"id": "secrets", "title": "明文扫描", "fn": check_secrets, "quick": True,
      "fix": "删除明文密钥, 或加入 SECRET_ALLOW 并写明原因(不允许静默放行); "
@@ -7522,6 +8060,58 @@ CHECKS = [
             "报『**词表缺档**』= `kind_source.by_kind` 少了一档 ⇒ 补档（无模板档要同时补 `kinds` 归属）。"
             "⚠ **它只判 token 在不在档内**，**不判**「这个状态对不对」（状态位的**语义**对不对要人读）；"
             "★ **模板文件跳过**（`*_TEMPLATE.md` 的「状态」行是**词表本身**，不是实例值）"},
+    {"id": "md-tables", "title": "md 表格列数守恒（防拆错格）",
+     "fn": check_md_tables, "quick": True,
+     "fix": "A4（2026-09-29）：同一张 markdown 表里 **分隔行 / 数据行** 的**格数**必须 == **表头**格数。"
+            "报『**某行 N 格 ≠ 表头 M 格**』= 该行**被拆错格**（字段错位）—— 最常见的原因是"
+            "**单元格文本里的竖线没转义**：写成**反斜杠 + 竖线**（`\\|`）即可；"
+            "整行少/多一格（比如漏了个 `|`）⇒ 补齐。"
+            "★ 口径（**唯一实现** = `md_table_scan`）：① **空单元格计入**格数；"
+            "② 分隔行必须**紧邻**表头（不跨行找表）；③ 代码围栏（``` / ~~~）与 GFM 缩进码块**跳过**；"
+            "④ 单元格里的转义竖线**不算分隔**。"
+            "📊 note 报 `扫描 N 篇 · 表 T 张 · 违规 V（冻结 F · 新增 D）`；"
+            "`表 0 张 ⇒ FAIL`（判据**无对象** = 退化空判，故「整篇没表 ⇒ 空集恒真」这种假绿被堵住）。"
+            "⚠ 报『冻结条目**失配** / 指向**已不存在**的文件』= **从 `inventory/md-tables.yaml` 删掉对应条目**"
+            "（冻结**只减不增** —— 修好了就清账，留着会烂成垃圾桶；同 `secrets` 的「豁免未命中」防腐化）；"
+            "存量冻结的**逐条理由**在该 yaml 里（2026-09-29 上线时实测 28 处 / 13 个文件）。"
+            "⚠ **它不判什么**：不判表格**内容**对不对，也不判文档该不该有表 —— 只判**格数守恒**。"},
+    {"id": "determinism", "title": "确定性噪声口径（单一真值表）",
+     "fn": check_determinism, "quick": True,
+     "fix": "A5（2026-09-29）：噪声口径 = **单表** `inventory/determinism-noise.yaml`（所有「双跑 / 逐字节比对」"
+            "类判据**引用**它，**不各写一份** —— 各写一份 = 同一事实两处表达，改一处漏一处）。"
+            "报『缺 `updated`』= 增长型真值表必须带**读数日期**；报『`line-ending.normalize_to` 必须 LF』="
+            "逐字节比对要求二进制一致（归一化只在**生产端**固化，比对端妥协 = 把噪声洗成假绿）；"
+            "报『`applies_to` 含 X —— 不是真实断言 id』= **孤儿消费者**（无消费者的真值表会腐化）⇒ 改成真实 gate id；"
+            "报『正则匹配不上代表样本』= 表里那条正则**检不出该类噪声**（坏正则）⇒ 修正则；"
+            "报『有 match 但无自证样本』= 新增了可机检噪声却没给夹具 ⇒ 在 `_DET_SAMPLES` 补样本；"
+            "报『`determinism: n/a` 缺 reason』= 天然不可双跑者必须写理由（**禁止静默跳过**）。"
+            "⚠ **它不判什么**：不真的跑某条管线双跑（那要具体管线接入）—— 只钉住**口径单一真值 + 表可用性**。"},
+    {"id": "derived-view", "title": "派生只读视图（真值→渲染→逐字节比对）",
+     "fn": check_derived_view, "quick": True,
+     "fix": "A3（2026-09-29）：清单类文档的**第二定义点**正解 —— 抄的那份改成**派生件**，"
+            "从真值**渲染**出来（渲染器 = `ops/derived_view.py`；当前真值源 = `inventory/ports.yaml`；"
+            "落档视图 = `docs/派生视图_端口分配.md`）。"
+            "报『**过期**（声明 source-hash ≠ 当前）』= 真值改了但视图没重渲染 ⇒ 跑 `py ops/derived_view.py --emit`；"
+            "报『**逐字节不一致**』= 视图被**手改**过 ⇒ 别手改，同样 `--emit` 覆盖（手改会被下次渲染冲掉）；"
+            "报『**渲染链路故障**(rc=2)』= 读真值/解析 yaml/落档写入失败 ⇒ **先修渲染器**（这与「过期」不是一回事）；"
+            "报『落档视图**缺 `source-hash` 行**』= 档头被删 ⇒ `--emit` 重出。"
+            "★ **为什么判退出码而不在这里重实现比对**：三态（0 一致 / 1 过期·漂移 / 2 故障）由渲染器**单一定义**，"
+            "门禁只做消费者 —— 各写一份 = 同一事实两处表达（本仓头号形态）。"
+            "⚠ **它不判什么**：不判视图**内容**对不对（那是 `ports` 判据的事），只判「视图 == 真值的确定函数」。"},
+    {"id": "executor-trace", "title": "执行侧过程留痕（五采集点）",
+     "fn": check_executor_trace, "quick": True,
+     "fix": "A2（2026-09-29）：治「判据只能看产物，看不到过程」—— 站上执行体改过哪些文件 / 跑过哪些命令"
+            "此前**查不到**（既有两件：输出字节序列只记吞吐曲线、工作区改动摘要实测为空）。"
+            "口径 = `dogfood-cards/imp4-executor-trace-design.md`：最小充分集**5 项**"
+            "（cmd / env / fs / tool / artifact）。"
+            "报『**缺采集点标记 X**』= `ops/station-bin/agent-cli.ps1` 里那一维**没被采集**"
+            "（看着有留痕，实际缺维度）⇒ 补回该采集点（**别只补门禁**）；"
+            "报『出现 `chain=core` / `chain=verified`』= **伪称执行体内部可核** —— 工具调用链由执行体**内部**产生"
+            "（可篡改 / 漏报 / 伪造），**只能如实标 `uncore`**；"
+            "报『runDir 的 executor-trace.txt **缺段**』= 落到仓的留痕件不齐（真缺陷）⇒ 查该次派发的采集链路。"
+            "⚠『覆盖 0 个』**不作为 FAIL**（本件尚未经真派发 ⇒ 覆盖率**未验**，报数不入分母）。"
+            "⚠ **它不判什么**：逐条字面细节（两段写入 / `$Script:EV_FILES` 登记 / 主控归档 / `free -m` 而非 `/proc`）"
+            "由**离线夹具** `_fm_golden_test.ps1` 守（见 `ps1-golden`）—— 本判据**不抄第二份**。"},
     # O-63 (2026-09-25): 取号并发夹具。**刻意 quick:False**（要起 8 个独立进程 + 两次 2.5s 共同释放时刻 ⇒ 约 6s）。
     {"id": "ps1-runstamp", "title": "ts 取号并发夹具", "fn": check_ps1_runstamp, "quick": False,
      "fix": "O-63: 跑 `powershell -NoProfile -ExecutionPolicy Bypass -File ops/station-bin/_runstamp_hammer.ps1 -N 8 -SelfTest`。"

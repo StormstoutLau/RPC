@@ -179,6 +179,7 @@ $Script:EV_FILES = @(
     @{ name = '.accept-cmds.txt';          pull = 'batch' },
     @{ name = '.golden-cmd.txt';           pull = 'batch' },
     @{ name = '.workspace-diff.txt';       pull = 'batch' },
+    @{ name = '.executor-trace.txt';       pull = 'batch' },
     @{ name = '.attach-manifest.txt';      pull = 'batch' },
     @{ name = '.session-meta.txt';         pull = 'batch' },
     @{ name = '.agent-output.txt';         pull = 'scp' },
@@ -1142,6 +1143,12 @@ function Get-FrontMatter {
     #   ⚠ 必须登记进本白名单 —— 本函数是**白名单解析**（未知键被静默丢弃），
     #     漏登记会让 `require-gate:` **看起来写了、其实没人读**（= 假防线，O-81 同族）。
     $h['require-gate'] = ''
+    # ADR-0009 / A1 (2026-09-29): D6/D7 层级归属的**三条判据**（默认 '' = 未声明 ⇒ 存量卡归属不变）。
+    #   ⚠ 本函数是**白名单解析**（未知键被静默丢弃）⇒ 漏登记会让卡里写了这三键却**没人读**
+    #     （= 假防线，与上一行 `require-gate` 同一警告，O-81 同族）。求值见 `Resolve-D6D7Boundary`。
+    $h['needs_non_producer_verdict'] = ''
+    $h['needs_multi_round_review'] = ''
+    $h['is_intra_dispatch_quality_gate'] = ''
     $inFreq = $false; $bodyRead = $false; $curKey = ''
     $bodyLines = @()
     $lines = [System.IO.File]::ReadAllLines($Path, [System.Text.UTF8Encoding]::new($false))
@@ -1316,6 +1323,9 @@ function Get-FrameworkSubjects($accept, [bool]$goldenActive) {
         @{ name = 'session-meta';    path = 'session-meta.txt' }
         @{ name = 'attach-manifest'; path = 'attach-manifest.txt' }
         @{ name = 'workspace-diff';  path = 'workspace-diff.txt' }
+        # A2 (2026-09-29): 执行侧过程留痕 —— 主路**无条件**产出（外壳在启动器写 `[env]`、run 尾追加
+        #   cmd/fs/tool/artifact）⇒ 裸列（不是 ephemeral）。claude 备路不产该件 ⇒ **只进主路基线**。
+        @{ name = 'executor-trace';  path = 'executor-trace.txt' }
         @{ name = 'card';            path = 'card.md' }
         @{ name = 'review';          path = 'review.json'; ephemeral = $true }
     )
@@ -1780,6 +1790,13 @@ function Invoke-Task {
     if ($reqGate) {
         if (-not (Invoke-GateCheck -Name $reqGate -Card $card)) { return 3 }   # 3 = GATE_BLOCK（新增，O-90）
     }
+    # A1 / ADR-0009 §2 (2026-09-29): **派发前**对三条判据求值（纯函数，无副作用）⇒ 层级归属落 run.json。
+    #   为什么求值点选这里：与 `require-gate` 同处"流程前置" —— 三键**全部来自卡**（派发方在派发前、
+    #   受理方在受理阶段写入）⇒ 此刻即可算出，**不依赖任何运行结果**（这正是 ADR-0009 §机制原理 的要害：
+    #   判据问的是**流程形态**，不问产物主题 ⇒ 可在产出开始前求值）。
+    #   ⚠ 射程（如实）：**claude 本地备路**在下方 `Invoke-Task-Claude` 分支早返回，其 run 记录
+    #     **不带**本键（那是另一条写入路径，未纳入本项）。
+    $boundary = Resolve-D6D7Boundary $fm['needs_non_producer_verdict'] $fm['needs_multi_round_review'] $fm['is_intra_dispatch_quality_gate']
     $m = if ($model) { $model } else { if ($fm['model']) { $fm['model'] } else { '' } }
     $sens = if ($sensitive) { $sensitive } else { if ($fm['sensitivity']) { $fm['sensitivity'] } else { 'public' } }
     # O-15/AUDIT (2026-09-21 实弹实测修正): 自动 fallback 的**入参必须在此处快照** ——
@@ -2029,48 +2046,48 @@ function Invoke-Task {
     $body = @"
 set -eu
 # O-59/T1: 脚本**自删** —— 名字带 per-run 身份后不再互相覆盖 ⇒ 会**累积**(实测三站各 0/4/0 个)。
-#   `trap … EXIT` 覆盖早退路径(`set -e` 触发时也删)。旧固定名是"被覆盖"所以不累积, 别退回那种写法。
+#   ``trap … EXIT`` 覆盖早退路径(``set -e`` 触发时也删)。旧固定名是"被覆盖"所以不累积, 别退回那种写法。
 trap 'rm -f "`$0"' EXIT
 W="$Script:WORKSPACE_ROOT/$proj"
 STAGE="$stage"
-# ADR-0007 缺口 5 实测发现(2026-09-18): `.attach/` **从不回收** —— 站上实测残留着 09-05/09-12 五次派发的
+# ADR-0007 缺口 5 实测发现(2026-09-18): ``.attach/`` **从不回收** —— 站上实测残留着 09-05/09-12 五次派发的
 #   附件(fileA.md/fileB.txt/inbox.txt/_o11_src.txt/_o26_src.txt + docs/emptydir/), 与 IMPLEMENTATION
-#   "`.attach/` 生命周期=单次 task(结束即回收)" 的声明**正相反**。后果有二: ①**污染本次附件摘要**
+#   "``.attach/`` 生命周期=单次 task(结束即回收)" 的声明**正相反**。后果有二: ①**污染本次附件摘要**
 #   (上一轮的旧文件混进本次 digest ⇒ 摘要看着正常但内容不是本次注入的); ②agent 可能读到残留件。
 #   ⇒ 改为**派发前清空**(等价于所声明的语义, 且不必依赖"collect 回收"那一步)。
-# O-59/T1 (2026-09-25): **这里不再碰 `$W/.attach`** —— 共享锁下两跑会互删(先验红见 DEV-LOG §27.11-G)。
-#   改为只备**本 run 私有**的中转目录;`.attach` 的"重置 + 落件"移到 **run body 的锁内**(见 body 内 O-59/T1 段)。
+# O-59/T1 (2026-09-25): **这里不再碰 ``$W/.attach``** —— 共享锁下两跑会互删(先验红见 DEV-LOG §27.11-G)。
+#   改为只备**本 run 私有**的中转目录;``.attach`` 的"重置 + 落件"移到 **run body 的锁内**(见 body 内 O-59/T1 段)。
 rm -rf "`$STAGE" && mkdir -p "`$STAGE/attach"
 # ★★ O-68/D3 (2026-09-25): 暂存件**按龄 GC**（**新增**，与 O-57-A 的 reset 并存 —— 见下）。
 #   用途: 防"per-run 件"（以及旧的无后缀死件）**永久累积**（"登记无出口⇒腐化"）。
-#   形状: **只按龄**（`-mtime +7`）⇒ **没有**"删除活件"这种可能；裕度理由见上面 `$evGcCmd` 定义处。
+#   形状: **只按龄**（``-mtime +7``）⇒ **没有**"删除活件"这种可能；裕度理由见上面 ``$evGcCmd`` 定义处。
 #   ⚠ 本 body 仍是**每次派发最早的远端写入点** ⇒ 放这里可保证"不会删掉本次 run 自己刚写的件"。
 $evGcCmd
 # ★★ O-72 (2026-09-25): **站上脚本副本**的按龄清（与上面那条同族、同位置 = 派发前段）。
-#   对象: 主 run body 的副本 `/tmp/agent-cli-task-<ts>.sh`（名字**已是 per-run** ⇒ 不互踩, 但**无出口**）。
+#   对象: 主 run body 的副本 ``/tmp/agent-cli-task-<ts>.sh``（名字**已是 per-run** ⇒ 不互踩, 但**无出口**）。
 #   实测（2026-09-25）: B 站 **101 个** · A 站 10 · C 站 12 ⇒ "登记无出口 ⇒ 腐化"。
-#   ⚠ **为什么不给主 body 也加 `trap 'rm -f "$0"'`**（T1 那两个中转脚本正是那么做的）:
-#     主 body 走 `Invoke-RemoteScript`，而该函数**带网络级重试**（同一路径**再 `bash` 一次**）
+#   ⚠ **为什么不给主 body 也加 ``trap 'rm -f "$0"'``**（T1 那两个中转脚本正是那么做的）:
+#     主 body 走 ``Invoke-RemoteScript``，而该函数**带网络级重试**（同一路径**再 ``bash`` 一次**）
 #     ⇒ 自删会把"远端其实已跑完、只是网络抖了一下"变成
-#       `bash: /tmp/agent-cli-task-xxx.sh: 没有那个文件或目录`(127) = **把成功判成失败**。
-#     ⇒ 按龄清是**不会误伤**的那条路（最长 `timeout_s=1800s` ⇒ 7 天 = **300×** 裕度, 与 D3 同依据）。
+#       ``bash: /tmp/agent-cli-task-xxx.sh: 没有那个文件或目录``(127) = **把成功判成失败**。
+#     ⇒ 按龄清是**不会误伤**的那条路（最长 ``timeout_s=1800s`` ⇒ 7 天 = **300×** 裕度, 与 D3 同依据）。
 find /tmp -maxdepth 1 -name 'agent-cli-task-*.sh' -mtime +7 -delete 2>/dev/null || true
 # ★★ O-76 (2026-09-25): **私有中转目录**的按龄清（同族、同位置；与上面两条共用"只按龄"这条判据）。
-#   对象: `/tmp/agent-stage-<RUN_TOKEN>` —— 私有中转（附件/golden 的落点；正常路径由锁内 `rm -rf "$STAGE"` 删）。
-#   实测泄漏面（一手）: B 站抓到 2 个残留 —— `agent-stage-fd612392…`（含 `attach/` + `golden.tgz`，
-#     = **O-71 那次 aborted 派发**）与 `agent-stage-46e4996f…`（含 `attach/`）。
+#   对象: ``/tmp/agent-stage-<RUN_TOKEN>`` —— 私有中转（附件/golden 的落点；正常路径由锁内 ``rm -rf "$STAGE"`` 删）。
+#   实测泄漏面（一手）: B 站抓到 2 个残留 —— ``agent-stage-fd612392…``（含 ``attach/`` + ``golden.tgz``，
+#     = **O-71 那次 aborted 派发**）与 ``agent-stage-46e4996f…``（含 ``attach/``）。
 #     为什么现成两道清理都盖不住: ① O-59/T1 的清理在 **body 内**（派发在 body 之前就死了 ⇒ 走不到）；
 #     ② O-46 的失败清理要求"**归档成功**"（此时 runDir 都还没建）⇒ **"scp 了中转件、却在 body 之前死掉"**无人管。
-#   ⚠ **只按龄、禁通配删**: `-mtime +7` 对"在飞的"结构上不可能命中（最长 `timeout_s=1800s` ⇒ 300× 裕度，与 D3 同依据）；
-#     绝**不可**写成"删所有 `agent-stage-*`" —— 那会**误删并发 run 的中转**（O-59/T1 已为此立过纪律）。
-#   ⚠ 用 `-exec rm -rf {} +` 而**不是** `-delete`: 目录**非空**时 `-delete` 会失败（`-delete` 只适合空目录/文件）。
+#   ⚠ **只按龄、禁通配删**: ``-mtime +7`` 对"在飞的"结构上不可能命中（最长 ``timeout_s=1800s`` ⇒ 300× 裕度，与 D3 同依据）；
+#     绝**不可**写成"删所有 ``agent-stage-*``" —— 那会**误删并发 run 的中转**（O-59/T1 已为此立过纪律）。
+#   ⚠ 用 ``-exec rm -rf {} +`` 而**不是** ``-delete``: 目录**非空**时 ``-delete`` 会失败（``-delete`` 只适合空目录/文件）。
 find /tmp -maxdepth 1 -type d -name 'agent-stage-*' -mtime +7 -exec rm -rf {} + 2>/dev/null || true
 # ★★ O-68/D2 **已落地（2026-09-25）: 此处原为 O-57-A 的"无条件清"，现已移除**。
 #   为什么可以移除: D4 已给所有暂存件加了 per-run 后缀 ⇒ "上一次 run 的残留"在**名字层**不存在
 #     （collect 只按**本 run** 的名字拉回）⇒ 无需在派发前破坏性删除。
-#   ⚠ **不要加回来**: 它**无条件删固定名**、且在 flock **之外**，而站上 flock 对 `readonly` 取 `-s`（共享）
+#   ⚠ **不要加回来**: 它**无条件删固定名**、且在 flock **之外**，而站上 flock 对 ``readonly`` 取 ``-s``（共享）
 #     ⇒ 同站同 proj 并存时会**删掉先起 run 正在用的件**（= O-68 的原始缺陷）。
-#   ⇒ 清理职责**只归上面那条按龄 GC**（`-mtime +7` ⇒ 结构上不可能误删活件）。
+#   ⇒ 清理职责**只归上面那条按龄 GC**（``-mtime +7`` ⇒ 结构上不可能误删活件）。
 "@
     # ★ O-68/D2-D3: 上面那段 **GC 清单**由 `$Script:EV_FILES` 真值**派生**（`$W` 用单引号拼出 ⇒ 由 bash
     #   展开，PS 不碰它）。**禁**在此处手写第二份名单 —— 两份枚举漂移正是本仓头号失败形态。
@@ -2252,17 +2269,17 @@ echo "ACCEPT_GOLDEN_OK=`$ACCEPT_GOLDEN_OK"
     $body = @"
 set -u
 # ── ★★ O-72 (2026-09-25): 采样器子壳的**兜底杀**（父壳非正常死亡时 teardown 杀不到它）──────────
-# 机制（读站上脚本体 + 一手取证）: `sample_progress &` 是**子壳** ⇒ 父壳末尾的 `SAMPLE=f`
-#   **到不了它**（fork 后变量是副本）⇒ 唯一出路是 `kill $SPID`；而父壳若在 teardown **之前**死
-#   （ssh 断/被杀）⇒ 那条 kill 永不执行 ⇒ 子壳 `while` **永不停**。
-#   ★ 实测: B 站抓到一条**活了 28.6h** 的孤儿 `bash /tmp/agent-cli-task-*.sh`（PPID=1），
-#     每 5s 往**裸名** `.progress` 追加一行（kill 它之前文件持续增长、kill 后立刻冻结）；
-#     它还**继承了锁 fd**（`/proc/<pid>/fd/9 -> .agent-lock (deleted)`）。
+# 机制（读站上脚本体 + 一手取证）: ``sample_progress &`` 是**子壳** ⇒ 父壳末尾的 ``SAMPLE=f``
+#   **到不了它**（fork 后变量是副本）⇒ 唯一出路是 ``kill $SPID``；而父壳若在 teardown **之前**死
+#   （ssh 断/被杀）⇒ 那条 kill 永不执行 ⇒ 子壳 ``while`` **永不停**。
+#   ★ 实测: B 站抓到一条**活了 28.6h** 的孤儿 ``bash /tmp/agent-cli-task-*.sh``（PPID=1），
+#     每 5s 往**裸名** ``.progress`` 追加一行（kill 它之前文件持续增长、kill 后立刻冻结）；
+#     它还**继承了锁 fd**（``/proc/<pid>/fd/9 -> .agent-lock (deleted)``）。
 # 两道防线（**缺一不可**）:
-#   ① 本陷阱: ssh 断开时 bash 会收到 `HUP` ⇒ 立刻杀子壳；`EXIT` 覆盖正常/异常退出路径；
-#   ② 采样器**自身有界**（见下面 `SAMPLE_MAX_S`）—— 这是**唯一**对 `SIGKILL` 也有效的防线
-#      （`SIGKILL` 抓不到，陷阱不会触发）。
-# ⚠ 陷阱体**必须始终返回 0**: 本 body 的退出码是**契约字段**（`$body` 末尾 `exit $FINAL_RC`），
+#   ① 本陷阱: ssh 断开时 bash 会收到 ``HUP`` ⇒ 立刻杀子壳；``EXIT`` 覆盖正常/异常退出路径；
+#   ② 采样器**自身有界**（见下面 ``SAMPLE_MAX_S``）—— 这是**唯一**对 ``SIGKILL`` 也有效的防线
+#      （``SIGKILL`` 抓不到，陷阱不会触发）。
+# ⚠ 陷阱体**必须始终返回 0**: 本 body 的退出码是**契约字段**（``$body`` 末尾 ``exit $FINAL_RC``），
 #   而陷阱里任一条失败的命令都可能把 rc 改掉（本仓 rc 失真属"判据不可信"级）。
 cleanup_sampler() {
   if [ -n "`${SPID:-}" ]; then kill "`$SPID" 2>/dev/null || true; fi
@@ -2270,16 +2287,16 @@ cleanup_sampler() {
 }
 trap cleanup_sampler HUP TERM EXIT
 W="$W"
-# O-59/T1: 私有中转路径 —— 与 attach-reset body 里那个**同源**（都由 `$stage` 插值而来）。
-#   ⚠ `set -u` 下**必须**在这里定义: 落盘段要用 `$STAGE`（实测漏定义 ⇒ `STAGE: 未绑定的变量` ⇒ rc=255）。
+# O-59/T1: 私有中转路径 —— 与 attach-reset body 里那个**同源**（都由 ``$stage`` 插值而来）。
+#   ⚠ ``set -u`` 下**必须**在这里定义: 落盘段要用 ``$STAGE``（实测漏定义 ⇒ ``STAGE: 未绑定的变量`` ⇒ rc=255）。
 STAGE="$stage"
 S="`$W/.agent-state.json"
 mkdir -p "`$W" "`$W/out"
 # ★★ O-68/D4 (2026-09-25): **per-run 后缀** —— 站上暂存件的名字必须带它。
-#   值由主控插值而来（`$evSuf`，唯一表达式 = `Get-EvSuffix $ts`）⇒ 与 collect 侧**同值**。
+#   值由主控插值而来（``$evSuf``，唯一表达式 = ``Get-EvSuffix $ts``）⇒ 与 collect 侧**同值**。
 #   为什么必须带: 名字层不重叠 ⇒ 并存的 run **不可能**互删/互覆（于是 O-57-A 那个破坏性 reset 可移除）。
-#   ⚠ 本行**必须早于**任何写点 —— 尤其早于 golden 段（它同样写 `.golden-cmd.txt`）。
-#   ⚠ 交付物（非点前缀, 例如卡产出的 `out/x.json`）**不带**后缀 —— 那是卡面契约, 不是暂存件。
+#   ⚠ 本行**必须早于**任何写点 —— 尤其早于 golden 段（它同样写 ``.golden-cmd.txt``）。
+#   ⚠ 交付物（非点前缀, 例如卡产出的 ``out/x.json``）**不带**后缀 —— 那是卡面契约, 不是暂存件。
 EV_SUF="$evSuf"
 # O-09 isolate-xdg: 同站并行写任务时把 opencode 数据目录隔离到 per-task 工作区,
 #   消除共享 opencode.db 上的写锁串行化 (SQLite 写锁序列化事实见 _bs1.py)。
@@ -2316,10 +2333,10 @@ fi
 echo "LOCK_ACQUIRED pid=`$$ mode=`$( [ -n "`$LOCK_FLAGS" ] && echo shared || echo exclusive )"
 # ── O-59/T1 (2026-09-25): **落盘段 —— 必须在锁内** ──────────────────────────────────────────
 # 为什么放这里(三个理由, 缺一即错):
-#   ① 本段要**重置** `.attach`/`.golden`(共享面) ⇒ 必须**已持锁**(见上面 `$flockShared` 的危险面判据);
-#   ② 必须**早于** `.attach-manifest.txt` 采样(它在下面) —— 那份 manifest 记的是"**注入的字节**";
-#   ③ `$STAGE` 是**本 run 私有**的中转(console 侧写入, 与 `$W` 零接触, 故它自己不需要锁)。
-# ⇒ 落地后立即删中转目录(`rm -rf "$STAGE"`), 不留残留。
+#   ① 本段要**重置** ``.attach``/``.golden``(共享面) ⇒ 必须**已持锁**(见上面 ``$flockShared`` 的危险面判据);
+#   ② 必须**早于** ``.attach-manifest.txt`` 采样(它在下面) —— 那份 manifest 记的是"**注入的字节**";
+#   ③ ``$STAGE`` 是**本 run 私有**的中转(console 侧写入, 与 ``$W`` 零接触, 故它自己不需要锁)。
+# ⇒ 落地后立即删中转目录(``rm -rf "$STAGE"``), 不留残留。
 rm -rf "`$W/.attach" && mkdir -p "`$W/.attach"
 if [ -d "`$STAGE/attach" ]; then cp -a "`$STAGE/attach/." "`$W/.attach/" 2>/dev/null || true; fi
 echo "ATTACH_STAGED=`$(ls -1 "`$W/.attach" 2>/dev/null | wc -l)"
@@ -2343,30 +2360,30 @@ R0=`$(date +%s%N)     # P2-1: run clock starts here (queue = lock+intake up to t
 # Re-read needed files, complete what was left, then verify per original criteria."
 CONT_B64="Q29udGludWUgdGhlIHVuZmluaXNoZWQgdGFzayBmcm9tIHdoZXJlIGl0IHN0b3BwZWQuIFJlLXJlYWQgbmVlZGVkIGZpbGVzLCBjb21wbGV0ZSB3aGF0IHdhcyBsZWZ0LCB0aGVuIHZlcmlmeSBwZXIgb3JpZ2luYWwgY3JpdGVyaWEu"
 # O-25 P0-② (2026-09-12): lightweight live-progress sampler. opencode run stdout is an
-# appending file (`$W/out/.agent-output.txt); no token signal exists in headless run
-# (CLOSED-LOOP 3.1), so we sample BYTE GROWTH + wall clock every 5s into `.progress`.
+# appending file (``$W/out/.agent-output.txt); no token signal exists in headless run
+# (CLOSED-LOOP 3.1), so we sample BYTE GROWTH + wall clock every 5s into ``.progress``.
 # Pure stdio-driven, zero external dependency. Sampler records its own clock base SP0
 # (R1 is defined only AFTER the run completes, so it must not be referenced here).
 SAMPLE=t
-# ★★ O-72 (2026-09-25): 采样器的**自带上限**（秒）—— 与上面那条 `HUP/TERM/EXIT` 陷阱互为保险。
-#   为什么需要它: 陷阱抓不到 `SIGKILL`（父壳被 `kill -9` / 容器清理时）⇒ 那种情况下只有"自己会停"能救。
-#   取值的依据: 单次预算 `timeout` 的 **4 倍 + 600s**（4 = 首跑 + 3 次续跑的上限；600s = 10min 裕度）。
-#   ⚠ 上限到了只**少一段节拍**（`.progress` 是**遥测**，不参与成败判定 —— 见 collect 段注释），
+# ★★ O-72 (2026-09-25): 采样器的**自带上限**（秒）—— 与上面那条 ``HUP/TERM/EXIT`` 陷阱互为保险。
+#   为什么需要它: 陷阱抓不到 ``SIGKILL``（父壳被 ``kill -9`` / 容器清理时）⇒ 那种情况下只有"自己会停"能救。
+#   取值的依据: 单次预算 ``timeout`` 的 **4 倍 + 600s**（4 = 首跑 + 3 次续跑的上限；600s = 10min 裕度）。
+#   ⚠ 上限到了只**少一段节拍**（``.progress`` 是**遥测**，不参与成败判定 —— 见 collect 段注释），
 #     绝不影响 rc / accept / golden。⇒ 宁可少节拍，不要留一条能活 28h 的孤儿（实测过）。
 SAMPLE_MAX_S=`$(( $timeout * 4 + 600 ))
 SB0=`$(( `$(date +%s%N) / 1000000 ))   # sampler clock base (ms), captured before first run
 : > "`$W/out/.progress`$EV_SUF"
 # O-37 (2026-09-24): **同时清空 agent 输出文件** —— 否则采样器第一个样本(t=0)读到的是**上一轮残留**。
-#   实测两条铁证: A1 `t=0 bytes=4434` == 上一轮 `OUT_BYTES=4434`; B2 `t=0 bytes=4470` == A1 的 `OUT_BYTES=4470`。
-#   后果 ① 首样本 bytes_s 假高(实测 1.4e6+ B/s); ② ★ `bytes>0` 在 t=0 即成立 ⇒ 任何"以字节增长判已产出"
+#   实测两条铁证: A1 ``t=0 bytes=4434`` == 上一轮 ``OUT_BYTES=4434``; B2 ``t=0 bytes=4470`` == A1 的 ``OUT_BYTES=4470``。
+#   后果 ① 首样本 bytes_s 假高(实测 1.4e6+ B/s); ② ★ ``bytes>0`` 在 t=0 即成立 ⇒ 任何"以字节增长判已产出"
 #   的消费者会在第 0 秒看到**假进度/假完成**(与 T-1「完成信号须与证据同源」、O-22「.meta 残留」同病族)。
-#   ⚠ 时序: 本行 → `sample_progress &` → opencode(自己的 `>` 再截断) ⇒ **必须在这里清**, 晚于此即有残留窗口。
+#   ⚠ 时序: 本行 → ``sample_progress &`` → opencode(自己的 ``>`` 再截断) ⇒ **必须在这里清**, 晚于此即有残留窗口。
 : > "`$W/out/.agent-output.txt`$EV_SUF"
 sample_progress() {
   SAMPLE_N=0
   while [ "`$SAMPLE" = t ]; do
-    # 2026-09-23 (RC4) **必须容忍文件尚未创建**: agent 启动前 `out/.agent-output.txt` 不存在,
-    #   而 bash 的**重定向失败消息由 shell 打印, 不受本命令 `2>/dev/null` 抑制** ⇒ 实测每 5s 刷一条
+    # 2026-09-23 (RC4) **必须容忍文件尚未创建**: agent 启动前 ``out/.agent-output.txt`` 不存在,
+    #   而 bash 的**重定向失败消息由 shell 打印, 不受本命令 ``2>/dev/null`` 抑制** ⇒ 实测每 5s 刷一条
     #   "行 61: … 没有那个文件或目录" 噪音, 并把 run 打成 excode=255(采样器处中断)。
     #   ⚠ 连续两轮我都误判为"站上缺 out/" —— 真相是"采样器读了还没创建的文件"(取证定性, 见 O-32)。
     ob=0; [ -f "`$W/out/.agent-output.txt`$EV_SUF" ] && ob=`$(wc -c < "`$W/out/.agent-output.txt`$EV_SUF" 2>/dev/null)
@@ -2376,8 +2393,8 @@ sample_progress() {
     printf 't=%s bytes=%s bytes_s=%s\n' "`$st" "`$ob" "`$bps" >> "`$W/out/.progress`$EV_SUF"
     # ★ O-72: **自停**（陷阱抓不到 SIGKILL ⇒ 这一行是最后一道防线）。变量名刻意带 SAMPLE_ 前缀,
     #   免得与 body 其它单字母名撞（本函数跑在子壳里, 撞了虽不外泄, 但读起来会误导）。
-    #   ⚠ `[` 是**普通 test**, 不是算术上下文 ⇒ 右侧**必须**写 `` `$SAMPLE_MAX_S ``(带 `$`)。
-    #     实测(2026-09-26 首跑): 写成裸名 ⇒ `[: SAMPLE_MAX_S: 需要整数表达式` ⇒ run `exit=255`。
+    #   ⚠ ``[`` 是**普通 test**, 不是算术上下文 ⇒ 右侧**必须**写 `` ``$SAMPLE_MAX_S ``(带 ``$``)。
+    #     实测(2026-09-26 首跑): 写成裸名 ⇒ ``[: SAMPLE_MAX_S: 需要整数表达式`` ⇒ run ``exit=255``。
     #     ⚠⚠ 这条**只有真派发才能发现** —— 静态夹具只验"这段文本在", 验不出"这行跑不跑得起来"
     #       (DEV-LOG §26.4: 夹具查"串在不", 查不出"这条链现在跑不跑得起来")。
     SAMPLE_N=`$(( SAMPLE_N + 1 ))
@@ -2387,7 +2404,7 @@ sample_progress() {
 }
 sample_progress &
 SPID=`$!
-# ADR-0007 缺口 5: 附件"注入字节"的**原始证据** —— 站上逐文件 `sha256sum`(`<hex>  <relpath>`)。
+# ADR-0007 缺口 5: 附件"注入字节"的**原始证据** —— 站上逐文件 ``sha256sum``(``<hex>  <relpath>``)。
 #   必须在 agent 运行**之前**采样(故在 marker 之前): 记的是"注入的字节", 而非 agent 可能改写后的。
 #   与主控侧对**源文件**的独立哈希互为**跨信任域交叉验证**(e2e 据此自证"记录属实")。
 : > "`$W/out/.attach-manifest.txt`$EV_SUF"
@@ -2396,15 +2413,33 @@ if [ -d "`$W/.attach" ]; then
 fi
 echo "ATTACH_MANIFEST_LINES=`$(wc -l < "`$W/out/.attach-manifest.txt`$EV_SUF" 2>/dev/null || echo 0)"
 # ADR-0007 缺口 4: agent 运行**窗口起点**标记 —— 必须在 agent 运行前创建, 否则窗口错位、
-#   diff 恒空。后续用 `find -newer` 列出本窗口内被改动的文件(与 git 无关: 实测工作区非
+#   diff 恒空。后续用 ``find -newer`` 列出本窗口内被改动的文件(与 git 无关: 实测工作区非
 #   git 仓库, git diff 会静默返回空 = 假的"未越界")。
 : > "`$W/.run-marker"
-# O-48: `-k 10` = 到点先 TERM、10s 后仍不退则 KILL。**裸 `timeout` 对忽略 SIGTERM 的子进程会一直等**
-#   (受控复现: `timeout 2 bash -c 'trap "" TERM; sleep 6'` ⇒ rc=124 但**耗时 6s**; 同命令加 `-k 1` ⇒ rc=137 **3s**)
+# ★★ A2 (2026-09-29): **执行侧过程留痕** —— 5 项最小充分集, 采集点**全部在执行体之外**（设计底稿 = 吃狗粮 imp4）。
+#   为什么要有它（实测现状）: 与"过程"最接近的两件证据是 ``.progress``（**只有吞吐曲线, 不记"做了什么"**）
+#   与 ``.workspace-diff.txt``（**只记改了哪些路径**）⇒ 判据只能看**产物**, 看不到**过程** = 幻觉抑制最缺的那类证据。
+#   ⚠ **第 4 项"工具调用链"由执行体内部产生 ⇒ 本仓刻意标 ``uncore``（不可核）**（执行体可篡改/漏报/伪造）——
+#     **绝不**把它算作可核证据（本仓头号形态: 把"没判"说成"判了且通过"）。
+#   ⚠ 采集点可达性**已核**（README 站上五条硬约束）: env 只用 ``uname``/``hostname``/``nproc``/``free -m``
+#     （``/proc/*`` 不可读 ⇒ 纪律 8 用 ``free -m``; 无 ``nvidia-smi`` ⇒ 纪律 9 不采 GPU）;
+#     cmd 取外壳自己的 R0/R1/RC; fs 由既有 ``find -newer`` 派生; artifact 由**主控侧**回收时算（本件只留指针）。
+ET_LAUNCH_NS=`$(date +%s%N)
+ET_PID=`$$
+ET_UNAME=`$(uname -srm 2>/dev/null | tr -d '\n')
+ET_HOST=`$(hostname 2>/dev/null | tr -d '\n')
+ET_NPROC=`$(nproc 2>/dev/null || echo unknown)
+ET_FREEM=`$(free -m 2>/dev/null | awk '/^Mem:/{print `$7}')
+{
+  printf '# executor-trace v1 ts=%s\n' "$ts"
+  printf '[env] caught_at=launcher pid=%s launch_ns=%s uname="%s" host="%s" nproc=%s free_m_avail=%s cwd="%s"\n' "`$ET_PID" "`$ET_LAUNCH_NS" "`$ET_UNAME" "`$ET_HOST" "`$ET_NPROC" "`$ET_FREEM" "`$W"
+} > "`$W/out/.executor-trace.txt`$EV_SUF"
+# O-48: ``-k 10`` = 到点先 TERM、10s 后仍不退则 KILL。**裸 ``timeout`` 对忽略 SIGTERM 的子进程会一直等**
+#   (受控复现: ``timeout 2 bash -c 'trap "" TERM; sleep 6'`` ⇒ rc=124 但**耗时 6s**; 同命令加 ``-k 1`` ⇒ rc=137 **3s**)
 #   ⇒ opencode 挂死时**永不返回**、留孤儿占槽(B 站实测孤儿曾活 17.2h)。
 timeout -k 10 $timeout opencode run -m "$id" < "`$W/out/.prompt.txt`$EV_SUF" > "`$W/out/.agent-output.txt`$EV_SUF" 2>&1
 RC=`$?
-# O-24 P0-① resume loop: on failure retry <=3 via `--continue` (opencode isolates sessions
+# O-24 P0-① resume loop: on failure retry <=3 via ``--continue`` (opencode isolates sessions
 # per workspace path -> in $W it resumes THIS run's session, verified 2026-09-09 on A station;
 # no session-id parsing needed; base64 prompt keeps ASCII discipline)
 CONT_ATTEMPT=0
@@ -2436,18 +2471,27 @@ TOTAL_BYTES=`$(wc -c < "`$W/out/.agent-output.txt`$EV_SUF" 2>/dev/null)
 TBPS=`$(( TOTAL_BYTES / ( (R1-R0)/1000000000 +1 ) ))
 printf 't=end bytes=%s bytes_s=%s\n' "`$TOTAL_BYTES" "`$TBPS" >> "`$W/out/.progress`$EV_SUF"
 # ADR-0007 缺口 4: readonly 卡的"未越界"载体 —— **与 git 无关**(实测工作区非 git 仓库,
-#   `git diff` 在非仓库上静默返回空 = 假的"未越界") ⇒ marker + `find -newer`, 只列 agent
-#   运行窗口内被改动的**工作区相对路径**(`-printf '%P'`)。
+#   ``git diff`` 在非仓库上静默返回空 = 假的"未越界") ⇒ marker + ``find -newer``, 只列 agent
+#   运行窗口内被改动的**工作区相对路径**(``-printf '%P'``)。
 #   **放在 golden/accept 门之前** —— 否则会被 golden 自身产出的构建物(如 cpphub beta 编译)污染。
 #   排除框架自身产物(漏项 ⇒ diff 恒非空 ⇒ 判据退化为噪声)。
-# ★★ O-78② (2026-09-26): 这两条正则**不再是字面量** —— 从 `$Script:FRAMEWORK_RESERVED_*` 派生
-#   （`Get-FrameworkReservedDirRegex` / `Get-FrameworkReservedFileRegex`），与 sync 排除**同源**。
-#   ⚠ 之前正是这里的字面量比 sync 那份**更全**（这里早就有 `agent-out`）⇒ 两份清单漂移，
-#     结果 sync 面踩了 O-77（`tar: ./agent-out: file changed as we read it`）。
+# ★★ O-78② (2026-09-26): 这两条正则**不再是字面量** —— 从 ``$Script:FRAMEWORK_RESERVED_*`` 派生
+#   （``Get-FrameworkReservedDirRegex`` / ``Get-FrameworkReservedFileRegex``），与 sync 排除**同源**。
+#   ⚠ 之前正是这里的字面量比 sync 那份**更全**（这里早就有 ``agent-out``）⇒ 两份清单漂移，
+#     结果 sync 面踩了 O-77（``tar: ./agent-out: file changed as we read it``）。
 ( cd "`$W" && find . -newer .run-marker -type f -printf '%P\n' 2>/dev/null \
     | grep -v -E '$(Get-FrameworkReservedDirRegex)' \
     | grep -v -E '$(Get-FrameworkReservedFileRegex)' ) > "`$W/out/.workspace-diff.txt`$EV_SUF" 2>/dev/null || true
 echo "WORKSPACE_DIFF_LINES=`$(wc -l < "`$W/out/.workspace-diff.txt`$EV_SUF" 2>/dev/null || echo 0)"
+# ★★ A2 (2026-09-29): 追加 cmd/fs/tool/artifact 四项留痕（``[env]`` 已在启动器采集）。
+#   ⚠ ``[tool]`` 由**执行体内部**产生 ⇒ 恒标 ``uncore``（不可核）—— 本件**如实**记"这一项核不了", 不假装覆盖。
+{
+  printf '[cmd] cmd="opencode run -m %s" t_start_ns=%s t_end_ns=%s rc=%s resume_attempts=%s\n' "$id" "`$R0" "`$R1" "`$RC" "`$CONT_ATTEMPT"
+  printf '[fs] diff_pointer=out/.workspace-diff.txt lines=%s\n' "`$(wc -l < "`$W/out/.workspace-diff.txt`$EV_SUF" 2>/dev/null || echo 0)"
+  printf '[tool] chain=uncore reason=executor-internal\n'
+  printf '[artifact] hashes=main-side note=主控侧回收时计算并与 run.json 摘要交叉锚定\n'
+} >> "`$W/out/.executor-trace.txt`$EV_SUF"
+echo "EXEC_TRACE_LINES=`$(wc -l < "`$W/out/.executor-trace.txt`$EV_SUF" 2>/dev/null || echo 0)"
 # accept gate (A14): run executable criteria in workspace after agent completes
 # golden gate (O-12, IMPLEMENTATION §3.3 M3): authoritative criteria run BEFORE self accept (inv 2/5)
 # default line: ACCEPT_GOLDEN_OK always present in .meta (derived-requirement, IMPLEMENTATION §9.2)
@@ -2480,10 +2524,10 @@ RUNS=`$(( (R1-R0)/1000000000 ))      # P2-1: run = agent generation wall time
 echo "QUEUE_S=`$QUEUE"
 echo "RUN_S=`$RUNS"
 # 2026-09-23 (ruling b, O-27) RC DOMAIN FIX: .meta 的 TASK_RC 必须与控制台看到的
-#   **整体退出码**同域。旧实现在此打印 agent 的 `$RC`(=0), 而 accept/golden 失败时本脚本
-#   往下 exit 9, 控制台又把 9 映射成 run.json `exit_code`=1 (DESIGN 9.5) ⇒ **两域不一致**,
-#   而 `_VERDICT_RC_MAP` 假设同域 ⇒ 每个"验收失败"的 run 都被判 evidence FAIL(阻断提交)。
-#   现: 先算 FINAL_RC(与下面 exit 同值)写进 .meta, 并加 `RC_DOMAIN=v2` 标记;
+#   **整体退出码**同域。旧实现在此打印 agent 的 ``$RC``(=0), 而 accept/golden 失败时本脚本
+#   往下 exit 9, 控制台又把 9 映射成 run.json ``exit_code``=1 (DESIGN 9.5) ⇒ **两域不一致**,
+#   而 ``_VERDICT_RC_MAP`` 假设同域 ⇒ 每个"验收失败"的 run 都被判 evidence FAIL(阻断提交)。
+#   现: 先算 FINAL_RC(与下面 exit 同值)写进 .meta, 并加 ``RC_DOMAIN=v2`` 标记;
 #   cluster.py 据此选域(无标记的历史 run 走 v1 有界宽容)。
 FINAL_RC="`$RC"
 if { [ "`$GOLDEN_ACTIVE" -eq 1 ] && [ "`$ACCEPT_GOLDEN_OK" -ne 1 ]; } \
@@ -2791,6 +2835,9 @@ exit `$FINAL_RC
         session_id = $sessionId
         exit_code = $code
         status = if ($code -eq 0 -and $acceptPassed -and $acceptGoldenPassed) { 'completed' } elseif ($code -eq 6) { 'timeout' } else { 'failed' }
+        # A1 / ADR-0009 §2: D6/D7 层级归属（**派发前**求值，见本函数前段 `$boundary`）。
+        #   可选键：存量 run.json 无此键 ⇒ 消费者须容忍缺键；卡未声明三键 ⇒ resolved=false（不假装已判）。
+        boundary = $boundary
         content_digest = "sha256:$contentSha"
         # 缺口 8: 形状升级 —— 除 total_tokens/tool_uses 外含 breakdown + `source`(血缘: 会话库 vs 取不到)
         usage = $usageObj
@@ -2872,6 +2919,10 @@ exit `$FINAL_RC
             #   零例外) ⇒ 站上是**无条件产出**的。不要用它反推 readonly(判 readonly 看 run.json)。
             $wdSrc = Join-Path $evDir '.workspace-diff.txt'
             if (Test-Path $wdSrc) { Move-Item $wdSrc (Join-Path $runDir 'workspace-diff.txt') -Force | Out-Null }
+            # A2 (2026-09-29): 执行侧**过程留痕**原件 → runDir（5 项; `[tool]` 恒标 uncore 如实标注）。
+            #   合批拉回清单由 `$Script:EV_FILES` 派生（IX）⇒ 此处只做"搬进 runDir"的归档命名。
+            $etSrc = Join-Path $evDir '.executor-trace.txt'
+            if (Test-Path $etSrc) { Move-Item $etSrc (Join-Path $runDir 'executor-trace.txt') -Force | Out-Null }
             # ADR-0007 缺口 5: 附件清单原件(逐文件 `<sha>  <relpath>`) —— **下钻**用(是"哪份附件里的哪个
             #   文件"的原始证据)。⚠ 本件**未被链钉住**(被钉住的是 run.json 里的摘要), 故"本件 ↔ 摘要"
             #   是否自洽**只能在人/工具侧核对**, 该上限已记入 ADR-0007/ARCHITECTURE。
@@ -3538,7 +3589,7 @@ function Invoke-Task-Claude {
 set -eu
 W="$stWorkDir"
 mkdir -p "`$W"
-# 只清 `.attach/`(残留件会污染本次); **不删** `W` 本身 —— 见上"每项目稳定"那条(`claude --continue`)
+# 只清 ``.attach/``(残留件会污染本次); **不删** ``W`` 本身 —— 见上"每项目稳定"那条(``claude --continue``)
 rm -rf "`$W/.attach" && mkdir -p "`$W/.attach"
 "@
         Invoke-RemoteScript -HostName $stHost -ScriptBody $bodyReset -LocalName "agent-cli-claude-ws-reset.sh" | Out-Null
@@ -4689,6 +4740,46 @@ function Select-Reviewer {
               prefer = $pick.prefer; rejected = $rejected; sensitivity = [string]$Sensitivity }
 }
 
+function Resolve-D6D7Boundary {
+    # ── A1 / ADR-0009 §2（2026-09-29）：**D6 / D7 层级归属的机械求值**（纯函数）──────────────
+    # 判什么：一次派发场景该落 **D6**（**这一次派发内部**的质量门）还是 **D7**
+    #   （需**非产出方主体**给结论 / 需在**同一产物**上**多轮往返**）。
+    # ★ 三条判据**原文照抄** ADR-0009 §1（不改含义）:
+    #     B-1 是否需要"**非产出方**"的主体来给结论？  是 ⇒ D7
+    #     B-2 是否在同一产物上需要**多轮往返**？      是 ⇒ D7
+    #     B-3 是否只是"**这一次派发内部**"的质量门？  是 ⇒ D6
+    # ★★ 求值规则 = **三分支，互斥且穷尽**（ADR-0009 §2）:
+    #     (1) B-1=是 ∨ B-2=是              ⇒ **D7**（branch='B-1orB-2'）
+    #     (2) B-3=是 ∧ ¬B-1 ∧ ¬B-2        ⇒ **D6**（branch='B-3'）
+    #     (3) ¬B-3 ∧ ¬B-1 ∧ ¬B-2          ⇒ **D6**（branch='convention'）
+    #   ⚠ **第三分支是"约定"不是"推导"**（ADR-0009 §2 明文，2026-09-29 由 O-115 补入）：三判据全否
+    #     **本身不指向 D6**；归 D6 是因为受理区状态机 / 验收接入点 / 派发引擎**当前均由 D6 承载**。
+    #     删掉它 ⇒ 3 行灰项（受理阶段协商回环 / 需求方验收签收 / 跨站派发，ADR §3 表）**求值落空**
+    #     —— `_fm_golden_test.ps1` 有对应**先验红**用例守这条（删分支 ⇒ 该 3 行形态必须红）。
+    # ★ **诚实性（fail-soft）**：三键**任一未声明**（空串 / 非 `true|false`）⇒ `resolved=$false`、
+    #   `layer` 空 —— **不假装已求值**（"没判" ≠ "判了且归 D6"；与 `Resolve-SelfReviewGuard`
+    #   的"读不出 ⇒ 不默认放行"同族）。**存量卡不带这三键 ⇒ 归属不变**（只多一条 `unresolved` 留痕）。
+    param($b1, $b2, $b3)
+    $tri = {
+        param($v)
+        $s = "$v".Trim().ToLower()
+        if ($s -eq 'true') { return $true }
+        if ($s -eq 'false') { return $false }
+        return $null
+    }
+    $v1 = & $tri $b1; $v2 = & $tri $b2; $v3 = & $tri $b3
+    $facts = [ordered]@{ needs_non_producer_verdict = $v1
+                         needs_multi_round_review = $v2
+                         is_intra_dispatch_quality_gate = $v3 }
+    if ($null -eq $v1 -or $null -eq $v2 -or $null -eq $v3) {
+        return @{ resolved = $false; layer = ''; branch = ''
+                  reason = '三判据未声明齐（缺 true/false 取值）⇒ 未求值'; facts = $facts }
+    }
+    if ($v1 -or $v2) { return @{ resolved = $true; layer = 'D7'; branch = 'B-1orB-2'; reason = ''; facts = $facts } }
+    if ($v3)         { return @{ resolved = $true; layer = 'D6'; branch = 'B-3';      reason = ''; facts = $facts } }
+    return @{ resolved = $true; layer = 'D6'; branch = 'convention'; reason = ''; facts = $facts }
+}
+
 function Invoke-Review {
     param(
         [string]$proj,
@@ -5179,6 +5270,20 @@ function Invoke-BatchTask {
     foreach ($j in $jobs) {
         $txt = @()
         if (Test-Path $j.logFile) { $txt = @(Get-Content $j.logFile -ErrorAction SilentlyContinue) }
+        # ★ O-116（2026-09-29）: 站级日志**一次切成"卡 → 块"**（块首 = 派发段写的 marker `=== CARD <卡> rc=<rc> ===`）。
+        #   下面逐卡取值**必须只在本卡的块内** —— 站级日志是"多卡**顺序追加**"（同站串行 ⇒ 一个 log 里 N 张卡首尾相接），
+        #   在**整站**日志里取 `TASK_DONE`/`RUNSTAMP` 的末行 ⇒ **每张卡都拿到末卡的值** ⇒ 用**末卡**的 runDir
+        #   读 `.agent-run.json` ⇒ 覆盖逐卡 rc ⇒ **判决级假绿**。
+        #   一手实证（3 卡同钉 B）：`xrev2` 真 `rc=1` / 站级日志 `TASK_RC=9` / 产物缺失，而官方汇总三行**同一个 runDir**
+        #   （末卡 `xrev3` 的）+ `exit=0` + `BATCH_DONE: 失败或未完成=0`。（同族 = O-57 跨 run 证据错配。）
+        $blocks = @()
+        $curBlk = $null
+        foreach ($l in $txt) {
+            if ("$l" -match '^=== CARD (.+) rc=.* ===\s*$') {
+                $curBlk = [pscustomobject]@{ card = $Matches[1]; lines = @() }
+                $blocks += $curBlk
+            } elseif ($null -ne $curBlk) { $curBlk.lines += "$l" }
+        }
         foreach ($c in @($j.cards)) {
             $mark = $txt | Where-Object { "$_" -like "=== CARD $($c.card) rc=*" } | Select-Object -Last 1
             if (-not $mark) {
@@ -5193,7 +5298,11 @@ function Invoke-BatchTask {
                 Write-Host ("  [未完成] {0} st={1} ⇒ 子进程未给出退出码(rc='{2}') —— **不许当作成功**" -f $c.card, $j.station, $rcTxt)
                 $bad++; continue
             }
-            $done = $txt | Where-Object { "$_" -like '*TASK_DONE dir=*' } | Select-Object -Last 1
+            # ★ O-116: `TASK_DONE`/`RUNSTAMP` **只在本卡的块内**取（见上面切块段）—— 取整站日志的末行
+            #   ⇒ 每卡都拿到**末卡**的值（实测：3 卡同 runDir、真失败的卡被判 `exit=0`）。
+            $cb = @($blocks | Where-Object { $_.card -eq $c.card } | Select-Object -Last 1)
+            $clines = if ($cb.Count -gt 0) { @($cb[0].lines) } else { @() }
+            $done = $clines | Where-Object { "$_" -like '*TASK_DONE dir=*' } | Select-Object -Last 1
             $runDir = ''; $exitReal = $rc; $exitSrc = 'log'
             if ($done -and ("$done" -match 'TASK_DONE dir=(\S+)')) {
                 $runDir = $Matches[1]
@@ -5210,7 +5319,7 @@ function Invoke-BatchTask {
                 }
             }
             $stamp = ''
-            $s2 = $txt | Where-Object { "$_" -like '*RUNSTAMP:*' } | Select-Object -Last 1
+            $s2 = $clines | Where-Object { "$_" -like '*RUNSTAMP:*' } | Select-Object -Last 1
             if ("$s2" -match 'RUNSTAMP: (\d+)') { $stamp = $Matches[1] }
             if ($exitReal -ne 0) { $bad++ }
             Write-Host ("  {0,-52} st={1} ts={2} exit={3} src={5} runDir={4}" -f $c.card, $j.station, $stamp, $exitReal, $runDir, $exitSrc)

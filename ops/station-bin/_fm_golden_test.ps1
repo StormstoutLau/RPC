@@ -38,7 +38,9 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 # D7-P3-1 (2026-09-26): **不得自审**的判定本体（纯函数）。
 'Resolve-SelfReviewGuard',
 # D7-P3-2 (2026-09-26): **编排层 —— 谁审谁** 的选择器（纯函数）。
-'Select-Reviewer')) {
+'Select-Reviewer',
+# A1 / ADR-0009 §2 (2026-09-29): **D6/D7 层级归属**的求值本体（纯函数：只吃三个布尔 ⇒ 可离线单测）。
+'Resolve-D6D7Boundary')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -245,12 +247,15 @@ Assert-True "evm-state: 反例 path 为空 → 拒" ((Test-EvmStatePull -state '
 #   从"裸列"改成"`$goldenActive` 条件列"（见 agent-cli.ps1 该件注释：裸列会让每个无 golden 的 run
 #   记一条 missing-artifact gap）⇒ **基线少 1 件**。该期望值当时没跟着改，而本夹具此前不在门禁里
 #   ⇒ **静静积累了多轮**。⚠ 判据：这是**合法演进**（有代码注释为证），不是回归 —— 故改期望值而非改代码。
+# ★ A2 (2026-09-29): 期望 9 → **10/14** —— **合法演进**（非回归）: 主路基线新增 `executor-trace` 件
+#   （执行侧过程留痕, 见 agent-cli.ps1 该处注释 + A-LIST-LANDING-PLAN §2.4）。⇒ 无 accept/golden = 10、
+#   有 accept+golden = 14。**判据**：有代码注释为证 ⇒ 改期望值, 不改代码。
 $b0 = @(Get-FrameworkSubjects @() $false)
 $n0 = @($b0 | ForEach-Object { $_.name })
-Assert-True "baseline: 无 accept 无 golden => 9 件" ($b0.Count -eq 9)
-Assert-True "baseline: 含 judgment-record/prompt/workspace-diff/card" (
+Assert-True "baseline: 无 accept 无 golden => 10 件" ($b0.Count -eq 10)
+Assert-True "baseline: 含 judgment-record/prompt/workspace-diff/executor-trace/card" (
     ($n0 -contains 'judgment-record') -and ($n0 -contains 'prompt') -and
-    ($n0 -contains 'workspace-diff') -and ($n0 -contains 'card'))
+    ($n0 -contains 'workspace-diff') -and ($n0 -contains 'executor-trace') -and ($n0 -contains 'card'))
 # 这条是**负向自证**: 实测无 accept 的 run 上该两件不存在 ⇒ 基线若无条件列入, 每个这类 run
 #   都会假报 missing-artifact(把缺口判据变成噪声) ⇒ 必须**不**列入。
 Assert-True "baseline: 无 accept => 不含 accept-output(否则每 run 假报缺件)" (-not ($n0 -contains 'accept-output'))
@@ -268,7 +273,7 @@ Assert-True "baseline: review 件带 ephemeral=true(否则未 review 的 run 假
 
 $b1 = @(Get-FrameworkSubjects @('echo ok') $true)
 $n1 = @($b1 | ForEach-Object { $_.name })
-Assert-True "baseline: 有 accept+golden => 13 件" ($b1.Count -eq 13)
+Assert-True "baseline: 有 accept+golden => 14 件" ($b1.Count -eq 14)
 Assert-True "baseline: 有 accept+golden => 含 accept-output/accept-golden-output" (
     ($n1 -contains 'accept-output') -and ($n1 -contains 'accept-golden-output'))
 
@@ -278,10 +283,11 @@ $cardSubs = @(
     @{ name = 'station-tmp-log'; path = ''; collect = 'tail -5 /tmp/x.log'; digest = 'sha256'; ephemeral = $true }
 )
 $mg = @(Merge-EvidenceSubjects $cardSubs @() $false)
-# 9(基线) + 2(卡声明) - 1(其中 prompt 与基线同 path, 去重) = 10
+# 10(基线) + 2(卡声明) - 1(其中 prompt 与基线同 path, 去重) = 11
 # O-56 (2026-09-25): 10 -> 9 —— `accept-cmds` 已改**条件列**（无 accept 的卡站上**永不产出**该件）。
 #   与 §218 那条同性质: **合法演进**（判据缺陷修复），故改期望值而非改代码。
-Assert-True "merge: 基线9 + 卡声明2 - 重复1 = 10" ($mg.Count -eq 10)
+# ★ A2 (2026-09-29): 9 -> 10(基线) ⇒ 合并结果 11 —— 基线新增一件（`executor-trace`）。
+Assert-True "merge: 基线10 + 卡声明2 - 重复1 = 11" ($mg.Count -eq 11)
 Assert-True "merge: 卡声明与基线同 path 只出现一次" ((@($mg | Where-Object { $_.path -eq 'prompt.txt' })).Count -eq 1)
 $tmp = @($mg | Where-Object { $_.name -eq 'station-tmp-log' })
 Assert-True "merge: 卡特有 subject 保留(collect/ephemeral 未丢)" (
@@ -306,7 +312,7 @@ Assert-True "merge: 未声明 state 的件缺省空串(保六键纯净, 不插 n
 
 # 路B 的核心目的: **无 manifest 的卡**(= 71 个真实 run 的来源)也能拿到非空声明 ⇒ 不再是 recipe v1
 $m0 = @(Merge-EvidenceSubjects @() @() $false)
-Assert-True "merge: 空卡仍得 9 件(=> 不再退化为 recipe v1)" ($m0.Count -eq 9)
+Assert-True "merge: 空卡仍得 10 件(=> 不再退化为 recipe v1)" ($m0.Count -eq 10)
 
 # --- O-15/AUDIT (2026-09-21): claude 备路按路基线(证据面到齐 => recipe v2) ---
 # 该路归档件集 = opencode 子集 + stderr, 无 judgment-record 等远端合成批件
@@ -344,9 +350,9 @@ $cmg2 = @(Merge-EvidenceSubjects $csubs @() $false { param($ac,$ga) Get-ClaudeFr
 Assert-True "claude merge: 基线5 + 卡声明2 - 重复1 = 6" ($cmg2.Count -eq 6)
 Assert-True "claude merge: prompt.txt 只出现一次" ((@($cmg2 | Where-Object { $_.path -eq 'prompt.txt' })).Count -eq 1)
 Assert-True "claude merge: 卡特有件保留" ((@($cmg2 | Where-Object { $_.name -eq 'station-tmp-log' })).Count -eq 1)
-# baselineFn 缺省(主路调用点)不传时行为不变 => 既有的 9 件合并仍成立(防退化; O-56: 10 -> 9)
+# baselineFn 缺省(主路调用点)不传时行为不变 => 既有的合并仍成立(防退化; O-56: 10 -> 9; A2: 9 -> 10)
 $defmg = @(Merge-EvidenceSubjects @() @() $false)
-Assert-True "claude merge: 缺省 baselineFn 仍得主路 9 件(未破坏主路调用)" ($defmg.Count -eq 9)
+Assert-True "claude merge: 缺省 baselineFn 仍得主路 10 件(未破坏主路调用)" ($defmg.Count -eq 10)
 
 # --- O-15/AUDIT (2026-09-21): auto-fallback 触发判定(纯函数, rc 表) ---
 # 正向: 只认 rc=6(引擎死锁/超时)才切 claude 备路
@@ -954,10 +960,10 @@ Assert-True 'o42: $pmArg 定义受 readonly 分支控制(readonly=false 才 acce
 $evTbl = ([regex]::Matches($content, '\$Script:EV_FILES = @\(')).Count
 Assert-True "o57: 暂存件真值**只定义一处**(禁第二份枚举 —— 本仓头号失败形态)" ($evTbl -eq 1)
 $evAll = @('.meta', '.prompt.txt', '.progress', '.accept-cmds.txt', '.golden-cmd.txt',
-           '.workspace-diff.txt', '.attach-manifest.txt', '.session-meta.txt',
+           '.workspace-diff.txt', '.executor-trace.txt', '.attach-manifest.txt', '.session-meta.txt',
            '.agent-output.txt', '.accept-output.txt', '.accept-golden-output.txt')
 $evMiss = @($evAll | Where-Object { -not $content.Contains("name = '$_'") })
-Assert-True "o57: 真值表含全部 **11** 个暂存件(逐名核对; 缺: $($evMiss -join ', '))" ($evMiss.Count -eq 0)
+Assert-True "o57: 真值表含全部 **12** 个暂存件(逐名核对; 缺: $($evMiss -join ', '))" ($evMiss.Count -eq 0)
 Assert-True "o57: 合批清单**从真值表派生**(不手写第二份枚举)" (
     $content.Contains('$Script:EV_FILES | Where-Object { $_.pull -eq ''batch'' }'))
 Assert-True "o57: per-run **后缀**的构造规则**只定义一处**(唯一命名规则)" (
@@ -1008,20 +1014,42 @@ Assert-True "o68: ★ 后缀定义**早于** body 内第一个写点(位置不�
 $iGoldenUse = $content.IndexOf("`n`$goldenBlock`n")
 Assert-True "o68: ★ golden 段的**插值点**晚于后缀定义(故它那两件也带后缀)" (
     $iGoldenUse -gt $iSufDef)
-# ★★ 最强的那条: **10 个 body 内基名的写点全部带后缀**, 且**裸名残留必须为 0**
+# ★★ 最强的那条: **11 个 body 内基名的写点全部带后缀**, 且**裸名残留必须为 0**
 $evBases = @('.meta', '.prompt.txt', '.progress', '.accept-cmds.txt', '.golden-cmd.txt',
-             '.workspace-diff.txt', '.attach-manifest.txt',
+             '.workspace-diff.txt', '.executor-trace.txt', '.attach-manifest.txt',
              '.agent-output.txt', '.accept-output.txt', '.accept-golden-output.txt')
 $evBare = @($evBases | Where-Object { $content.Contains('$W/out/' + $_ + '"') })
 Assert-True "o68: ★★ 站上写点**无裸名残留**(逐个核对; 残留: $($evBare -join ', '))" ($evBare.Count -eq 0)
 $evNoSuf = @($evBases | Where-Object { -not $content.Contains('$W/out/' + $_ + '`$EV_SUF') })
-Assert-True "o68: ★★ 10 个基名**逐个**都插了后缀(缺: $($evNoSuf -join ', '))" ($evNoSuf.Count -eq 0)
+Assert-True "o68: ★★ 11 个基名**逐个**都插了后缀(缺: $($evNoSuf -join ', '))" ($evNoSuf.Count -eq 0)
 Assert-True "o68: 主控侧三处用 **PS 变量 `evSuf`**(不是站上那个 bash 变量 ⇒ 语法域不同)" (
     ([regex]::Matches($content, '\$W/out/\.(agent-output|accept-output|accept-golden-output)\.txt\$evSuf')).Count -ge 3)
 Assert-True "o68: 会话遥测 helper 的目标路径也带后缀(它**不走** body ⇒ 单独一处)" (
     $content.Contains(".session-meta.txt`$evSuf'"))
 Assert-True "o68: 合批的远端路径带后缀, 但 **marker 仍发基名**(归档映射靠基名)" (
     $content.Contains('$W/out/$($_)$evSuf') -and $content.Contains('echo FILE:$_'))
+
+# --- ★★ A2 (2026-09-29): 执行侧**过程留痕** —— 5 项采集点 + `[tool]` 恒 uncore ---
+#   为什么: 判据只能看**产物**, 看不到**过程**（幻觉抑制最缺的那类证据 —— 它怎么得出这个结论）。
+#   ⚠ **最关键的一条是负向的**: `[tool]`（工具调用链）由**执行体内部**产生 ⇒ 恒标 `uncore`（不可核）——
+#     若有人把它改成"可核/verified", 就是把**没判的说成判了且通过**（本仓头号形态）⇒ 断言必须红。
+Assert-True "a2: `[cmd]`/`[env]`/`[fs]`/`[tool]`/`[artifact]` 五个采集点**逐个**在 body 里" (
+    $content.Contains('[cmd] cmd=') -and $content.Contains('[env] caught_at=') -and
+    $content.Contains('[fs] diff_pointer=') -and $content.Contains('[tool] chain=') -and
+    $content.Contains('[artifact] hashes='))
+Assert-True "a2: `[env]` 采集点在**启动器**(fork 前捕获 ⇒ launch_ns 早于 agent 运行)" (
+    ([regex]::Matches($content, '\[env\] caught_at=launcher')).Count -eq 1)
+Assert-True "a2: ★ `[tool]` **恒 uncore**(执行体内部 ⇒ 不可核; 绝不冒充可核证据)" (
+    $content.Contains('[tool] chain=uncore'))
+Assert-True "a2: ★ 负向自证 —— body 里**不存在**把它标成可核的形态(`chain=core`/`chain=verified`)" (
+    -not ($content.Contains('chain=core') -or $content.Contains('chain=verified')))
+Assert-True "a2: env 采集只用**可达命令**(`free -m`, 不读 `/proc` —— README 纪律 8)" (
+    $content.Contains('free -m') -and -not $content.Contains('cat /proc/meminfo'))
+Assert-True "a2: `[env]` 段用 `>` 建件 + `[cmd/fs/tool/artifact]` 段用 `>>` 追加(同 run 分两处采集)" (
+    $content.Contains('} > "`$W/out/.executor-trace.txt`$EV_SUF"') -and
+    $content.Contains('} >> "`$W/out/.executor-trace.txt`$EV_SUF"'))
+Assert-True "a2: 主控侧把留痕件**归档进 runDir**(executor-trace.txt)" (
+    $content.Contains("(Join-Path `$runDir 'executor-trace.txt')"))
 # ⚠ 2026-09-25 (T1) **就地更正本条**: 原断言要求"派发前 body 里也有 `.attach` 的 reset" ——
 #   T1 之后那条**已移进锁内落盘段**(理由见 DEV-LOG §27.11-A), 故此处改为只认"中转目录"。
 #   若有人把 `.attach` 的重置搬回派发前, 由下面 t1 段的**位置断言**兜住。
@@ -1130,8 +1158,33 @@ Assert-True "o72③: 站上脚本副本 `/tmp/agent-cli-task-*.sh` **按龄清**
     $content.Contains("find /tmp -maxdepth 1 -name 'agent-cli-task-*.sh' -mtime +7 -delete"))
 # ⚠ 这条是**防倒退**的: T1 那两个中转脚本用 `trap 'rm -f "$0"'` 自删(因为它们**不**走重试链),
 #   而主 body **走** `Invoke-RemoteScript` 的网络重试(同一路径再 bash 一次) ⇒ 自删会把"成功"判成 127。
+# ⚠ 2026-09-29 期望值更新（**不是回归**）：该句原文里的 `` `bash` `` 落在**双引号 here-string 内** ⇒
+#   PS 会把单反引号当转义吃掉 ⇒ 生成件与源码不一致（详见 `o117`）。⇒ 源码按设计改为**双写**
+#   ``` ``bash`` ```（渲染出字面反引号）⇒ 本断言同步改期望值。★ 语义一字未变。
 Assert-True "o72④: 源码写明【为什么主 body 不自删】(防后来者照抄 T1 的 trap 自删)" (
-    $content.Contains('把成功判成失败') -and $content.Contains('再 `bash` 一次'))
+    $content.Contains('把成功判成失败') -and $content.Contains('再 ``bash`` 一次'))
+# ── o117 (2026-09-29): 双引号 here-string 内的「反引号 + 转义字母」会把 markdown 内联码变成**控制字符** ──
+#   一手事故: 当日 23:01 批 **4/4 全挂 `exit=255`** —— A2 的采集点注释里写了 `` `nproc` `` / `` `free -m` `` /
+#   `` `nvidia-smi` ``，而 `@"..."@` **先做 PS 转义**：`` `n ``→LF · `` `f ``→FF ⇒ 注释**后半截被推出 `#` 之外**
+#   ⇒ bash 当命令跑（`proc/ree: 没有那个文件或目录`）⇒ **整条派发链死**（且报错点离病因很远）。
+#   ★★ 当时静态断言 `o72④` **全绿** —— 又是本夹具自述的「查'串在不', 查不出'这条链现在跑不跑得起来'」。
+#   ⇒ 口径: 双引号 here-string **区段内**，**奇数个**反引号紧邻 [nftbrva0] ⇒ 必红。
+#      （**双写** ``` `` ``` 即安全 —— PS 渲染成**字面反引号**，源码与生成件重新一致。）
+#   ⚠ 区段判定用**行式**（行尾 `@"` 开、行内仅 `"@` 收）—— 与 `Invoke-RemoteScript` 实际生成的一致，
+#     不用跨文件非贪婪正则（那会被注释里偶然出现的 `@"` 骗出假区段）。
+$hLines = $content.Split("`n")
+$hInDq = $false
+$hBad = @()
+for ($hk = 0; $hk -lt $hLines.Count; $hk++) {
+    $hCur = $hLines[$hk]
+    if ($hInDq) {
+        if ($hCur.Trim() -eq '"@') { $hInDq = $false; continue }
+        foreach ($hmm in [regex]::Matches($hCur, '(`+)([nftbrva0])')) {
+            if (($hmm.Groups[1].Value.Length % 2) -eq 1) { $hBad += ("L$($hk+1)=" + $hCur.Trim()) }
+        }
+    } elseif ($hCur.TrimEnd().EndsWith('@"')) { $hInDq = $true }
+}
+Assert-True "o117: 双引号 here-string 内**不得**出现【奇数个反引号 + n/f/t/b/r/v/a/0】(PS 当转义 ⇒ 注入控制字符 ⇒ 生成件坏)（危险点 $($hBad.Count) 处）" ($hBad.Count -eq 0)
 # ★★ o72⑤/⑥ = **行为测试**（离线, 用本地 Git Bash 跑**同一段结构**）——
 #   为什么非有不可: 静态断言只验"那行文本在"。而**首跑(2026-09-26)实测**抓到的缺陷恰恰是
 #   "文本在、但**跑不起来**": `[ $(( n * 5 )) -ge SAMPLE_MAX_S ]` 少了 `$` ⇒ `[: SAMPLE_MAX_S: 需要整数表达式`
@@ -1289,6 +1342,22 @@ Assert-True "o80⑨: 汇总从 **`.agent-run.json`** 读真值（不是 `run.jso
 Assert-True "o80⑨b: `src=` 打出的**标签**也必须是真名（读对了但说错，仍是'没读到'的同族）" (
     -not $codeOnlyFull.Contains("`$exitSrc = 'run.json'") -and
     $codeOnlyFull.Contains("`$exitSrc = '.agent-run.json'"))
+# ★ O-116（2026-09-29）: 汇总**逐卡取值必须限定在"本卡的块"内** —— 站级日志是"多卡**顺序追加**"
+#   （同站串行 ⇒ 一个 log 文件里 N 张卡首尾相接）。在**整站**日志里取 `TASK_DONE`/`RUNSTAMP` 的末行
+#   ⇒ **每张卡都拿到末卡的值** ⇒ 用**末卡**的 runDir 读 `.agent-run.json` ⇒ 覆盖逐卡 rc。
+#   一手实证（本批 3 卡同钉 B）：`xrev2` 真 `rc=1` / 站级日志 `TASK_RC=9` / 产物缺失，
+#   而官方汇总三行**同一个 runDir**（末卡 `xrev3` 的）+ `exit=0` + `BATCH_DONE: 失败或未完成=0`
+#   ⇒ 这不是"读数偏差"，是**判决级假绿**（失败被报成成功）。同族 = O-57（跨 run 证据错配）。
+Assert-True "o80⑩: 汇总**先按卡切块**（块首 = 子进程写的 marker `=== CARD <卡> rc=<rc> ===`）" (
+    $codeOnlyFull.Contains("^=== CARD (.+) rc=.* ===") -and $codeOnlyFull.Contains('$blocks'))
+# ⚠ 两条合起来才非空转：⑩b 单独被"删掉整个取值段"满足（那是不算）⇒ ⑩c 必须证明"改成从块里取"
+Assert-True "o80⑩b: `TASK_DONE`/`RUNSTAMP` **不再取自整站 `$txt`**（整站取末行 = 每卡拿到末卡的值）" (
+    -not $codeOnlyFull.Contains('$txt | Where-Object { "$_" -like ''*TASK_DONE dir=*'' }') -and
+    -not $codeOnlyFull.Contains('$txt | Where-Object { "$_" -like ''*RUNSTAMP:*'' }'))
+Assert-True "o80⑩c: 两者**取自本卡的块**（`$clines`），且按卡取块是「取最后一个」（同卡重复行时以末次为准）" (
+    $codeOnlyFull.Contains('$clines | Where-Object { "$_" -like ''*TASK_DONE dir=*'' }') -and
+    $codeOnlyFull.Contains('$clines | Where-Object { "$_" -like ''*RUNSTAMP:*'' }') -and
+    $codeOnlyFull.Contains('$blocks | Where-Object { $_.card -eq $c.card } | Select-Object -Last 1'))
 
 # --- O-56 (2026-09-25): 基线"**声明无条件 / 产出有条件**"(两处) ---
 # ① 主路: `accept-cmds` 原为**裸列**, 而站上只在 `[ -n "$ACCEPT_B64" ]` 时才写 ⇒ 无 accept 的卡
@@ -1776,6 +1845,71 @@ Assert-True "sel-10 接线：换过之后**重新过一遍**门（不是换完�
     $content -match '\$sg2 = Resolve-SelfReviewGuard' -and $content -match "if \(\`$sg2\['ok'\]\)")
 Assert-True "sel-11 留痕：review.json 记 `switched_from`（未换 = 空串）" (
     $content -match "switched_from = \`$switchedFrom")
+
+# --- ★★ A1 (2026-09-29): D6/D7 分界判据求值（ADR-0009 §2 三分支）---
+#   为什么: A1 的实质 = "**派发前**对三判据求值 ⇒ 唯一归属"；而"**互斥且穷尽**"是它的**全部价值**
+#     —— 8 种取值组合必须**全命中且仅命中一条**（既不落空、也不双命中）。
+#   ⚠ 第三分支（¬B-3 ∧ ¬B-1 ∧ ¬B-2 ⇒ D6）是**约定归属**（修 O-115）⇒ 删掉它，下面
+#     "3 行灰项"形态的用例**必须红**（这正是 A-LIST-LANDING-PLAN §2.2 点名的**先验红点**）。
+$c = Resolve-D6D7Boundary 'true' 'true' 'true'
+Assert-True "a1: 是/是/是 ⇒ D7（第一分支 B-1∨B-2 优先，压过 B-3）" ($c.resolved -and $c.layer -eq 'D7' -and $c.branch -eq 'B-1orB-2')
+$c = Resolve-D6D7Boundary 'false' 'false' 'true'
+Assert-True "a1: 否/否/是 ⇒ D6（第二分支：仅本次派发内部质量门，如判官抽检）" (
+    $c.resolved -and $c.layer -eq 'D6' -and $c.branch -eq 'B-3')
+$c = Resolve-D6D7Boundary 'false' 'false' 'false'
+Assert-True "a1: ★否/否/否 ⇒ D6（**第三分支=约定归属**；ADR §3 三行灰项正是此形）" (
+    $c.resolved -and $c.layer -eq 'D6' -and $c.branch -eq 'convention')
+$c = Resolve-D6D7Boundary 'true' 'false' 'false'
+Assert-True "a1: 是/否/否 ⇒ D7（B-1：需非产出方给结论，如需求方验收/跨站派发）" ($c.resolved -and $c.layer -eq 'D7')
+$c = Resolve-D6D7Boundary 'false' 'true' 'false'
+Assert-True "a1: 否/是/否 ⇒ D7（B-2：同产物多轮往返，如多轮续聊 审→改→再审）" ($c.resolved -and $c.layer -eq 'D7')
+# 穷尽性：8 种组合**逐个**求值 ⇒ resolved 必有、layer 必 ∈ {D6,D7}（**无一落空**）。
+$miss = @(); $nD6 = 0; $nD7 = 0
+foreach ($a in @('true', 'false')) { foreach ($bb in @('true', 'false')) { foreach ($d in @('true', 'false')) {
+    $r = Resolve-D6D7Boundary $a $bb $d
+    if (-not $r.resolved -or -not $r.layer) { $miss += "$a/$bb/$d" } elseif ($r.layer -eq 'D6') { $nD6++ } else { $nD7++ }
+}}}
+Assert-True "a1: ★8 种取值组合**全命中**（无一落空；落空者: $($miss -join ',')）" ($miss.Count -eq 0)
+Assert-True "a1: 互斥穷尽 ⇒ D6/D7 计数 = 2/6（D7 = B-1∨B-2 为真的 3×2；D6 = 其余 1×2）" (
+    $nD6 -eq 2 -and $nD7 -eq 6)
+# 诚实性：任一键未声明（空/非 true|false）⇒ **不假装已求值**。
+$c = Resolve-D6D7Boundary '' 'false' 'true'
+Assert-True "a1: 任一键未声明 ⇒ resolved=false 且 layer 空（「没判」≠「判了且归 D6」）" (
+    (-not $c.resolved) -and $c.layer -eq '')
+$c = Resolve-D6D7Boundary 'yes' 'false' 'true'
+Assert-True "a1: 非枚举值（yes）不被当成 true ⇒ 未求值（fail-soft，不扩大取值域）" (
+    (-not $c.resolved) -and $c.layer -eq '')
+# 行为断言（**非文本扫描**，避免 O-65 那种"用全文子串判"的假绿）: 三键经真 Get-FrontMatter 解析。
+$bCard = Join-Path $tmpCards 'boundary.md'
+@"
+---
+proj: paper
+task: boundary parse test
+model: gpt-oss
+needs_non_producer_verdict: true
+needs_multi_round_review: false
+is_intra_dispatch_quality_gate: false
+---
+## 任务描述
+boundary body
+"@ | Set-Content $bCard -Encoding utf8
+$bm = Get-FrontMatter $bCard
+Assert-True "a1: 三键经 Get-FrontMatter **解析出来**（登记进白名单生效，非「写了没人读」）" (
+    $bm['needs_non_producer_verdict'] -eq 'true' -and $bm['needs_multi_round_review'] -eq 'false' -and
+    $bm['is_intra_dispatch_quality_gate'] -eq 'false')
+Assert-True "a1: 三键与求值闭合（解析出的三键喂给求值 ⇒ 是/否/否 ⇒ D7，与 §3 B-1 行一致）" (
+    (Resolve-D6D7Boundary $bm['needs_non_producer_verdict'] $bm['needs_multi_round_review'] $bm['is_intra_dispatch_quality_gate']).layer -eq 'D7')
+$plainB = Get-FrontMatter (Join-Path $tmpCards 'plain.md')
+Assert-True "a1: ★存量卡（无这三键）⇒ 三键缺省空串 ⇒ 求值 resolved=false（**向后兼容**，不误判归属）" (
+    $plainB['needs_non_producer_verdict'] -eq '' -and $plainB['needs_multi_round_review'] -eq '' -and
+    $plainB['is_intra_dispatch_quality_gate'] -eq '' -and
+    (-not (Resolve-D6D7Boundary $plainB['needs_non_producer_verdict'] $plainB['needs_multi_round_review'] $plainB['is_intra_dispatch_quality_gate']).resolved))
+# 接线（防"写了但没跑"）: 派发前求值 + run.json 落键。
+Assert-True "a1: 接线：`$run 落 boundary 键（派发前求值随 run.json 留痕）" (
+    $content -match 'boundary = \$boundary')
+Assert-True "a1: 接线：求值点在**派发前**（早于主路 body 的 `out/.progress` 写入）" (
+    ($content.IndexOf('Resolve-D6D7Boundary $fm')) -gt 0 -and
+    ($content.IndexOf('Resolve-D6D7Boundary $fm')) -lt $content.IndexOf('out/.progress'))
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"

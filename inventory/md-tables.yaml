@@ -1,0 +1,51 @@
+# md 表格**列数守恒**（A4，2026-09-29）—— 「存量冻结」清单
+#
+# 判据（唯一实现在 `ops/rpc_check.py` 的 `md_table_scan`）：同一张表里
+#   **分隔行 / 数据行** 的**格数** 必须 == **表头** 的格数；格数不符 ⇒ 该行**错位**。
+#   事故形态 = 某字段文本里出现**一个未转义的竖线** ⇒ 该行被拆成比表头更多的格，长期无人发现。
+#
+# 为什么需要本文件：判据上线时**全仓已有 28 处违规 / 13 个文件**（2026-09-29 实测）——
+#   若一上线即 FAIL，它就是一台「假红机」（本仓纪律 13 已吃过这个亏）。
+#   ⇒ 照 `inventory/ops.yaml` 的「冻结存量」与 `inventory/doc-status.yaml` 的 `freeze` 同法：
+#   **冻结存量 · 只减不增** —— 新增违规一律 FAIL；修好某行后**请删掉对应条目**
+#   （留着会把本表烂成垃圾桶 —— 同 `secrets` 的「豁免未命中」防腐化）。
+#
+# 为什么按 `(file, line_sha256)` 而不按行号：行号会随上方插/删行而漂移 ⇒
+#   冻结按**行内容指纹**（该**违规原始行**不含换行的 sha256 前 16 位）。
+#   行一改（无论修好、还是又改坏成别的形态）指纹即失配 ⇒ 门禁会**自报 `失配`** 并要求清账。
+#
+# 字段（**逐条显式，不许静默豁免**）：
+#   file         : 仓库相对路径（posix）
+#   line_sha256  : 该违规原始行的 sha256 前 16 位
+#   why          : 冻结理由（**不许省略**）
+version: 1
+updated: 2026-09-29
+frozen:
+  - {file: docs/2026-09-23_cluster.py模块化重构_调研与方案.md, line_sha256: 15090976c3197757, why: "存量：row 行 4 格 ≠ 表头 3 格"}
+  - {file: docs/Agent跨项目调用标准与迁移复用调研.md, line_sha256: 76ca448dfa554339, why: "存量：row 行 5 格 ≠ 表头 4 格"}
+  - {file: docs/Agent跨项目调用标准与迁移复用调研.md, line_sha256: 65e9cb00c7682a32, why: "存量：row 行 3 格 ≠ 表头 2 格"}
+  - {file: docs/分布式推理.md, line_sha256: aa66564b31a336b1, why: "存量：row 行 3 格 ≠ 表头 4 格"}
+  - {file: docs/分布式推理.md, line_sha256: cf67c69abd35d5db, why: "存量：row 行 3 格 ≠ 表头 4 格"}
+  - {file: docs/分布式推理.md, line_sha256: 927dbd35c2c1cd14, why: "存量：row 行 3 格 ≠ 表头 4 格"}
+  - {file: docs/分布式推理.md, line_sha256: d7cacbdba7ad539e, why: "存量：row 行 3 格 ≠ 表头 4 格"}
+  - {file: spec/cluster-bench/CHECKLIST.md, line_sha256: 44d2beb7cdb409d0, why: "存量：row 行 5 格 ≠ 表头 4 格"}
+  - {file: spec/cluster-bench/CHECKLIST.md, line_sha256: 76a664e2a65b67b3, why: "存量：row 行 5 格 ≠ 表头 4 格"}
+  - {file: spec/cluster-bench/CHECKLIST.md, line_sha256: 7a8a6a6a0b20d045, why: "存量：row 行 5 格 ≠ 表头 4 格"}
+  - {file: spec/d6-agent-standard/dogfood-cards/land-a4-cell-safety.md, line_sha256: 8898b79145446b50, why: "存量：row 行 10 格 ≠ 表头 3 格（卡片用坏表示例，非数据台账）"}
+  - {file: spec/d6-agent-standard/dogfood-cards/land-a4-cell-safety.md, line_sha256: dfa9f47399d76eda, why: "存量：row 行 6 格 ≠ 表头 3 格（卡片用坏表示例，非数据台账）"}
+  - {file: spec/d6-agent-standard/dogfood-cards/land-a4-cell-safety.md, line_sha256: 942727e64ad296e6, why: "存量：row 行 7 格 ≠ 表头 3 格（卡片用坏表示例，非数据台账）"}
+  - {file: spec/d6-agent-standard/dogfood-cards/land-a4-cell-safety.md, line_sha256: a5be123a7dd3a6c4, why: "存量：row 行 6 格 ≠ 表头 3 格（卡片用坏表示例，非数据台账）"}
+  - {file: spec/d6-agent-standard/dogfood-cards/land-a4-cell-safety.md, line_sha256: 386b440f34374970, why: "存量：row 行 8 格 ≠ 表头 3 格（卡片用坏表示例，非数据台账）"}
+  - {file: spec/d6-agent-standard/dogfood-cards/README.md, line_sha256: 96dcdd20e99fbee5, why: "存量：row 行 4 格 ≠ 表头 3 格"}
+  - {file: spec/d6-agent-standard/dogfood-cards/xrev1-cellsafety-boundary.md, line_sha256: 2c132b6aee0640d1, why: "存量：row 行 9 格 ≠ 表头 3 格（卡片内嵌底稿的坏表示例）"}
+  - {file: spec/d6-agent-standard/dogfood-cards/xrev1-cellsafety-boundary.md, line_sha256: dfa9f47399d76eda, why: "存量：row 行 6 格 ≠ 表头 3 格（卡片内嵌底稿的坏表示例）"}
+  - {file: spec/d6-agent-standard/dogfood-cards/xrev1-cellsafety-boundary.md, line_sha256: f77a7abed2ac657f, why: "存量：row 行 6 格 ≠ 表头 3 格（卡片内嵌底稿的坏表示例）"}
+  - {file: spec/d6-agent-standard/dogfood-cards/xrev1-cellsafety-boundary.md, line_sha256: 3c4130e2168f3dd5, why: "存量：row 行 8 格 ≠ 表头 3 格（卡片内嵌底稿的坏表示例）"}
+  - {file: spec/d6-agent-standard/strong-accept/IMPLEMENTATION.md, line_sha256: d1cfd2499ead3919, why: "存量：row 行 4 格 ≠ 表头 2 格"}
+  - {file: spec/ds4-backend/DESIGN.md, line_sha256: 634255c92648c1f6, why: "存量：row 行 4 格 ≠ 表头 3 格"}
+  - {file: spec/model-eval/questions/domain_matrix.md, line_sha256: ef896aef4259ae33, why: "存量：row 行 6 格 ≠ 表头 4 格"}
+  - {file: spec/operator-optimization/research/双机推理服务化与编排框架调研.md, line_sha256: 0d9a08f9f1f3b0d1, why: "存量：row 行 5 格 ≠ 表头 4 格"}
+  - {file: spec/rpc-optimization/metrics-log.md, line_sha256: 268f8cc6d1dd40d8, why: "存量：row 行 4 格 ≠ 表头 5 格"}
+  - {file: spec/vulkan-version-control/CHECKLIST.md, line_sha256: cf6e3f3b29743c27, why: "存量：row 行 6 格 ≠ 表头 5 格"}
+  - {file: spec/vulkan-version-control/CHECKLIST.md, line_sha256: 9eeb0672cebd29a7, why: "存量：row 行 6 格 ≠ 表头 4 格"}
+  - {file: spec/vulkan-version-control/CHECKLIST.md, line_sha256: 76023016ccb2f3dc, why: "存量：row 行 5 格 ≠ 表头 3 格"}
