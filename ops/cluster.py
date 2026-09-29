@@ -2874,7 +2874,7 @@ def _verdict_check(run_dir: Path, ts: str, label: str) -> tuple:
     tid = meta.get("TASK_ID")
     if tid and tid != ts:
         return [], [f"{label}: 判据记录属**上一轮残留** (TASK_ID={tid}, O-22) ⇒ 本轮 verdict 不可复核"], False
-    bad, judged = [], 0
+    bad, gap, judged = [], [], 0
 
     def cmp(label_, mv, jv):
         nonlocal judged
@@ -2897,8 +2897,20 @@ def _verdict_check(run_dir: Path, ts: str, label: str) -> tuple:
             bad.append(f"{label}: run.json exit_code **形状畸形** ({type(ec).__name__}: {ec!r}) "
                        f"⇒ 该条不可判(不静默跳过)")
         elif ec not in allowed:
-            bad.append(f"{label}: TASK_RC={rci} 但 run.json exit_code={ec} "
-                       f"(依映射允许 {sorted(allowed)})")
+            # O-119 (2026-09-30): **传输层失败 / 任务层成功** 的**双真相**。实测来源 = hang 批首跑
+            #   4 张卡（O-117：生成件里那条"被推出 `#` 的注释"当命令跑）⇒ **外壳退出码 = 255**
+            #   （ssh/bash 的"远端命令失败"约定），而任务自身的 accept **已跑过并通过**
+            #   （产物在 runDir、`ACCEPT_OK=1`）。两份归档件**都没被改**（不是篡改）⇒ 属**不可判**
+            #   （与 O-22"上一轮残留"同族：判据记录不可信 ⇒ 本轮 verdict 不可复核）。
+            #   ★ **刻意不进 FAIL 集**：报 FAIL 会让这 4 条一入链就**阻断一切提交**，而判据会因此
+            #   被整体忽略（同 O-29 / D4 的处置）。⚠ 豁免**只覆盖实测过的这一个形状**
+            #   （`TASK_RC=0` 且 `exit_code=255`），其余不一致**照旧 FAIL**（见 T15，防"把门拆掉"）。
+            if rci == 0 and ec == 255:
+                gap.append(f"{label}: TASK_RC={rci} 但 run.json exit_code={ec}"
+                           f"（**传输层失败 / 任务层成功** = O-117 形态）⇒ 本轮 verdict 不可复核")
+            else:
+                bad.append(f"{label}: TASK_RC={rci} 但 run.json exit_code={ec} "
+                           f"(依映射允许 {sorted(allowed)})")
     cmp("ACCEPT_OK↔accept.passed", _tri(meta.get("ACCEPT_OK")), (j.get("accept") or {}).get("passed"))
     ag = j.get("accept_golden")
     if isinstance(ag, dict):
@@ -2907,7 +2919,7 @@ def _verdict_check(run_dir: Path, ts: str, label: str) -> tuple:
         mv = meta.get(mk)
         if mv is not None and mv.lstrip("-").isdigit():
             cmp(f"{mk}↔{jk}", int(mv), j.get(jk))
-    return bad, [], judged > 0
+    return bad, gap, judged > 0
 
 
 _GOLDEN_INDEX = None
