@@ -159,6 +159,9 @@
 > [`tests/test_rpc_check_executor_trace.py`](../../../tests/test_rpc_check_executor_trace.py) 9/9 绿 · ps1 离线夹具 409/0。
 > ⚠ 原判"采集点与本机群不符"已**就地核实**并改成可达命令（`uname`/`hostname`/`nproc`/`free -m`，**不读 `/proc`**）；
 > 但 §2.2 的 **runtime 验收**（真派发后留痕件齐 + 与产物哈希交叉锚定）**未实测**（覆盖读数 0 个 run）。
+> ★ **2026-09-30 更新（该结论已收口）**：覆盖读数 **11 个（齐段 11）**；且「与产物哈希交叉锚定」**已补判据**
+> （门禁 `executor-trace` **第三段** —— 执行体不得自报哈希 · 留痕件 `ts` 须 == runDir 名 · 主控侧须有 `content_digest`；
+> 读数 `ts 相符 11 · 自报 0 · ts 不符 0 · 无锚记录 0`）⇒ 见 [../A-LIST-LANDING-PLAN.md](../A-LIST-LANDING-PLAN.md) **「§2.4 读数刷新」**。
 > 详见 [../A-LIST-LANDING-PLAN.md](../A-LIST-LANDING-PLAN.md) **§2.4** 与 `DEVELOPMENT-LOG.md` `2026-09-29（续④）`。
 >
 > ★ **`imp1` 的落地（A1，2026-09-29 本地落地 · 无派发）**：`d6-d7-boundary` 由"设计提案"落成**可机判件** ——

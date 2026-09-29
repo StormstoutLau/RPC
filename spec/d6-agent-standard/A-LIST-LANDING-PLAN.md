@@ -168,7 +168,7 @@ if i + 1 >= len(lines) or not _is_sep(lines[i + 1].strip()):
 | **A4** | `ops/rpc_check.py`（`md_table_scan` / `check_md_tables`）+ [inventory/md-tables.yaml](../../inventory/md-tables.yaml)（28 条冻结） | `md-tables` | [tests/test_rpc_check_md_tables.py](../../tests/test_rpc_check_md_tables.py) 14/14 绿 | 扫描 270 篇 · 表 1881 张 · 违规 28（冻结 28 · 新增 0） |
 | **A5** | `ops/rpc_check.py`（`det_manifest_diff` / `check_determinism`）+ [inventory/determinism-noise.yaml](../../inventory/determinism-noise.yaml)（噪声 7 类） | `determinism` | [tests/test_rpc_check_determinism.py](../../tests/test_rpc_check_determinism.py) 14/14 绿 | 噪声 7 类（可机检 5 · 无字面模式 2）· 正则样本自证 12/12 |
 | **A3** | [ops/derived_view.py](../../ops/derived_view.py)（渲染 + `--check`）+ [docs/派生视图_端口分配.md](../../docs/派生视图_端口分配.md) | `derived-view` | [tests/test_rpc_check_derived_view.py](../../tests/test_rpc_check_derived_view.py) 12/12 绿 | source-hash `ac133408fbac…` · 逐字节一致（三态 0/1/2 各实跑） |
-| **A2** | [ops/station-bin/agent-cli.ps1](../../ops/station-bin/agent-cli.ps1) 五采集点（`$Script:EV_FILES` + body 启动器 `[env]` + body 尾 `[cmd][fs][tool][artifact]` + 主控 collect + `Get-FrameworkSubjects`） | `executor-trace` | [tests/test_rpc_check_executor_trace.py](../../tests/test_rpc_check_executor_trace.py) 9/9 绿 + [_fm_golden_test.ps1](../../ops/station-bin/_fm_golden_test.ps1) 409/0（+7 条） | 机制：采集点 5/5 · 覆盖：runDir 含该件 **0 个**（尚无真派发） |
+| **A2** | [ops/station-bin/agent-cli.ps1](../../ops/station-bin/agent-cli.ps1) 五采集点（`$Script:EV_FILES` + body 启动器 `[env]` + body 尾 `[cmd][fs][tool][artifact]` + 主控 collect + `Get-FrameworkSubjects`） | `executor-trace` | [tests/test_rpc_check_executor_trace.py](../../tests/test_rpc_check_executor_trace.py) 9/9 绿（→ **13/13**，2026-09-30 补锚定段） + [_fm_golden_test.ps1](../../ops/station-bin/_fm_golden_test.ps1) 409/0（+7 条） | 机制：采集点 5/5 · 覆盖：runDir 含该件 **0 个**（**2026-09-29 落地时**；★ **已过期** ⇒ 见「§2.4 读数刷新」） |
 
 **A4 先验红**：向 `docs/分布式推理.md` 注入 2 列表头 + 3 格数据行 ⇒ `FAIL · 新增 1`（精确点到 `docs/分布式推理.md:612 row 行 3 格 ≠ 表头 2 格`）⇒ 字节级恢复自证（sha256 前后一致）。
 **A5 先验红**：把 `determinism-noise.yaml` 的 timestamp 正则改为不匹配 ⇒ `FAIL`（点名声到该条）⇒ 恢复后 sha256 一致。
@@ -176,10 +176,25 @@ if i + 1 >= len(lines) or not _is_sep(lines[i + 1].strip()):
 **A3 落地的两处设计决定**：① 档内**移除 `generated-at`**（§1.2 勘误）；② `source-hash` 在**生产端**归一化行尾/BOM
 （否则 `core.autocrlf=true/false` 两台机器算出不同哈希 ⇒ 视图"互相过期"—— 正是 §3.2 旁证那条活问题的机器版）。
 **A2 落地的两处设计决定**：① **工具调用链如实标 `uncore`**（执行体内部产生 ⇒ 可篡改/漏报/伪造），门禁**负向自证**
-（出现 `chain=core`/`chain=verified` ⇒ FAIL）；② **覆盖 0 个不作为 FAIL**（尚无真派发 ⇒ "没验到" ≠ "验出问题"，
+（出现 `chain=core`/`chain=verified` ⇒ FAIL）；② **覆盖 0 个不作为 FAIL**（**落地时**尚无真派发 ⇒ "没验到" ≠ "验出问题"，
 报数不入分母）—— 逐条字面细节（两段写入 / `EV_FILES` 登记 / 主控归档 / `free -m` 而非 `/proc`）留在**离线夹具**，
-门禁**不抄第二份**。★ **A2 runtime 验收未实测**（§2.2 要求"1 次真派发后留痕件齐 + 与产物哈希交叉锚定"）
-⇒ **如实登记为未实测**。
+门禁**不抄第二份**。
+
+**§2.4 读数刷新（2026-09-30）** —— 上表 A2 行的覆盖读数（**0 个**）**已过期**。本批实测：
+
+- **覆盖**：`runDir 含该件 **11 个**（齐段 11）`。原"0 个 / 尚无真派发"是 **2026-09-29 落地时**的读数；
+  此后经 7 个吃狗粮批真派发 ⇒ **已有对象**。
+- ★ **锚定段已补**（原缺口 = §2.2 要求的后半「**与产物哈希交叉锚定**」**当时无判据**）：门禁 `executor-trace`
+  新增**第三段**，三条子判据 —— ① 执行体**不得自报**哈希（`[artifact] hashes=` 必须 `main-side`，否则 **FAIL**）；
+  ② 留痕件 `ts=` 必须 **== runDir 名**（归属不符 ⇒ **FAIL**，与 `O-57`「归属核对」同族）；
+  ③ 主控侧须有该次哈希记录（`.agent-run.json` 的 `content_digest`）—— **缺 ⇒ 只报数**（"没验到 ≠ 验出问题"）。
+  **实测读数**：`ts 相符 11 · 自报 0 · ts 不符 0 · 无锚记录 0`（**先量后定档**：存量零违规才敢判 FAIL）。
+  ⚠ **射程（别读过头）**：这三条**不**比较「留痕件里的哈希值 == 主控侧哈希值」—— 留痕件**按设计不含哈希值**
+  （只声明 `hashes=main-side`）⇒ 锚定的含义是「**同一对象 + 哈希权威在主控侧**」，**不是**「两个哈希值相等」。
+- **夹具**：[tests/test_rpc_check_executor_trace.py](../../tests/test_rpc_check_executor_trace.py) **13/13**
+  （9/9 → **+4 条锚定用例**，其中两条**先验红**：自报哈希 ⇒ FAIL · `ts` 不符 ⇒ FAIL）。
+- ⇒ **A2 的 runtime 验收两半（留痕件齐 / 哈希交叉锚定）现均有判据与读数** ⇒ 原「如实登记为未实测」**不再成立**。
+
 ★ **连带改动**：手册计数 **46 → 47**（quick 38 → 39；A4/A5/A3）→ **47 → 48**（quick 39 → 40；A2）；
 `py ops/id_site_census.py --emit` 重出真值（本仓 RPC **23 → 25** 行 / **5 → 6** 文件，因 `ops/derived_view.py` 贡献
 `hashlib.sha256()` + `h.hexdigest()` 两行）+ [U4-INVALIDATION-RULES.md](U4-INVALIDATION-RULES.md) §1 表同步。
