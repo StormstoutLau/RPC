@@ -13,6 +13,7 @@
     py tests\\test_rpc_check_doc_status.py
 """
 import copy
+import re
 import sys
 from pathlib import Path
 
@@ -68,16 +69,30 @@ bad, notes = R.validate_doc_status(copy.deepcopy(REAL_PAIRS), copy.deepcopy(REAL
                                    n_template=REAL_TPL, sites=copy.deepcopy(REAL_SITES))
 chk("正例 · 真表 + 真扫描通过", not bad, (" <- " + bad[0][:100]) if bad else "")
 print("      note =", (notes[0] if notes else "(无)"))
-chk("正例 · 词表符合性段 **0 不合**（85/85，模板不入分母）", "词表符合 85/85" in (notes[0] if notes else ""),
+# ★ 2026-09-29 由硬编码 `85/85` 改为**按意图断言**（与 test_rpc_check_model_families 的同批做法一致）：
+#   硬编码的计数**每次文档增减「状态」行都会陈旧**（本次 85→89 即触发它假红），而它要防的缺陷是
+#   **"有不合"** 与 **"判据对着空集宣 PASS"** —— 那与"当前有多少个实例位点"无关。
+_VOCAB = re.compile(r"词表符合\s*(\d+)\s*/\s*(\d+)")
+_m0 = _VOCAB.search(notes[0] if notes else "")
+chk("正例 · 词表符合性段 **0 不合**（X/X，模板不入分母）",
+    bool(_m0) and _m0.group(1) == _m0.group(2) and int(_m0.group(1)) > 0,
     " <- " + (notes[0][:130] if notes else "(无 note)"))
 
 # ── ② 规模护栏 + 事实核对（免得判据对着一个空集宣 PASS）────────────────────
 chk("真扫描：两处都有 >= 20（否则判据没对象）", len(REAL_PAIRS) >= 20, f" <- {len(REAL_PAIRS)}")
 chk("真扫描：模板被排除且计入报数", REAL_TPL >= 3, f" <- {REAL_TPL} 个模板")
-chk("真扫描：位点数 == 95（85 实例 + 10 模板；**模板不入分母**）", len(REAL_SITES) == 95, f" <- {len(REAL_SITES)}")
-chk("★ 模板位点**不被算作「判过」**（假绿防线）",
-    sum(1 for s in REAL_SITES if not s.get("template") and not s["file"].upper().endswith("_TEMPLATE.MD")) == 85,
-    f" <- {sum(1 for s in REAL_SITES if not s.get('template') and not s['file'].upper().endswith('_TEMPLATE.MD'))} 个实例位点")
+# ★ 2026-09-29 去硬编码（同上）：原写「位点数 == 95（85 实例 + 10 模板）」。改断言**分区性质** +
+#   **两侧都非空**。⚠ 注意 `REAL_TPL` 是**模板文件数**（5），模板**位点数**是它的两倍（`fm` + `body` 各 1 个）
+#   —— 上一版误把两者当同一个量。真正要防的"模板位点混进分母"由**下一条 note-X 断言**直接管。
+_N_INST = sum(1 for s in REAL_SITES
+              if not s.get("template") and not s["file"].upper().endswith("_TEMPLATE.MD"))
+_N_TPL_SITES = len(REAL_SITES) - _N_INST
+chk("真扫描：位点分「实例 / 模板」两侧且均非空（**模板不入分母**）",
+    _N_INST > 0 and _N_TPL_SITES > 0 and _N_TPL_SITES > REAL_TPL,
+    f" <- 位点 {len(REAL_SITES)} = 实例 {_N_INST} + 模板位点 {_N_TPL_SITES}（模板文件 {REAL_TPL} 个）")
+chk("★ 模板位点**不被算作「判过」**（假绿防线：note 的 X 必须 == 实例位点数）",
+    bool(_m0) and int(_m0.group(1)) == _N_INST and _N_INST > 0,
+    f" <- note {_m0.group(0) if _m0 else '(无)'} vs 实例位点 {_N_INST} / 模板 {REAL_TPL}")
 eq = sum(1 for x in REAL_PAIRS if R._doc_token(x["fm"]) == R._doc_token(x["body"]))
 chk("真扫描：不等数 == 0（清账后）", len(REAL_PAIRS) - eq == 0,
     f" <- 不等 {len(REAL_PAIRS) - eq}")
@@ -206,7 +221,10 @@ chk("head=5 ⇒ 收不到「两处都有」（正文行在文档头之后）", l
     f" <- {len(p_small)}")
 chk("head=5 ⇒ 位点数也随之缩小（射程真的在起作用）", 0 < len(s_small) < len(REAL_SITES),
     f" <- {len(s_small)}")
-chk("head=20（真值）⇒ 34 对", len(REAL_PAIRS) == 34, f" <- {len(REAL_PAIRS)}")
+# ★ 2026-09-29 由硬编码 `34` 改为**按意图断言**：本条要防的是「缺省 `DOC_STATUS_HEAD` 被改小 / 没生效」，
+#   与"当前有多少对"无关 ⇒ 改为断言「**显式 head=20 与缺省扫描逐字段一致**」（head 真值被写死才有此性质）。
+chk("head=20（真值）⇒ 显式 head=20 与缺省扫描一致（射程常量没被改小）",
+    R.scan_doc_status(head=20) == (REAL_PAIRS, REAL_TPL, REAL_SITES), f" <- 缺省 {len(REAL_PAIRS)} 对")
 
 # ── ⑧ 门禁函数本身（走真表 + 真扫描，不注入）──────────────────────────────
 lvl, note, bad = R.check_doc_status(None)
@@ -214,7 +232,9 @@ chk("check_doc_status(真表) == PASS", lvl == "PASS" and not bad,
     f" <- {lvl}: {(bad[0][:90] if bad else note[:80])}")
 chk("门禁的 note 含两处/一致/不等三项计数",
     ("两处都有" in note and "一致" in note and "不等" in note), " <- " + note[:110])
-chk("门禁的 note 含 `词表符合 85/85`（O-109）", "词表符合 85/85" in note, " <- " + note[:140])
+_mn = _VOCAB.search(note)
+chk("门禁的 note 含 `词表符合 X/X`（X == X > 0；O-109）",
+    bool(_mn) and _mn.group(1) == _mn.group(2) and int(_mn.group(1)) > 0, " <- " + note[:140])
 
 # ── ⑨ ★ 自证：真文件**字节未变** + 真扫描未被本文件污染 ────────────────────
 chk("真文件字节未变（本文件不写仓）", INV.read_bytes() == ORIG_BYTES)

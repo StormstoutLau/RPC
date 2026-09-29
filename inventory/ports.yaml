@@ -40,7 +40,7 @@
 #   - 新增服务 => 改本表
 # ============================================================================
 version: 1
-updated: 2026-09-28
+updated: 2026-09-29
 measured_by: "sudo ss -ltnup + 服务配置核对 + 进程归属反查, 三站实测 2026-09-15"
 
 # ── 本项目自管的服务端口 ────────────────────────────────────────────
@@ -212,7 +212,8 @@ unmanaged:
    note: "由 gvfsd 会话拉起 (user-1000), 未登录时不存在; 故仅会话期监听"}
   - {port: 6665, proto: udp, purpose: "netconsole-listen (A 站 printk 镜像接收)", scope: [B],
    note: "netconsole 默认端口; B 站 netconsole-listen.service → /usr/local/bin/netconsole-listen.py"}
-  - {port: 724, proto: udp, purpose: "rpc.statd (NSM)", scope: [B], bind: 127.0.0.1}
+  - {port: 729, proto: udp, purpose: "rpc.statd 本地特权套接字 (NFS 状态监控 / NSM)", scope: [B], bind: 127.0.0.1,
+     note: "★ 2026-09-29 更正: 原登记 `724`（NSM 标准端口）—— 实测 `724` **无监听**, rpc.statd 实际持有 127.0.0.1:729。⚠ 它**不是** rpcbind 注册的那个 status 服务: `rpcinfo -p` 显示 100024 注册在**动态**端口 (udp 59332 / tcp 43467) ⇒ 那部分由『≥32768 段位规则』豁免, 本条只登记这个 loopback 固定口"}
 
 # ── 动态端口服务 (端口随启动变化 → 按 owner + 段位豁免, 不写死端口号) ──
 # 为什么单开一段: 2026-09-14 曾把 mountd/statd 的**当次**端口
@@ -229,7 +230,7 @@ dynamic:
     purpose: NFS 状态监控 (NSM)
     scope: [B]
     proto: tcp+udp
-    note: "2026-09-15 实测 TCP 33925/49957, UDP 36339/58847; 固定 NSM 端口 724 登记在 unmanaged"
+    note: "2026-09-15 实测 TCP 33925/49957, UDP 36339/58847; 固定 NSM 端口 729（★ 2026-09-29 更正, 原写 724）登记在 unmanaged"
   - owner: nfsd (内核线程)
     purpose: NFS 服务端内核套接字
     scope: [B]
