@@ -56,6 +56,23 @@
 > · ⇒ **机判切分**：`Verdict.verdict` **不是整数**（如写成判官四值 / 布尔）⇒ **拒**（`validate_envelope`）。
 > ⚠ 为什么**不改名**（如改叫 `exit_verdict`）：本契约把 `Verdict 字段集`列为**逐字采纳**（见 §2）
 > ⇒ 改名 = **改摘要逐字**，会让那条采纳记录失效；而"同名不同物"靠**值类型**已能机械分开。
+>
+> ★★ **`Verdict` 的落点（2026-10-01 裁【甲】并落 · `O-139`）**：**`review.json.d7_verdict`（嵌套段）**
+> —— ★ **顶层仍无 `verdict` 键** ⇒ 上面那条"靠载体分离"的裁定**一字不动**（两处 `verdict` 都在嵌套里，
+> 且值类型不同：本信封 = **整数**，结论契约 = **四值字符串**）。
+> ★ **该段是【派生段】而不是第二份真值**：`l1_results` / `l2_marks` / `verdict` **逐字取** review.json
+> 已有的 `l1` 段 / `contract` 段 / `metadata.call_code` ⇒ 只把**同一次裁决**收成一个**可指对象**。
+> ⚠ **它是「最新裁决」不是「裁决流水」**：review.json 已登记 `not_a_ledger`（`conclusion-ledgers.yaml`
+> 的 `**/review.json`）⇒ **重评（`--overwrite`）会覆盖它**；要流水须**先升格账本**（另一步）。
+> ⚠⚠ **连带实测（未裁 · 见 `O-140`）**：`review.json` 是**证据链钉住的 subject**（v2 recipe 计入）
+> ⇒ ★ **对【已入链】的 run 做任何 review（首次或重评）都会让该 run `digest 不符` ⇒ 门禁 `evidence`
+> FAIL（阻断）**，而 `cluster.py agent chain`（幂等去重）与 `--reanchor`（只重写锚）**都改不了已有条目的
+> 摘要** ⇒ 该机制下**唯一出路是"恢复归档件字节"**（ADR-0007 历次负向用例的标准收场）。
+> **本仓实测（2026-10-01）**：重评后撞 `[288] … digest 不符, 变了: review` ⇒ 逐字还原该件 ⇒ 回 PASS。
+> ★ **本注只登记事实，不裁**（三条候选见 `O-140`）；★ 留持久凭证的**安全姿势** = **在该 run 入链之前** review。
+> ★ 为什么不做 `verdict.json`（乙）：增量收益只是换个文件名，代价是**改本契约的「不新增信封件」裁**
+> + 两条 `Get-*FrameworkSubjects` 基线各加一件 + 一份**必然与 review.json 重复**的拷贝
+> ⇒ 撞本仓头号失败形态（同一事实两处表达）。三项候选的完整五维对照见 `O-139`。
 
 ### 1.2 三条设计红线（逐字）
 
@@ -118,12 +135,12 @@
 | **P1 领取** | 站上 `.agent-state.json` + `.agent-lock`（`Invoke-LockState`） | ★ **已接（B3）**：acquire 写 `claimed`（B3 之前写 `running`） |
 | **P2 执行** | `Invoke-Task` 本体 | ★ **已接（B3）**：任务体写 `executing`；claude 备路也落同一词。★ 该行**同时是 `PRM` 的争点** —— **已裁【甲】**（角色化，见 §1.4 / §1.6）：主控机器上的出网通道以 `worker` 角色登记 ⇒ **不触** `PRM`，**但必须被 `PRH` 看见** |
 | **P3 回收** | runDir + `.agent-run.json` → `New-RunReport` | ★ **已接（B2）**：**两处** `.agent-run.json` 写出点（主路 + claude 备路）各产 `RunReport` ⇒ 判据校验；★ **刻意不含 `verdict`**（产出方不得自评）；`gaps` 3 项如实报出 |
-| **P4a 机械门** | ★ **`Resolve-L1Gate`（已存在）** | ★ **已接（B2）**：`Write-D7Adjudication` 逐跳调 `d7_transition`（`collected→mech_verified`） |
+| **P4a 机械门** | ★ **`Resolve-L1Gate`（已存在）** | ★ **已接（B2）**：`Get-D7Adjudication` 逐跳调 `d7_transition`（`collected→mech_verified`） |
 | **P4b 语义复核** | ★ **`Invoke-Review` + 结论契约校验（已存在）** | ★ **已接（B2）**：L2 跑过 ⇒ 走 `sem_verified`；**没跑（判官调用失败）⇒ 如实跳过**；`l2_marks[]` = 结论契约段**原文照收** |
-| **P5 裁决登记** | `review.json`（**advisory**；**顶层无 `verdict` 键**）→ `New-Verdict` | ★ **已接（B2）**：**两处** review 写出点各产 `Verdict` 信封（`verdict` = review 的 **exit code**）⇒ 判据校验 + 红线 1/2；★ 仍 **advisory**（**不改退出码**） |
+| **P5 裁决登记** | ★ **`review.json.d7_verdict`（嵌套段 · 2026-10-01 裁【甲】）** —— **advisory**；**顶层无 `verdict` 键** | ★ **已接（B2）+ 已落盘（甲）**：**两处** review 写出点各产 `Verdict` 信封（`verdict` = review 的 **exit code**）⇒ 判据校验 + 红线 1/2；★★ **甲**：组装**提到写盘之前**、注入 `$review['d7_verdict']` ⇒ **一次写盘**（旧实现跑在 `Set-Content` 之后 ⇒ Verdict **只活在 stdout**，C 段实测 `O-139`）；★ 仍 **advisory**（**不改退出码**） |
 | **I-1 单写者** | `Add-LedgerLine`（带锁共享 ledger） | ★ **已接（B3 第二半）**：事件流**写点**调 `d7_block('I1', actor=master, target=events)`（放在重试循环**之前** ⇒ 只跑一次） |
 | ★ **`PRH` 同机可见性**（**非相 · 非拦截**） | `.agent-run.json` 的 `exec_host` / `arbiter_host` | ★ **已接（B3 第二半）**：**两处**写出点落两侧事实（`Resolve-D7Hosts` 单一定义点）；P5 处 `--d7-host-sep` **报数**（同机 ⇒ WARN，**不阻断**） |
-| ★ **`I-6` / `PRM` / `PRW` 调用点**（**非相**） | `Write-D7Report`（决策点）· `Write-D7Adjudication`（角色动作点） | ★ **已接（B3 第二半）**：`I-6` 在唯一汇报壳判 `$r['code']`（非 0 **不是** pass）· `PRM`/`PRW` 在两角色事实相遇处（`actor='worker'` / `master`） |
+| ★ **`I-6` / `PRM` / `PRW` 调用点**（**非相**） | `Write-D7Report`（决策点）· `Get-D7Adjudication`（角色动作点） | ★ **已接（B3 第二半）**：`I-6` 在唯一汇报壳判 `$r['code']`（非 0 **不是** pass）· `PRM`/`PRW` 在两角色事实相遇处（`actor='worker'` / `master`） |
 
 ★ **B 段落的本地映射（摘要没给"谁对谁" ⇒ 写死在这里，免得下次另发明一套）**：
 
@@ -300,6 +317,15 @@
    `seq` **固定 1** ⇒ 进 `gaps`）。⚠⚠ **而它只被 `Write-Host` 打印，【没有任何落盘点】**
    ⇒ 契约把 P5 叫「**裁决登记**」，而**登记面是空的**（`Verdict` 不落 `review.json`、不落任何件）。
    ★ 这是 C 段新产出的**未裁发现**（已登记 `O-139`，**本段不擅自改产物 schema**）⇒ `state = partial`。
+   ★★ **已落（2026-10-01 同日 · 用户裁【甲】）**：`Verdict` 段落 **`review.json.d7_verdict`（嵌套）** ——
+   组装**提到写盘之前**（函数改名 `Write-D7Adjudication` → **`Get-D7Adjudication`**，名实相符：它取一段事实、
+   不写盘）、注入后**一次写盘**。**真跑实测**（run `202610010258295814` 重评）：落盘段的
+   `verdict=7` **逐字等于** `metadata.call_code`、`l1_results[0].record_sha256` **逐字等于** `l1.record_sha256`
+   （⇒ 确系**派生**，非第二份真值）、`l2_marks` **缺席**（L2 没跑 ⇒ 不假装）、**顶层仍无 `verdict` 键**
+   （⇒ A 段"靠载体分离"的裁定**一字不动**）。
+   ⚠ **残留（如实，故仍记 `partial` 而非已消）**：① **`seq` 仍是固定 1**（占位，进 `gaps`）；
+   ② **无流水** —— review.json 是 `not_a_ledger`（一次一份、不追加）⇒ **重评会覆盖**本段
+   （它是「最新裁决」不是「裁决流水」）；③ `redispatch?` 仍属 §2 的**射程边界**（不判、不补）。
 7. **三条红线从未被机制强制过**：完成信号权仅在主控站 · L1 先于 L2 且 L2 不改写 ·
    判据与 golden 哈希 P0 固化 —— 均为**文档约束**，代码层**无拦截/校验实现**。
    ★ **A 段已落（2026-10-01）**：三条已落成**纯函数拦截**（`ops/rpc_check.py` 的 `d7_block`

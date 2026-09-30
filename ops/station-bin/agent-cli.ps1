@@ -1560,11 +1560,23 @@ function New-Verdict {
     return @{ verdict = $v; gaps = $gaps }
 }
 
-function Write-D7Adjudication {
+function Get-D7Adjudication {
     # ── ★★ B 段（2026-10-01）：**P4a/P4b/P5 接线** —— 状态机 + 红线 1/2 + Verdict 登记 ────────
     # ★ 只**消费既有事实**（`$L1Section` / `$CcSection` / review 的 exit code），**不改任何判定**：
     #   `review` 仍是 **advisory**（本函数只打印 + 调判据，**不影响退出码**）。
     # ⚠ **有副作用**（子进程）⇒ 不进离线夹具（纯的那半 = `Resolve-D7PhaseChain` / `New-Verdict` 已离线测）。
+    # ★★ **甲（2026-10-01，用户裁定）：本函数【返回】段，由调用方在 `review.json` 写盘前调** ──────
+    #   为什么改（`O-139`，C 段真跑查出）：旧名 `Write-D7Adjudication` 跑在 `Set-Content` **之后**
+    #   ⇒ 判据校验过的那个 `Verdict` **只活在 stdout**，磁盘上找不到 ⇒ 契约把 P5 叫「裁决**登记**」
+    #   而**登记面是空的**。现改为「先组装 → 注入 `$review['d7_verdict']` → **一次写盘**」。
+    #   ⇒ 改名 `Get-*`（PS 的 `Get-Verb` 它已合规）：**名实相符** —— 它确实是"取一段事实"，不是"写"。
+    # ★★ **该段是【派生段】，不是第二份真值**：`l1_results` / `l2_marks` / `verdict` **逐字取**
+    #   `review.json` 已有的 `l1` 段 / `contract` 段 / `metadata.call_code` ⇒ 它只是把**同一次裁决**
+    #   收成一个**可指对象**（"登记面"），**不引入任何新事实**。
+    # ⚠⚠ **生命周期边界（写死，防下一个人把它当账本读）**：`review.json` 已登记 `not_a_ledger`
+    #   （`inventory/conclusion-ledgers.yaml`：glob `**/review.json`，why「一次派发一份的产物，**不追加**」）
+    #   ⇒ 本段是「**最新裁决**」，**不是「裁决流水」**：重评（`--overwrite`）会**覆盖**它
+    #   （`recorded_at` 随之更新）—— 要流水须先升格账本，那是**另一步**（见 `O-139` 的升级路径）。
     # ⚠ 诚实：`actor` 在本架构里**恒为 `master`**（外壳只在主控跑）⇒ 红线 1 的实用价值是
     #   **防将来有人把 P5 搬到站上**（届时 `actor` 变 ⇒ 判据立刻拦）—— **不是**"已拦过真实动作"。
     # ★ B3（2026-10-01）新增 `-ExecHost`：**产出机**（run 记录里的 `exec_host`）—— `PRH` 需要它。
@@ -1623,6 +1635,11 @@ function Write-D7Adjudication {
         elseif ($hsep['code'] -eq 0) { Write-Host ("D7_PRH_SEPARATE: " + $hsep['line']) }
         else { Write-Host ("D7_PRH_UNDECIDABLE: " + $hsep['line'] + " ⇒ 灰度期不阻断") }
     }
+    # ★ 甲（2026-10-01）：**把段还给调用方**（由它在 `$review | ConvertTo-Json | Set-Content` **之前**注入）。
+    #   ⚠ 位置在**函数末尾**（不许提前 return —— 那会跳过上面的 PRM/PRW/PRH 三条角色检查）。
+    #   ⚠ 归零纪律：本函数其余输出一律 `Write-Host`（不占管道）⇒ 这里的 return 是**唯一**进管道的对象；
+    #     调用方**必须**具名赋值（`$review['d7_verdict'] = Get-D7Adjudication …`），**不许裸跑**。
+    return $d7v['verdict']
 }
 
 function Test-CardSafetyDeclared([string]$card, $cardId, [string]$sensitive) {
@@ -5581,14 +5598,18 @@ function Invoke-Review {
         $review['l1'] = $l1Section
         $review['contract'] = $ccSection        # D7-P2-2：判官调用失败也留契约校验结果（多半 ok=false）
         $review['self_review_guard'] = $sgSection   # D7-P3-1：不得自审的事实也留档
-        $review | ConvertTo-Json -Depth 8 | Set-Content $reviewPath -Encoding utf8
-        Write-Host "REVIEW_WRITTEN(advisory,error) $reviewPath"
-        # ── ★★ B 段（2026-10-01）：**D7 协议 P4a/P4b/P5**（状态机 + 红线 1/2 + Verdict 登记）────
+        # ── ★★ 甲（2026-10-01）：**P4a/P4b/P5 在【写盘之前】跑**，Verdict 段随本次写盘落地 ──────
+        # ⚠ 顺序是**承重的**（`O-139`）：旧实现把它放在 `Set-Content` **之后** ⇒ 判据校验过的那个
+        #   `Verdict` **只活在 stdout**、磁盘上找不到 ⇒ P5 叫「裁决**登记**」而**登记面是空的**。
+        #   ★ 现改为「先调 → 注入 `$review['d7_verdict']` → **一次写盘**」（不写第二遍文件）。
         # ⚠ 判官调用失败 ⇒ `$judgeObj` 为 null ⇒ **L2 没跑**（只走 P4a→P5）⇒ 如实传 `-L2Ran $false`。
         # ★ B3：`-ExecHost` = run 记录的**产出机**（`exec_host`；`Resolve-D7Hosts` 在写 run 时落的）
         #   ⇒ `PRH` 两侧事实**同源**（不在这里另推一份机器名）。
-        Write-D7Adjudication -L1Section $l1Section -CcSection $ccSection -ExitCode $callCode -L2Ran $false `
-                             -Card $card -ExecHost ([string]$l1Record.exec_host) | Out-Null
+        # ⚠ 归零纪律：`Get-D7Adjudication` 的返回值就是该段 ⇒ **必须具名赋值**（裸跑会往管道吐对象）。
+        $review['d7_verdict'] = Get-D7Adjudication -L1Section $l1Section -CcSection $ccSection `
+            -ExitCode $callCode -L2Ran $false -Card $card -ExecHost ([string]$l1Record.exec_host)
+        $review | ConvertTo-Json -Depth 8 | Set-Content $reviewPath -Encoding utf8
+        Write-Host "REVIEW_WRITTEN(advisory,error) $reviewPath"
         if ($callCode -ge 5) { return $callCode }   # NETFAIL(5)/timeout(6)/unparseable(7) surfaced, non-blocking
         return 0
     }
@@ -5673,13 +5694,14 @@ function Invoke-Review {
     $review['contract'] = $ccSection
     # D7-P3-1（2026-09-26）：**不得自审**的事实随产物留档（判官/产出者各自的模型 + 是否放行）
     $review['self_review_guard'] = $sgSection
+    # ── ★★ 甲（2026-10-01）：**P4a/P4b/P5 在【写盘之前】跑**（与上面那条失败路**同一处置**）───────
+    # ★ 只**登记事实**：`review` 仍是 advisory ⇒ 本调用**不改**退出码（下面仍 `return 0`）。
+    # ★ B3：`-ExecHost` = run 记录的**产出机**（与失败路**同一来源** ⇒ 两侧事实同源）。
+    # ⚠ 归零纪律：返回值即该段 ⇒ **具名赋值**（裸跑会往管道吐对象，污染 `Invoke-Review` 的返回）。
+    $review['d7_verdict'] = Get-D7Adjudication -L1Section $l1Section -CcSection $ccSection `
+        -ExitCode 0 -L2Ran $true -Card $card -ExecHost ([string]$l1Record.exec_host)
     $review | ConvertTo-Json -Depth 8 | Set-Content $reviewPath -Encoding utf8
     Write-Host "REVIEW_WRITTEN(advisory) $reviewPath"
-    # ── ★★ B 段（2026-10-01）：**D7 协议 P4a/P4b/P5**（状态机 + 红线 1/2 + Verdict 登记）────────
-    # ★ 只**登记事实**：`review` 仍是 advisory ⇒ 本调用**不改**退出码（下面仍 `return 0`）。
-    # ★ B3：`-ExecHost` = run 记录的**产出机**（与上面那条失败路**同一来源** ⇒ 两侧事实同源）。
-    Write-D7Adjudication -L1Section $l1Section -CcSection $ccSection -ExitCode 0 -L2Ran $true `
-                         -Card $card -ExecHost ([string]$l1Record.exec_host) | Out-Null
     Write-Host ("REVIEW score=" + $review.output.score + " pass=" + $review.output.pass + " judge=" + $judge['id'] + " elapsed_s=" + $elapsed)
     return 0   # advisory: score=不合格 does NOT block; exit 0 signals commit (O-16 closed)
 }
