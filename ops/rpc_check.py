@@ -836,6 +836,95 @@ def check_sensitivity(ctx):
 #   ② 未定轴**不许硬塞**：`axis=not-assigned` 必须写 `axis_note`（说明它属于什么轴）；
 #   ③ `axis=evidence-strength` 而逐级对应未知时，只允许写 `axis_value: undefined` + 理由
 #      —— 堵住"看着像就填"（`b1b` 实测把 RPC 的 E1–E5 猜成了「官方>社区>实测>推断>无据」，输入里没有）。
+# ── ★★ `U1#5`（2026-10-01 裁）：**命名空间注册表**（`inventory/namespaces.yaml` = 取值域的**唯一真值**）──
+# 背景（**实测**）：U1 spec §1.3 曾把身份取值域指向 `dialect.yaml` 的 `namespaces`，而那份文件自称**生成物**
+#   （"禁止手工编辑语义 —— 一律改源头 → 重抽"）⇒ ★★ **两条纪律互斗**：想新增一个 namespace **没有合法路径**
+#   （改它 = 违反生成物纪律；走重抽 = 源里根本没有这一节）⇒ **取值域不该挂在派生视图上**。
+# ⇒ 剥出成独立真值文件；`dialect`（U-2 映射行）与 `u1-identity`（U-1 身份声明）**都只读它**。
+NAMESPACE_REG = ROOT / "inventory" / "namespaces.yaml"
+NS_STATUS = ("active", "reserved", "retired")
+
+
+def namespace_index(reg):
+    """注册表 → `(by_id, alias2id)`。**唯一**解析点（消费者不许各自再建一份表）。"""
+    by_id, a2i = {}, {}
+    for n in ((reg or {}).get("namespaces") or []):
+        if not isinstance(n, dict) or not n.get("id"):
+            continue
+        by_id[n["id"]] = n
+        for a in (n.get("aliases") or []):
+            a2i[a] = n["id"]
+    return by_id, a2i
+
+
+def validate_namespaces(reg):
+    """**纯函数** → `(bad, notes)`：注册表自洽（三条治理规则的**机判本体**）。
+
+    ① `id` 非空；② `status` ∈ `NS_STATUS`；③ `since` 形如 `YYYY-MM-DD`；
+    ④ ★ **同一个字符串不许同时属于两条**（id 或 alias）—— 这是**唯一**会判红的**冲突**（治理规则②）。
+    """
+    bad, notes = [], []
+    if not isinstance(reg, dict):
+        return ["namespaces.yaml 顶层不是映射（结构改了？）"], notes
+    items = reg.get("namespaces") or []
+    if not items:
+        bad.append("`namespaces` 为空 ⇒ 身份取值域没有内容（判据会退化成空判）")
+    seen = {}
+    for i, n in enumerate(items, 1):
+        if not isinstance(n, dict):
+            bad.append(f"`namespaces[{i}]` 不是映射: {n!r}")
+            continue
+        nid = n.get("id")
+        if not nid:
+            bad.append(f"`namespaces[{i}]` 缺 `id`")
+            continue
+        if n.get("status") not in NS_STATUS:
+            bad.append(f"`namespaces[{i}]`({nid}) status={n.get('status')!r} 不在闭集 {list(NS_STATUS)}")
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", str(n.get("since") or "")):
+            bad.append(f"`namespaces[{i}]`({nid}) `since` 必须是 `YYYY-MM-DD`: {n.get('since')!r}")
+        for token in [nid] + list(n.get("aliases") or []):
+            if token in seen and seen[token] != nid:
+                bad.append(f"★ **命名空间冲突**：{token!r} 同时属于 {seen[token]!r} 与 {nid!r} "
+                           f"⇒ 同一个串不许出现在两条里（治理规则②）")
+            seen.setdefault(token, nid)
+    notes.append(f"命名空间 {len(items)} 条 · active "
+                 f"{sum(1 for n in items if isinstance(n, dict) and n.get('status') == 'active')} · 字符串位点 {len(seen)}")
+    return bad, notes
+
+
+def namespace_domain_error(ns, reg):
+    """★★ `U1#5` 判据：一个 `namespace` 取值是否合法 ⇒ 错误串，或 `None`（合法）。
+
+    ★ 规则比"在不在名单里"**严一档**：必须是 **canonical `id` 且 `status: active`**。
+      · 写 **alias**（如 `Open_Data`）⇒ **拒**，并提示应改写成 canonical id ——
+        身份 = 对 `["<ns>","<id>","<ver>"]` 的哈希，**吃的是原字符串** ⇒ 放行别名会让同一产物**有两个身份**；
+      · `retired` ⇒ **拒**（历史身份仍可复算，但**新声明不许用**，治理规则③）；
+      · 未登记 ⇒ **拒**（fail-closed）。
+    ⚠ 匹配一律**精确**（不做大小写 / 分隔符归一）—— 归一化会把"两个身份"藏起来。
+    """
+    by_id, a2i = namespace_index(reg)
+    if ns in by_id:
+        st = by_id[ns].get("status")
+        if st == "active":
+            return None
+        return f"`namespace`={ns!r} 的状态是 `{st}` ⇒ 不得用于**新**声明（治理规则③：退役不删，但不许新用）"
+    if ns in a2i:
+        return (f"`namespace`={ns!r} 是 **alias**，身份里必须写 canonical id `{a2i[ns]!r}` —— "
+                f"⚠ 别名若放行，同一个产物会有**两个身份**（哈希吃原字符串）")
+    return f"`namespace`={ns!r} **未登记** ⇒ 拒（fail-closed；要新增须先写进 `inventory/namespaces.yaml`）"
+
+
+def namespace_for_project(project, reg):
+    """`项目名 → canonical namespace`（**消费侧**用，如 `--invalidate` 的 affected 归集）。
+
+    ⚠ 只在**有登记时**才换算（id 或 alias 精确命中）；**未登记 ⇒ 原样返回**（与旧行为一致 —— 不猜）。
+    """
+    by_id, a2i = namespace_index(reg)
+    if project in by_id:
+        return project
+    return a2i.get(project, project)
+
+
 DIALECT_INV = ROOT / "inventory" / "dialect.yaml"
 DIALECT_AXES = {"evidence-strength", "not-assigned"}
 DIALECT_RELATIONS = {"独占", "冲突", "同名不同义-族内"}
@@ -861,11 +950,12 @@ def _dialect_slice(text, start_marker, next_prefix):
     return "\n".join(lines[i:j])
 
 
-def validate_dialect(inv, read_text_fn, exists_fn):
+def validate_dialect(inv, read_text_fn, exists_fn, reg):
     """**纯函数** → `(bad, notes)`（离线可正反夹测，见 tests/test_rpc_check_dialect.py）。
 
-    规则：① 轴与命名空间是封闭枚举/白名单；② 每行映射的前缀必填；
-          ③ `coverage` 与实际行数**双向**相等（漏一行、多一行都红）；
+    规则：① 轴是封闭枚举；★★ **命名空间白名单来自 `reg`（注册表），不再来自本文件**
+             —— `U1#5`（2026-10-01）：取值域的真值唯一在 `inventory/namespaces.yaml`，本文件只是消费者；
+          ② 每行映射的前缀必填；③ `coverage` 与实际行数**双向**相等（漏一行、多一行都红）；
           ④ `sources` 的 path 必须存在，且**复算指纹**必须与登记一致（源变 ⇒ 下游红）。
     """
     bad, notes = [], []
@@ -887,10 +977,13 @@ def validate_dialect(inv, read_text_fn, exists_fn):
         if not (isinstance(v, dict) and v.get("id") and v.get("label")):
             bad.append(f"`axis.values` 有条目缺 id/label: {v!r}")
 
-    # ── ② 命名空间白名单（前缀必填的值域）────────────────────────────────
-    ns_ids = [n.get("id") for n in (inv.get("namespaces") or []) if isinstance(n, dict)]
+    # ── ② 命名空间白名单（前缀必填的值域）—— ★ `U1#5`：**从注册表读**，不从本文件读 ──
+    #    ⚠ 只认 `status: active` 的 **canonical id**（alias 不许写进映射行 —— 同身份那条理由：
+    #      "同一事实两处表达"的代价最大的一种就是别名放行 ⇒ 一个东西两个名字）。
+    _by_id, _a2i = namespace_index(reg)
+    ns_ids = [k for k, v in _by_id.items() if (v or {}).get("status") == "active"]
     if not ns_ids:
-        bad.append("`namespaces` 为空 ⇒ 「前缀必填」没有值域可查")
+        bad.append("命名空间注册表 `inventory/namespaces.yaml` 里**没有 active 条目** ⇒ 「前缀必填」没有值域可查")
 
     # ── ③ 映射表 ────────────────────────────────────────────────────────
     mapping = inv.get("mapping") or []
@@ -905,7 +998,8 @@ def validate_dialect(inv, read_text_fn, exists_fn):
         if not ns:
             bad.append(f"`mapping[{i}]` 缺 `namespace`（★ 前缀是**必填字段**，§11.4 教训①）")
         elif ns_ids and ns not in ns_ids:
-            bad.append(f"`mapping[{i}]` 的 namespace={ns!r} 不在 `namespaces` 白名单里")
+            bad.append(f"`mapping[{i}]` 的 namespace={ns!r} **不在命名空间注册表"
+                       f"（`inventory/namespaces.yaml`）的 active 白名单**里")
         if not sym:
             bad.append(f"`mapping[{i}]` 缺 `symbol`")
         if (ns, sym) in seen_pair:
@@ -1022,11 +1116,23 @@ def check_dialect(ctx):
     except Exception as e:
         return "FAIL", f"inventory/dialect.yaml 解析失败: {type(e).__name__}: {e}", []
 
+    # ★ `U1#5`（2026-10-01）：白名单改从**注册表**读 —— 它是取值域的真值，本文件只是消费者。
+    #   ⚠ 注册表缺失/不可解析 ⇒ **FAIL**（不是跳过）：白名单是本条判据的**值域**，没有它映射行无从判。
+    if not NAMESPACE_REG.is_file():
+        return "FAIL", "inventory/namespaces.yaml 缺失（`U1#5` 起它是命名空间取值域的唯一真值）", []
+    try:
+        reg = yaml.safe_load(NAMESPACE_REG.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        return "FAIL", f"inventory/namespaces.yaml 解析失败: {type(e).__name__}: {e}", []
+    ns_bad, ns_notes = validate_namespaces(reg)
+    if ns_bad:
+        return "FAIL", "命名空间注册表自身不自洽（见明细）", ns_bad
+
     def _read(rel):
         return (ROOT / rel).read_text(encoding="utf-8", errors="replace")
 
-    bad, notes = validate_dialect(inv, _read, lambda rel: (ROOT / rel).exists())
-    return ("FAIL" if bad else "PASS"), " · ".join(notes), bad
+    bad, notes = validate_dialect(inv, _read, lambda rel: (ROOT / rel).exists(), reg)
+    return ("FAIL" if bad else "PASS"), " · ".join(notes + ns_notes), bad
 
 
 # ── D7-P1-3 (2026-09-26)：U-3 依赖边格式（`inventory/edges.yaml`）────────────
@@ -1467,6 +1573,11 @@ def check_u1_identity(ctx):
          （D-25：前缀进头部注释、不进哈希行；U1 spec §1.4 要求"每文件首行"）。
       ③ ★ **至少 1 个声明**：一个都没有 ⇒ 本条判据**没有对象** ⇒ 判红。
          （否则它会**静默退化**成空判 —— 正是本仓头号失败形态"判据什么都没判"。）
+      ★★ ④ **`namespace` 必须落在取值域里**（`U1#5`，2026-10-01）—— 取值域的真值 =
+         `inventory/namespaces.yaml`（注册表）；**只认 `status: active` 的 canonical id**
+         （写 alias / retired / 未登记 ⇒ 拒）。⚠ 本条此前**不存在**：旧判据只复算，
+         于是 `namespace: 任何字符串` 都能过 ⇒ D-25 的"前缀必填 + 取值域封闭"**只有前半句落地了**。
+         同时顺带判**注册表自身自洽**（`validate_namespaces`）。
     """
     try:
         import yaml
@@ -1474,6 +1585,14 @@ def check_u1_identity(ctx):
         return "WARN", "缺 pyyaml, 跳过 u1-identity 断言", []
     if not U1_DECL_SCAN_DIR.is_dir():
         return "FAIL", "inventory/ 缺失（本断言的登记依据）", []
+    # ★★ `U1#5` ④：取值域的真值 = 注册表；缺失/不自洽 ⇒ **FAIL**（不是跳过 —— 没有值域就无从判）
+    if not NAMESPACE_REG.is_file():
+        return "FAIL", "inventory/namespaces.yaml 缺失（`U1#5` 起它是 namespace 取值域的唯一真值）", []
+    reg = yaml.safe_load(NAMESPACE_REG.read_text(encoding="utf-8")) or {}
+    ns_bad, ns_notes = validate_namespaces(reg)
+    if ns_bad:
+        return "FAIL", "命名空间注册表自身不自洽（见明细）", ns_bad
+    ns_note = " · ".join(ns_notes)
     bad, declared, ok_recalc = [], 0, 0
     for p in sorted(U1_DECL_SCAN_DIR.glob("*.yaml")):
         text = p.read_text(encoding="utf-8")
@@ -1487,6 +1606,9 @@ def check_u1_identity(ctx):
             continue
         declared += 1
         err = u1_verify_declaration(decl)
+        # ★ `U1#5` ④：取值域 —— 与复算**分开报**（复算过不了 ≠ 取值域不对，反之亦然）
+        if not err:
+            err = namespace_domain_error(decl.get("namespace"), reg)
         if err:
             bad.append(f"{p.name}: {err}")
         else:
@@ -1499,7 +1621,8 @@ def check_u1_identity(ctx):
                    "U-1 的落地以『至少一个可复算的声明』为可判形式")
     # ⚠ 这两个数**算出来**，不写死 —— 上一版我在这里硬编码了"复算 0 处不符"，
     #   那正是刚修掉的"标签在说谎"同族（标签比事实硬）。
-    notes = f"已声明 U-1 身份 {declared} 个 · 复算通过 {ok_recalc} 个（扫描 inventory/*.yaml）"
+    notes = (f"已声明 U-1 身份 {declared} 个 · 复算+值域通过 {ok_recalc} 个（扫描 inventory/*.yaml）"
+             f" · {ns_note}")
     return ("FAIL" if bad else "PASS"), notes, bad
 
 

@@ -74,8 +74,14 @@ D-23 的"不追溯重算**历史产物**"**不适用**于它们 —— 那 2 个
 **字段定义**：
 
 - **`namespace`**：产物所属命名空间。★ **取值域不在此另列一份** ——
-  真值 = [`inventory/dialect.yaml`](../../inventory/dialect.yaml) 的 `namespaces[].id`
-  （**单一真值来源**；本文件不复制该清单，避免"同一事实两处定义"）。
+  ~~真值 = [`inventory/dialect.yaml`](../../inventory/dialect.yaml) 的 `namespaces[].id`~~
+  ⇒ ★★ **2026-10-01 已改（`U1#5` 裁，见末节第 5 条）**：
+  真值 = [`inventory/namespaces.yaml`](../../inventory/namespaces.yaml)（**命名空间注册表**，单一真值来源）。
+  **为什么换**（**实测**）：`dialect.yaml` 自称**生成物**（"禁止手工编辑语义"）⇒ 取值域挂在它上面时，
+  **想新增一个 namespace 没有合法路径**（改它 = 违反生成物纪律；走重抽 = 源里没有这一节）。
+  ★ **判据形态（三条治理规则）**：① 新增 = 向注册表追加一条 `status: active`（**门禁不看人，只看登记**）；
+  ② 冲突 = **同一个字符串不许属于两条**（id 或 alias）；③ 退役改 `status: retired` 而**不删**。
+  ★ **身份里只许写 canonical `id`** —— 写 alias **拒**（哈希吃原字符串 ⇒ 别名放行会让同一产物**有两个身份**）。
 - **`identifier`**：业务主键，**原样保留、不做二次哈希**。
   既有各处可无损映射：Open_Data 的「源 + 维度 + 日期」· Macro_Data 的 `full_url` ·
   factor_pipeline 的 `id` · Auto_Prover 的 `normalized` · Fin_Agent 的 `text` ·
@@ -188,6 +194,25 @@ D-23 的"不追溯重算**历史产物**"**不适用**于它们 —— 那 2 个
    ⇒ "看到 32 位就是 U-1"这种**长度启发式**会误判（必须靠**前缀**，不能靠长度）。
 5. **`namespace` 的跨项目唯一性治理**：取值域现指向 `inventory/dialect.yaml` 的 `namespaces`，
    但**没有注册机制**（谁可以新增一个 namespace、冲突怎么裁决）⇒ 未实测。
+   ★★ **2026-10-01 已裁并已落（`U1#5`，用户裁"拆出注册表"）** —— 普查顺带查出**三条比登记更具体的缺口**：
+   - **① 真值挂错了地方**：取值域挂在 `dialect.yaml` 上，而那份文件自称**生成物**（"禁止手工编辑语义"）
+     ⇒ ★★ **两条纪律互斗**：想新增一个 namespace **没有合法路径**（改它 = 违反生成物纪律；
+     走重抽 = 源里根本没有 namespace 这一节）⇒ **取值域不该挂在派生视图上**。
+   - **② 值域判据根本不存在（可证伪）**：`check_u1_identity` 旧判据**只复算** ⇒ `namespace: 任何字符串`
+     都能过（复算自洽即可）⇒ D-25 的"前缀必填 + **取值域封闭**"**只有前半句落地了**
+     （`check_dialect` 的白名单只管 U-2 映射行，**不管 U-1 身份声明**）。
+   - **③ 同一个项目多个名字，且有一个连合法名都没有（实测）**：`open_data`（dialect）vs `Open_Data`
+     （`id-storage-census` / `_ns_of_project`）两种写法并存；★ **`Auto_Prover` 有 2 处存储登记却不在取值域里**
+     ⇒ 要给它的产物发身份时**无值可填**（这是"从别人的投影里继承取值域"的直接后果 —— 投影只为 U-2 的符号冲突服务，**不为身份发号**）。
+   **落地（四件）**：① 注册表 [`inventory/namespaces.yaml`](../../inventory/namespaces.yaml)（`id`/`label`/`status`/`since`/`aliases`，
+     10 条**原样搬入、取值一字未改** + 补登 `auto_prover`）；② `dialect.yaml` 的 `namespaces` 段**剥出**（改为指向）；
+     ③ 门禁侧：`validate_namespaces`（注册表自洽）+ `namespace_domain_error`（**只认 active 的 canonical id**）
+     ⇒ 接进 `check_u1_identity` 的**判据 ④**、`check_dialect` 的白名单来源改为注册表；
+     ④ 消费侧 `namespace_for_project`（`ops/id_storage_census.py` 的 `项目 → namespace` 硬编码表换成注册表解析）。
+   ★ **先验红**：`tests/test_rpc_check_u1.py` **+5 条**（含 **"只改一个字符串⇒翻红"** 的自证）；
+     `test_rpc_check_dialect.py` 的白名单来源随裁改写（含 `retired` 不许新用的一条）。
+   ⚠ **仍未实测的部分**：**跨项目强制** —— 本仓只能**对账**、不能强制别仓遵守注册表（同 `dialect.yaml`
+     `regeneration.why_not_automated` 的既有判断）⇒ `state` = **`partial`**、`blocker` = `external`。
 6. **`version` 的兜底语义**：多数出处**没有版本概念**，兜底写 `0.0.0` 会让
    "同一 identifier、不同版本"产生**相同哈希**（= 该维度实际失效）⇒ 真实冲突场景未验证。
 7. **本仓 inbox 的双轨维护成本**：新产物同时写 `MANIFEST.sha256`（全 64 兼容）

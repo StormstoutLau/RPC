@@ -67,17 +67,13 @@ axis:
       note: 出处 = Open_Data 的 `L3`（原文词「实测取得级」）
 
 # ── 命名空间前缀（§11.4 教训③：**必填字段**，不靠人自觉写前缀）────────────
-namespaces:
-  - {id: paper, label: Paper}
-  - {id: textbook, label: Textbook}
-  - {id: open_data, label: Open_Data}
-  - {id: macro_data, label: Macro_Data}
-  - {id: fin_agent, label: Fin_Agent}
-  - {id: cpp_hub, label: Cpp_Hub}
-  - {id: spec_workflow, label: Spec_Workflow}
-  - {id: factor_pipeline, label: factor_pipeline}
-  - {id: rpc, label: 本仓 RPC}
-  - {id: rpc_inbox, label: 本仓 inbox}
+# ★★ **2026-10-01（`U1#5`）：本段已【剥出】本文件 —— 取值域的真值唯一在
+#   [`inventory/namespaces.yaml`](namespaces.yaml)，本文件只做 `mapping[].namespace` 的**消费者**。**
+#   **理由（两条纪律互斗，已实测）**：U1 spec §1.3 曾把身份取值域指向本文件的 `namespaces`，而本文件自称
+#   **生成物**（"禁止手工编辑语义 —— 一律改源头 → 重抽"）⇒ **想新增一个 namespace 没有合法路径**
+#   （改本文件 = 违反生成物纪律；走重抽 = 源里根本没有这一节）⇒ 故**取值域不该挂在派生视图上**。
+#   ⚠ 搬入时**取值一字未改**（10 条原样），只增补了普查实测缺口的 `auto_prover`（见该文件内的补登理由）。
+#   ⚠ 门禁 `dialect` 的白名单现从注册表读（`validate_dialect(..., reg)`）⇒ 本段不再有 `namespaces` 键。
 
 # ── 源词表（指纹一旦不符 ⇒ 门禁红：源变了而你没重抽）──────────────────────
 sources:

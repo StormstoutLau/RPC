@@ -108,8 +108,17 @@
   `U3#4`：扩样例并出**拦截率 / 误杀率**读数 ⇒ `拦截率 17/17 · 误杀率 0/3`（**含先验红自证**：假绿桩只抓到 1/17）。
   ⚠ **两条仍未实测**：`U5#5` = **真实记忆晋升**（本仓无共享记忆层）；`U3#4` = **真实脏数据分布**（样例是构造的）
   ⇒ `state` 均如实标 **`partial`**（**不冒充实测**）。
-- 批 5：**等裁定 / 单独立项** —— `U1#5` 需先裁「谁能新增 namespace / 冲突怎么裁」；
-  `D7-PROTOCOL-CONTRACT` 9 条是**建链路**（协议 P0–P5 从未真实跑通）⇒ 不在"补测试"范围。**未开始**。
+- ★ **批 5 · `U1#5` 已完成（2026-10-01）**：用户裁「**拆出注册表**」⇒ 取值域从 `dialect.yaml`（生成物）
+  剥成独立真值 [`inventory/namespaces.yaml`](../../inventory/namespaces.yaml)；`dialect.yaml` 改为指向它。
+  ★ **普查查出三条比登记更具体的缺口**（见 `U1-ARTIFACT-IDENTITY.md` §未实测 5）：① 真值挂错地方（**两条纪律互斗**
+  ⇒ 新增 namespace 没有合法路径）；② **值域判据根本不存在**（旧判据只复算 ⇒ 写任何字符串都能过）；
+  ③ 同一项目多写法 + `Auto_Prover` **有登记却不在取值域**（无值可填）。
+  落地 = registry + `validate_namespaces` + `namespace_domain_error`（**只认 active 的 canonical id**）
+  ⇒ 接进 `u1-identity` 判据 ④ 与 `dialect` 白名单；消费侧 `namespace_for_project`（census 硬编码表换成注册表）。
+  **先验红**：`test_rpc_check_u1.py` **+5**（含"只改一个字符串⇒翻红"）· `test_rpc_check_dialect.py` 随裁改写。
+  ⚠ **仍未实测** = **跨项目强制**（本仓只能对账、不能强制别仓）⇒ `state` 标 **`partial`**、`blocker` = `external`。
+- 批 5 · `D7-PROTOCOL-CONTRACT` 9 条：**仍待裁定**（性质 = **建链路**，协议 P0–P5 从未真实跑通；
+  建议按"离线契约化 → 外壳接线 → 站上真跑"三段立项）。**未开始**。
 
 ## 9. 维护
 

@@ -29,13 +29,20 @@ SRC_SHA = "af488798235febd98c392c3929fcac1660e573d61118fc74fba95ec8a256c98d"
 FILES = {"docs/src.md": SRC}
 EXISTS = {"docs/src.md": True}
 
+# ★★ `U1#5`（2026-10-01）：命名空间白名单**不再来自 dialect.yaml**，改从**注册表**读
+#   ⇒ 夹具必须显式喂一个注册表（这也顺带证明"白名单真的换了来源"：本夹具的 `_inv()` 里**没有** `namespaces` 键）。
+REG = {"namespaces": [
+    {"id": "open_data", "label": "Open_Data", "status": "active", "since": "2026-09-26", "aliases": ["Open_Data"]},
+    {"id": "retired_one", "label": "旧项目", "status": "retired", "since": "2026-09-26", "aliases": []},
+]}
+
 
 def _inv(**over):
     base = {
         "axis": {"id": "evidence-strength", "label": "证据强度",
                  "values": [{"id": "official", "label": "官方来源"},
                             {"id": "community", "label": "社区来源"}]},
-        "namespaces": [{"id": "open_data", "label": "Open_Data"}],
+        # ⚠ 这里**故意没有** `namespaces` 键：取值域的真值已剥到 `inventory/namespaces.yaml`（`REG`）
         "sources": [{"id": "s1", "path": "docs/src.md", "whole_file": True, "sha256": SRC_SHA}],
         "coverage": [{"family": "L", "expected_rows": 1}],
         "mapping": [{"family": "L", "namespace": "open_data", "symbol": "L1", "source": "Open_Data",
@@ -70,8 +77,10 @@ CASES = [
     # ── ★ 前缀必填（§11.4 教训①）──────────────────────────────────────
     ("★反例 缺 namespace（前缀是**必填字段**，不靠人自觉）",
      _inv(mapping=[_row(namespace=None)]), False, "缺 `namespace`"),
-    ("★反例 namespace 不在白名单",
-     _inv(mapping=[_row(namespace="ghost_proj")]), False, "不在 `namespaces` 白名单"),
+    ("★反例 namespace 不在**注册表**白名单里（`U1#5`：白名单来源已换）",
+     _inv(mapping=[_row(namespace="ghost_proj")]), False, "不在命名空间注册表"),
+    ("★反例 namespace 是 `retired`（注册表里在、但**不许新用**）",
+     _inv(mapping=[_row(namespace="retired_one")]), False, "不在命名空间注册表"),
     ("★反例 缺 symbol",
      _inv(mapping=[_row(symbol=None)]), False, "缺 `symbol`"),
 
@@ -149,7 +158,7 @@ def main() -> int:
     for desc, inv, want_ok, kw in CASES:
         reader = (lambda p: FILES[p]) if desc != READ_FAIL_CASE else (
             lambda p: (_ for _ in ()).throw(UnicodeDecodeError("utf-8", b"", 0, 1, "boom")))
-        bad, notes = R.validate_dialect(inv, reader, lambda p: EXISTS.get(p, False))
+        bad, notes = R.validate_dialect(inv, reader, lambda p: EXISTS.get(p, False), REG)
         blob = " ".join(bad) + " " + " ".join(notes)
         got_kw = kw in blob
         ok = ((not bad) == want_ok) and got_kw
@@ -170,9 +179,15 @@ def main() -> int:
     try:
         import yaml
         real = yaml.safe_load((ROOT / "inventory" / "dialect.yaml").read_text(encoding="utf-8"))
+        reg_real = yaml.safe_load((ROOT / "inventory" / "namespaces.yaml").read_text(encoding="utf-8"))
         bad, notes = R.validate_dialect(
             real, lambda p: (ROOT / p).read_text(encoding="utf-8", errors="replace"),
-            lambda p: (ROOT / p).exists())
+            lambda p: (ROOT / p).exists(), reg_real)
+        nb, nn = R.validate_namespaces(reg_real)
+        if nb:
+            fails.append(f"真注册表自身不自洽: {nb}")
+        else:
+            print(f"  ok   端到端 真读 inventory/namespaces.yaml\n        {' · '.join(nn)} · bad=0")
         ok = not bad
         print(f"  {'ok  ' if ok else 'FAIL'} 端到端 真读 inventory/dialect.yaml\n"
               f"        {notes} · bad={len(bad)}")
