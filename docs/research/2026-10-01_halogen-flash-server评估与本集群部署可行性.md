@@ -1,0 +1,279 @@
+# halogen-flash-server 评估与本集群部署可行性
+
+> **日期**: 2026-10-01
+> **触发**: 用户指令「分析一下 `peonist-ai/halogen-qwen3.8-flash-next` 如何在本机群下载部署 / 吞吐速度是否有明显优势 / 通过统一管理入口执行」。
+> **证据等级**: **E1**（本会话实测：仓内侦察 + 门禁链）· **E2**（前会话实测留档：现役吞吐基线 / 容器就绪盘点 / 磁盘余量 / IOMMU 状态）· **E3**（外部文档：上游 README / EULA / HF / 第三方实测贴，**全部未在本集群复现**）。
+> ⚠ **本文件不部署任何东西**：未拉镜像、未起容器、未下任何权重、未改任何站上配置。所有"怎么做"都是**计划**，不是**已做**。
+> **单一承载文档**: 本主题（halogen 引擎）**只此一处**；跨主题事实一律**建链接不复制**。
+
+---
+
+## 0. 结论摘要（一屏）
+
+| # | 用户的问题 | 判定 | 依据 |
+|---|---|---|---|
+| 1 | **吞吐有没有明显优势** | ★ **有，且在现役栈最痛的点上（长 ctx 塌缩）** —— 但其全部数字是 **E3 外部自测**，且**投机解码依赖 prompt 形态（同一 build prose ~20 / code ~42 t/s，跨度 ~2×）** ⇒ 只能判「**值得复测**」，**不能**据外部数字直接判「值得上」 | §6 |
+| 2 | **"在本机群"下载部署** | ★★ **口径纠正：它是【单站部署】，不是机群部署** —— 引擎为**一块硅片**写死（README 首段逐字 "runs on exactly one piece of silicon"），**不存在 RPC / 多机形态** ⇒ 本集群的 RPC 双机/三机能力对它**无用** | §3 |
+| 3 | **权重怎么下** | `.hgn` 档共 **~111 GiB**，含 **62–63 GiB 单文件** ⇒ 撞 HF >50 GB 常规 HTTP 上限 ⇒ **必须走 `lm-download@`（aria2c 分段并行 Range）**，`hf download` 与容器内置 `HALOGEN_DOWNLOAD` 在镜像场景**结构性不可用** | §4 |
+| 4 | **有没有更便宜的入口** | ★★ **有**：引擎自 0.7.0 起**直读 llama.cpp GGUF**，而我们盘上**已有**该档权重（`UD-IQ4_XS` 三片 93.7 GB，**A/B/C 三站齐备**）⇒ **BYO GGUF 档只需额外下 1.4 GiB**（draft head + tokenizer），**不必下 111 GiB** | §4.3 |
+| 5 | **前置闸** | **三道**：① 新引擎栈（OCI 容器）**须过 ADR 立项**；② **容器运行时未就绪**（三站有 `docker` CLI，daemon **仅 A 站 active**；`podman`/`toolbox`/`distrobox` **三站全无**）；③ 端口 **8730/8731 未登记**且**引擎协议无鉴权** | §5 |
+| 6 | **建议** | ★ **先立项（ADR）+ 只做【BYO GGUF】档的吞吐复测**（额外下载 1.4 GiB）；**不下 111 GiB**、**不部署到多站**、**不新增并列脚本** | §8 |
+
+---
+
+## 1. 它是什么（E3，全部未复现）
+
+**三件套，缺一不可**：
+
+| 件 | 是什么 | 形态 |
+|---|---|---|
+| **引擎** | `peonist-ai/halogen-flash-server`（v0.15.1）—— 为 **gfx1151 + Qwen3.8-Flash-Next 这一对**手写 kernel 的推理服务 | ★ **闭源 OCI 容器**（`ghcr.io/peonist-ai/halogen-flash-server`）；仓库顶层**无源码树**（`language: Shell`，只有 `docs/ tools/ deploy/ docker-compose.yml`）|
+| **权重** | `peonist-ai/halogen-qwen3.8-flash-next` —— **私有 `.hgn` 格式**（非 GGUF、非 safetensors） | HF 仓库，~111 GiB |
+| **服务面** | OpenAI 兼容 `/v1`（+ `/v1/responses`、`/v1/messages`）；引擎自身协议在容器内 **8730** | 对外发布 **8731** |
+
+**与官方模型的关系（澄清一个易混点）**：它**不是**官方 Qwen 权重，而是**第三方**（`peonist-ai` / Peonist, LLC）针对**官方** Qwen3.8-Flash-Next 做的**专用重打包 + 专用引擎**。官方架构事实（E3，Qwen README）：125B MoE（**6B 激活**）+ **51B n-gram embedding** + 4B MTP head，**48 层 / 512 experts（10 routed + 1 shared）**，`qwen4_exp` 架构（GDN + QSA 稀疏注意力），原生 ctx 262,144 → YaRN 1M。⇒ 与本集群手册 §3.4 记的架构**一致**（`qwen4exp`）。
+
+**规模与活跃度（E3，GitHub API 实测）**：774 ★ / 50 fork / 14 open issues / 创建 2026-08-26 / 最近推送 **2026-09-30**（活跃）。
+
+**★ 许可与供应链（E3，逐条读 EULA）**——这一节是本主题**最容易被跳过、却最影响治理**的部分：
+
+| 条款 | 内容 | 对本仓的含义 |
+|---|---|---|
+| 许可形态 | **EULA**（`LICENSE.md` v0.1，2026-08-25 生效），**不是**开源许可 | ⇒ **代码不可审**：一个跑在你把 94 GiB 权重交给它的位置上的**不透明二进制** |
+| 授权 | 全球、免版税、非独占、**含商用与生产**，无席位/核数/请求量上限，无 license key | ⇒ 授权本身**不构成阻断** |
+| 限制 | ①**不得对外分发"改造过的镜像"**（自用可改）；②不得移除版权声明；③不得用其名称背书 | ⇒ 若日后要改镜像（如绑址/端口），**改动件不得外发** |
+| 反工程 | **不禁止**，但**不得把衍生源码当自己的作品分发** | ⚠ 一处**已知的社区反向工程先例**：`IIIIIllllIIIIIlllll/gfx1151-engine`（Windows 版，性能不及原版但优于 llama.cpp，E3 未核）|
+| **基准发布** | ★ **明文允许**：可跑基准并发布结果，**无需事先报备** | ⇒ 我们**可以**把实测读数落进本仓（正好满足本仓"必须实测"的纪律）|
+| **测准前提** | ★★ 要求发布时写明**软件版本 + prompt set**，理由：**decode 吞吐取决于投机接受率，而接受率取决于文本可预测性** —— 同一 build 在其自有 prompt set 上**从 prose ~20 t/s 到 code ~42 t/s（≈2×）** | ⇒ ★★★ **这是一个口径警报，不是法律条款**：halogen 表格里的 46.0 / 55.7 这类数字**不能**与本集群的裸 AR 读数并列 |
+| 遥测 | **零遥测**、零 license 检查、零回调；**默认零出站连接**（唯一例外 = 你主动设 `HALOGEN_DOWNLOAD`，且连的是**你指定的第三方主机**） | ⇒ 出站面**干净**（对比：这点优于多数第三方栈）|
+| 担保 | AS-IS；**不担保任何特定吞吐**、**只担保 gfx1151**、不担保无中断 | ⇒ 无 SLA 可依赖 |
+| 管辖 | 美国**佛罗里达州**法律 | 登记为事实 |
+
+---
+
+## 2. 真实规格（E3，未复现）
+
+### 2.1 权重文件（HF 仓库 `peonist-ai/halogen-qwen3.8-flash-next`）
+
+| 文件 | 体积 | 用途 | 是否常驻 |
+|---|---|---|---|
+| `qwen38-flash-next-v2.hgn` | **~62 GiB**（L1T 贴记 63 GiB）| 主检查点（权重） | ✅ 常驻（pinned）|
+| `qwen38-flash-next-ngram.hgn` | **47.7 GiB** | n-gram 查表 | ❌ **分页，不常驻内存** |
+| `qwen38-flash-next-vision.hgn` | 857 MiB | 视觉侧车（**默认不加载**）| 按需（开启 +2 GiB）|
+| `tokenizer/` | — | 分词器 | — |
+| **合计** | **≈ 111 GiB** | | 常驻部分仅 ~62 GiB |
+
+> ★ 注意：**"111 GiB"是磁盘量，"62 GiB"是内存量** —— 这两个数在本主题里极易混用（n-gram 表的设计卖点恰是"能从 DRAM/页缓存跑"）。**精度**：5.53 bpw（按其检查点自家张量表算，**非**格式名）＝ 全 179.55B 参数口径。
+
+### 2.2 内存占用（按其 0.15.1 启动行，128 GB 机 / 默认检查点 / 4 slots）
+
+| 项 | 数值 |
+|---|---|
+| 权重常驻 | 62.1 GiB（自家 v2）/ **68.0 GiB（w4b）** / **72 GiB（BYO GGUF，因 8-bit dense 层）** |
+| KV 池（**内存主旋钮** `HALOGEN_KV_POOL_POSITIONS`）| 262,144 → 19.8 GiB；**524,288（默认）→ 27.0 GiB**；1,048,576 → 36.9 GiB（@MAX_TOK 16384）/ 41.4 GiB |
+| 工作内存（`HALOGEN_MAX_TOK`=32,768）| 12.6 GiB（自家档）/ 12.5 GiB（w4b）|
+| 单位置开销 | ~28–29.5 KiB（含 scratch）|
+| 拟合口径 | `MemTotal − 权重常驻 − HALOGEN_HOST_RESERVE_GIB(20)` |
+| ★ **留给宿主的余量** | **~12 GiB**；其自述**低于 ~10 GiB 时 n-gram 表会被逐出 ⇒ prefill 从秒级退到分钟级** |
+
+### 2.3 吞吐（其参考机：Ryzen AI Max+ 395 / 128 GB / **ROCm 7.14.0** / **~85 W 包功耗** / **IOMMU 关闭**）
+
+| 口径 | 自家 v2 检查点 | **BYO GGUF（unsloth `UD-IQ4_XS`，= 我们盘上那份）** |
+|---|---|---|
+| prefill @ 8,192 / 32,768 | 1,502 / 1,499 t/s（0.14.1）| **1,485 / 1,465（within 2.5%）** |
+| prefill @ 131,072 | 1,517 t/s | — |
+| prefill @ 1M 配置（258,794 / 1,004,581）| 1,114（232 s）/ 937 t/s（17.9 min）| — |
+| decode **serial greedy** @ ctx 1,500 / 32,768 | 37.6 / 34.1 t/s | **26.0–27.1（0.12.1）/ 25.4（0.14.1）** —— **比自家档 −28%** |
+| decode **MTP 投机** @ ctx 1,500 | 44.8（prose）/ 49.9（code）| draft head 27.9–30.2（接受率 45%）|
+| decode **MTP，served** @ ctx 32,768 | **46.0 t/s**（十 prompt 均值）| — |
+| decode **coding-agent turn（MTP + prompt lookup）** | **55.7–56.3 t/s** | **42–45 t/s** |
+| decode @ 1M ctx（冷）| 38.3 t/s | — |
+| 并发生成（1 / 2 / 4 / 8 流）| 41.3 / 55.2 / 74.8 / 87.8 t/s 总 | — |
+| 磁盘 / 内存 | 118 GiB（两文件）/ 68 GiB RAM | **94 GB（仅 GGUF）/ 72 GiB RAM** |
+
+**两条会改变读数的条件（其自述，E3）**：
+- ★ **IOMMU**：`iommu=pt` vs **关闭** ⇒ prefill **385 vs 460 t/s**（@2,048）⇒ **关闭值 +13~16% prefill**（带宽类数字不受影响；"IOMMU 是功耗税，不是内存路径税"）。第三方贴另记 `amd_iommu=off` ≈ **+10%**。
+- ★ **功耗包络**：70 W 限功率的手持机实测 **低 11~12%**（prefill 可复现）⇒ **不比功耗包络的 decode 数字无意义**。
+- BYO GGUF 的额外开机成本：**repack 全文件一次，18 s 冷盘 / 9 s 热缓存，每次启动都付**（`HALOGEN_GGUF_CACHE=1` 写 70 GiB 缓存可省，属可选）。
+
+---
+
+## 3. ★★ 口径纠正：「在本机群部署」实际是【单站部署】
+
+用户问的是「**在本机群**下载部署」。按证据，这句话必须拆成两半：
+
+| 半句 | 事实 | 来源 |
+|---|---|---|
+| 引擎**能不能**跨机 | ❌ **不能**。README 首段逐字：*"Every kernel is written for this one GPU and this one model family. No general-purpose runtime, no portability layer, no fallback path. That is why it can do things a general engine cannot, and why it **runs on exactly one piece of silicon**."* ⇒ **无 RPC / 无多机 / 无层切分** | E3 |
+| **要不要**跨机 | ❌ **不需要**。常驻 62 GiB（GGUF 档 72 GiB）+ 池 27 GiB + 工作内存 12.6 GiB ≈ **112 GiB < 单站 ~123–124 GiB** ⇒ **单站即可**（n-gram 表分页不常驻）| E3 + E2 |
+
+⇒ ★★ **这与本集群最近的同类结论正相反、且互补**：`glm-5.3-flash` 是**146.1 GiB 单文件 ⇒ 非 RPC 切分不可**（[GLM 系列本地推理部署](./2026-09-28_GLM系列本地推理部署.md)）；halogen 的整个设计目标恰恰是**把 124 GiB 单站压榨到极限** ⇒ **本集群的 RPC 能力对它无用**。
+
+**推论（三站的含义变了）**：三站上"部署 halogen"**不是**一次分布式部署，而是**最多三个互相独立的单机实例** ⇒ 只有在"要三档模型同跑"时才成立。而它加载后**占掉整站（余 ~12 GiB）** ⇒ 与本仓「**禁止同站叠加加载**」纪律同向。
+
+---
+
+## 4. 下载面
+
+### 4.1 三条路径对账
+
+| # | 路径 | 可行性 | 依据 |
+|---|---|---|---|
+| 甲 | 容器内置 `-e HALOGEN_DOWNLOAD=peonist-ai/halogen-qwen3.8-flash-next` | ⚠ **镜像场景结构性风险** | 其走 huggingface_hub；该 repo 是 **xet** 仓库，而 **hf-mirror 不提供 Xet 端点** |
+| 乙 | `hf download peonist-ai/halogen-qwen3.8-flash-next --local-dir …` | ⚠ **同上** | 同上 |
+| 丙 | ★ **`lm-download@<任务>`（aria2c `-c -x16 -s16` 分段并行 Range）** | ✅ **既有正解** | ★ **本仓已被实测教训买过一次**：[ADR-0010](../../adr/ADR-0010-DwarfStar第二引擎引入立项.md) 记 `./download_model.sh glm53-q4` 因 **hf-mirror 无 Xet ⇒ 回落常规 HTTP ⇒ 撞 HF >50 GB 常规下载上限而失败**，最终靠 `lm-download@ds4-glm53-q4` 的**分段并行 Range**才落地（101 GB）|
+
+**关键算术**：主检查点 **62–63 GiB 是单个文件** ⇒ **>50 GB** ⇒ 甲/乙在镜像场景**必然踩同一个坑**。⇒ **下载只能走丙**。
+
+### 4.2 丙 的走法（既有闸门，非新脚本）
+
+```
+# 任务定义（三变量）—— 站上既有组件，登记在 inventory/ops.yaml 的 station_runtime
+sudo vi /etc/lm-download/tasks/halogen-qwen38.env     # DL_URL / DL_DIR / DL_OUT
+sudo systemctl start lm-download@halogen-qwen38
+journalctl -u lm-download@halogen-qwen38 -f           # 进度
+```
+- 该组件 = **`ops/lm-download/*` + 站上 `lm-download@.service`**，是**既有闸门**（净 46–52 MB/s 实测，为 hf-mirror 单流的 ~11×）。
+- **磁盘**：三站可用 **773 G（A）/ 790 G（B）/ 1.1 T（C）**（E1，2026-09-30 盘点）⇒ 111 GiB 无压力。
+- ⚠ **严格按 ADR-0004 D1**：`lm-download@` **不是** `cluster.py` 子命令 ⇒ 若要把"下载"真正纳入唯一入口，正确做法是给 `cluster.py` 加**薄封装**（如 `models fetch <repo> --station X`），**不是**再写一个脚本。此点在 [ds4 管理面设计](../../spec/ds4-backend/DESIGN.md) 已被标为"**可选，非必须**"⇒ 属**待裁**项（本文 §8 列为建议动作之一）。
+
+### 4.3 ★★ 最便宜的入口：BYO GGUF（1.4 GiB 而非 111 GiB）
+
+引擎自 **0.7.0** 起可用 `HALOGEN_CHECKPOINT` 直接读 **llama.cpp GGUF**：启动时**无损重排**（"the file's own quantized values, moved, not requantized"），n-gram 表**就地读**，只额外取一个 **1.4 GiB 的 draft head + tokenizer**。
+
+⇒ ★★ **而我们盘上已有这份文件**：`/data/models/gguf/lmstudio-community/Qwen3.8-Flash-Next-GGUF/UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf`（三片齐全，93.7 GB，**stations A/B/C**，见 [`inventory/models.yaml`](../../inventory/models.yaml)）。
+
+⇒ **这正是 halogen 支持得最好的 bit map**：其 README 逐字指出 0.12.1 之前**只认 unsloth 的位图**（`UD-IQ4_XS` / `UD-Q4_K_XL`），bartowski/mradermacher 的 IQ4_XS 会被**按名拒绝**。"**BYO GGUF 档 = 同权重、只换引擎**" ⇒ ★ **这是本主题唯一一个干净的单变量对照**。
+
+**代价**：decode **−28%**（serial 25.4 vs 35.4）、常驻 **+4 GiB**（72 vs 68）、磁盘 **−24 GB**、perplexity **更好**（其自述）。
+
+---
+
+## 5. 部署面：三道前置闸
+
+### 闸① 治理：新引擎栈 ⇒ **须过 ADR 立项**
+
+- [ADR-0004](../../adr/ADR-0004-统一管理入口为唯一管理面.md) D3①：新增管理能力**默认**给 `cluster.py` 加子命令；引入**新实体/新栈**须立项。
+- ★ **先例已把这条写死**：[kyuz0 容器方案评估](./2026-09-30_kyuz0容器方案评估与现役venv对比.md) 的核心前置逐字为「**引入容器栈 = 新实体，须立项**」。
+- ★★ **不能搭 `ADR-0012` 的车**：[ADR-0012](../../adr/ADR-0012-A站容器栈纳管.md) **D5 明确排除** ——「本 ADR **不**为任何推理栈（vLLM / kyuz0 / ds4）背书 …… **不**新增任何镜像、**不**改变引擎拓扑」。⇒ halogen 需要**另立一个 ADR**。
+- **供应链分级（本文新增的一条对账）**：halogen 的供应链风险**高于** kyuz0 —— kyuz0 至少有**可审的 10 阶段 Dockerfile**；halogen **只有二进制镜像**（EULA 明文承认"compiled binary containing gfx1151 device code"，只承诺"不禁止反工程"）。
+
+### 闸② 运行时：容器栈**未就绪**（E1，2026-09-30 盘点 + `O-122`）
+
+| 项 | A | B | C |
+|---|---|---|---|
+| `docker` CLI（29.8.1）| ✅ | ✅ | ✅ |
+| **`docker` daemon** | ✅ **active** | ⚠ inactive | ❌ **无 unit** |
+| `podman` / `toolbox` / `distrobox` | ❌ | ❌ | ❌ |
+| GPU 访问 | ✅ 在 `render` 组，可 `--device /dev/kfd /dev/dri` | 同 | 同 |
+| 磁盘可用 | 773 G | 790 G | 1.1 T |
+
+★ **注意官方 quickstart 用的是 `podman`**（`--group-add keep-groups` 是 **Podman 扩展**）⇒ 走 Docker 须改 `--group-add video --group-add render`。⇒ **两条都要"改站上配置"**：要么装 podman、要么起 dockerd。
+⇒ ★ **这不是"容器不可用"，是"服务未起"**（同 `O-121` §7 的提醒，别读过头）。
+
+### 闸③ 端口与鉴权：**未登记 + 无鉴权**
+
+- 端口 **8730（引擎内）/ 8731（发布）** 在 [`inventory/ports.yaml`](../../inventory/ports.yaml) **均未登记**（E1：本会话逐条查证）。
+- ★★ **引擎协议无鉴权**（其配置表逐字：*"**The engine protocol has no authentication**; keep it unpublished."*）⇒ 只能 loopback / 内网，且**必须**按 `ADR-0012` D3 的口径登记进真值表。
+- 另：`cluster.py load` 的 **`load-gate` 硬规则不覆盖非 llama/ggml 进程** ⇒ halogen 需要一个**它自己的前置判据**（按 ADR-0004 ⇒ 做成 `cluster.py` 子命令/卡片，**不新增脚本**）。
+
+---
+
+## 6. 吞吐对账（与现役同模型档）
+
+### 6.1 ★ 先说清楚现役读数**本身就是脏的**（E2，本会话核出）
+
+[`spec/d6-agent-standard/THROUGHPUT-BASELINE.md`](../../spec/d6-agent-standard/THROUGHPUT-BASELINE.md) 第 18 行的**自相矛盾**：
+
+- 列 `后端` = **Vulkan(C 站)**，而列 `方法/日志` = **"HIP 实测"**，注 = **"HIP MoE bug→弃 HIP；Vulkan 待复测"**；
+- 同表 §2「缺失档」把「**`qwen3.8-flash-next` Vulkan｜decode 直测（HIP 数据仅为弃用参照）**」列为**待补**。
+
+⇒ **诚实结论**：`19–20 / 5.5–6.1` 这两个数是 **HIP 档**，而 HIP 后端**已被弃用**（llama.cpp MoE bug，[llama.cpp#27856]）⇒ **现役该档其实【没有一条干净的当前生产读数】**。另有第三条（不同口径）：手册 §4 记 **双机 RPC 15.7 t/s**（103 G）。
+
+### 6.2 三条口径警告（否则这张表就是"假精确"）
+
+1. **后端不同**：现役读数是 **HIP**（已弃）/ halogen 是 **ROCm 专用 kernel** ⇒ **不同后端**，不是同后端对照。
+2. ★ **投机 vs 裸 AR**：halogen 的 44.8–56.3 全**含 MTP 投机**；我们的 `19–20` 是**裸 AR**（该模型的 MTP 在 llama.cpp PR 里"**还没弄**"）⇒ **只有 halogen 的 `serial greedy` 行（26.0–27.1 / 25.4）是可比的**。
+3. ★★ **prompt set 依赖 ~2×**（见 §1 EULA §4）：同一 build prose ~20 / code ~42 t/s ⇒ **任何单点数字都必须带 prompt set**，否则"**在两个方向上都不成立**"（其原话）。
+
+### 6.3 对账表（**同权重**：unsloth `UD-IQ4_XS`）
+
+| 口径 | 现役 llama.cpp（C 站） | halogen BYO GGUF | 差 |
+|---|---|---|---|
+| decode serial，短 ctx | **19–20 t/s**（HIP，已弃参照）| **25.4–27.1 t/s** | **+27%~+50%** |
+| decode serial @32k | **5.5–6.1 t/s**（长 ctx 塌缩）| **34.1 t/s**（自家档同口径）| ★ **~5.6–6.2×** |
+| prefill @8k / @32k | **—**（现役**无读数**，同表列为待补）| **1,485 / 1,465 t/s** | 从"无读数"到有（量级参照：现役 `gpt-oss-120b` 单站 prefill 112–152 t/s）|
+| 内存 | 单站量化加载 | 72 GiB 常驻 + 池 27 GiB | — |
+
+**另列（.hgn 自家档，供权衡）**：serial 35.4 / served@32k 46.0 / coding-agent 55.7–56.3 ⇒ 相对现役短 ctx **~1.8×**、长 ctx **~5.6×**；代价 = **111 GiB 下载**（vs 1.4 GiB）。
+
+### 6.4 判定
+
+★ **有量级优势，且优势集中在现役栈的最痛点（长 ctx 塌缩）** —— 但**现有读数里没有一条是同后端、同投机口径、同 prompt set 的** ⇒ **本仓口径下只能判「值得复测」**，**不能**判「已证实优势」。**正式结论必须来自本集群自己的实测**（这也正是其 EULA §4 明文允许、且要求写明 prompt set 的那件事）。
+
+---
+
+## 7. 站选择：★ **C 站**
+
+| 站 | 有利 | 不利 |
+|---|---|---|
+| **C** ★ | ★ **内核参数 `amd_iommu=off`** —— 与 halogen 参考机条件**一致**（+13~16% prefill）；权重（GGUF）已在盘 | docker daemon **无 unit**（需补运行时）|
+| A | 容器栈**唯一就绪**（daemon active；`~/searxng` + `ADR-0012` 先例）| IOMMU 状态**未核**；且当前常驻 `gpt-oss-120b`（速度档）|
+| B | 权重已在盘 | **缺 `iommu=pt`** ⇒ 按 halogen 实测 IOMMU 在译模式下是**功耗税** |
+
+⇒ **建议目标站 = C**（IOMMU 条件与权重就位的组合最优），代价 = **先在 C 站补容器运行时**（属"改站上配置"，须与 ADR 一并裁）。
+⚠ **这不否定 A 站**：若最终判"容器栈只在 A 站承载"，则须先核 A 站 IOMMU 状态，并把该差异**记进读数条件**（否则又是"比了不同条件的数字"）。
+
+---
+
+## 8. 建议路径（分阶段）与**明确不做**
+
+### 8.1 建议（三阶段，每阶段有独立判据）
+
+| 阶段 | 动作 | 判据 / 成本 |
+|---|---|---|
+| **P1 立项** | 立一个 ADR（halogen 引擎引入 / 暂缓），口径照 [ADR-0010](../../adr/ADR-0010-DwarfStar第二引擎引入立项.md) 与 kyuz0 先例 | **不下载、不部署**；输出裁决与失效条件 |
+| **P2 最小复测** ★ | 过 ADR 后：**C 站**补容器运行时 → 拉镜像（`ghcr.io`，体积**未实测**）→ **BYO GGUF**（额外下 1.4 GiB）→ 起容器 → **按本仓口径复测** | 成本 = **1.4 GiB** + 一次镜像拉取；产出 = 短/长 ctx 各一档 **serial** 读数 + prompt set 写明 ⇒ **同时补上 BASELINE §2 的缺口** |
+| **P3 单调** | 仅当 P2 证实优势**且**需要那 −28% decode 时，才走 `lm-download@` 下 **111 GiB** `.hgn` 档 | 成本 = 111 GiB + 磁盘；**默认不动** |
+
+### 8.2 ★ 明确不做（**不做也是一种结论，写下来**）
+
+| # | 不做 | 理由 |
+|---|---|---|
+| 1 | **不下 111 GiB** 起手 | 最大单文件 62–63 GiB > 50 GB ⇒ 只能走 aria2c 分段；而**验证"是否有优势"用 1.4 GiB 就够**（同权重单变量）|
+| 2 | **不部署到多站** | 引擎单硅片；且它独占一站 ⇒ 与本仓「禁止同站叠加加载」同向 |
+| 3 | **不新增任何并列脚本** | ADR-0004 D1/D2；下载走 `lm-download@`，管理动作走 `cluster.py` |
+| 4 | **不搭 `ADR-0012` 的车** | 其 D5 明文排除推理栈背书 |
+| 5 | **不据外部数字改 BASELINE / models.yaml** | E3 未复现，且其数字**依赖 prompt set 与投机接受率** ⇒ 登记它 = 造第二份真值 |
+
+---
+
+## 9. 未实测清单（如实，**均为本文的判定边界**）
+
+1. 镜像**未拉**、体积**未测**、**未启**；
+2. **`ghcr.io` 在站上的可达性未验**（⚠ `O-122` 顺带记过：`daemon.json` 配了国内 registry mirror ⇒ 是"**有配置**"，**仍只到有配置、未实测拉取**）；
+3. **本集群零读数** —— 本文所有吞吐数字均为 **E3**（其参考机 85 W / IOMMU off）；
+4. **`amdgpu.gttsize=120000` 与本引擎的相容性未验**（其自述需要"BIOS carve-out 调到最小"；本集群单站 ~123–124 GiB 可见 ⇒ 方向一致，但**未实测**）；
+5. GGUF **repack 在本集群的实际耗时 / 是否需 `HALOGEN_GGUF_CACHE`** 未测；
+6. **分支桩未核**：`20,000,000 bigram/trigram`、QSA budget（512 blocks / 2,048 tokens）等**官方架构细节**本文未独立复核；
+7. `IIIIIllllIIIIIlllll/gfx1151-engine`（社区反工程 Windows 版）**未打开、未核**；
+8. **`.hgn` 档的许可与其"检查点不可重下"的性质未核**（⚠ 对比：[ADR-0010](../../adr/ADR-0010-DwarfStar第二引擎引入立项.md) 已就 ds4 档把"可重下但不易"如实标注 ⇒ 本文**同样只标"未核"**，不推定）；
+9. **A 站 IOMMU 状态未核**（只确知 B 缺 `iommu=pt`、C 为 `amdgpu` iommu off）；
+10. 本引擎的 **`/v1` 与 opencode / claude / hermes 三客户端的兼容面未验**（⚠ 有先例：Codex 因 `wire_api` 面而"大概率不通"，见 `O-118`）。
+
+---
+
+## 10. 引用（跨主题**建链接不复制**）
+
+| 主题 | 去哪 |
+|---|---|
+| 唯一管理面纪律 | [ADR-0004](../../adr/ADR-0004-统一管理入口为唯一管理面.md) |
+| 下载闸门（aria2c 分段并行）+ >50 GB 教训 | [ADR-0010](../../adr/ADR-0010-DwarfStar第二引擎引入立项.md) · [DwarfStar 前置核验](./2026-09-28_DwarfStar前置核验与ROCm工具链安装决策.md) |
+| 容器栈治理先例（**引入容器栈 = 新实体须立项**）| [kyuz0 容器方案评估](./2026-09-30_kyuz0容器方案评估与现役venv对比.md) |
+| A 站容器栈纳管（**D5 排除推理栈背书**）| [ADR-0012](../../adr/ADR-0012-A站容器栈纳管.md) · `O-122` |
+| 现役吞吐基线（**含本节 6.1 指出的口径矛盾**）| [`spec/d6-agent-standard/THROUGHPUT-BASELINE.md`](../../spec/d6-agent-standard/THROUGHPUT-BASELINE.md) |
+| 模型别名/路径真值 | [`inventory/models.yaml`](../../inventory/models.yaml) · [`model-families.yaml`](../../inventory/model-families.yaml) |
+| 端口真值（**8730/8731 未登记**）| [`inventory/ports.yaml`](../../inventory/ports.yaml) |
+| 同模型另一条部署路线（**必须 RPC 切分的对照面**）| [GLM 系列本地推理部署](./2026-09-28_GLM系列本地推理部署.md) |
+| 台账条目 | `O-137`（本主题）· 同域 `O-120`（换栈）/ `O-121`（容器）/ `O-122`（A 站容器栈）|
+| 上游（**E3，未复现**）| `peonist-ai/halogen-flash-server`（README / LICENSE.md / CHANGELOG）· `peonist-ai/halogen-qwen3.8-flash-next`（HF）· QwenLM `Qwen3.8-Flash-Next` README · Level1Techs「Ryzen AI Halo: Halogen Server Testing Notes」· CSDN《AMD AI MAX 395 运行 qwen3.8-flash-next 测试》|
