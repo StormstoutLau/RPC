@@ -74,7 +74,7 @@ items:
   - {spec: U1-ARTIFACT-IDENTITY, n: 5, gist: "namespace 的跨项目唯一性治理：没有注册机制（谁能新增 / 冲突怎么裁）", state: todo, needs_decision: false, refs: [], blocker: decision}
   - {spec: U1-ARTIFACT-IDENTITY, n: 6, gist: "version 兜底 0.0.0 会让「同 identifier 不同版本」同哈希 ⇒ 该维度实际失效", state: todo, needs_decision: false, refs: [], blocker: implementation}
   - {spec: U1-ARTIFACT-IDENTITY, n: 7, gist: "inbox 双轨维护（全 64 MANIFEST.sha256 + 带前缀 32 新索引）双写工作流未跑通", state: todo, needs_decision: false, refs: [], blocker: implementation}
-  - {spec: U1-ARTIFACT-IDENTITY, n: 8, gist: "★ 已裁 2026-09-30（O-123）：采纳候选①（显式标注「旧代」）+ 显式映射表 ⇒ 走哪条路已定；⚠ 实现仍未落地（故 state 仍 todo）", state: todo, needs_decision: false, refs: [D-25, O-123], blocker: implementation}
+  - {spec: U1-ARTIFACT-IDENTITY, n: 8, gist: "★ 已裁 2026-09-30（O-123）：采纳候选①（显式标注「旧代」）+ 显式映射表；★ 2026-09-30 已落（批 3）：判据 U1_TRUNC_MAP（唯一真值源，只登记真实改过的 16→32）+ u1_classify/u1_verify_declaration（无标注即拒 / 有标注则换把尺子复算）+ u1_legacy_marker（携带旧代号供消费方降级）；映射表外长度即便加标注也拒；⚠ 仍未实测 = 真实外发旧身份（本仓零个）⇒ state=partial", state: partial, needs_decision: false, refs: [D-25, O-123], blocker: implementation}
 
   # ── U3-EDGE-FORMAT（9 条）───────────────────────────────────────────────────
   - {spec: U3-EDGE-FORMAT, n: 1, gist: "字段集完整性：无实现 / 无真实边实例 / 与现状的相容解析未试", state: todo, needs_decision: false, refs: [], blocker: implementation}
@@ -103,7 +103,7 @@ items:
   - {spec: U5-TRUST-BASIS, n: 1, gist: "四条判据从未被真实对象驱动（无真实输入；与 Textbook / Auto_Prover 从未对接）", state: todo, needs_decision: false, refs: [], blocker: external}
   - {spec: U5-TRUST-BASIS, n: 2, gist: "v1 的「对应得对不对」判不了 —— **已知能力边界，不是待办**（语义正确性仍是人的活）", state: boundary, needs_decision: false, refs: [], blocker: none}
   - {spec: U5-TRUST-BASIS, n: 3, gist: "v2 是新造形式（V-2 实测真空 ⇒「什么算一跳」无第二方实现可对照）", state: todo, needs_decision: false, refs: [], blocker: implementation}
-  - {spec: U5-TRUST-BASIS, n: 4, gist: "★ 已裁 2026-09-30（O-123）：裁掉「默认名单」形态 ⇒ 必须显式声明（缺失即判不通过）+ 支持显式空声明（如 `axioms: []`）以区分「无需」与「未声明」；⚠ 只裁方向、未落地（state 仍 todo）；再触发 = 出现第一个真实形式化证明输入", state: todo, needs_decision: false, refs: [O-123], blocker: implementation}
+  - {spec: U5-TRUST-BASIS, n: 4, gist: "★ 已裁 2026-09-30（O-123）：裁掉「默认名单」形态 ⇒ 必须显式声明（缺失即判不通过）+ 支持显式空声明以区分「无需」与「未声明」；★ 2026-09-30 已落（批 3）：v3_axiom_whitelist 删除缺省回落（None ⇒ 判不通过；[] ⇒ 合法且仍会因 extra 红）；V-3 表行同步改（propext 等 = 原文举例、非裁定值）；⚠ 仍未实测 = 真实形式化证明输入（该层从未被真实对象驱动）⇒ state=partial；再触发 = 出现第一个真实形式化证明输入", state: partial, needs_decision: false, refs: [O-123], blocker: implementation}
   - {spec: U5-TRUST-BASIS, n: 5, gist: "晋升门 entries 实例 0 条（schema 从未被真实条目走过一遍）", state: todo, needs_decision: false, refs: [], blocker: run}
   - {spec: U5-TRUST-BASIS, n: 6, gist: "★ 已裁 2026-09-30（O-123）：登记为「能力边界」不裁（state→boundary）—— min_recurrence 取值是设计选择、不是可验结论，且 schema 零实例；边界声明 = 该字段当前不得参与自动判定，要参与须先在真实实例上校准（届时升回待办）", state: boundary, needs_decision: false, refs: [O-123], blocker: none}
   - {spec: U5-TRUST-BASIS, n: 7, gist: "★ structure 两条（不对称配置 / 双盲）不可机判 ⇒ 结构性约束**还没有判据**（自认本批最大缺口，正扛着「不得自审」）", state: todo, needs_decision: false, refs: [], blocker: implementation}

@@ -149,6 +149,48 @@ def test_the_recompute_check_is_not_vacuous():
     assert R.u1_verify_declaration(fake) is not None, "真判据必须判红"
 
 
+# ── ⑤b ★★ `U1#8`（2026-09-30 裁 / `O-123`）：**历史截断长度的映射路径** ─────────────
+# 裁 = 「检测到历史长度时**强制要求"旧代"标注字段存在（缺失即【拒绝】，不是警告）**」+ **独立映射表**
+# ⚠ 全部按 `R.U1_TRUNC` / `R.U1_TRUNC_MAP` 取，**不硬编码** `16`/`32`（否则改一次取值就得回来手改）。
+def _legacy_decl(**over):
+    """造一个**历史长度**（映射表里那条 `from_length`）的声明。"""
+    old = R.U1_TRUNC_MAP[0]["from_length"]
+    d = {"namespace": NS, "identifier": IDENT, "version": VER,
+         "identity": R.u1_identity(NS, IDENT, VER, trunc=old)}
+    d.update(over)
+    return d
+
+
+def test_legacy_length_without_mark_is_rejected():
+    """★ 无"旧代"标注 ⇒ **拒绝**（不是警告）—— 旧实现只会以格式为由拦下 ⇒ 与"乱串"无从区分。"""
+    err = R.u1_verify_declaration(_legacy_decl())
+    assert err and R.U1_LEGACY_MARK in err, f"历史长度**未带标注**却没被拒: {err!r}"
+    assert R.u1_legacy_marker(_legacy_decl()) is None
+
+
+def test_legacy_length_with_mark_is_accepted_and_carries_marker():
+    """★ 有标注 ⇒ 接受，**且结果携带"旧代"标记**（消费方可自行降级）—— 这是"两阶段"的第二半。"""
+    decl = _legacy_decl(**{R.U1_LEGACY_MARK: True})
+    assert R.u1_verify_declaration(decl) is None, "带标注的历史长度应被接受（并换把尺子复算通过）"
+    mk = R.u1_legacy_marker(decl)
+    assert mk and mk.get("legacy") and mk.get("from_length") == R.U1_TRUNC_MAP[0]["from_length"] \
+        and mk.get("to_length") == R.U1_TRUNC, f"旧代标记不完整: {mk!r}"
+
+
+def test_length_never_used_as_u1_is_still_rejected():
+    """★ **从未作为 U-1 长度**的取值（如 `12`）⇒ 即便加了标注也**不在映射表里** ⇒ 拒（不许靠标注"洗白"）。"""
+    d = {"namespace": NS, "identifier": IDENT, "version": VER,
+         "identity": R.u1_identity(NS, IDENT, VER, trunc=12), R.U1_LEGACY_MARK: True}
+    err = R.u1_verify_declaration(d)
+    assert err and "从未作为 U-1 长度" in err, f"映射表外的长度被放过: {err!r}"
+
+
+def test_the_legacy_mark_is_not_vacuous():
+    """★ **先验红自证**：同一条历史身份 —— **无标注 ⇒ 红；有标注 ⇒ 绿** ⇒ 证明"标注"是真的载荷。"""
+    assert R.u1_verify_declaration(_legacy_decl()) is not None
+    assert R.u1_verify_declaration(_legacy_decl(**{R.U1_LEGACY_MARK: True})) is None
+
+
 # ── ⑥ 端到端真读：本仓真的写了这两个声明（消掉 U1 spec 未实测 #2）──────────
 def test_repo_inventory_declarations_exist_and_recompute():
     import yaml

@@ -121,11 +121,20 @@ CASES = [
 ]
 
 V_CASES = [
-    # V-3
-    ("V-3 正例 公理 ⊆ 白名单", lambda: R.v3_axiom_whitelist(["propext", "Quot.sound"]), True, ""),
-    ("★V-3 反例 白名单外公理", lambda: R.v3_axiom_whitelist(["propext", "MyCheat"]), False, "白名单外公理"),
-    ("★V-3 反例 **显式空白名单** ⇒ 不许静默回落成默认、更不许恒真",
-     lambda: R.v3_axiom_whitelist([], whitelist=[]), False, "判据恒真"),
+    # ── V-3 ★★ `U5#4`（2026-09-30 裁 / `O-123`）：**裁掉"默认名单"形态** ⇒ 白名单**必须显式声明** ──
+    # ⚠ 下面几条的**期望值改动过**（旧版：缺省回落默认名单 ⇒ `True`；`whitelist=[]` ⇒ `False`）。
+    #   ⇒ **方向 = 改写断言**（照裁），**不是回退代码**。
+    ("V-3 正例 公理 ⊆ **显式声明**的白名单",
+     lambda: R.v3_axiom_whitelist(["propext", "Quot.sound"], whitelist=["propext", "Quot.sound"]), True, ""),
+    ("★V-3 反例 白名单外公理",
+     lambda: R.v3_axiom_whitelist(["propext", "MyCheat"], whitelist=["propext", "Quot.sound"]),
+     False, "白名单外公理"),
+    ("★V-3 反例 **未声明白名单**（None）⇒ 判不通过（裁掉默认名单：取自原文举例 ≠ 裁定）",
+     lambda: R.v3_axiom_whitelist(["propext"]), False, "未声明公理白名单"),
+    ("★V-3 正例 **显式空声明** `whitelist=[]` ⇒ 合法（语义 = 「确实不需要额外公理」）",
+     lambda: R.v3_axiom_whitelist([], whitelist=[]), True, ""),
+    ("★V-3 反例 显式空声明 + 却用了公理 ⇒ 仍红（空声明**不是**判据恒真）",
+     lambda: R.v3_axiom_whitelist(["propext"], whitelist=[]), False, "白名单外公理"),
     # V-4
     ("V-4 正例 依赖全钉 rev + ledger 齐",
      lambda: R.v4_build_reproducible([{"name": "mathlib", "rev": "abc123"}],
