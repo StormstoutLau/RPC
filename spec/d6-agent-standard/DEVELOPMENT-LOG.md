@@ -44,8 +44,10 @@ A 段的价值 = 把"**该拒什么**"变成**一份可复用的判据**，B 段
 
 **③ 两处裁定的内容与理由**：
 
-- **(a) `verdict` 词义冲突** —— 协议 P5 的 `verdict` = **exit code**（整数），而本仓 `review.json` 的 `verdict` = **判官四值**
-  （`accept` / `revise` / `reject` / `uncertain`）⇒ **同一个词、两个含义，就在本仓内部**（这是三期残留的含糊）。
+- **(a) `verdict` 词义冲突** —— 协议 P5 的 `verdict` = **exit code**（整数），而**判官输出（结论契约
+  `D7-PROTOCOL-CONCLUSION-CONTRACT`）**的 `verdict` = **四值**
+  （`accept` / `revise` / `reject` / `uncertain`；★ 本仓落点 = **`review.json.contract.verdict`（嵌套）**
+  —— **`review.json` 顶层无该键**）⇒ **同一个词、两个含义，就在本仓内部**（这是三期残留的含糊）。
   裁定 = **不改名**，**改靠"信封 + 值类型"分开**：该字段是 §2 里"**逐字采纳**"的项，改名 = 改摘要逐字、会让采纳记录失效；
   而 `Verdict.verdict` **非整数即拒** 已能让机判分开（判官四值必然落拒）。
 - **(b) §2 五行"依据不足"的处置** —— 规范原文写着"**不是待办、是登记**"，但**没有说机判上怎么办**。

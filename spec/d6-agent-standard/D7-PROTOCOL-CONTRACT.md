@@ -49,8 +49,10 @@
 >
 > ★★ **`verdict` 词义冲突的裁定（A 段，2026-10-01）** —— 本契约定：**同一个词、两个含义，靠信封与值类型分离**：
 > · **本信封（`Verdict`）的 `verdict` = exit code（整数）**（照摘要逐字，**不改名**）；
-> · **`review.json` 的 `verdict` = 判官四值**（`accept` / `revise` / `reject` / `uncertain`，见
->   `ops/station-bin/review/judge-prompt.tmpl`）—— **不属本信封**。
+> · **判官输出（= 结论契约 `D7-PROTOCOL-CONCLUSION-CONTRACT`）的 `verdict` = 四值**
+>   （`accept` / `revise` / `reject` / `uncertain`；承载 = `ops/station-bin/review/judge-prompt.tmpl` +
+>   `Test-ConclusionContract`；★ 本仓落点 = **`review.json.contract.verdict`（嵌套）** ——
+>   **`review.json` 顶层没有 `verdict` 键**）—— **不属本信封**。
 > · ⇒ **机判切分**：`Verdict.verdict` **不是整数**（如写成判官四值 / 布尔）⇒ **拒**（`validate_envelope`）。
 > ⚠ 为什么**不改名**（如改叫 `exit_verdict`）：本契约把 `Verdict 字段集`列为**逐字采纳**（见 §2）
 > ⇒ 改名 = **改摘要逐字**，会让那条采纳记录失效；而"同名不同物"靠**值类型**已能机械分开。
