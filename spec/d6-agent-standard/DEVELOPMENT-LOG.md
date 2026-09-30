@@ -1,4 +1,4 @@
-# 开发日志：D6 agent-cli wrapper 框架（Development Log）
+﻿# 开发日志：D6 agent-cli wrapper 框架（Development Log）
 
 ***
 
@@ -18,6 +18,45 @@ upstream: \[d6-agent-standard-.* 全量文档]
 ***
 
 ## 历史回溯（2026-09-03 起）
+
+### 2026-09-30（续⑱） — **修「链档恒脏」**：钩子改写受跟踪文件却不暂存（改受管源 `ops/rpc.ps1` 生成器 + 重装）
+
+> **症状**：每次提交后 `archive/evidence-chain/{ANCHOR.txt,agent-chain.json}` **恒为 ` M`** ⇒ **链档永远落后一次提交**。
+> **机制**：`.git/hooks/{pre-commit,pre-push}` 里 `"$PY" ops/cluster.py agent chain` **改写**这两件**受跟踪**文件，
+> 而钩子**不暂存** ⇒ 本次提交取的树是"**改写前**"的快照 ⇒ 提交后工作树 ≠ HEAD（**每提交必脏**）。
+
+**① 正解位置（★ 不是手改钩子）**：钩子头写明「**由 `ops/rpc.ps1 install-hooks` 生成, 请勿手改**」，
+且 `git config core.hooksPath` **为空** ⇒ **钩子本体不在版本管理内** ⇒ 改**受管源** [`ops/rpc.ps1`](../../ops/rpc.ps1)
+的 `Install-HookEntry` 模板，再跑 `ops\rpc.ps1 install-hooks` 重装。★ 这样**修法本身可复现**（手改 `.git/hooks/` 只在本机生效、且下次重装即被覆盖）。
+
+**② 修法**（`Install-HookEntry` 模板，紧跟 agent chain 那行之后）：
+```powershell
+if ($Name -eq 'pre-commit') { $lines += 'git add -- archive/evidence-chain/ANCHOR.txt archive/evidence-chain/agent-chain.json 2>/dev/null || true' }
+```
+- ★ **只 add 这两个路径** —— **不用 `git add -A`**（那会把无关改动**静默卷进**本次提交）；
+- ★ **只在 pre-commit** —— pre-push 不产生提交，暂存反而留下"**已暂存但未提交**"的假象；
+- 保持 **best-effort**（`|| true`），与既有的 `agent chain` 那行同风格。
+
+**③ 验收（实测）**：重装后 —— `pre-commit` **含**该行 / `pre-push` **不含**（分别核过）·
+两文件均 **UTF-8 无 BOM + `sh -n` rc=0** · ★★ **本提交之后 `git status` 对这两件为空 = 环路已断**。
+
+**④ ⚠ 过程中我自己犯了一次（并已回滚）**：第一版把 `"exec ..."` 从 `$lines = @(...)` 数组里搬出，
+并**追加了一个多行 `$lines += @(...)` 块** ⇒ `ops/rpc.ps1` **解析失败**（报 *"here-string 未闭合"*，
+`parse errors = 2`；而 `git show HEAD:ops/rpc.ps1` 解析 **0 错** ⇒ 确认是自己改坏的）。
+回滚后改用**单行标量追加**即成（`parse errors = 0`）。
+⇒ ★ **纪律（本轮学到的）**：**改生成器 / 门禁脚本之前，先用 AST 解析器验一遍** ——
+`[System.Management.Automation.Language.Parser]::ParseFile($p,[ref]$null,[ref]$errs)` 数 `$errs.Count`，
+**别等 `install-hooks` 炸了才发现**。⚠ 且 `syntax` 门禁**只扫 15 个 ps1**（`ops/station-bin/`），
+**不覆盖 `ops/rpc.ps1`** ⇒ 这类文件**没有门禁兜底**，只能靠自己先解析。
+
+**⑤ ⚠ 提交时又被门禁拦了一次（BOM 丢）**：本次提交被 `syntax` **阻断** —— 明细 `.ps1-bom:15文件/**1失败**`。
+根因：**保存 `ops/rpc.ps1` 时把它的 UTF-8 BOM 弄丢了**（实测 `git show HEAD:ops/rpc.ps1` → `BOM True`/6563 B；工作区 → `BOM False`/7410 B），
+而门禁对 ps1 的解析**按有无 BOM 走不同解码**（无 BOM ⇒ 按系统 ANSI/GBK 读）⇒ **中文注释乱码 ⇒ 假解析错** ⇒ FAIL。
+⇒ **修法**：把文件重写为 **UTF-8 with BOM**（内容一字未改）⇒ `syntax` **PASS**（`.ps1-bom:15文件/0失败`）· AST 解析 `0 错`。
+★ **纪律（与本轮 ④ 合并成一条）**：**动 `.ps1`（尤其 `ops/rpc.ps1` 这类带 BOM 的生成器）之后，交提交前先跑 `--only syntax`** ——
+它会同时兜住**语法**与**BOM**两件事，比只看 AST 解析多一层。⚠ 且本例说明 `syntax` 的 15 个 ps1 **包含 `ops/rpc.ps1`**（与 ④ 里"不覆盖"的判断相反，**已就地更正**）。
+
+**关联**：`archive/evidence-chain/*`（钩子产出，2026-09-17 起 best-effort 入链）· `O-34`（门禁范围口径 / 手动跑与提交跑可能不同）· 发现者 = 本轮 `git status`。
 
 ### 2026-09-30（续⑰） — **`O-123` 第二刀（`U4×3 + U5×2`）5 卡跑完 + 主控逐张复核（全部可用）+ 新登记 `O-126`**
 
