@@ -1862,8 +1862,70 @@ PROMO_POLICIES = ("lru", "fifo")
 PROMO_REQUIRED_CRITERIA = ("success_rate", "recurrence", "verified")
 
 
+def _promo_cmp(lhs, op, rhs):
+    """*纯*比较器（`op ∈ PROMO_OPS`）；类型不合 ⇒ `False`（**不抛** —— 一条脏条目不该炸掉整份判定）。"""
+    try:
+        if op == ">=":
+            return lhs >= rhs
+        if op == "<=":
+            return lhs <= rhs
+        if op == "==":
+            return lhs == rhs
+        if op == "!=":
+            return lhs != rhs
+        if op == ">":
+            return lhs > rhs
+        if op == "<":
+            return lhs < rhs
+    except TypeError:
+        return False
+    return False
+
+
+def promotion_entry_verdict(entry, gate):
+    """★ `U5#5`（2026-09-30 · 批 4）：把**一条真实条目**喂给 `gate` ⇒ `(ok, reasons, satisfied)`。
+
+    ⚠⚠ **本批补的是一个真缺口，不只是"扩样例"**：此前 `validate_promotion` 只判 **schema 自身**
+      （字段 / 判据 / 映射闭包 / `entries` 是不是列表）—— **从不把任何条目喂给 `gate.required` / `gate.criteria`**
+      ⇒ 「实例 0 条」比它看起来更糟：**即便加一条，也没有任何东西会检查它**（schema 是"**只可读、不可走**"的）。
+    ⇒ 本函数把 `gate` 变成**可走的**：`required` 缺 ⇒ 不可晋升；`criteria` **任一满足** ⇒ 可晋升；
+      「字段没给」⇒ 该判据**不满足**（**不是**"跳过"、更**不是**"默认满足"）。
+    ⚠ **不给阈值就不能假定**：`ref` 指向的门槛字段未给 ⇒ 该判据**不满足**（阈值未定 = `unverified` 已登记）
+      —— **不许**替它填一个数（那正是 `O-126` 点名的"用凭空数值满足可机判"）。
+    """
+    if not isinstance(entry, dict):
+        return False, [f"条目不是映射: {entry!r}"], []
+    hard = []
+    for f in (gate.get("required") or []):
+        v = entry.get(f)
+        if v is None or (isinstance(v, str) and not v.strip()):
+            hard.append(f"缺必填字段 `{f}`（Spec_Workflow 原文：**缺锚点不得登记**）")
+    satisfied, crit_note = [], []
+    for c in (gate.get("criteria") or []):
+        fld, op, ref = c.get("field"), c.get("op"), c.get("ref")
+        if isinstance(ref, str) and ref.startswith("$"):
+            rhs = entry.get(ref[1:])
+            if rhs is None:
+                crit_note.append(f"判据 `{c.get('id')}` **不满足**：门槛 `{ref[1:]}` 未给（阈值未定 ⇒ 不许假定）")
+                continue
+        else:
+            rhs = ref
+        lhs = entry.get(fld)
+        if lhs is None:
+            crit_note.append(f"判据 `{c.get('id')}` **不满足**：条目未给 `{fld}`")
+            continue
+        if _promo_cmp(lhs, op, rhs):
+            satisfied.append(c.get("id"))
+    if hard:
+        return False, hard, satisfied
+    if not satisfied:
+        return False, crit_note + ["**没有任何判据满足** ⇒ 不得晋升（三种判据**任一**满足才可；"
+                                   "并列语义本身仍是 `unverified` 登记项）"], []
+    return True, [], satisfied
+
+
 def validate_promotion(doc):
-    """**纯函数** → `(bad, notes)`：晋升门 schema 的自洽 + **映射闭包**。"""
+    """**纯函数** → `(bad, notes)`：晋升门 schema 的自洽 + **映射闭包** + ★ **逐条目走一遍门**。"""
     bad, notes = [], []
     if not isinstance(doc, dict):
         return ["promotion.yaml 顶层不是映射（结构改了？）"], notes
@@ -1970,6 +2032,21 @@ def validate_promotion(doc):
             bad.append("`entries` 为空**且没有 `empty_reason`** ⇒ 空得没说法")
         elif not ents:
             notes.append("实例 0 条 (空已显式报出, 不静默通过)")
+        else:
+            # ★ `U5#5`（批 4）：**逐条目走一遍门** —— 容量件套 + `gate.required` + `criteria`（任一满足）
+            cap_max = (gate.get("capacity") or {}).get("max")
+            if isinstance(cap_max, int) and len(ents) > cap_max:
+                bad.append(f"`entries` {len(ents)} 条 > `gate.capacity.max`={cap_max} ⇒ 容量件套被绕过")
+            n_ok = 0
+            for i, e in enumerate(ents):
+                ok_e, why, _sat = promotion_entry_verdict(e, gate)
+                if ok_e:
+                    n_ok += 1
+                    continue
+                eid = (e or {}).get("id", "?") if isinstance(e, dict) else repr(e)
+                bad.append(f"`entries[{i}]`({eid}) **不可晋升**: " + " ; ".join(why))
+            notes.append(f"实例 {len(ents)} 条 · **可晋升 {n_ok} · 拦截 {len(ents) - n_ok}**"
+                         f"（判据 = `gate.required` + `gate.criteria` **任一满足**）")
 
     if not (doc.get("unverified") or []):
         bad.append("`unverified` 为空 ⇒ 本 schema 里**新设**的东西没被如实登记（新设项 = 最像“第四种”的地方）")

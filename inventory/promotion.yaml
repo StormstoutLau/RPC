@@ -17,7 +17,7 @@
 # 但"三种实现各自映射进它"这件事可被门禁 `promotion` 判（见 `mapping_closure` 段）。
 
 version: 1
-updated: 2026-09-26
+updated: 2026-09-30
 owner: Scott (鹏)
 
 # ── 字段集（`gate.required` / 判据 都只能引用这里的字段名）──────────────────
@@ -64,11 +64,24 @@ mapping_closure:
     criteria_used: [verified]
 
 # ── 实例（晋升登记条目）────────────────────────────────────────────────────
-# 本仓当前为 0：本仓**没有共享记忆层**（四道门属 D7-P3-3）⇒ 没有可登记的条目。
-entries: []
-empty_reason: >-
-  本仓**没有共享记忆层**（记忆四道门 write/retrieval/promotion/reuse 归 `D7-P3-3`，尚未设计）
-  ⇒ 没有可登记的晋升条目。空 ≠ 没事：门禁 `promotion` 会把「0 条」显式报出来。
+# ★ `U5#5`（2026-09-30 · 批 4）：**第一条真实条目** —— 拿本仓一个**已被实测验证过**的发现，把 schema **走一遍**
+#   （此前 0 条 ⇒ schema 从未被走过；★ 且本批同时发现：**即便加一条，此前也没有任何东西会检查它**
+#    —— `validate_promotion` 只判 schema 自身、**不把条目喂给 `gate`** ⇒ 已补 `promotion_entry_verdict`）。
+# ⚠ **只记真实知道的东西**：`min_recurrence` / `min_success_for_inject` **故意不给** —— 前者阈值**新设未定**
+#   （见下方 `unverified` 第 1 条），替它编一个数正是 `O-126` 点名的"**用凭空数值满足可机判**"。
+#   ⇒ 那两条判据**如实标为不满足**（不是"跳过"，更不是"默认满足"）。
+# ⚠ `empty_reason` 已随本条一并删除：`entries` 不再为空，留着它就成"**比证据旧**"的字段（本仓口径）；
+#   若日后又清空 entries，门禁会照旧要求 `empty_reason`（那段判据没动）。
+entries:
+  - id: O-127
+    anchor: "spec/d6-agent-standard/OPEN-ISSUES.md#O-127（批清单编码坑：裸读 kept=0 / 显式 -Encoding UTF8 kept=1）"
+    verified: true          # 判据 ③（Fin_Agent 系）：该发现**已被实测验证**（正反读数俱在）
+    recurrence: 0           # 真实值：截至目前只在**一个**场景复现（跨项目复发 = 0）
+    success_count: 0        # 真实值：尚未被"复用成功"过（它是一条**教训**，不是一个可复用件）
+    note: >-
+      第一条真实条目。**它凭什么可晋升** = `verified: true` ⇒ 判据 ③ 满足（三种判据**任一**满足即可）。
+      另两条**不满足且如实留着**：`success_rate` 缺 `min_success_for_inject`、`recurrence` 缺 `min_recurrence`
+      （两个门槛/阈值都**未定**）—— **不编数**（`O-126`）。
 
 # ── 如实登记：本 schema 里**新设**的东西（不是从三处抄来的）─────────────────
 unverified:
