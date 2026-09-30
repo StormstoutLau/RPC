@@ -2032,8 +2032,11 @@ D7_ENVELOPES = {
         "forbidden": (),
     },
 }
-# `review.json` 的判官**四值**（`judge-prompt.tmpl` / `test_rpc_check_u4.py` 的 `cc-*` 夹具）
-# —— ★ 与 D7 信封的 `verdict`（exit code）**同名不同物**；A 段裁 = 靠**值类型**机械切分。
+# 判官**四值**（属**结论契约** `D7-PROTOCOL-CONCLUSION-CONTRACT`；承载 = `judge-prompt.tmpl` +
+# `Test-ConclusionContract` 的 `$enum`）—— ★ 与 D7 信封**顶层**的 `verdict`（exit code）**同名不同物**；
+# A 段裁 = 靠**载体 + 值类型**机械切分：★ 本仓 `review.json` **顶层没有 `verdict` 键**，
+# 四值落在**嵌套**的 `review.json.contract.verdict`（E1 读码：`Invoke-Review` 的 `$ccSection`）
+# ⇒ 顶层键集**不相交**；即便有人把四值提到顶层，它是字符串 ⇒ 仍落拒。
 D7_VERDICT_WORDS = ("accept", "revise", "reject", "uncertain")
 D7_ENV_VERDICTS = ("ok", "reject")
 
@@ -2084,7 +2087,7 @@ def validate_envelope(kind, env):
         if isinstance(v, bool) or not isinstance(v, int):
             return "reject", (f"Verdict.verdict 必须是**整数**（= exit code）；实得 {v!r}"
                               f" ⇒ 拒（★ 词义冲突的机械切分：判官四值 {list(D7_VERDICT_WORDS)}"
-                              f" 属 `review.json`，**不属**本信封）")
+                              f" 属**结论契约**（嵌套落在 `review.json.contract.verdict`），**不属**本信封）")
     return "ok", f"{kind} 信封**字段级合法**（顶层 {len(spec['required'])} 项齐）"
 
 
