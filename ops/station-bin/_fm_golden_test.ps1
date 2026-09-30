@@ -46,6 +46,10 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 #   （⚠ 必须一并提取 `Get-TargetHost` —— 反查若自己另抄一份 host 表, 就是"同一事实两处表达"）。
 # O-125 候选① (2026-09-30): 卡面 `backend:` 的**唯一解析点**（纯函数：吃档位 + 字段值 ⇒ 离线可单测）。
 'Get-ActualStation', 'Get-StationLetterFromHost', 'Get-TargetHost', 'Resolve-CardBackendLocal',
+# B3 第二半 (2026-10-01): `PRH`（同机可见性）的**两侧事实**推导（纯函数：吃站字母 ⇒ 两个 host 串）。
+#   ⚠ 必须一并提取 `Get-TargetHost`（上面已有）—— 它推产出机时用的就是**同一个** host 表，
+#     另抄一份 host 表 = "同一事实两处表达"（本仓头号形态）。
+'Resolve-D7Hosts',
 # D7-CC #8 + #3 (2026-09-30): 判官**取哪件产物**（卡声明 + 强制回退）与**提示词注入产物相对名**
 #   （`Resolve-ReviewProduct` 的 `-Exists` 可注入 ⇒ 离线真跑；`Build-JudgePrompt` 依赖已提取的 `Read-ReviewResource`）。
 # B 段 (2026-10-01): **P0 立契**的产信封本体（纯函数：只吃已解析的 $fm/$cardId ⇒ 可离线单测）
@@ -2260,6 +2264,40 @@ Assert-True "b3⑧(先验红·同源对照): b3④ 那条**真的在看** ——
     ([regex]::Matches($content, [regex]::Escape('"state":"running"'))).Count -eq 0)
 Assert-True "b3⑨: 接线 —— 备路（claude 本地路）也落 P2 词，并**就地标注 PRM 冲突**（不静默放过）" (
     $content.Contains('+ $Script:STATE_EXECUTING +') -and $content.Contains('角色禁项 PRM'))
+
+# --- b3 第二半 (2026-10-01, `O-136` **B3**): `PRH` 接线 + 四条按调用点接入（I-1/I-6/PRM/PRW）---
+#   ★★ 本块的主判据 = "**四条不在 P5 一处堆**"（契约 §1.6 逐字：全堆在 P5 = **挂名接线**）
+#      ⇒ 断言形态是"**每条恰一处调用点**"，不是"都调过"。
+#   ★ 口径同 b1/b2/b3 前半：只测**接线形态 + 纯函数三态**（判据本体由 py 侧用例覆盖，不在此抄第二份）。
+$hEmpty = Resolve-D7Hosts -Station ''
+$hA = Resolve-D7Hosts -Station 'A'
+$hB = Resolve-D7Hosts -Station 'B'
+$hZ = Resolve-D7Hosts -Station 'Z'
+Assert-True "b3⑩: `Resolve-D7Hosts` 三态 —— 站空 ⇒ 产出==裁决（本地跑=同机）· 站 A/B ⇒ 产出=站 host · 站 Z ⇒ 产出=''（不可判）" (
+    $hEmpty.exec_host -eq $hEmpty.arbiter_host -and [bool]$hEmpty.exec_host -and
+    $hA.exec_host -eq (Get-TargetHost 'A') -and $hB.exec_host -eq (Get-TargetHost 'B') -and
+    $hZ.exec_host -eq '' -and [bool]$hZ.arbiter_host)
+Assert-True "b3⑪(★不堆在 P5 · 主判据): 四条 `--d7-block` **各恰一处**调用点（I1 事件流写点 / I6 决策点 / PRM·PRW 角色动作点）" (
+    ([regex]::Matches($content, [regex]::Escape("@('--d7-block', 'I1')"))).Count -eq 1 -and
+    ([regex]::Matches($content, [regex]::Escape("@('--d7-block', 'I6')"))).Count -eq 1 -and
+    ([regex]::Matches($content, [regex]::Escape("@('--d7-block', 'PRM')"))).Count -eq 1 -and
+    ([regex]::Matches($content, [regex]::Escape("@('--d7-block', 'PRW')"))).Count -eq 1)
+Assert-True "b3⑫: `I-1` 判据在**重试循环之前** ⇒ 只跑一次（放进循环会让重试次数变成判据调用次数）" (
+    $content.IndexOf("@('--d7-block', 'I1')") -gt 0 -and
+    $content.IndexOf("@('--d7-block', 'I1')") -lt $content.IndexOf('for ($i = 0; $i -lt 10; $i++) {'))
+Assert-True "b3⑬: `PRH` 两侧事实落在**两处** `.agent-run.json` 写出点（主路 + claude 备路，同一实现）" (
+    ([regex]::Matches($content, [regex]::Escape('Resolve-D7Hosts -Station'))).Count -eq 2 -and
+    ([regex]::Matches($content, [regex]::Escape("Set-Content (Join-Path `$runDir '.agent-run.json')"))).Count -eq 2 -and
+    ([regex]::Matches($content, [regex]::Escape('$run[''exec_host''] ='))).Count -eq 2 -and
+    ([regex]::Matches($content, [regex]::Escape('$run[''arbiter_host''] ='))).Count -eq 2)
+Assert-True "b3⑭: `--d7-host-sep` 已接 + **自家先判空**（argv 空值不可表达 ⇒ 不许把空串交给 CLI）+ 三态分支齐" (
+    $content.IndexOf('if (-not $ExecHost -or -not $arb)') -gt 0 -and
+    $content.IndexOf('if (-not $ExecHost -or -not $arb)') -lt $content.IndexOf("@('--d7-host-sep'") -and
+    $content.Contains('D7_PRH_UNDECIDABLE') -and $content.Contains('D7_PRH_SAME') -and
+    $content.Contains('D7_PRH_SEPARATE'))
+Assert-True "b3⑮(先验红·同源对照): 四条分支产出**互不相同**（含 'Z' ⇒ ''）⇒ b3⑩ 非恒真（恒真桩会三态同值）" (
+    $hEmpty.exec_host -ne $hA.exec_host -and $hA.exec_host -ne $hB.exec_host -and
+    $hZ.exec_host -ne $hB.exec_host -and $hZ.exec_host -eq '' -and $hZ.station -eq 'Z')
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"

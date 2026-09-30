@@ -121,7 +121,9 @@
 | **P4a 机械门** | ★ **`Resolve-L1Gate`（已存在）** | ★ **已接（B2）**：`Write-D7Adjudication` 逐跳调 `d7_transition`（`collected→mech_verified`） |
 | **P4b 语义复核** | ★ **`Invoke-Review` + 结论契约校验（已存在）** | ★ **已接（B2）**：L2 跑过 ⇒ 走 `sem_verified`；**没跑（判官调用失败）⇒ 如实跳过**；`l2_marks[]` = 结论契约段**原文照收** |
 | **P5 裁决登记** | `review.json`（**advisory**；**顶层无 `verdict` 键**）→ `New-Verdict` | ★ **已接（B2）**：**两处** review 写出点各产 `Verdict` 信封（`verdict` = review 的 **exit code**）⇒ 判据校验 + 红线 1/2；★ 仍 **advisory**（**不改退出码**） |
-| **I-1 单写者** | `Add-LedgerLine`（带锁共享 ledger） | 无**流级**单写者身份层（**未接** · B3） |
+| **I-1 单写者** | `Add-LedgerLine`（带锁共享 ledger） | ★ **已接（B3 第二半）**：事件流**写点**调 `d7_block('I1', actor=master, target=events)`（放在重试循环**之前** ⇒ 只跑一次） |
+| ★ **`PRH` 同机可见性**（**非相 · 非拦截**） | `.agent-run.json` 的 `exec_host` / `arbiter_host` | ★ **已接（B3 第二半）**：**两处**写出点落两侧事实（`Resolve-D7Hosts` 单一定义点）；P5 处 `--d7-host-sep` **报数**（同机 ⇒ WARN，**不阻断**） |
+| ★ **`I-6` / `PRM` / `PRW` 调用点**（**非相**） | `Write-D7Report`（决策点）· `Write-D7Adjudication`（角色动作点） | ★ **已接（B3 第二半）**：`I-6` 在唯一汇报壳判 `$r['code']`（非 0 **不是** pass）· `PRM`/`PRW` 在两角色事实相遇处（`actor='worker'` / `master`） |
 
 ★ **B 段落的本地映射（摘要没给"谁对谁" ⇒ 写死在这里，免得下次另发明一套）**：
 
@@ -175,18 +177,34 @@
   （三态：`0` 分离 / `1` 同机 / `2` 不可判，**不混**）· 测试 `tests/test_rpc_check_d7_protocol.py` §⑦
   （含**恒真桩先验红**）。★ 它**刻意不进** `D7_BLOCK_RULES` / `D7_BLOCK_FNS` —— 那 8 条的口径是
   「三红线 + 三不变量 + 两角色禁项」，**报数不属于其中任何一类**（混进去会让那 8 条的计数失去意义）。
-- ⚠ **未接线（下一批）**：① `.agent-run.json` 记 `exec_host` / `arbiter_host`（**两处**写出点）；
-  ② P5 处调一次并 **WARN 报出**；③ 夹具 `b3⑩+`。
-- ⚠ **`I-1` / `I-6` / `PRW` 的接线**：★ **不堆在 P5 一处** —— 四条各有其**正确调用点**
-  （`I-1` 在 `Add-LedgerLine` 的事件流写点 · `I-6` 在各判据的决策点 · `PRM`/`PRW` 在角色动作点）；
-  全堆在 P5 = **挂名接线**（本仓最防的形态）⇒ 逐条按其调用点接，**下一批**。
+- ✅ **已接线（2026-10-01 同日 · B3 第二半）**：① `.agent-run.json` 记 `exec_host` / `arbiter_host`
+  （**两处**写出点：主路 `Invoke-Task` + claude 备路 `Invoke-Task-Claude`，走**同一实现**
+  `Resolve-D7Hosts` ⇒ 不各推一份机器名）；② P5（`Write-D7Adjudication`）调一次 `--d7-host-sep`
+  并 **WARN 报出**；③ 夹具 `b3⑩–b3⑮`（含**先验红·同源对照**）。
+- ✅ **`I-1` / `I-6` / `PRM` / `PRW` 已按各自调用点接入**（★ **不堆在 P5 一处** = 挂名接线）：
+  · `I-1` → `Add-LedgerLine` 的**事件流写点**（放在重试循环**之前** ⇒ 只跑一次）；
+  · `I-6` → `Write-D7Report`（**唯一汇报壳** = 各判据的**决策点**）：只有 `code=0` 才是**显式 `pass`**，
+    `1`（reject）/ `2`（不可判）**都不是** pass ⇒ **不许**把"判不了"静默读成通过；
+  · `PRM`/`PRW` → `Write-D7Adjudication` 的**角色动作点**（"谁执行 / 谁裁决"两个角色事实
+    **第一次相遇**处）：`PRM` 取 `actor='worker'`（裁【甲】第 2 句：**不由机器归属推**）·
+    `PRW` 取 `actor=$actor`(=master) 的 `write_verdict` 动作 ⇒ **两者均不触**；★ 它们的价值是
+    **防将来把 P5 搬到站上**（届时 `actor` 变 ⇒ 判据立刻拦），**不是**"已拦过真实动作"。
+  ★ 四条**各恰一处**调用点（机判形态 = 夹具 `b3⑪`）。
+- ⚠ **`PRH` 的读数落在哪里（如实，勿误读）**：两侧事实写进 **`.agent-run.json`**（P3 载体）+
+  在 **P5 处报出**（`D7_PRH_SAME` / `_SEPARATE` / `_UNDECIDABLE`）；★ **不往 `Verdict` 注入新键**
+  —— §1.5 已把"摘要未给内部结构"的键登记为**射程边界**，为 `PRH` 新造一个 `Verdict` 字段
+  = **由本仓发明结构**（与"新建第二份真值"同罪）。⇒ §1.6 三句裁里的「写进 `Verdict`」按
+  "**落在 P5 裁决记录的面内**"读（两侧事实 + 报出），**不是**新键。
 - ⚠ **已知 argv 限制（写下来，免得下一个人"修错"）**：**空值在 argv 上不可表达**
   （PS 与 `argparse` 都会吃掉空串 ⇒ `argparse` 直接退 2）⇒ 调用方**必须自己先判空**并报"不可判"，
-  **不要**把空串交给 CLI。
+  **不要**把空串交给 CLI（★ 已落：`Write-D7Adjudication` 的 `if (-not $ExecHost -or -not $arb)`，
+  夹具 `b3⑭` 钉"判空在调 CLI **之前**"）。
+- ★ **不做名字归一（写死理由）**：`exec_host` / `arbiter_host` **逐字比**（**不**抹大小写、**不**抹
+  `.local`）—— 归一 = 由本仓发明两串的等价关系；实测裁决机名（`DESKTOP-BR5R8EV`）与三个站 host 串
+  **逐字不同** ⇒ 逐字比**不会**假报同机，而"本地 spawn"那一路两侧都取本机名 ⇒ **正**能报出同机。
 
-⚠ **仍未接**（B3 剩余 + C 段）：`d7_block` 的其余条目（`I-1` / `I-6` / `PRM` / `PRW`）——
-★ **`PRM` 的语义争点已裁【甲】并落本**（角色化，见上），但**接线仍待按各自调用点接**（不堆在 P5）；
-`PRH` 的 **run 字段记录与 WARN 报出**同批；**`RunReport`/`Verdict` 的真跑**（C 段）——
+⚠ **仍未做**（只剩 C 段）：`RunReport` / `Verdict` 的**真跑**（站上产出第一份真实信封）——
+`d7_block` 的**八条已全部接线**（A 段判据 → 本段八处调用点）＋ `PRH` 报数面已接；
 如实登记，不假装全覆盖。
 
 ---
