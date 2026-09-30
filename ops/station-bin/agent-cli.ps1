@@ -1407,17 +1407,41 @@ function Invoke-D7Cli {
         if ($null -ne $Json) {
             $tmp = Join-Path $env:TEMP ("d7-" + [Guid]::NewGuid().ToString('N') + ".json")
             [IO.File]::WriteAllText($tmp, ($Json | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
-            $a += $tmp
+            # ★★ **JSON 入参的形态【按判据入口分开】** —— 这是本壳唯一的"接口适配"，不许外泄到调用点。
+            #   ★★ C 段首次真跑实测（2026-10-01）**两次**踩到它，方向相反、都致命：
+            #     · 旧实现把临时路径**裸追加** ⇒ `--d7-block` 的 ctx 是**标志取值**（`--d7-ctx <f>`）
+            #       ⇒ `argparse` 报 `unrecognized arguments` ⇒ 退 **2** 且**无 `D7_` 行**
+            #       ⇒ 末行 `.Trim()` 在空管道上抛 ⇒ `$ErrorActionPreference='Stop'` **崩断整个 `task`**；
+            #     · "一律补 `--d7-ctx`" 也不行 ⇒ `--d7-envelope KIND PATH` 的 PATH 是**位置参数**
+            #       ⇒ 信封校验**全部**变 `D7_*_UNDECIDABLE`（实测第二轮）。
+            #   ⇒ 结论：**形态由入口决定，写死在这张表里**；不认识入口 ⇒ **当场 throw**（fail-closed，
+            #     由下方 catch 归 2），**绝不**猜一个形态把错的东西喂给判据（那才是真的假绿）。
+            $mode = if (@($Argv).Count -gt 0) { [string]$Argv[0] } else { '' }
+            $a += switch ($mode) {
+                '--d7-envelope' { , $tmp }                          # 位置参数：`--d7-envelope KIND PATH`
+                '--d7-block'    { '--d7-ctx'; $tmp }                # 标志取值：`--d7-block RULE --d7-ctx JSON`
+                default {
+                    throw ("D7_CLI_UNKNOWN_MODE: 入口 '$mode' 不吃 JSON 入参（形态未登记 ⇒ 不猜）")
+                }
+            }
         }
         $out = (& py ops/rpc_check.py @a 2>&1 | Out-String)
         $code = if ($null -eq $LASTEXITCODE) { 2 } else { [int]$LASTEXITCODE }
     }
-    catch { $out = "$out`n$($_.Exception.Message)"; $code = 2 }
+    # ⚠ 本壳**自己**的失败（入口形态未登记 / 起进程失败）必须**自带可读行** —— 否则 `line` 为空，
+    #   调用点只能打印一个裸 exit code，**"判不了"就变成不可诊断**（判不了 ≠ 不可查）。
+    catch { $out = "$out`nD7_UNDECIDABLE_LOCAL(壳): $($_.Exception.Message)"; $code = 2 }
     finally {
         Pop-Location
         if ($tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue | Out-Null }
     }
-    $line = ([string]($out -split "`r?`n" | Where-Object { $_ -match '^D7_' } | Select-Object -Last 1)).Trim()
+    # ⚠⚠ **空管道会让 `.Trim()` 抛，且 `$ErrorActionPreference='Stop'` 下是【终止性】** ——
+    #   PS 解析把 `.Trim()` 落在**内部管道**上（不是 `[string]` 转换的结果上）⇒ 管道为空时
+    #   对 `$null` 调方法 ⇒ **整个外壳崩断**（不是"报一行错"）。
+    #   ★ C 段首次真跑实测（2026-10-01）：这一行把"判据没吐 `D7_` 行"放大成"派发崩断"。
+    #   ⇒ 先转字符串（`$null` ⇒ `''`），**再** `.Trim()`；命中行先滤掉空串（防 `''` 被当命中）。
+    $hit = @($out -split "`r?`n" | Where-Object { $_ -match '^D7_' } | Select-Object -Last 1)
+    $line = ([string]$hit).Trim()
     return @{ code = $code; ok = ($code -eq 0); line = $line }
 }
 
@@ -1471,6 +1495,10 @@ function New-RunReport {
     # ⚠ 如实（不冒充当已具备）：下列字段本仓**当前无对应读数** ⇒ 填空并进 `gaps`：
     #   · `attempt`（本仓无 attempt 计数）· `decisions[]`（摘要只说"八字段"，本仓无此产出）
     #   · `evidence[]`（协议指**锚点** E1–E4；本仓锚点在**审计报告**里，不在 run 产出侧）。
+    # ★★ **"填空"的形态 = 空列表，不是 `null`** —— C 段首次真跑实测（2026-10-01）：`decisions=$null`
+    #   被判据**当场拒**（`RunReport.decisions 必须是列表`，值类型在射程内）⇒ P3 信封**每次真跑都红**。
+    #   ⇒ 与 `New-Verdict` 的既有先例**同一处置**：**空数组 + 仍进 `gaps`**（"类型合规"与"不是真值"
+    #     两件事**分开表达**）—— 空表**不发明结构**（没编那八字段），`gaps` 照报"这不是真值"。
     # ⚠ **映射是本地选择**（摘要没给"哪个字段对哪个"）⇒ 已写进契约 §1.6，免得下次另发明一套：
     #   `run_id` ← `task_id`（本仓 run 的既有标识）· `artifact.digest` ← `content_digest` ·
     #   `artifact.size` ← `output_bytes` · `inputs_digest` ← `card.sha256`（卡 = 最大的注入物）。
@@ -1481,14 +1509,14 @@ function New-RunReport {
         artifact      = [ordered]@{ digest = [string]$Run['content_digest']; size = [int]$Run['output_bytes'] }
         inputs_digest = [string]$Run['card']['sha256']
         exit_code     = [int]$Run['exit_code']
-        decisions     = $null
-        evidence      = $null
+        decisions     = @()
+        evidence      = @()
         usage         = $Run['usage']
     }
     $gaps = @()
     if ($null -eq $rr['attempt'])       { $gaps += 'attempt' }
-    if ($null -eq $rr['decisions'])     { $gaps += 'decisions' }
-    if ($null -eq $rr['evidence'])      { $gaps += 'evidence' }
+    if (@($rr['decisions']).Count -eq 0) { $gaps += 'decisions' }
+    if (@($rr['evidence']).Count -eq 0)  { $gaps += 'evidence' }
     if (-not $rr['artifact']['digest']) { $gaps += 'artifact.digest' }
     return @{ report = $rr; gaps = $gaps; run_dir = $RunDir }
 }

@@ -2299,6 +2299,31 @@ Assert-True "b3⑮(先验红·同源对照): 四条分支产出**互不相同**�
     $hEmpty.exec_host -ne $hA.exec_host -and $hA.exec_host -ne $hB.exec_host -and
     $hZ.exec_host -ne $hB.exec_host -and $hZ.exec_host -eq '' -and $hZ.station -eq 'Z')
 
+# --- b3 第三刀 (2026-10-01, `O-136` **C 段首次真跑**): 两个**真缺陷**的回归护栏 -----------
+#   ★★ 本块记的是"C 段第一次真跑就崩了"这件事本身 —— 两个缺陷**都不是**"判据错了"，
+#      而是**外壳与判据的交界**错了（判据本体一直是对的）。四条 b3⑯/⑰ 就是那两处交界。
+#   ⚠ 口径同前：本夹具只做**形态断言**（真跑需要站 + py 子进程 ⇒ 不在离线夹具里）。
+Assert-True "b3⑯(★真缺陷①): JSON 入参**按入口分形态** —— `--d7-envelope` 收位置参数 / `--d7-block` 收 `--d7-ctx`，且未知入口 throw" (
+    $content.Contains("'--d7-envelope' { , `$tmp }") -and
+    $content.Contains("'--d7-block'    { '--d7-ctx'; `$tmp }") -and
+    $content.Contains('D7_CLI_UNKNOWN_MODE') -and
+    ([regex]::Matches($content, [regex]::Escape("@('--d7-ctx', `$tmp)")).Count -eq 0) -and
+    -not $content.Contains('$a += $tmp'))
+Assert-True "b3⑰(★真缺陷②): 末行提取**空管道安全** —— `.Trim()` 不许与 `[string](...)` 同表达式（PS 把方法落在内部管道上）" (
+    $content.Contains('$line = ([string]$hit).Trim()') -and
+    -not $content.Contains('[string]($out -split'))
+# ★ 先验红自证（本机真跑 PS 解析规则）：旧写法在**空管道**上**确实会抛** ⇒ b3⑰ 非恒真。
+$oldThrew = $false
+try { $null = ([string]('' -split "`r?`n" | Where-Object { $_ -match '^D7_' } | Select-Object -Last 1)).Trim() }
+catch { $oldThrew = $true }
+Assert-True "b3⑱(先验红·同源对照): 旧写法在空管道上**当场抛**（b3⑰ 非恒真；恒真的断言在这里会红）" (
+    $oldThrew -and $content.Contains('$line = ([string]$hit).Trim()'))
+Assert-True "b3⑲(★真缺陷③): 无读数的两个**列表**字段填空 = **空数组**（`null` 会被判据当场拒 ⇒ P3 信封每次真跑都红）" (
+    ($RRT.report.decisions -is [array]) -and @($RRT.report.decisions).Count -eq 0 -and
+    ($RRT.report.evidence -is [array]) -and @($RRT.report.evidence).Count -eq 0 -and
+    # ★ 同源对照：**仍是** gaps 里的三项（"类型合规" 不冒充 "有真值"）
+    (@($RRT.gaps) -join ',') -eq 'attempt,decisions,evidence')
+
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
 exit $(if ($fail -eq 0) { 0 } else { 1 })
