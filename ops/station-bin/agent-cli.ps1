@@ -1285,6 +1285,77 @@ function Get-CardIdentity([string]$card) {
     return $o
 }
 
+function New-TaskContract {
+    # ── ★★ B 段（2026-10-01）：**P0 立契** —— 卡 → `TaskContract` 信封（D7 协议契约 §1.1）─────
+    # 契约本体 = `spec/d6-agent-standard/D7-PROTOCOL-CONTRACT.md`；判据本体 = `ops/rpc_check.py`
+    #   的 `validate_envelope`。★ **外壳只产信封、不含判定** —— 判定一律走判据本体（`Test-D7Envelope`），
+    #   否则就是"同一事实两处表达"（本仓头号失败形态）。
+    # ★ 本函数是**纯函数**（只吃已解析的 `$Fm` / `$CardId`，不碰站、不碰文件系统）⇒ 可离线单测。
+    # ★★ 唯一**新增的计算** = `criteria_hash`：本仓原本没有"判据哈希"（调研 §3.3 记 `❌ 无`），
+    #   而红线 3「判据与 golden 哈希在 **P0 固化**」正需要它 ⇒ **P0 就是固化点**：
+    #   判据文本 → 哈希，随契约定格（此后改判据 ⇒ 哈希变 ⇒ 可判"判据被事后改过"）。
+    # ⚠⚠ **如实（不冒充当已具备）**：下列字段本仓**当前不提供真值** ⇒ 填空并登记进 `gaps`：
+    #   · `evidence_budget{anchors,tool_calls}` —— 摘要自己承认"无既有经验值可依"，本仓无此读数；
+    #   · `constraints`（统一禁止项清单）—— 本仓**没有**统一清单，由 `sensitivity`/`readonly`/
+    #     `attach-egress` 三字段**分散承载**（调研 §3.3）；⚠ **不把三字段塞进 `constraints`** ——
+    #     那是**发明结构**（把"分散声明"说成"统一禁止项清单"）；
+    #   · `golden.checksum` —— 本仓不预存金标哈希（运行期由 `accept-golden.cmd` 现算）。
+    #   ★ 判据只判"**键在不在**"（A 段 §1.5 的射程）⇒ 它们会**通过**；`gaps` 是给**读的人**看的
+    #     "这些值不是真值" ⇒ **不制造假绿**（没有假装有值）。
+    param($Fm, $CardId)
+    $acc = @()
+    foreach ($c in @($Fm['accept'])) {
+        $t = ([string]$c).Trim()
+        if (-not $t) { continue }
+        $acc += [ordered]@{ criteria = $t; criteria_hash = ("sha256:" + (Get-Sha256Text $t)) }
+    }
+    $goldenRef = [string]$Fm['accept-golden']['source']
+    $tc = [ordered]@{
+        task_id         = [string]$CardId['sha256']
+        task_desc       = [string]$Fm['task']
+        accept          = $acc
+        golden          = [ordered]@{ ref = $goldenRef; checksum = '' }
+        inputs          = [ordered]@{ ref = 'card.md'; digest = [string]$CardId['sha256'] }
+        evidence_budget = [ordered]@{ anchors = $null; tool_calls = $null }
+        constraints     = $null
+        timeout_s       = [int]$Fm['timeout_s']
+        sensitivity     = [string]$Fm['sensitivity']
+        readonly        = [bool]$Fm['readonly']
+    }
+    # ★ `gaps` = 本仓**当前不提供真值**的字段（如实报出）。⚠ 它**不是判据**（不阻断、不评分）。
+    $gaps = @()
+    if ($null -eq $tc['evidence_budget']['anchors']) { $gaps += 'evidence_budget' }
+    if ($null -eq $tc['constraints'])                { $gaps += 'constraints' }
+    if (-not $tc['golden']['checksum'])              { $gaps += 'golden.checksum' }
+    return @{ contract = $tc; gaps = $gaps }
+}
+
+function Test-D7Envelope {
+    # ── ★★ B 段（2026-10-01）：**调判据本体** —— 协议判据的**唯一消费点** ─────────────────
+    # 形态同 `Invoke-GateCheck`（外壳调 `py ops/rpc_check.py`），理由同：判据**只在一处**。
+    # ⚠ **有副作用**（起子进程 + 临时文件）⇒ **不进离线夹具**（判据本体由
+    #   `tests/test_rpc_check_d7_protocol.py` 的 CLI 用例覆盖；此处只做**接线形态**断言）。
+    # 退出码**三态不可混**：0 = ok · 1 = reject · 2 = **无法判**（fail-closed，**不冒充** ok/reject）。
+    # ⚠ 用**临时文件**而非 stdin 管道：`ConvertTo-Json` 的产出含中文 ⇒ PS 5.1 管道会用 ANSI 编码
+    #   写进子进程 stdin（IMP §2.3 同款坑）⇒ 显式 `WriteAllText` + UTF-8 无 BOM。
+    param([string]$Kind, $Env, [string]$Card = '')
+    $tmp = Join-Path $env:TEMP ("d7-env-" + [Guid]::NewGuid().ToString('N') + ".json")
+    $out = ''; $code = 2
+    Push-Location $Script:REPO_ROOT
+    try {
+        [IO.File]::WriteAllText($tmp, ($Env | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+        $out = (& py ops/rpc_check.py --d7-envelope $Kind $tmp 2>&1 | Out-String)
+        $code = if ($null -eq $LASTEXITCODE) { 2 } else { [int]$LASTEXITCODE }
+    }
+    catch { $out = "$out`n$($_.Exception.Message)"; $code = 2 }
+    finally {
+        Pop-Location
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue | Out-Null
+    }
+    $line = ([string]($out -split "`r?`n" | Where-Object { $_ -match '^D7_ENVELOPE ' } | Select-Object -Last 1)).Trim()
+    return @{ code = $code; ok = ($code -eq 0); line = $line; card = $Card }
+}
+
 function Test-CardSafetyDeclared([string]$card, $cardId, [string]$sensitive) {
     # ADR-0007 前置(2026-09-18): **无 front-matter 卡的处置** —— 实测这类卡在 D6 路径下会**静默退化**:
     #   `readonly` 永远 false、`sensitivity` 默认 `public`、且无 accept-golden / 无 manifest。
@@ -1848,6 +1919,31 @@ function Invoke-Task {
     $reqGate = [string]$fm['require-gate']
     if ($reqGate) {
         if (-not (Invoke-GateCheck -Name $reqGate -Card $card)) { return 3 }   # 3 = GATE_BLOCK（新增，O-90）
+    }
+    # ── ★★ B 段（2026-10-01）：**D7 协议 P0 立契**（`D7-PROTOCOL-CONTRACT` §1 的 P0 相）────────
+    # 做什么：卡 → `TaskContract` 信封（纯函数 `New-TaskContract`）⇒ 交**判据本体**校验
+    #   （`Test-D7Envelope` → `ops/rpc_check.py --d7-envelope`；**外壳不重写判据**）。
+    # ★★ **灰度期（首批）**：**不阻断派发**。理由三条（都是登记在案的，不是推测）：
+    #   ① 本仓**存量 79 张卡**一个都不带 `criteria_hash`（红线 3 的字段此前**根本不存在**）；
+    #   ② `New-TaskContract` 的 `gaps` 有 3 项是"**本仓当前不提供**"（不是卡写错）；
+    #   ③ 此时硬拒 = 把**已知缺口**变成"**谁都派不了**" ⇒ 假红的结局是**被加进例外名单**
+    #      （O-70 同族，本仓已有教训）。
+    #   ⇒ 只**如实报出**（`D7_CONTRACT_*` 行）；**收紧为硬拒的时机 = `gaps` 清空**（见契约 §1.6）。
+    $d7tc = New-TaskContract -Fm $fm -CardId $cardId
+    $d7chk = Test-D7Envelope -Kind 'TaskContract' -Env $d7tc['contract'] -Card $card
+    if ($d7chk.code -eq 0) {
+        Write-Host ("D7_CONTRACT_OK: P0 立契信封字段级合法 · task_id=" + $d7tc['contract']['task_id'])
+    }
+    elseif ($d7chk.code -eq 1) {
+        Write-Host ("D7_CONTRACT_REJECT: " + $d7chk.line + " ⇒ **灰度期：不阻断**（判据已接线）")
+    }
+    else {
+        Write-Host ("D7_CONTRACT_UNDECIDABLE: 判据**跑不起来**（exit=" + $d7chk.code +
+                    "）⇒ 灰度期不阻断，但**必须有人看**（判不了 ≠ 通过）")
+    }
+    if (@($d7tc['gaps']).Count -gt 0) {
+        Write-Host ("D7_CONTRACT_GAPS: 本仓当前**不提供真值**的字段 = [" + (@($d7tc['gaps']) -join ', ') +
+                    "]（如实报出：判据只判键在不在 ⇒ 它们通过 ≠ 它们有值）")
     }
     # A1 / ADR-0009 §2 (2026-09-29): **派发前**对三条判据求值（纯函数，无副作用）⇒ 层级归属落 run.json。
     #   为什么求值点选这里：与 `require-gate` 同处"流程前置" —— 三键**全部来自卡**（派发方在派发前、

@@ -15,7 +15,10 @@
 
 ⚠ 本文件自带 `__main__` 入口：门禁 `py-tests` 以**脚本**方式调用（只认退出码 + `RESULT:` 行）。
 """
+import json
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -212,6 +215,53 @@ def main() -> int:
         print(f"  {'ok  ' if ok else 'FAIL'} {desc}")
         if not ok:
             fails.append(f"[先验红] {desc}")
+
+    # ── ⑥ 消费面（B 段新增的 CLI）—— **外壳的唯一调用点** ─────────────────────────
+    # 为什么要测它：判据本体在 Python、调用方在外壳（PS）⇒ 没有可用的 CLI，外壳只能**重写一份**
+    #   （= 同一事实两处表达）。故 CLI 是"接线"的前提，必须自己先站得住。
+    # ⚠ 用 `sys.executable`（= 门禁同一个解释器），**不用** PATH 上的 `py`/`python`（O-36 的教训）。
+    print("── ⑥ 消费面 CLI（外壳调用点）──")
+    cli = str(ROOT / "ops" / "rpc_check.py")
+
+    def _cli(args, stdin=None):
+        p = subprocess.run([sys.executable, cli] + args, input=stdin, capture_output=True,
+                           text=True, encoding="utf-8", errors="replace")
+        return p.returncode, ((p.stdout or "") + (p.stderr or ""))
+
+    with tempfile.TemporaryDirectory() as d:
+        okf = Path(d) / "rr.json"
+        okf.write_text(json.dumps(RR, ensure_ascii=False), encoding="utf-8")
+        badf = Path(d) / "rr_verdict.json"
+        badf.write_text(json.dumps({**RR, "verdict": 0}, ensure_ascii=False), encoding="utf-8")
+        ctxf = Path(d) / "ctx_worker.json"
+        ctxf.write_text(json.dumps({"actor": R.D7_WORKER}), encoding="utf-8")
+        cli_cases = [
+            (["--d7-envelope", "RunReport", str(okf)], None, 0, "D7_ENVELOPE ok"),
+            (["--d7-envelope", "RunReport", str(badf)], None, 1, "D7_ENVELOPE reject"),
+            (["--d7-envelope", "RunReport", "-"],
+             json.dumps(RR, ensure_ascii=False), 0, "D7_ENVELOPE ok"),      # stdin 通道
+            (["--d7-envelope", "RunReport", str(Path(d) / "nope.json")], None,
+             2, "D7_ENVELOPE undecidable"),                                 # ★ 判不了 ≠ 通过
+            (["--d7-block", "RL1", "--d7-ctx", str(ctxf)], None, 1, "D7_BLOCK reject"),
+            (["--d7-block", "NOPE"], None, 1, "D7_BLOCK reject"),           # 未知规则 ⇒ 拒
+            (["--d7-transition", "drafted", "dispatched", "master"], None, 0, "D7_TRANSITION ok"),
+            (["--d7-transition", "collected", "accepted", "master"], None, 1, "D7_TRANSITION reject"),
+        ]
+        for args, stdin, want_rc, want_mark in cli_cases:
+            rc, out = _cli(args, stdin)
+            hit = want_mark in out
+            ok = (rc == want_rc) and hit
+            print(f"  {'ok  ' if ok else 'FAIL'} {' '.join(args)}\n        → exit={rc}（期望 {want_rc}）· "
+                  f"标记 {'在' if hit else '**缺**'}「{want_mark}」")
+            if not ok:
+                fails.append(f"[CLI] {' '.join(args)} ⇒ exit={rc} mark={hit}")
+        # ★ 同源对照（先验红）：**同一个**信封文件，仅多一个 `verdict` 键 ⇒ 0 → 1
+        rc_ok, _ = _cli(["--d7-envelope", "RunReport", str(okf)])
+        rc_bad, _ = _cli(["--d7-envelope", "RunReport", str(badf)])
+        print(f"  {'ok  ' if (rc_ok, rc_bad) == (0, 1) else 'FAIL'} "
+              f"★ 同源对照：去掉 verdict ⇒ {rc_ok} / 加上 verdict ⇒ {rc_bad}")
+        if (rc_ok, rc_bad) != (0, 1):
+            fails.append("[CLI] 同源对照失败")
 
     print(f"RESULT: {'ALL PASS' if not fails else f'失败 {len(fails)} 条'}")
     for f in fails:
