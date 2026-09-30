@@ -47,7 +47,7 @@ def collect():
     """
     import cluster as C
     roots, note = C._agent_proj_roots()
-    pairs, hosts, guards, n_rec, n_rev, n_no_pair = [], [], [], 0, 0, 0
+    pairs, hosts, guards, tguards, n_rec, n_rev, n_no_pair = [], [], [], [], 0, 0, 0
     for proj, root in sorted(roots.items()):
         d = root / "agent-out"
         if not d.is_dir():
@@ -60,6 +60,10 @@ def collect():
                 continue
             n_rec += 1
             hosts.append((proj, sub.name, rec.get("exec_host"), rec.get("arbiter_host")))
+            # ★ task 侧报数（`.agent-run.json` 的 `d7_guard`）—— `P0`/`P3`/`I-1` 的码；
+            #   ⚠ 与 review 侧**分开装**：两侧 tag 名不同、分母也不同（run 数 ≠ review 数）。
+            if isinstance(rec.get("d7_guard"), dict):
+                tguards.append((proj, sub.name, rec["d7_guard"]))
             rev = _read(sub / "review.json")
             if isinstance(rev, dict) and isinstance(rev.get("d7_guard"), dict):
                 guards.append((proj, sub.name, rev["d7_guard"]))
@@ -75,7 +79,7 @@ def collect():
                 continue
             pairs.append((proj, sub.name, pm, jm, ps, js))
     return (roots, note, pairs,
-            {"run_records": n_rec, "with_review": n_rev, "no_pair": n_no_pair}, hosts, guards)
+            {"run_records": n_rec, "with_review": n_rev, "no_pair": n_no_pair}, hosts, guards, tguards)
 
 
 def prh_distribution(hosts):
@@ -102,6 +106,10 @@ def prh_distribution(hosts):
         else:
             buckets["station"].append((proj, rid, eh, ah))
     return buckets
+
+
+# ⚠ 这些键存的是**计数**（不是 CLI 的三态码）⇒ 报数时**不得**套三态图例，否则误导读者。
+_COUNT_KEYS = {"transition.hops", "transition.rejected"}
 
 
 def d7_guard_tally(guards):
@@ -133,7 +141,7 @@ def main():
     a = ap.parse_args()
 
     idx = R.load_family_index()
-    roots, note, pairs, cnt, hosts, guards = collect()
+    roots, note, pairs, cnt, hosts, guards, tguards = collect()
 
     t1, t2, same, unknown, j2_same = {}, {}, [], [], []
     for proj, rid, pm, jm, ps, js in pairs:
@@ -178,14 +186,28 @@ def main():
     # ── ★★ D7 判据报数聚合（2026-10-01 · 测收益的 ②）────────────────────────────────────────
     # 这是"**每千次 review 拦了多少**"的分子/分母。★ 分母必须报 `covered`（见 `d7_guard_tally`）。
     gk, g_covered, g_n = d7_guard_tally(guards)
-    print(f"[D7 判据报数] 有 d7_guard 的 review {g_n} 份 · **其中跑完 guard 段的 {g_covered}**")
+    print(f"[D7 判据报数 · review 侧] 有 d7_guard 的 review {g_n} 份 · **其中跑完 guard 段的 {g_covered}**")
     if g_n == 0:
         print("   ⚠ **零份** ⇒ 本项**算不出来**（不是「零拦截」）：报数落点是本批才加的 ⇒ "
               "旧的 review.json 里没有 `d7_guard`（**不可回溯**：那些行当时只走了 stdout）")
     else:
         for k in sorted(gk):
-            dist = " · ".join(f"{v}→{c}" for v, c in sorted(gk[k].items()))
-            print(f"   · {k}: {dist}   （0=ok / 1=reject / 2=不可判，与 CLI 同码）")
+            dist = " · ".join(f"code={v} × {c}" for v, c in sorted(gk[k].items()))
+            # ⚠⚠ **不要给计数键套三态码的图例**：`transition.hops`/`transition.rejected` 存的是
+            #   **计数**（跳数 / 被拒跳数），不是 CLI 的三态码 ⇒ 套上"0=ok/1=reject/2=不可判"
+            #   会**把读者引到错误结论**（例如 hops=2 被读成"不可判"）。
+            legend = "" if k in _COUNT_KEYS else "   （0=ok / 1=reject / 2=不可判，与 CLI 同码）"
+            print(f"   · {k}: {dist}{legend}")
+    # ── task 侧（`P0`/`P3`/`I-1`）—— 与 review 侧**分开报**（tag 不同、分母也不同：run 数 ≠ review 数）
+    tk, _t_covered, t_n = d7_guard_tally(tguards)
+    print(f"[D7 判据报数 · task 侧] 有 d7_guard 的 run {t_n} 份 / run 记录 {cnt['run_records']} 份")
+    if t_n == 0:
+        print("   ⚠ **零份** ⇒ 同样**算不出来**（task 侧落点也是本批才加；旧 run 记录没有这个键）")
+    else:
+        for k in sorted(tk):
+            dist = " · ".join(f"code={v} × {c}" for v, c in sorted(tk[k].items()))
+            legend = "" if k in _COUNT_KEYS else "   （0=ok / 1=reject / 2=不可判，与 CLI 同码）"
+            print(f"   · {k}: {dist}{legend}")
     print("[口径·报数] ★ 聚合**只计数、不判灯**；⚠ 「没跑」必须与「跑了且全 ok」分得开 "
           "（故单列 covered）——否则 0 个 reject 会被读成「很干净」（假绿）")
     print("[口径] 只读报数，**不判灯**（先量后定档，同 O-69/O-97）；`unknown` 不等于失败")
@@ -196,7 +218,8 @@ def main():
                           "same": same[:20], "unknown": unknown[:20],
                           "prh": {"station": n_st, "local": n_lo, "unknown": n_un,
                                   "local_examples": ph["local"][:10]},
-                          "d7_guard": {"reviews": g_n, "covered": g_covered, "tally": gk}},
+                          "d7_guard": {"reviews": g_n, "covered": g_covered, "tally": gk},
+                          "d7_guard_task": {"runs": t_n, "tally": tk}},
                          ensure_ascii=False))
     return 0
 
