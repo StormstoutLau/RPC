@@ -48,7 +48,10 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 'Get-ActualStation', 'Get-StationLetterFromHost', 'Get-TargetHost', 'Resolve-CardBackendLocal',
 # D7-CC #8 + #3 (2026-09-30): 判官**取哪件产物**（卡声明 + 强制回退）与**提示词注入产物相对名**
 #   （`Resolve-ReviewProduct` 的 `-Exists` 可注入 ⇒ 离线真跑；`Build-JudgePrompt` 依赖已提取的 `Read-ReviewResource`）。
-'Resolve-ReviewProduct', 'Build-JudgePrompt')) {
+# B 段 (2026-10-01): **P0 立契**的产信封本体（纯函数：只吃已解析的 $fm/$cardId ⇒ 可离线单测）
+#   ⚠ 必须一并提取 `Get-Sha256Text` —— 它是 `criteria_hash` 的**唯一**实现点（不许另抄一份哈希）。
+'Resolve-ReviewProduct', 'Build-JudgePrompt',
+'Get-Sha256Text', 'New-TaskContract')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -2107,6 +2110,50 @@ Assert-True "o125⑥: 接线 —— 唯一赋值点改用该纯函数, 且 `$use
 #     加 `-Encoding UTF8` = **33 行/kept=1**（卡行完好）。⇒ 这是**读侧**的病，不是"清单要带 BOM"的约定。
 Assert-True "o127: 批清单解析**显式 -Encoding UTF8**（裸 `Get-Content` 会按 ANSI 解码 ⇒ 吞掉换行 ⇒ 0 行）" (
     $content.Contains('Get-Content -LiteralPath $listFile -Encoding UTF8'))
+
+# --- b1 (2026-10-01, `O-135` **B 段**): **P0 立契** —— 卡 → `TaskContract` 信封（纯函数）--------
+#   契约 = `D7-PROTOCOL-CONTRACT.md` §1.1；判据 = `ops/rpc_check.py` 的 `validate_envelope`
+#     （★ 判据**不在本夹具里重写** —— 这里只测"**产信封**"这一半；判据那一半由
+#      `tests/test_rpc_check_d7_protocol.py` 的 CLI 用例覆盖）。
+#   ★ 本批**唯一新增的计算** = `criteria_hash`（= 红线 3「判据与 golden 哈希在 **P0 固化**」的固化动作）。
+#   ⚠ `gaps` = 本仓**当前不提供真值**的字段（如实报出）—— 断言它**非空**，防"占位被读成有值"。
+$fmT = @{ accept = @('test -f out/x.md', 'echo ok'); 'accept-golden' = @{ source = 'golden/g.py'; cmd = './g.py' }
+          task = 'TC 夹具'; timeout_s = 900; sensitivity = 'local-only'; readonly = $true }
+$cidT = @{ path = 'card.md'; sha256 = 'sha256:deadbeef'; bytes = 1; front_matter = $true }
+$TCT = New-TaskContract -Fm $fmT -CardId $cidT
+Assert-True "b1①: task_id 取卡身份哈希（本仓唯一的任务标识）" (
+    $TCT.contract.task_id -eq 'sha256:deadbeef')
+Assert-True "b1②: accept 每项含 criteria + criteria_hash，且哈希 = 判据文本的哈希（**可复算**）" (
+    $TCT.contract.accept.Count -eq 2 -and
+    $TCT.contract.accept[0].criteria -eq 'test -f out/x.md' -and
+    $TCT.contract.accept[0].criteria_hash -eq ("sha256:" + (Get-Sha256Text 'test -f out/x.md')))
+Assert-True "b1③: 两条不同判据 ⇒ 两个不同哈希（否则「固化」是恒真判据）" (
+    $TCT.contract.accept[0].criteria_hash -ne $TCT.contract.accept[1].criteria_hash)
+Assert-True "b1④: golden/inputs/evidence_budget 的**子键键在**（摘要逐字给出的键，值可为空）" (
+    $TCT.contract.golden.Contains('ref') -and $TCT.contract.golden.Contains('checksum') -and
+    $TCT.contract.inputs.Contains('ref') -and $TCT.contract.inputs.Contains('digest') -and
+    $TCT.contract.evidence_budget.Contains('anchors') -and
+    $TCT.contract.evidence_budget.Contains('tool_calls') -and
+    $TCT.contract.golden.ref -eq 'golden/g.py')
+Assert-True "b1⑤: gaps 如实报出本仓**不提供真值**的三项" (
+    (@($TCT.gaps) -join ',') -eq 'evidence_budget,constraints,golden.checksum')
+Assert-True "b1⑥(先验红·空 accept): 无判据的卡 ⇒ accept 为空表（判据会因此拒 ⇒ 非恒真）" (
+    (New-TaskContract -Fm @{ accept = @(); 'accept-golden' = @{ source = '' }; task = 't'
+                             timeout_s = 900; sensitivity = ''; readonly = $false } -CardId $cidT).contract.accept.Count -eq 0)
+Assert-True "b1⑦: 空白判据串被跳过（不产生 criteria_hash 空哈希的假条目）" (
+    (New-TaskContract -Fm @{ accept = @('  ', 'a'); 'accept-golden' = @{ source = '' }; task = 't'
+                             timeout_s = 900; sensitivity = ''; readonly = $false } -CardId $cidT).contract.accept.Count -eq 1)
+Assert-True "b1⑧: 接线 —— P0 立契在 `Invoke-Task` 内，且**调判据本体**（外壳不重写判据）" (
+    $content.Contains('$d7tc = New-TaskContract -Fm $fm -CardId $cardId') -and
+    $content.Contains("Test-D7Envelope -Kind 'TaskContract'") -and
+    $content.Contains('--d7-envelope'))
+$d7blk = ''
+$bi0 = $content.IndexOf('$d7tc = New-TaskContract')
+$bi1 = $content.IndexOf('# A1 / ADR-0009', $bi0)
+if ($bi0 -ge 0 -and $bi1 -gt $bi0) { $d7blk = $content.Substring($bi0, $bi1 - $bi0) }
+Assert-True "b1⑨: 接线 —— **灰度期不阻断**（P0 块内**无** return/die；收紧时机 = gaps 清空）" (
+    $d7blk.Length -gt 0 -and -not ($d7blk -match '\breturn\b') -and
+    $content.Contains('D7_CONTRACT_GAPS'))
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"

@@ -96,6 +96,30 @@
   本仓**零个真实 `TaskContract` / `RunReport` / `Verdict`** ⇒ 判据的输入全是**离线夹具**。
   ⇒ §未实测 **7 / 8 / 9** 的 `state` 按口径记 **`partial`**（判据已落、真跑未做），**不**记为已消。
 
+### 1.6 六相 × 本仓现状（**B 段落点表** · 2026-10-01）
+
+> ★ **本表不是新造的** —— 字段级"本仓有没有"仍以既有对照表为准
+> （[Spec_Workflow 调研 §3.3](../../docs/2026-09-23_Spec_Workflow能否作为D6-D7工作流基准_调研.md)，2026-09-23）；
+> 本表只补"**接线落在哪个既有载体、缺什么**"这一层（**不重复**那份的字段清单）。
+> ★★ **B 段的口径**（用户 2026-10-01 裁）：**对齐既有载体 · 不新增信封件** —— 三信封**映射到**卡 /
+> `.agent-run.json` / `review.json`，判据一律走 `ops/rpc_check.py`（**外壳不重写判据**）。
+
+| 相 | 落点（既有载体，**不新增件**） | 现状 / B 段动作 |
+|---|---|---|
+| **P0 立契** | 卡 front-matter + `Get-CardIdentity` → `New-TaskContract` | ★ **已接（B 段首批）**：`Invoke-Task` 的 `require-gate` 之后产 `TaskContract` 信封（**新增** `criteria_hash` = 红线 3 的**固化动作**）⇒ `Test-D7Envelope` 调判据本体；`gaps` 3 项**如实报出**、**灰度期不阻断** |
+| **P1 领取** | 站上 `.agent-state.json` + `.agent-lock`（`Invoke-LockState`） | 状态**词汇**未对齐到 `claimed`（**未接** · B2） |
+| **P2 执行** | `Invoke-Task` 本体 | 状态名 `executing` 未落（**未接** · B2） |
+| **P3 回收** | runDir + `.agent-run.json` | `.agent-run.json` 缺 `attempt` / `artifact.size` / `inputs_digest` / `decisions[]` / `evidence[]`（**未接** · B2） |
+| **P4a 机械门** | ★ **`Resolve-L1Gate`（已存在）** | **红线 2 的"L1 先行"早有实现** ⇒ B2 只接 `d7_block('RL2')` 与状态名 `mech_verified` |
+| **P4b 语义复核** | ★ **`Invoke-Review` + 结论契约校验（已存在）** | `review.json.l1.record_sha256` = "**L2 未改写 L1**"的**可判凭据** ⇒ B2 对齐 `sem_verified` / `l2_marks[]` |
+| **P5 裁决登记** | `review.json`（**advisory**；**顶层无 `verdict` 键**） | Verdict 信封（`verdict`=exit code · `phase` · `l1_results[]` · `recorded_at`+`seq`）**尚无**（**未接** · B2） |
+| **I-1 单写者** | `Add-LedgerLine`（带锁共享 ledger） | 无**流级**单写者身份层（B2 接 `d7_block('I1')`） |
+
+★ **P0 从"灰度"转"硬拒"的条件（写死，免得靠记忆）**：`New-TaskContract` 的 `gaps` **清空** ⇒
+把 `D7_CONTRACT_REJECT` 分支改成 `return 3`（拒派发）。
+⚠ **本批明确未做**（B2 承接）：P1/P2/P3/P5 的信封与状态名 · `d7_block` 的其余 5 条规则 ·
+**claude 备路的 P0**（`Invoke-Task-Claude` **早返回**，本批**未接** —— 如实登记，不假装全覆盖）。
+
 ---
 
 ## 2. 采纳 / 裁剪的逐项决定
@@ -167,3 +191,13 @@
    ★ **A 段已落（2026-10-01）**：两角色禁项已落成纯函数规则（`d7_block` 的 `PRM` / `PRW`）
    + **状态机的驱动角色约束**（`d7_transition` 的角色检查：P1/P2/P3 由工作站、其余由主控站）。
    ⚠ **仍未实测**：**未接编译期或运行期约束**（仍靠调用方传 `actor`）⇒ `state` 记 **`partial`**。
+
+> ★★ **2026-10-01 复核更正（就地 · B 段）** —— 以上 **5 / 7 / 8** 三条里
+> "**代码里无对应实现**""**代码层无拦截/校验实现**""**无运行时断言**"的措辞**已过时**。
+> **实测（读码，E1）**：**红线 2 与 `I-6` 早有实现** —— `ops/station-bin/agent-cli.ps1` 的 `Resolve-L1Gate`
+> （`D7-P2-1`，2026-09-26）：**纯函数** · **fail-closed**（记录读不出 ⇒ `unknown` ⇒ **拒**）·
+> `--allow-l1-red` **降级但不隐藏**；**P4b 的 `sem_verified` 侧亦有实现**（`Invoke-Review` +
+> 结论契约校验 + `review.json.l1.record_sha256` = "**L2 未改写 L1**"的可判凭据）。
+> ⇒ ★ **本节的"未实测"仍然成立**（"从未被**真实运行**验证过"没变），但**"无实现"这半句要改**：
+> 真实缺口是"**这些实现没有被收敛到契约的字段与状态名下**"（= B 段在做的），**不是"没有机制"**。
+> ⚠ 登记性质 = **就地更正**（"登记比实现旧"这一类），**不是**新裁定。

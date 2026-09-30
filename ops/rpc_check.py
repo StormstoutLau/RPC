@@ -2219,6 +2219,62 @@ def d7_block(rule, **ctx):
     return fn(**ctx)
 
 
+# ── ★★ D7 判据的**消费面**（B 段 · 2026-10-01）────────────────────────────────────
+# 为什么要有：判据本体是**纯函数**（上面那一段），而**调用方是外壳**
+#   （`ops/station-bin/agent-cli.ps1`）⇒ 若外壳**重写一份**判据，就是"同一事实两处表达"
+#   （本仓头号失败形态）。⇒ 这里给一个**薄 CLI**：外壳把「信封 / 迁移 / 动作」喂进来，
+#   判据**只在这一处**（同 `Invoke-GateCheck` 调 `py ops/rpc_check.py` 的既有形态）。
+# ⚠ **不是 CHECKS 项、不新增 gate id**（同 A 段）；它**不读写仓库文件**（只读入参）
+#   ⇒ 不进任何门禁的射程 —— 它的护栏是 `tests/test_rpc_check_d7_protocol.py` 的 CLI 用例。
+# 退出码（三态，**不可混**）：`0` = ok · `1` = **reject**（判据给了拒绝理由）·
+#   `2` = **无法判**（入参读不到 / 解析失败 ⇒ fail-closed，**不是** ok，也不冒充 reject）。
+D7_CLI_EXIT_UNDECIDABLE = 2
+
+
+def _d7_cli_read(src):
+    """读一个 JSON 入参：`'-'` = stdin，其余 = 文件路径（`utf-8-sig` 容忍 BOM）。"""
+    raw = sys.stdin.read() if src == "-" else Path(src).read_text(encoding="utf-8-sig")
+    return json.loads(raw)
+
+
+def d7_cli(args):
+    """**消费面**：按 `args` 跑对应判据 ⇒ 退出码（见上）。命中则返回 int，未命中返回 `None`。"""
+    if not (args.d7_envelope or args.d7_transition or args.d7_block):
+        return None
+    try:                                  # 只在本入口改编码：门禁自身的输出行为**零改动**
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    if args.d7_envelope:
+        kind, src = args.d7_envelope
+        try:
+            env = _d7_cli_read(src)
+        except Exception as e:
+            print(f"D7_ENVELOPE undecidable {kind}: 读不到/解析失败 "
+                  f"{type(e).__name__}: {e} ⇒ fail-closed")
+            return D7_CLI_EXIT_UNDECIDABLE
+        v, why = validate_envelope(kind, env)
+        print(f"D7_ENVELOPE {v} {kind}: {why}")
+        return 0 if v == "ok" else 1
+    if args.d7_transition:
+        a, b, actor = args.d7_transition
+        ok, _nxt, why = d7_transition(a, b, actor)
+        print(f"D7_TRANSITION {'ok' if ok else 'reject'} {a} -> {b} ({actor}): {why}")
+        return 0 if ok else 1
+    try:
+        ctx = _d7_cli_read(args.d7_ctx) if args.d7_ctx else {}
+    except Exception as e:
+        print(f"D7_BLOCK undecidable {args.d7_block}: ctx 解析失败 {type(e).__name__}: {e}"
+              f" ⇒ fail-closed")
+        return D7_CLI_EXIT_UNDECIDABLE
+    if not isinstance(ctx, dict):
+        print(f"D7_BLOCK undecidable {args.d7_block}: ctx 不是对象 ⇒ fail-closed")
+        return D7_CLI_EXIT_UNDECIDABLE
+    ok, why = d7_block(args.d7_block, **ctx)
+    print(f"D7_BLOCK {'ok' if ok else 'reject'} {args.d7_block}: {why}")
+    return 0 if ok else 1
+
+
 # ── D7-P1-5 (2026-09-26)：U-5 信任基座四问 V-1~V-4 + 晋升门 schema ────────────
 # 两部分：
 #   ① **四问各一条可机判判据**（`v1_definition_correspondence` / `v2_bridge_completeness` /
@@ -9053,7 +9109,20 @@ def main():
     ap.add_argument("--quick", action="store_true", help="仅本地快检 (pre-commit)")
     ap.add_argument("--only", default="", help="逗号分隔的断言 id")
     ap.add_argument("--list", action="store_true", help="只列断言清单")
+    # ★ B 段（2026-10-01）：D7 协议判据的**消费面**（外壳调它 ⇒ 判据只在一处；见 `d7_cli`）。
+    ap.add_argument("--d7-envelope", nargs=2, metavar=("KIND", "PATH"),
+                    help="D7 信封校验：KIND ∈ TaskContract|RunReport|Verdict；PATH = JSON 文件或 - (stdin)")
+    ap.add_argument("--d7-transition", nargs=3, metavar=("FROM", "TO", "ACTOR"),
+                    help="D7 六相状态迁移校验（ACTOR ∈ master|worker）")
+    ap.add_argument("--d7-block", default="", metavar="RULE",
+                    help="D7 8 条拦截之一（RL1/RL2/RL3/I1/I3/I6/PRM/PRW）")
+    ap.add_argument("--d7-ctx", default="", metavar="JSON",
+                    help="--d7-block 的上下文（JSON 文件或 -）")
     args = ap.parse_args()
+
+    rc = d7_cli(args)                      # 命中 D7 消费面 ⇒ 直接返回（不跑门禁）
+    if rc is not None:
+        return rc
 
     if args.list:
         for c in CHECKS:
