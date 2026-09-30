@@ -47,6 +47,14 @@ D6 `DESIGN.md` 顶层目标已声明：为 RPC / Paper / Auto_Prover / Cpp_Hub �
 - `accept-golden`（主控独立断言，`source`+`cmd`；实现/测试分离）
 - 可选：`isolate-xdg`（同站并行兜底）、`decompose`（拆片 A/B 并行）
 - 可选（**"显式接受出网"家族**）：`review-model`（把该卡的 review 钉到指定 judge）、**`attach-egress: ok`**（**附件默认不出网** —— 有附件且后端会出网时，必须写它才放行；判据 = **可判性**，见 [REMEDIATION-PLAN §5.5.2](REMEDIATION-PLAN.md)）
+- 可选（2026-09-30 新增，`O-125` 候选① 已落）：**`backend: local|egress`** —— **显式选择执行后端**，
+  把"内容档位"与"执行后端"两件事**分开声明**（原先 `sensitivity` 一个字段扛两个语义）。
+  **语义**：不写 ⇒ **完全按 `sensitivity` 推导**（`local-only` ⇒ `local`；其余 ⇒ `egress`）⇒ 存量卡行为不变；
+  `backend: local` + 更宽的档位（如 `public`）**合法**（= 原来只能靠"过分类"才做到的事）。
+  ★ **判据（fail-closed）**：`sensitivity: local-only` ∧ `backend: egress` ⇒ **REJECT（exit 4）**；
+  未知取值（拼错）⇒ **REJECT**（都不许静默取一边）。唯一解析点 = `agent-cli.ps1` 的 `Resolve-CardBackendLocal`。
+  ⚠ **射程**：只管 **claude 通道**（`opencode` 通道的后端由**路由 id** 决定，不读本字段）。
+  ⚠ 本键必须登记在 `Get-FrontMatter` 的白名单里 —— 那是**白名单解析**，漏登记 = "写了却没人读"（假防线）。
 - **可选但受条件约束**（2026-09-23 新增，待裁 **37** 落地）：**`input-provenance`** —— 卡的**输入来源清单**（本仓相对路径，逐项）。
   **义务**：卡声明 `sensitivity: public` / `sanitized` **且带输入**时，**本字段必填**；其中每个路径必须在
   [`inventory/sensitivity.yaml`](../../inventory/sensitivity.yaml) 里有 `tier`，且**卡的 `sensitivity` 不得宽于该项 tier**

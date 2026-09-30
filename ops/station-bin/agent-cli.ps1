@@ -210,6 +210,22 @@ function Get-TargetHost([string]$station) {
     return 'scott-lau-GTR-Pro.local'   # B default (memory master)
 }
 
+function Get-StationLetterFromHost {
+    # O-124 候选① (2026-09-30): host 串 -> 站字母 的**唯一**反查点（纯函数 ⇒ 夹具可离线单测）。
+    #   为什么需要: claude 通道的"请求站"只能从 `--remotehost`(批行 `station=`) 来 ⇒ 要把它变回 `A|B|C`
+    #     才能喂给 `Resolve-ClaudeStationCandidates -Preferred`（该函数吃的是站字母，不是 host）。
+    #   ⚠ 不许自己另抄一份 host 表（"同一事实两处表达"）—— 真值源 = `Get-TargetHost`；
+    #     但也**不能**直接 `Get-TargetHost $x -eq $h` 逐个试，因为 `Get-TargetHost` 对**未知**输入
+    #     **默认返回 B 的 host** ⇒ 任意串都会"反查成 B"。故先建 {host -> letter} 表，**查不到就返回 ''**。
+    #   返回 '' = 不可判 ⇒ 调用方必须**如实回落**（不许猜）。
+    param([string]$HostName)
+    if (-not $HostName) { return '' }
+    $map = @{}
+    foreach ($s in @('A', 'B', 'C')) { $map[(Get-TargetHost $s)] = $s }
+    if ($map.ContainsKey($HostName)) { return [string]$map[$HostName] }
+    return ''
+}
+
 # ── ssh/scp 调用纪律 (2026-09-22 统一) ───────────────────────────────────────
 # 本文件**每个** ssh/scp 调用点都必须带 `-o BatchMode=yes`（并显式给 `-o ConnectTimeout=N`）。
 # 为什么: 认证异常时（典型 = `~/.ssh/config` 缺对应身份块 ⇒ 用户名退化为本机用户）
@@ -1153,6 +1169,11 @@ function Get-FrontMatter {
     $h['needs_non_producer_verdict'] = ''
     $h['needs_multi_round_review'] = ''
     $h['is_intra_dispatch_quality_gate'] = ''
+    # O-125 候选① (2026-09-30): backend —— 执行后端的**显式声明**（默认 '' = 按 `sensitivity` 推导）。
+    #   ⚠ 必须登记进本白名单 —— 本函数是**白名单解析**（未知键被静默丢弃），漏登记会让卡里写了
+    #     `backend:` 却**没人读**（= 假防线，O-81 同族，与上面两处同一警告）。
+    #   解析/判据见纯函数 `Resolve-CardBackendLocal`（含"矛盾即拒"与"未知取值即拒"）。
+    $h['backend'] = ''
     $inFreq = $false; $bodyRead = $false; $curKey = ''
     $bodyLines = @()
     $lines = [System.IO.File]::ReadAllLines($Path, [System.Text.UTF8Encoding]::new($false))
@@ -1666,6 +1687,40 @@ function Get-SensitivityBackendReject {
     return ''
 }
 
+function Resolve-CardBackendLocal {
+    # O-125 候选① (2026-09-30): **卡可选字段 `backend: local|egress` 的唯一解析点**（纯函数 ⇒ 可离线单测）。
+    #
+    # 为什么要有它: `sensitivity` 一个字段扛**两个语义** —— ① 内容档位 ② 执行后端
+    #   （逐字: `$backendLocal = ($sens -eq 'local-only')`）⇒ 想"内容按 public 判、却要测本地引擎链"
+    #   的作者**没有正当写法**，只能**过分类**（把 public 卡写成 local-only）—— 而过分类**同时换了执行链**
+    #   （后端/模型/ENGINE_CTX/超时与 resume 行为）⇒ 两档结果不可当"同一实验的两个读数"（O-125 一手踩到）。
+    #
+    # 返回 `@{ ok=<bool>; local=<bool>; why=<token> }`:
+    #   · `backend` **未声明**（''）⇒ **完全按旧式推导**：`local-only` ⇒ local，其余 ⇒ egress
+    #     ⇒ 全仓既有卡**零改动**（实测 2026-09-30: 该键此前 **0 张卡**在用 ⇒ 迁移面为空）。
+    #   · 显式 `local` 而档位更宽（public/sanitized）⇒ **允许**（= 过分类/选链，方向安全）。
+    #   · ★ **矛盾即拒**（O-125 的判据）: `local-only` ∧ `egress` ⇒ ok=false
+    #     —— 内容标了"不出网"却显式要出网 ⇒ **不猜、不静默取一边**（fail-closed）。
+    #   · **未知取值（拼错）⇒ ok=false** —— 不许静默退回推导值（那会让"写了却没人读"变成假防线，O-81 同族）。
+    # ⚠ 射程（如实）: 它只管 **claude 通道**的后端 —— opencode 通道的后端由**路由 id** 决定（`Get-BackendEgress`），不读本字段。
+    param(
+        [string]$Sensitivity,
+        [string]$Backend
+    )
+    $sens = ("$Sensitivity").Trim().ToLower()
+    $bk = ("$Backend").Trim().ToLower()
+    if (-not $bk) {
+        return @{ ok = $true; local = ($sens -eq 'local-only'); why = '' }
+    }
+    if ($bk -ne 'local' -and $bk -ne 'egress') {
+        return @{ ok = $false; local = $false; why = "card-backend-unknown-value ($bk) - 只接受 local|egress" }
+    }
+    if ($bk -eq 'egress' -and $sens -eq 'local-only') {
+        return @{ ok = $false; local = $false; why = 'card-backend-contradicts-sensitivity (local-only + backend=egress) - 卡面自相矛盾, 不猜' }
+    }
+    return @{ ok = $true; local = ($bk -eq 'local'); why = '' }
+}
+
 # ---------------- W1a (2026-09-21): 后端属性判据（把敏感度闸从"型号前缀"接到"后端属性"上） ----------------
 # 为什么要有这三个纯函数（结构根因）:
 #   此前判"这个后端会不会出网"用的是**白名单式型号前缀** `-match '^opencode/'`，代价已付过两次 ——
@@ -1848,7 +1903,15 @@ function Invoke-Task {
     }
     Write-Host "CLI=$effectiveCli route_station=$station"
     if ($effectiveCli -eq 'claude') {
-        return Invoke-Task-Claude -proj $proj -card $card -model $m -sensitive $sens -attach $attach -complexity $complexity -taskType $taskType
+        # O-124 候选① (2026-09-30): **把"请求的站"传下去**。批行的 `station=A|B|C` 由批量侧换成 host 串、
+        #   经 `--remotehost` 落到本函数的 `-hostName`（见入口 `Invoke-Task … -hostName $RemoteHost`），
+        #   而**原实现把这一路整个丢弃** ⇒ claude 通道只认 route 的 station，而 `model: claude`（卡的
+        #   自然写法）解析出的 `station` **本就是空** ⇒ `$stPref` 恒空 ⇒ local 档三行 `station=A/B/C`
+        #   **全落第一站**（实测 `_batch/20260930145623`：三份 `.agent-run.json` 均 `station:A/main`），
+        #   且出网档的 pin 也被静默忽略（那批实测三次全在**主控本地**跑，`model` = 云端型号）。
+        #   ⚠ 反查不到（''）= 不可判 ⇒ 如实回落（不猜站）；route 自己声明了站时**以 route 为准**（见下）。
+        $pinSt = Get-StationLetterFromHost $hostName
+        return Invoke-Task-Claude -proj $proj -card $card -model $m -sensitive $sens -attach $attach -complexity $complexity -taskType $taskType -PreferredStation $pinSt
     }
     elseif ($effectiveCli -ne 'opencode') {
         Write-Host "REJECT unknown-cli ($effectiveCli) - only opencode|claude supported"
@@ -1862,9 +1925,10 @@ function Invoke-Task {
         #   同步/执行去了 A 站, 而 slot-gate / 记账 / 显示仍按 route 的站 ⇒ 三站并发时
         #   "三张卡被当成同站" ⇒ 撞 per-(proj,站) 锁(实测 LOCK_HELD 同一 owner)。
         #   此处由 hostName 反推 station, 使覆盖自洽。
-        foreach ($s in @('A', 'B', 'C')) {
-            if ((Get-TargetHost $s) -eq $hostName) { $station = $s; break }
-        }
+        # ⚠ O-124 候选① (2026-09-30): 反查改用**唯一**实现点 `Get-StationLetterFromHost`（原为就地一份
+        #   `foreach` 循环；claude 通道也要同一反查 ⇒ 不抄第二份）。**语义不变**：反查不到 ⇒ 保持原 `$station`。
+        $revSt = Get-StationLetterFromHost $hostName
+        if ($revSt) { $station = $revSt }
     }
 
     # 6.4 complexity routing: CLI --complexity/--task-type > card front-matter > default(reason)
@@ -3329,7 +3393,10 @@ function Invoke-Task-Claude {
         [string[]]$attach,
         [string]$complexity,
         [string]$taskType,
-        [string]$AvoidStation = ''
+        [string]$AvoidStation = '',
+        # O-124 候选① (2026-09-30): 调用方**请求的站**（来自批行 `station=` / `--remotehost`）。
+        #   只在 route 未声明站时用作 `-Preferred`；'' = 没有请求站（不可判 ⇒ 不改行为）。
+        [string]$PreferredStation = ''
     )
     if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
         Write-Host "REJECT claude-not-installed (exit 13) - run: npm i -g @anthropic-ai/claude-code, then: claude auth login"
@@ -3388,8 +3455,24 @@ function Invoke-Task-Claude {
     #   · `$backendLocal` = 后端是不是**站上本地引擎**(= 不出网): **只有** `local-only` 是;
     #                       其余一律 OpenRouter(会出网 —— 主控本地 或 站上, 由 `$useStation` 决定在哪台机器)
     #   ⇒ 后端属性**独立于位置**判: 站上也允许出网(站上 OpenRouter, 按站独立 key)。
-    $useStation = ($sens -eq 'local-only') -or [bool]$r['station']
-    $backendLocal = ($sens -eq 'local-only')
+    #   ★ O-124 候选① (2026-09-30): **请求站也是一个位置来源** —— 原式只看 `local-only` 与 route 的
+    #     station ⇒ `model: claude`(route station 为空) **即便批行/`--remotehost` 钉了站也走主控本地**
+    #     （实测 `_batch/20260930145220`：三行 `station=A/B/C` 三次全在**主控本地**跑、`model` = 云端型号）。
+    #     ⇒ 加上 `[bool]$PreferredStation`；⚠ 这**同时改变出网档**：钉了站 ⇒ 走**站上** OpenRouter（该站独立 key）。
+    #   O-125 候选① (2026-09-30): `$backendLocal` 改由**纯函数**解析卡面可选字段 `backend:`（唯一的解析点）
+    #     —— 值域 { local | egress }；**缺省（不写）= 按 `sensitivity` 推导**（⇒ 存量卡行为**逐字不变**）。
+    #     ★ 本项的要害就在下一行用 `$backendLocal`（而**不是** `$sens -eq 'local-only'`）：
+    #       显式 `backend: local` 而档位是 `public` 时**必须**仍走站上通道 ——
+    #       否则会落到下面的 `else`(主控本地 spawn) = **出网**，与卡面声明**正好相反**。
+    #     ⚠⚠ 次序硬约束: 本块**必须早于** `$useStation`（那行要吃 `$backendLocal`）——
+    #       与本函数顶上 "$stPref 必须在 $useStation 之后"是**同一族**（PS 未定义变量 = `$null` = 假）。
+    $br = Resolve-CardBackendLocal -Sensitivity $sens -Backend ([string]$fm['backend'])
+    if (-not $br['ok']) {
+        Write-Host "REJECT $($br['why']) (claude-direct, exit 4) - 卡面 backend 与 sensitivity 必须自洽; 不猜"
+        return 4
+    }
+    $backendLocal = $br['local']
+    $useStation = $backendLocal -or [bool]$r['station'] -or [bool]$PreferredStation
     # ⚠ P3 (2026-09-21) 探查期发现的**真实缺口**: `$r['station']` 的语义**按分支不同** ——
     #   · **主控本地** spawn(= 云端后端, 路由未声明站) ⇒ 无 station 可言, 走它自己的路径
     #   · **站上**分支 ⇒ 非空 station 是**偏好站** —— 卡若写 `model: gpt-oss-20b`
@@ -3399,8 +3482,11 @@ function Invoke-Task-Claude {
     # D7 (2026-09-25): 旧闸 `REJECT claude-station` **已撤除** —— 它把"站上"与"不出网"绑死, 那正是那把锁。
     #   取而代之是下面这条**有意义**的配对闸: 站上 **egress** 模式下打 `local/*` id ⇒ OpenRouter 服务不了
     #   ⇒ 前置拒(等价于原行为: 本地型号 + claude + 非 local-only 仍被拦, 只是理由变准了)。
-    $stPref = ''
-    if ($useStation) { $stPref = [string]$r['station'] }
+    $stPref = [string]$r['station']
+    # ★ O-124 候选① (2026-09-30): route 未声明站（`model: claude` 的自然情形）⇒ **回落到请求站**。
+    #   ⚠ 次序: route 的站**优先**（卡明写的别名 `claude-a/-b/-c` 更具体）；两者都在时**不**静默改判
+    #   —— 不一致会在批报告里显形（`st=<实际>(req=<请求>)`，见 Get-ActualStation 那处）。
+    if (-not $stPref) { $stPref = [string]$PreferredStation }
     if ($useStation -and -not $backendLocal -and $id -match '^local/') {
         Write-Host "REJECT claude-station-egress-local-id ($id) (exit 4) - 站上 OpenRouter 模式只能服务云端 id; 本地 id 请用 sensitivity: local-only"
         return 4
@@ -5196,8 +5282,15 @@ function Invoke-BatchTask {
     if (-not $Script:PROJECTS.ContainsKey($proj)) { Write-Host "BATCH_ABORT: 未知 proj: $proj"; return 2 }
 
     # 1) 解析清单（`#` 注释与空行忽略；行内可选 `station=A|B|C` / `model=<别名>`）
+    #   ⚠ O-127 (2026-09-30 实测踩到): **必须显式 `-Encoding UTF8`** —— 本仓清单都是
+    #     **BOM-less UTF-8**，而 PS 5.1 的裸 `Get-Content` 会按**系统 ANSI(GBK)** 解码
+    #     ⇒ 中文注释的某些字节对会把**换行吃掉** ⇒ 相邻两行**并成一行** ⇒ 卡行被并进上一行注释
+    #     ⇒ 该行以 `#` 开头 ⇒ 被当注释跳过 ⇒ **清单解析出 0 行** +
+    #     `BATCH_ABORT: 清单里没有可解析的行`（错报位置离病因很远）。
+    #     ★ 实测（`batches/o124-pref.txt` 首版）: 25 行被读成 **16** 行、kept=**0**。
+    #     ⚠ 既有清单"能用"只是**碰巧**（注释里恰好没有那类字节对）—— 不是约定。
     $items = @(); $ln = 0
-    foreach ($raw in @(Get-Content $listFile)) {
+    foreach ($raw in @(Get-Content -LiteralPath $listFile -Encoding UTF8)) {
         $ln++
         $line = ("$raw").Trim()
         if (-not $line -or $line.StartsWith('#')) { continue }

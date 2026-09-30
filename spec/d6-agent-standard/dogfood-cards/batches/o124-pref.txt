@@ -1,0 +1,33 @@
+# O-124 候选① 验收批 —— **请求站是否真的被采纳**（2026-09-30）
+#
+#   要回答的唯一问题：`model: claude`（route `station` **本就为空**）时，批行的 `station=C`
+#   会不会真的进到 `P3_CANDIDATES` 的 `pref=`，并让 claude 落在 **C 站**。
+#
+#   ★ 为什么单行、且只钉 C：
+#     · **单行** —— 本批刻意不制造并发（三个 row 会形成三个 job，而只有 C 的引擎就绪 ⇒
+#       未就绪的行会**落到 A 站** ⇒ A 站引擎被多路并发打（违 `O-18`））。一卡一行 = 单变量。
+#     · **只钉 C** —— A 站引擎本就 READY，钉 A 时"前后"都会落 A（**不可判**）；
+#       C 站引擎由本次单独 `load`（见下），钉 C ⇒ 修好前落 A、修好后落 C ⇒ **可判**。
+#
+#   前后对比（基线 = `o111-tools-local.txt` 的第 3 行，`_batch/20260930145623/st-C.log`）：
+#     修前: `P3_CANDIDATES: A,B,C (pref= avoid=)` + `P3_STATION_SELECT: station=A` + `station:A/main`
+#     修后: 期望 `P3_CANDIDATES: C,A,B (pref=C avoid=)` + `P3_STATION_SELECT: station=C` + `station:C/main`
+#   ★ 判据（O-124 明写，可机判）: 批报告 `st=` 必须等于 `.agent-run.json` 的 `station:<X>/` 的 X。
+#
+#   前置（本次实测）：`cluster.py status` = A READY / B STOPPED / C STOPPED
+#     ⇒ 先 `py -3.12 ops/cluster.py load gpt-oss-120b-c`（按站路由名 ⇒ 只加载 C 站）。
+#
+#   命令:
+#     干跑: $env:AGENT_BATCH_DRYRUN=1; & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/o124-pref.txt"
+#     实跑: & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/o124-pref.txt"
+#
+#   格式: <卡路径> [station=A|B|C] [model=<别名>]      # 以 # 开头是注释；空行忽略
+#
+#   ⚠⚠ **清单文件的编码陷阱**（本次实测踩到，2026-09-30 ⇒ 已修，见台账 `O-127`）:
+#     首版本文件是 **BOM-less UTF-8**，而 `Invoke-BatchTask` 当时用**裸 `Get-Content`** 读清单，
+#     PS 5.1 对 BOM-less 文件按**系统 ANSI(GBK)** 解码 ⇒ 中文注释的某些字节对把**换行吃掉**
+#     ⇒ 相邻两行并成一行 ⇒ 卡行被并进上一行注释 ⇒ 该行以 `#` 开头 ⇒ **解析出 0 行**。
+#     ★ 实测: 25 行被读成 **16** 行、kept=**0** ⇒ `BATCH_ABORT: 清单里没有可解析的行`。
+#     ⇒ **修法是根因侧**: `agent-cli.ps1` 的解析改为 `Get-Content -LiteralPath <f> -Encoding UTF8`
+#       ⇒ 本文件**无需带 BOM**（与同目录既有清单一致）。
+spec/d6-agent-standard/dogfood-cards/probe-claude-tools-local.md station=C

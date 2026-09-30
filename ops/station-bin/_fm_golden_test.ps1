@@ -42,7 +42,10 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 # A1 / ADR-0009 §2 (2026-09-29): **D6/D7 层级归属**的求值本体（纯函数：只吃三个布尔 ⇒ 可离线单测）。
 'Resolve-D6D7Boundary',
 # O-124 (2026-09-30): 批报告取【实际执行站】的判定本体（纯函数：只吃日志行数组 ⇒ 可离线单测）。
-'Get-ActualStation')) {
+# O-124 候选① (2026-09-30): host -> 站字母 的**唯一反查点** + 它的真值源 `Get-TargetHost`
+#   （⚠ 必须一并提取 `Get-TargetHost` —— 反查若自己另抄一份 host 表, 就是"同一事实两处表达"）。
+# O-125 候选① (2026-09-30): 卡面 `backend:` 的**唯一解析点**（纯函数：吃档位 + 字段值 ⇒ 离线可单测）。
+'Get-ActualStation', 'Get-StationLetterFromHost', 'Get-TargetHost', 'Resolve-CardBackendLocal')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -424,13 +427,16 @@ Assert-True "station: pref 不在候选集 ⇒ 顺序不变(不因未知 pref �
 Assert-True "station: 判据已参数化 -backendEgress (-not \$backendLocal)(P2 的核心; D7 起与位置解耦)" (
     $content.Contains('-backendEgress (-not $backendLocal)'))
 Assert-True "station: 分流判据 = local-only **或** 路由声明了站(D7 拆成两个量)" (
-    $content.Contains('$useStation = ($sens -eq ''local-only'') -or [bool]$r[''station'']'))
-Assert-True "station: 后端属性独立于位置(\$backendLocal 只由 sensitivity 判)(D7 拆锁)" (
-    $content.Contains('$backendLocal = ($sens -eq ''local-only'')'))
+    $content.Contains('$useStation = $backendLocal -or [bool]$r[''station''] -or [bool]$PreferredStation'))
+# ⚠ O-125 候选① (2026-09-30): 原字面量 `$backendLocal = ($sens -eq 'local-only')` **已不存在**
+#   （判定改由纯函数 `Resolve-CardBackendLocal`）⇒ 本守卫的字面量随之更新；
+#   ★ **不变式一个字没改**: 后端属性**仍与位置解耦**（判定输入 = 档位 + 卡面 `backend`，**不含站**）。
+Assert-True "station: 后端属性独立于位置(判定输入 = 档位 + 卡面 backend; 不含站)(D7 拆锁)" (
+    $content.Contains('$br = Resolve-CardBackendLocal -Sensitivity $sens -Backend ([string]$fm[''backend''])'))
 Assert-True "station: 站上不可用 ⇒ fail-closed(有 REJECT 行 + return 4, 且该分支内无 Invoke-ClaudeFly 回退)" (
     $content.Contains('REJECT local-only-no-station-engine (exit 4)'))
 $iNoSt = $content.IndexOf('REJECT local-only-no-station-engine')
-$iBlk  = $content.IndexOf('$useStation = ($sens -eq ''local-only'') -or [bool]$r[''station'']')
+$iBlk  = $content.IndexOf('$useStation = $backendLocal -or [bool]$r[''station''] -or [bool]$PreferredStation')
 $blkSeg = $content.Substring($iBlk, $iNoSt - $iBlk)
 Assert-True "station: fail-closed 分支里**没有**主控本地 spawn(回退=出网)" (
     -not ($blkSeg -match 'Invoke-ClaudeFly\s'))
@@ -439,10 +445,19 @@ Assert-True "station: 两处 runner 调用点都已分流(首跑 + resume)" (
 # ⚠ 位置断言 —— 2026-09-21 **实弹踩到的顺序 bug**: 初版把 `$stPref` 块放在 `$useStation` 赋值
 #   **之前** ⇒ PS 未定义变量为 `$null` ⇒ `if ($useStation)` 为假 ⇒ 走旧的 `REJECT claude-station`
 #   分支 ⇒ `local-only` 卡被旧语义误拒。**夹具当时全绿**(它只查"串在不", 查不出顺序) ⇒ 补此条。
-$iUse = $content.IndexOf('$useStation = ($sens -eq ''local-only'') -or [bool]$r[''station'']')
-$iPref = $content.IndexOf("`$stPref = ''")
+#   ⚠ O-124 候选① (2026-09-30): 两行**字面量都改过**（`$useStation` 增 `-or [bool]$PreferredStation`；
+#     `$stPref` 由 `''` 改为 `[string]$r['station']` + 回落行）⇒ 本条断言的字面量随之更新 ——
+#     **守卫的语义一个字没改**（仍钉"赋值早于使用"）。
+#   ⚠ O-125 候选① (2026-09-30): `$useStation` 的字面量**再改一次**（`($sens -eq 'local-only')` ⇒ `$backendLocal`）
+#     ⇒ 同法更新；★ **并补一条同族的次序守卫**（见下）:`$backendLocal` 的解析块也必须早于 `$useStation`
+#     —— 这**不是假想**: 本次实现时第一版正是把它放在 `$useStation` 之后（PS 下 `$null` ⇒ 假 ⇒ 静默走错通道）。
+$iUse = $content.IndexOf('$useStation = $backendLocal -or [bool]$r[''station''] -or [bool]$PreferredStation')
+$iPref = $content.IndexOf('$stPref = [string]$r[''station'']')
 Assert-True "station: \$useStation 赋值**早于** \$stPref 使用(实弹踩到的顺序 bug)" (
     $iUse -gt 0 -and $iPref -gt 0 -and $iUse -lt $iPref)
+$iBr = $content.IndexOf('$backendLocal = $br[''local'']')
+Assert-True "station: \$backendLocal 解析**早于** \$useStation 使用(同族的顺序硬约束)" (
+    $iBr -gt 0 -and $iUse -gt 0 -and $iBr -lt $iUse)
 
 # --- D7 (2026-09-25): **站上 claude + OpenRouter**（撤掉"站上 ⇒ 必不出网"那把锁） ---
 # 锁的形态: `$useStation = ($sens -eq 'local-only')` 让"跑在站上"与"不出网"互为充要
@@ -1984,6 +1999,67 @@ Assert-True "o124④: 同名多行（resume 重选）⇒ 取**最后一条**（=
 Assert-True "o124⑤: 接线 —— 批报告用 `Get-ActualStation` 取实际站, 且**取不到时回落请求值**" (
     $content.Contains('$stActual = Get-ActualStation -Lines $clines') -and
     $content.Contains('$stLabel = if ($stActual -and $stActual -ne $j.station)'))
+
+# --- o124b (2026-09-30, `O-124` 候选①): 卡/批行的 `station=` 必须**真的被采纳**（local 档的 pref）---
+#   根因（读码）: 卡用 `model: claude`（自然写法）⇒ `Resolve-Model` 给出 `station=''`
+#     ⇒ `$stPref` 恒空 ⇒ `P3_CANDIDATES: A,B,C (pref= avoid=)` ⇒ 三行 `station=A/B/C` **全落第一站**。
+#   ⇒ 修法 = 路由无站时**回落** `-PreferredStation`（来源 = 批行 `station=` 经 `--remotehost` 转成的 host 串）。
+#   ⚠ 边界: `Get-TargetHost` 对**未知**输入**默认返回 B 的 host** ⇒ 反查**不能**直接拿它比
+#     （否则任意串都会"反查成 B"）。本用例 o124b② 就是钉这条。
+#   ⚠ 写卡/写断言须知（本次踩到）: `Assert-True "…"` 的描述串**不得以反引号结尾**
+#     —— `` `" `` 会被 PS 读成**转义引号** ⇒ 字符串不终止 ⇒ 报 "string is missing the terminator"
+#     （错报位置在**文件末尾**，不在出错行 ⇒ 别按报的位置找）。
+Assert-True "o124b①: host -> 站字母（A/B/C 三条**全部**可反查）" (
+    (Get-StationLetterFromHost 'scott-lau-NEX.local') -eq 'A' -and
+    (Get-StationLetterFromHost 'scott-lau-GTR-Pro.local') -eq 'B' -and
+    (Get-StationLetterFromHost '192.168.10.37') -eq 'C')
+Assert-True "o124b②(先验红·边界): **未知 host** ⇒ ''（不许因 `Get-TargetHost` 的 B 默认而误判成 B）" (
+    (Get-StationLetterFromHost 'scott-lau-WHATEVER.local') -eq '' -and
+    (Get-StationLetterFromHost '') -eq '')
+Assert-True "o124b③: 端到端（纯函数链）—— 批行 host 经反查后**真的**成为 pref 首选" (
+    ((Resolve-ClaudeStationCandidates -Avoid '' -Stations @('A', 'B', 'C') -Preferred (Get-StationLetterFromHost 'scott-lau-GTR-Pro.local')) -join ',') -eq 'B,A,C')
+Assert-True "o124b④: 接线 —— `Invoke-Task-Claude` 在**路由无站**时回落到 `-PreferredStation`（pref 回填）" (
+    $content.Contains('if (-not $stPref) { $stPref = [string]$PreferredStation }'))
+Assert-True "o124b⑤: 接线 —— pin 使通道**成为站上通道**（否则出网档的 pin 仍被静默丢弃）" (
+    $content.Contains('-or [bool]$PreferredStation'))
+Assert-True "o124b⑥: 接线 —— claude 分支把 `-hostName` 反查成站并**传下去**" (
+    $content.Contains('$pinSt = Get-StationLetterFromHost $hostName') -and
+    $content.Contains('-PreferredStation $pinSt'))
+
+# --- o125 (2026-09-30, `O-125` 候选①): `backend` 从 `sensitivity` 拆出（**可选字段** + 缺省推导）---
+#   为什么: `sensitivity` 一个字段扛两个语义（内容档位 / 执行后端），而**后端是档位的副作用**
+#     ⇒ 想"按内容判档、却测另一条执行链"的作者没有正当写法（实测: 为测本地引擎被迫把 public 卡写成
+#     local-only = **过分类**）。⇒ 加可选 `backend: local|egress`，**缺省仍由档位推导**（向后兼容：
+#     实测全仓 **0 张卡**在用该键 ⇒ 迁移面为空）。
+#   ★ 判据（`O-125` 明写）: 卡面**同时**声明 `sensitivity` 与 `backend` 且**互相矛盾** ⇒ FAIL。
+#     `local-only` + `backend: egress` = 内容标了"不出网"却显式要出网 ⇒ **拒**（不猜、不静默取一边）。
+#   ⚠ 未知取值同样 fail-closed（`backend: egresss` 这种拼错**不许静默退回推导值**）。
+function BE([string]$s, [string]$b) { return (Resolve-CardBackendLocal -Sensitivity $s -Backend $b) }
+Assert-True "o125①(先验红·缺省推导): 不带 `backend` ⇒ 与旧式**逐字等价**（local-only ⇒ local；其余 ⇒ egress）" (
+    (BE 'local-only' '').ok -and (BE 'local-only' '').local -eq $true -and
+    (BE 'public' '').ok -and (BE 'public' '').local -eq $false -and
+    (BE 'sanitized' '').ok -and (BE 'sanitized' '').local -eq $false -and
+    (BE 'unverified' '').ok -and (BE 'unverified' '').local -eq $false)
+Assert-True "o125②: 显式 `backend: local` 在**非** local-only 档上生效（= 过分类/选链，允许）" (
+    (BE 'public' 'local').ok -and (BE 'public' 'local').local -eq $true -and
+    (BE 'sanitized' 'LOCAL').ok -and (BE 'sanitized' 'LOCAL').local -eq $true)
+Assert-True "o125③: 显式 `backend: egress` 在 local-only 档上 ⇒ **矛盾**（ok=false，不许猜）" (
+    -not (BE 'local-only' 'egress').ok)
+Assert-True "o125④: 显式 `backend: egress` + 非 local-only 档 ⇒ 与缺省同值（egress）" (
+    (BE 'public' 'egress').ok -and (BE 'public' 'egress').local -eq $false -and
+    (BE 'local-only' 'local').ok -and (BE 'local-only' 'local').local -eq $true)
+Assert-True "o125⑤(先验红·边界): 未知取值（拼错）⇒ fail-closed（不许静默退回推导值）" (
+    -not (BE 'public' 'egresss').ok -and -not (BE 'local-only' 'l').ok -and -not (BE 'public' '1').ok)
+Assert-True "o125⑥: 接线 —— 唯一赋值点改用该纯函数, 且 `$useStation` 把 `$backendLocal` 也算进去" (
+    $content.Contains('$br = Resolve-CardBackendLocal -Sensitivity $sens -Backend ([string]$fm[''backend''])') -and
+    $content.Contains('$backendLocal = $br[''local'']') -and
+    $content.Contains('$useStation = $backendLocal -or [bool]$r[''station''] -or [bool]$PreferredStation'))
+
+# --- o127 (2026-09-30, `O-127`): 批清单**必须显式按 UTF-8 读**（裸 `Get-Content` ⇒ ANSI ⇒ 吞换行）---
+#   一手实测: 同一份 BOM-less UTF-8 清单，裸读 = **21 行/kept=0**（卡行被并进注释 ⇒ 整批 ABORT）；
+#     加 `-Encoding UTF8` = **33 行/kept=1**（卡行完好）。⇒ 这是**读侧**的病，不是"清单要带 BOM"的约定。
+Assert-True "o127: 批清单解析**显式 -Encoding UTF8**（裸 `Get-Content` 会按 ANSI 解码 ⇒ 吞掉换行 ⇒ 0 行）" (
+    $content.Contains('Get-Content -LiteralPath $listFile -Encoding UTF8'))
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"

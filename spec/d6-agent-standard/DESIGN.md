@@ -224,6 +224,8 @@ timeout_s: 900                                            # 可选覆盖
 fallback-timeout-s: 0                                     # claude 通道(含 AUTO_FALLBACK 备路)的独立首跑预算; 0=沿用 timeout_s (P4, 2026-09-21)
 review-model:                                             # 可选: 把该卡的 review 钉到指定 judge（O-16；"显式接受出网"家族）
 attach-egress:                                            # 可选: 附件**默认不出网** —— 有附件且后端会出网时必须显式写 ok 才放行 (W4, 2026-09-22)
+backend: local | egress                                   # 可选: **显式选择执行后端**; 不写 = 按 sensitivity 推导 (O-125 候选①, 2026-09-30)
+                                                          #   ⚠ 只管 claude 通道; `local-only` ∧ `egress` = 自相矛盾 ⇒ REJECT (exit 4)
 accept:                                                   # 验收判据（可执行）
   - python -m pytest paper_cli/tests/ -q
 ---
