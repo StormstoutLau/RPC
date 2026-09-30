@@ -226,6 +226,33 @@ function Get-StationLetterFromHost {
     return ''
 }
 
+function Resolve-D7Hosts {
+    # ── ★★ B3（2026-10-01）：`PRH`（同机可见性）的**两侧事实** —— 纯函数 ⇒ 可离线单测 ──────────
+    # 契约 §1.6「落地状态」①：`.agent-run.json` 记 `exec_host` / `arbiter_host`（**两处**写出点）。
+    # ★ **裁决机** = `$env:COMPUTERNAME` —— 依据是契约 §1.6 的既有事实「**外壳只在主控跑**」
+    #   （红线 1 的 `actor` 恒为 master，是同一件事）。**不**拿站表反查（那会把"主控是谁"变成猜测）。
+    # ★ **产出机** = 由**执行站字母**推：站 ∈ {A,B,C} ⇒ `Get-TargetHost`；站为空 ⇒ **本地跑** ⇒ 同裁决机。
+    # ⚠⚠ **站给了但取不到 ⇒ `exec_host=''`（判"不可判"）**，**绝不**回落成裁决机名 —— 否则会把
+    #   "不知道在哪跑"**假报成"同机"**。`Get-TargetHost` 对**未知**输入默认返回 B 的 host
+    #   （见 `Get-StationLetterFromHost` 的注释，`O-124` 记）⇒ **只对 A/B/C 调它**。
+    # ⚠ **不做名字归一**（不抹大小写、不抹 `.local`）：两侧名字须**逐字**同源；归一 = 由本仓发明等价关系。
+    #   实测依据（2026-10-01，本机）：裁决机 = `DESKTOP-BR5R8EV`，与三个站 host 串**逐字不同** ⇒
+    #   逐字比**不会**假报同机；而"本地 spawn"那一路两侧都取本机名 ⇒ 逐字比**正**能报出同机
+    #   （这正是 `PRH` 要看见的形态，`O-124` 实测批 `20260930145220`）。
+    param([string]$Station)
+    $arbiter = [string]$env:COMPUTERNAME
+    $s = ([string]$Station).Trim().ToUpper()
+    if (-not $s) {
+        return @{ exec_host = $arbiter; arbiter_host = $arbiter; station = ''
+                  note = '未给站 ⇒ 本地执行（与裁决同机）' }
+    }
+    if (@('A', 'B', 'C') -notcontains $s) {
+        return @{ exec_host = ''; arbiter_host = $arbiter; station = $s
+                  note = "站 $s 不落 A/B/C ⇒ 取不到机器名 ⇒ **不可判**（不许回落成裁决机名）" }
+    }
+    return @{ exec_host = (Get-TargetHost $s); arbiter_host = $arbiter; station = $s; note = '' }
+}
+
 # ── ssh/scp 调用纪律 (2026-09-22 统一) ───────────────────────────────────────
 # 本文件**每个** ssh/scp 调用点都必须带 `-o BatchMode=yes`（并显式给 `-o ConnectTimeout=N`）。
 # 为什么: 认证异常时（典型 = `~/.ssh/config` 缺对应身份块 ⇒ 用户名退化为本机用户）
@@ -859,6 +886,15 @@ function Add-LedgerLine {
     #   判据同 BLINDSCAN-v3 §3 的跨条目纪律: 共享路径**要么带 per-invocation 身份、要么走真锁**;
     #   ledger **必须共享**(它是全局台账), 故只能走锁 —— 这里用 `FileShare.Read` 隐式互斥 + 退避重试。
     param([string]$Path, [string]$Line)
+    # ── ★★ B3（2026-10-01）：`I-1` 单写者 —— **事件流写点**就是它的正确调用点 ──────────────────
+    # 契约 §1.6「不堆在 P5 一处」：`I-1` 归**事件流写点**（`Add-LedgerLine`）；四条目各有其位。
+    # ★ **放在重试循环之前 ⇒ 只跑一次**（判的是"谁在写"，与本次 append 成功与否无关）——
+    #   放进循环里会让重试次数变成判据调用次数（同一事实被报 N 次）。
+    # ⚠ **归零纪律**：本函数返回 `$true`/`$false` ⇒ 调用一律具名赋值（**不**裸跑），不许有对象混进管道。
+    $d7i1 = Invoke-D7Cli -Argv @('--d7-block', 'I1') -Json @{ actor = 'master'; target = 'events' }
+    if ($d7i1['code'] -ne 0) {
+        Write-Host ("D7_I1_REJECT: " + $d7i1['line'] + " ⇒ **灰度期：不阻断**")
+    }
     for ($i = 0; $i -lt 10; $i++) {
         try {
             $fs = [IO.File]::Open($Path, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::Read)
@@ -1415,6 +1451,16 @@ function Write-D7Report {
         Write-Host ("D7_" + $Tag + "_GAPS: 本仓当前**不提供真值**的字段 = [" + (@($Gaps) -join ', ') +
                     "]（判据只判键在不在 ⇒ 通过 ≠ 有值）")
     }
+    # ── ★★ B3（2026-10-01）：`I-6` fail-closed —— **决策点就在上面那三态**（判据 = `$r['code']`）──
+    # 契约 §1.6「不堆在 P5 一处」：`I-6` 归**各判据的决策点** ⇒ 这里（唯一的汇报壳）是它的正确调用点。
+    # ★ **三态不可混**：只有 `code -eq 0` 才是**显式 `pass`**；`1`（reject）/ `2`（不可判）**都**不是
+    #   pass ⇒ 交给判据判（判据见非 `pass` 即拒）—— **绝不在这里把"判不了"静默读成通过**。
+    $dec = if ($r['code'] -eq 0) { 'pass' } else { 'not-pass' }
+    $i6 = Invoke-D7Cli -Argv @('--d7-block', 'I6') -Json @{ decision = $dec }
+    if ($i6['code'] -ne 0) {
+        Write-Host ("D7_" + $Tag + "_I6_REJECT: " + $i6['line'] + "（decision=" + $dec +
+                    "）⇒ **灰度期：不阻断**")
+    }
 }
 
 function New-RunReport {
@@ -1493,7 +1539,11 @@ function Write-D7Adjudication {
     # ⚠ **有副作用**（子进程）⇒ 不进离线夹具（纯的那半 = `Resolve-D7PhaseChain` / `New-Verdict` 已离线测）。
     # ⚠ 诚实：`actor` 在本架构里**恒为 `master`**（外壳只在主控跑）⇒ 红线 1 的实用价值是
     #   **防将来有人把 P5 搬到站上**（届时 `actor` 变 ⇒ 判据立刻拦）—— **不是**"已拦过真实动作"。
-    param($L1Section, $CcSection, [int]$ExitCode, [bool]$L2Ran = $true, [string]$Card = '')
+    # ★ B3（2026-10-01）新增 `-ExecHost`：**产出机**（run 记录里的 `exec_host`）—— `PRH` 需要它。
+    #   ⚠ 收的是 **host 串**（不是站字母）：本函数的两个调用点在 `Invoke-Review` 里，那里**只有** run
+    #     记录可读（`$l1Record.exec_host`），**没有**站字母 ⇒ 传 host 才是**事实直传**（传字母要反查，
+    #     反查不到又会回落成"本地"⇒ **假报同机**）。缺 = 空串 ⇒ 判"不可判"（见 ⑤）。
+    param($L1Section, $CcSection, [int]$ExitCode, [bool]$L2Ran = $true, [string]$Card = '', [string]$ExecHost = '')
     $actor = 'master'
     # ① 状态机（P4a→P4b 可选→P5）**逐跳调判据** —— 非法跳（如跳过 L1）会当场报 reject
     $chain = Resolve-D7PhaseChain -L1Verdict ([string]$L1Section['verdict']) -L2Ran $L2Ran
@@ -1516,6 +1566,35 @@ function Write-D7Adjudication {
     $d7v = New-Verdict -ExitCode $ExitCode -Phase 'P5' -L1Section $L1Section `
                        -L2Marks $(if ($L2Ran) { @($CcSection) } else { $null })
     Write-D7Report -Kind 'Verdict' -Obj $d7v['verdict'] -Gaps $d7v['gaps'] -Tag 'VERDICT' -Card $Card
+    # ── ★★ B3（2026-10-01）：角色禁项 `PRM` / `PRW` —— **角色动作点**（契约 §1.6「不堆在 P5 一处」）──
+    # ⚠ 为什么是**这里**：本函数正是"**谁执行 / 谁裁决**"两个角色事实**第一次相遇**的地方（③ 之后）。
+    #   · `PRM` 的动作 = `execute_task` ⇒ 执行由 **worker 角色**登记 —— 裁【甲】（契约 §1.4）：§1.4 的
+    #     「主控站/工作站」= **角色**（不是机器）⇒ 主控机器上的出网通道也以 `worker` 登记 ⇒ **不触** PRM；
+    #     ★ "同一台机器既产出又裁决"这件事由下面的 `PRH` 负责**看见**（报数，不阻断）。
+    #     ⇒ ⚠ 这里**不**按机器归属推 actor（裁【甲】第 2 句逐字：**不由机器归属推**）。
+    #   · `PRW` 的动作 = `write_verdict` ⇒ 在此**动作点**由 `$actor`（master）驱动 ⇒ 不触 PRW
+    #     （PRW 约束的是 worker：不自评/不写 verdict/不重派/不合并）。价值 = **防将来把 P5 搬到站上**。
+    $rpm = Invoke-D7Cli -Argv @('--d7-block', 'PRM') -Json @{ actor = 'worker'; action = 'execute_task' }
+    if ($rpm['code'] -ne 0) { Write-Host ("D7_PRM_REJECT: " + $rpm['line'] + " ⇒ **灰度期：不阻断**") }
+    $rpw = Invoke-D7Cli -Argv @('--d7-block', 'PRW') -Json @{ actor = $actor; action = 'write_verdict' }
+    if ($rpw['code'] -ne 0) { Write-Host ("D7_PRW_REJECT: " + $rpw['line'] + " ⇒ **灰度期：不阻断**") }
+    # ── ★★ B3（2026-10-01）：`PRH` 同机可见性 —— **报数不阻断**（契约 §1.6 ②）──────────────────
+    # ★ 判据 = `d7_host_separation`（**不属于**那 8 条拦截 ⇒ 单独调 `--d7-host-sep`，不进 `--d7-block`）。
+    # ★ 两侧事实：产出机 = `-ExecHost`（run 记录里的 `exec_host`）· 裁决机 = `$env:COMPUTERNAME`。
+    # ⚠⚠ **argv 空值不可表达**（PS 与 argparse 都吃空串 ⇒ `argparse` 直接退 2）⇒ **自家先判空**并报
+    #    "不可判"，**不要**把空串交给 CLI（契约 §1.6「已知 argv 限制」逐字）—— 而"判不了"**不许**读成"不同机"。
+    $arb = [string]$env:COMPUTERNAME
+    if (-not $ExecHost -or -not $arb) {
+        Write-Host ("D7_PRH_UNDECIDABLE: 缺 host（exec=" + $ExecHost + " / arbiter=" + $arb +
+                    "）⇒ **不可判**（判不了 ≠ 不同机）⇒ 灰度期不阻断")
+    } else {
+        $hsep = Invoke-D7Cli -Argv @('--d7-host-sep', $ExecHost, $arb)
+        if ($hsep['code'] -eq 1) {
+            Write-Host ("D7_PRH_SAME: " + $hsep['line'] + " ⇒ **WARN（灰度期不阻断，先量后定档）**")
+        }
+        elseif ($hsep['code'] -eq 0) { Write-Host ("D7_PRH_SEPARATE: " + $hsep['line']) }
+        else { Write-Host ("D7_PRH_UNDECIDABLE: " + $hsep['line'] + " ⇒ 灰度期不阻断") }
+    }
 }
 
 function Test-CardSafetyDeclared([string]$card, $cardId, [string]$sensitive) {
@@ -3235,6 +3314,12 @@ exit `$FINAL_RC
             #   任何未被 `Out-Null` 吸收的 cmdlet 输出都会**混进返回值**(调用方 `$code = Invoke-Task …`)。
             #   实测: 环境层 `Remove-Item` 包装器在"回收站失败"时往管道吐了 `$null` ⇒ 契约字段畸形。
             #   ⇒ 本段所有 `Move-Item`/`Copy-Item`/`Remove-Item` 一律 `| Out-Null`(它们本就无返回值语义)。
+            # ── ★★ B3（2026-10-01）：`PRH` 两侧事实随 run 记录落档（契约 §1.6「落地状态」①）──────
+            # ★ 就落在**既有**写出点上（与 P3 的 RunReport 同一处）⇒ **不另起第二个写出点**
+            #   （"同一事实两处表达"是本仓头号失败形态；claude 备路同样处理）。
+            # ⚠ 归零纪律：赋值语句无管道输出 ⇒ 安全。
+            $d7h = Resolve-D7Hosts -Station $station
+            $run['exec_host'] = $d7h.exec_host; $run['arbiter_host'] = $d7h.arbiter_host
             $run | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $runDir '.agent-run.json') -Encoding utf8
             # ── ★★ B 段（2026-10-01）：**D7 协议 P3 回收**（工作站产出 `RunReport`）────────────
             # ★ 契约 §1.1 的 ★：`RunReport` **刻意不含 `verdict`**（**产出方不得自评**，红线 1）——
@@ -4179,6 +4264,11 @@ mkdir -p "$stWorkDir/.attach/$nm2"
     }
     if ($collectOk) {
         try {
+            # ── ★★ B3（2026-10-01）：`PRH` 两侧事实随 run 记录落档（与主路**同一实现**）──────────
+            # ★ 本路的**执行站字母** = `$st`（`$useStation=$false` 时为空 ⇒ 本地 spawn ⇒ 与裁决同机，
+            #   正是 `PRH` 要看见的形态；`O-124` 实测批 `20260930145220`）。
+            $d7h = Resolve-D7Hosts -Station $st
+            $run['exec_host'] = $d7h.exec_host; $run['arbiter_host'] = $d7h.arbiter_host
             $run | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $runDir '.agent-run.json') -Encoding utf8
             # ── ★★ B 段（2026-10-01）：**P3 回收**（claude 备路同一处置）──────────────────────
             # ★ 与主路**共用同一实现**（`New-RunReport` + 共享汇报壳）⇒ 不复制第二份判据/映射。
@@ -5467,7 +5557,10 @@ function Invoke-Review {
         Write-Host "REVIEW_WRITTEN(advisory,error) $reviewPath"
         # ── ★★ B 段（2026-10-01）：**D7 协议 P4a/P4b/P5**（状态机 + 红线 1/2 + Verdict 登记）────
         # ⚠ 判官调用失败 ⇒ `$judgeObj` 为 null ⇒ **L2 没跑**（只走 P4a→P5）⇒ 如实传 `-L2Ran $false`。
-        Write-D7Adjudication -L1Section $l1Section -CcSection $ccSection -ExitCode $callCode -L2Ran $false -Card $card | Out-Null
+        # ★ B3：`-ExecHost` = run 记录的**产出机**（`exec_host`；`Resolve-D7Hosts` 在写 run 时落的）
+        #   ⇒ `PRH` 两侧事实**同源**（不在这里另推一份机器名）。
+        Write-D7Adjudication -L1Section $l1Section -CcSection $ccSection -ExitCode $callCode -L2Ran $false `
+                             -Card $card -ExecHost ([string]$l1Record.exec_host) | Out-Null
         if ($callCode -ge 5) { return $callCode }   # NETFAIL(5)/timeout(6)/unparseable(7) surfaced, non-blocking
         return 0
     }
@@ -5556,7 +5649,9 @@ function Invoke-Review {
     Write-Host "REVIEW_WRITTEN(advisory) $reviewPath"
     # ── ★★ B 段（2026-10-01）：**D7 协议 P4a/P4b/P5**（状态机 + 红线 1/2 + Verdict 登记）────────
     # ★ 只**登记事实**：`review` 仍是 advisory ⇒ 本调用**不改**退出码（下面仍 `return 0`）。
-    Write-D7Adjudication -L1Section $l1Section -CcSection $ccSection -ExitCode 0 -L2Ran $true -Card $card | Out-Null
+    # ★ B3：`-ExecHost` = run 记录的**产出机**（与上面那条失败路**同一来源** ⇒ 两侧事实同源）。
+    Write-D7Adjudication -L1Section $l1Section -CcSection $ccSection -ExitCode 0 -L2Ran $true `
+                         -Card $card -ExecHost ([string]$l1Record.exec_host) | Out-Null
     Write-Host ("REVIEW score=" + $review.output.score + " pass=" + $review.output.pass + " judge=" + $judge['id'] + " elapsed_s=" + $elapsed)
     return 0   # advisory: score=不合格 does NOT block; exit 0 signals commit (O-16 closed)
 }
