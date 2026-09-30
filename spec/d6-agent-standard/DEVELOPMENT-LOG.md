@@ -19,6 +19,49 @@ upstream: \[d6-agent-standard-.* 全量文档]
 
 ## 历史回溯（2026-09-03 起）
 
+### 2026-10-01（续㉛） — **P5 登记面落地 + review×证据链时序守卫 + 「测收益」两侧报数落点**（`O-139` 裁【甲】· `O-140` 裁【甲·可机判版】· `O-136` 前置）
+
+> **定位**：三段式之后的**治理批** —— 让判据跑出来的东西**落得下、拦得住、算得出**。
+> ★ 本批不改判据本体一字（`ops/rpc_check.py` 只增 CLI 面）。
+
+**① `O-139` 裁【甲】：`Verdict` 有家了** —— `Write-D7Adjudication` **改名 `Get-D7Adjudication`**（名实相符：取一段事实、不写盘）+ **两处** review 写出点改「先调 → 注入 → **一次写盘**」；该段是**派生段**（逐字取 review.json 已有的 `l1`/`contract`/`metadata.call_code`）⇒ 不是第二份真值；**顶层仍无 `verdict` 键** ⇒ A 段载体分离裁定一字不动。
+★ **被先排除的候选**：`.agent-run.json` 不能当落点（会自伤 `l1.record_sha256`）。
+
+**② `O-140` 裁【甲·可机判版】：review × 证据链的时序冲突** —— 真跑撞出「`review.json` 是链钉住的 subject，而 `review` 天生可重跑」⇒ 已从**纪律**升级为**可机判的默认拦**：`Resolve-RunChained`（纯函数，三态）+ `Invoke-Review` 入链检查（**fail-closed**，退出码 **9**）+ 显式通道 `--allow-after-chain`（**降级但留痕** `after_chain_guard`）。
+
+**③ 测收益的前置（两侧报数落点）** —— 核出两个数：**成本已可算**（判据调用 **205 ms/次** × 调用点 9 处 ⇒ task ≈1.0 s / review ≈1.8–2.1 s，对照 `--quick` 门禁 22 s ⇒ 可忽略）；**收益算不出来**（`D7_*` 行只走 stdout，与 `O-139` 同病，只是病在报数面）。⇒ 已落：`-GuardSink`（`IDictionary`，PS 引用语义；**不用返回值** = 保归零纪律）⇒ **review 侧九台判据**落 `review.json.d7_guard` · **task 侧**（P0/P3/`I-1`）落 `.agent-run.json.d7_guard`（★ 键在 run 写盘时一并落 ⇒ **不破** `record_sha256`；⚠ 与 `O-139` 排除的"事后写"不是一回事）；读侧聚合进既有消费者 `agent_pair_audit.py`（**不新增脚本**），★ **分母单列 `covered`**（否则"没跑"与"跑了且全 ok"都表现为 0 个 reject = 假绿）。
+
+**涉及文件**：`ops/station-bin/agent-cli.ps1`（`Get-D7Adjudication` / `Resolve-RunChained` / `Invoke-Review` / `Write-D7Report` / `Add-LedgerLine` / `Invoke-Task-Claude` / `Invoke-Task`）/ `ops/agent_pair_audit.py` / `spec/d6-agent-standard/D7-PROTOCOL-CONTRACT.md`（§1.1 / §1.6）/ `spec/d6-agent-standard/OPEN-ISSUES.md`。
+
+**验收证据**：`_fm_golden_test.ps1` **+15**（`b3⑳`–`b3㊸`）⇒ **526/0**；`--quick` 38 绿 / 2 黄 / 0 红；`py-tests` 48/48。★ **真跑实测**：`review.json` 顶层键多 `d7_verdict`（**仍无顶层 `verdict`**）· `d7_guard` 十键 · `.agent-run.json.d7_guard` 五键 · `REJECT REVIEW_AFTER_CHAIN … exit 9`。
+★ **两次"顺序承重"自伤（都是真跑当场抓到、而夹具当时只计数不判序 = 假绿）**：① review 侧注入写在填充它的调用**之前** ⇒ sink 空 ⇒ 什么都没落盘；② task 侧 P3 报数原在 `Set-Content` **之后** ⇒ `RUNREPORT.*` 赶不上写盘。⇒ 断言已改为**判相对位置** + 先验红。
+
+**关联条目**：`O-139`（✅ 闭环）· `O-140`（✅ 闭环）· `O-136`（🔵 部分收口 · 本批为其"定档/转硬拒"补前置）· `O-134`/`O-135`（A/B1）· ⚠ **三处仍待裁**：`seq` 语义 · `PRH` 形态定性裁（★ 首份分层读数 **同机 0** ⇒ 待判形态**从未出现**）· 灰度门槛（★ 核对发现"`gaps` 清空"**按构造不可达**）。
+
+***
+
+### 2026-10-01（续㉚） — **`D7-PROTOCOL-CONTRACT`「B3 + C 段」**：状态名落站 + 四条按调用点接入 + `PRM` 裁【甲】+ **第一次站上真跑（一跑就崩）**
+
+> **定位**：三段式的**第二段后半 + 第三段**。★ 本批的主判据不是"都调过"，而是"**每条恰一处调用点**"（全堆在 P5 = 挂名接线）。
+
+**B3 第一半（状态名落站）**：站上 `.agent-state.json` 词汇对齐契约（`claimed` ← P1 · `executing` ← P2；`running` **停写、保留 legacy 可读**）。★★ **主判据 = 读侧与写侧同源** —— 旧孤儿判据**逐字比** `= running`，而写入侧不再写它 ⇒ 只改写方会让**孤儿检测静默失效**（fail-open）⇒ 活跃态谓词收进 `$Script:STATE_*` 唯一真值块、被**两个** body 插值。★ 两个**非契约词**（`done` 锁释放 / `orphaned` 孤儿回收）**已登记**（否则下一个人会把生命周期读成相），且均**不写** D7 终态（红线 1）。
+
+**`PRM` 争点已裁【甲】（角色化）**：契约 §1.4 的"主控站/工作站"**定义为角色**（不是机器）⇒ 主控机器上的出网通道以 `worker` 角色登记、**不触** `PRM`；★ 代价是"**同一台机器既产出又裁决**"被**允许** ⇒ 故新增 **`PRH`**（同机可见性，**报数不阻断**，**不设阈值**，先量后定档）。
+
+**B3 第二半（接线）**：`Resolve-D7Hosts`（纯函数：站字母 ⇒ 两侧事实；★ 站不落 A/B/C ⇒ `exec_host=''` = **不可判**，**绝不**回落成裁决机名）+ **四条按调用点接入**（`I-1` → 事件流写点（循环**之前**）/ `I-6` → 唯一汇报壳的决策点 / `PRM`+`PRW` → 角色动作点 / `PRH` → 报数）+ **两处** run 写出点各落 `exec_host`/`arbiter_host`。
+
+**C 段（站上真跑）—— 最值钱的产出是"第一次真跑就崩了"**：★★★ 三个真缺陷**全在"外壳与判据的交界"、无一在判据本体**（判据 A 段一直是对的）：① `Invoke-D7Cli` 把临时文件**裸追加**进 argv（而 `--d7-block` 的 ctx 是**标志取值**）⇒ `argparse` 报错、退 2 且**无 `D7_` 行**；② 末行 `.Trim()` 在 PS 里绑在**内部管道**上 ⇒ 空管道对 `$null` 调方法 ⇒ 配 `ErrorActionPreference='Stop'` **崩断整个 `task`** —— ★ **把①放大成"派发完全跑不起来"**（本仓"零个真实 run"就是这个形态）；③ `New-RunReport` 把无读数字段填 `null` 而判据**判值类型** ⇒ P3 信封**每次真跑都红**。修法全在外壳（判据本体零改动）。
+**C 段实测读数**：`D7_CONTRACT_OK` / `D7_RUNREPORT_OK` / `D7_PHASES: collected -> mech_verified -> accepted` / `D7_VERDICT_OK`（`verdict`=7）/ **`D7_PRH_SEPARATE`**（`PRH` 第一份真实读数）；★ P4b 走"可选跳过"（判官避让后 `m27` 是本地档 ⇒ `JUDGE_UNREADY`）⇒ 按设计**如实** `-L2Ran $false`。
+⚠ **诚实边界**：`TaskContract`/`RunReport` 仍是**主控侧投影**（过站的是**卡**）· 站上状态件**单槽** ⇒ `claimed`/`executing` **零归档命中** · **未拦过任何真实违规**。
+
+**涉及文件**：`ops/station-bin/agent-cli.ps1`（`$Script:STATE_*` / `Resolve-D7Hosts` / `Add-LedgerLine` / `Write-D7Report` / `Get-D7Adjudication` / `Invoke-D7Cli` / 两处 run 写出点）/ `ops/rpc_check.py`（`d7_host_separation` + `--d7-host-sep`）/ `spec/d6-agent-standard/D7-PROTOCOL-CONTRACT.md`（§1.4 / §1.6）/ `spec/d6-agent-standard/OPEN-ISSUES.md`。
+
+**验收证据**：`_fm_golden_test.ps1` `b3①`–`b3⑲`（含先验红同源对照）⇒ 502/0；`--quick` 38 绿 / 2 黄 / 0 红；★ **CLI 八例实测**（I1 ok/reject · I6 pass/not-pass · PRM/PRW ok · PRH same/separate）+ **判据调用壳五形态实测**。
+
+**关联条目**：`O-136`（🔵 部分收口）· `O-134`/`O-135`（A/B1）· 本批就地新登记 **`O-139`**（P5 登记面为空）。
+
+***
+
 ### 2026-10-01（续㉙） — **`D7-PROTOCOL-CONTRACT`「B2」**：P3 回收 + P4a/P4b/P5 接线（外壳收口）+ 抓到判据自己身上一处真缺陷（+ 新登记 `O-136`）
 
 > **定位**：三段式第二段的后半（A → B1 → **B2** → C）。★ 本批把**六相里除 P1/P2 外的全部**接上既有载体；
