@@ -106,19 +106,30 @@
 
 | 相 | 落点（既有载体，**不新增件**） | 现状 / B 段动作 |
 |---|---|---|
-| **P0 立契** | 卡 front-matter + `Get-CardIdentity` → `New-TaskContract` | ★ **已接（B 段首批）**：`Invoke-Task` 的 `require-gate` 之后产 `TaskContract` 信封（**新增** `criteria_hash` = 红线 3 的**固化动作**）⇒ `Test-D7Envelope` 调判据本体；`gaps` 3 项**如实报出**、**灰度期不阻断** |
-| **P1 领取** | 站上 `.agent-state.json` + `.agent-lock`（`Invoke-LockState`） | 状态**词汇**未对齐到 `claimed`（**未接** · B2） |
-| **P2 执行** | `Invoke-Task` 本体 | 状态名 `executing` 未落（**未接** · B2） |
-| **P3 回收** | runDir + `.agent-run.json` | `.agent-run.json` 缺 `attempt` / `artifact.size` / `inputs_digest` / `decisions[]` / `evidence[]`（**未接** · B2） |
-| **P4a 机械门** | ★ **`Resolve-L1Gate`（已存在）** | **红线 2 的"L1 先行"早有实现** ⇒ B2 只接 `d7_block('RL2')` 与状态名 `mech_verified` |
-| **P4b 语义复核** | ★ **`Invoke-Review` + 结论契约校验（已存在）** | `review.json.l1.record_sha256` = "**L2 未改写 L1**"的**可判凭据** ⇒ B2 对齐 `sem_verified` / `l2_marks[]` |
-| **P5 裁决登记** | `review.json`（**advisory**；**顶层无 `verdict` 键**） | Verdict 信封（`verdict`=exit code · `phase` · `l1_results[]` · `recorded_at`+`seq`）**尚无**（**未接** · B2） |
-| **I-1 单写者** | `Add-LedgerLine`（带锁共享 ledger） | 无**流级**单写者身份层（B2 接 `d7_block('I1')`） |
+| **P0 立契** | 卡 front-matter + `Get-CardIdentity` → `New-TaskContract` | ★ **已接（B 段）**：`Invoke-Task` 的 `require-gate` 之后产 `TaskContract` 信封（**新增** `criteria_hash` = 红线 3 的**固化动作**）⇒ `Write-D7Report` 调判据本体；`gaps` 3 项**如实报出**、**灰度期不阻断**。★ **复核更正**：claude 备路**也被覆盖**（`Invoke-Task` 的两处 `Invoke-Task-Claude` 调用在 L2133 / L3410，**都在 P0 块 L2067 之后**）—— B1 曾登记"claude 备路未接"，**该说法有误，已就地更正** |
+| **P1 领取** | 站上 `.agent-state.json` + `.agent-lock`（`Invoke-LockState`） | 状态**词汇**未对齐到 `claimed`（**未接** · B3） |
+| **P2 执行** | `Invoke-Task` 本体 | 状态名 `executing` 未落（**未接** · B3） |
+| **P3 回收** | runDir + `.agent-run.json` → `New-RunReport` | ★ **已接（B2）**：**两处** `.agent-run.json` 写出点（主路 + claude 备路）各产 `RunReport` ⇒ 判据校验；★ **刻意不含 `verdict`**（产出方不得自评）；`gaps` 3 项如实报出 |
+| **P4a 机械门** | ★ **`Resolve-L1Gate`（已存在）** | ★ **已接（B2）**：`Write-D7Adjudication` 逐跳调 `d7_transition`（`collected→mech_verified`） |
+| **P4b 语义复核** | ★ **`Invoke-Review` + 结论契约校验（已存在）** | ★ **已接（B2）**：L2 跑过 ⇒ 走 `sem_verified`；**没跑（判官调用失败）⇒ 如实跳过**；`l2_marks[]` = 结论契约段**原文照收** |
+| **P5 裁决登记** | `review.json`（**advisory**；**顶层无 `verdict` 键**）→ `New-Verdict` | ★ **已接（B2）**：**两处** review 写出点各产 `Verdict` 信封（`verdict` = review 的 **exit code**）⇒ 判据校验 + 红线 1/2；★ 仍 **advisory**（**不改退出码**） |
+| **I-1 单写者** | `Add-LedgerLine`（带锁共享 ledger） | 无**流级**单写者身份层（**未接** · B3） |
 
-★ **P0 从"灰度"转"硬拒"的条件（写死，免得靠记忆）**：`New-TaskContract` 的 `gaps` **清空** ⇒
-把 `D7_CONTRACT_REJECT` 分支改成 `return 3`（拒派发）。
-⚠ **本批明确未做**（B2 承接）：P1/P2/P3/P5 的信封与状态名 · `d7_block` 的其余 5 条规则 ·
-**claude 备路的 P0**（`Invoke-Task-Claude` **早返回**，本批**未接** —— 如实登记，不假装全覆盖）。
+★ **B 段落的本地映射（摘要没给"谁对谁" ⇒ 写死在这里，免得下次另发明一套）**：
+
+- P3：`run_id` ← `task_id`（本仓 run 的既有标识）· `artifact.digest` ← `content_digest` ·
+  `artifact.size` ← `output_bytes` · `inputs_digest` ← `card.sha256`（卡 = 最大的注入物）。
+- P5：`l1_results[]` ← `review.json` 的 `l1` 段 · `l2_marks[]` ← 结论契约段（**原文照收，不新造结构**）·
+  `verdict` ← review 的 exit code · `phase` ← `P5` · `seq` **固定 1**（⚠ 摘要未给语义 ⇒ **占位不是真值**，进 `gaps`）。
+- 相序列：起点 `collected`；终态 = `accepted` **iff L1 = green**（机械门通过 = 本仓"完成信号"的来源）；
+  **L2 是 advisory ⇒ 不翻转终态**。
+- ⚠ **诚实**：红线 1 的 `actor` 在本架构里**恒为 `master`**（外壳只在主控跑）⇒ 它的实用价值是
+  **防将来有人把 P5 搬到站上**，**不是**"已拦过真实动作"。
+
+★ **各相从"灰度"转"硬拒"的条件（写死，免得靠记忆）**：对应信封的 `gaps` **清空** ⇒ 把 `D7_*_REJECT`
+分支改成 `return 3`（拒派发 / 拒收）。
+⚠ **仍未接**（B3 承接）：**P1/P2** 的状态名（站上状态件）· `d7_block` 的其余条目（`I-1` / `I-6` / `PRM` / `PRW`）·
+**`RunReport`/`Verdict` 的真跑**（C 段）—— 如实登记，不假装全覆盖。
 
 ---
 

@@ -149,6 +149,13 @@
   **收紧条件已写死 = `gaps` 清空**（契约 §1.6）。
   **验收**：`test_rpc_check_d7_protocol.py` **+10** · `_fm_golden_test.ps1` **+9**（468/0）；**落回本体** = 契约 **§1.6 落点表**
   + §未实测 复核更正段。⚠ **未做（B2）**：P1/P2/P3/P5 · 其余 5 条规则 · claude 备路 ⇒ 索引 `#7/#8/#9` 仍 `partial`、`#1–#6` 仍 `todo`。
+- ★ **批 5 · `D7-PROTOCOL-CONTRACT` B2 已完成（2026-10-01）**：**P3 回收 + P4a/P4b/P5** 接线（外壳收口）。
+  ① P3：`New-RunReport`（纯函数）⇒ **两处** `.agent-run.json` 写出点（主路 + claude 备路），★ **刻意不含 `verdict`**；
+  ② P4a/P4b/P5：`Resolve-D7PhaseChain` + `New-Verdict`（纯函数）+ `Write-D7Adjudication`（接线）⇒ **两处** review 写出点，
+  逐跳调 `d7_transition`、调 `d7_block('RL1'/'RL2')`；③ 共享壳 `Invoke-D7Cli` / `Write-D7Report`（不复制四份）。
+  ★★ **抓到判据自己身上一处真缺陷**：ctx 与判据**输入契约不符**时 `d7_block(**ctx)` 抛异常 ⇒ 退 **1** ⇒ **与 reject 不可区分**
+  ⇒ 改 **`undecidable`（2）**。**验收**：py **+4** · ps1 **+16**（483/0）。**落回本体** = 契约 **§1.6**（落点表 + 本地映射 + 收紧条件）。
+  ⚠ **未接（B3）**：**P1/P2 状态名** · `d7_block` 其余条目（`I-1`/`I-6`/`PRM`/`PRW`）；真跑要 **C 段** ⇒ 索引 `#1–#6` 仍 `todo`。
 
 ## 9. 维护
 
