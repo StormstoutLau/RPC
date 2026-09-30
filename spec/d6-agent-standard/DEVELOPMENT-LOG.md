@@ -19,6 +19,45 @@ upstream: \[d6-agent-standard-.* 全量文档]
 
 ## 历史回溯（2026-09-03 起）
 
+### 2026-09-30（续⑮） — **`O-111` 工具面实测闭环（两程探针）+ 挖出两条新缺陷（`O-124`/`O-125`）+ `O-123` 五条暂缓建卡**
+
+> **定位**：承 `续⑭`。本轮把 `O-111` 从"真值已取证、工具面待触发"推到 **✅ 工具面已实测**；并在实测中**挖出两条新缺陷**（登记为 `O-124` / `O-125`）；同时把 `O-123` 的 5 条暂缓项**按已裁路线建卡**（摘要 + 卡 + 批清单）。
+
+**① `O-111`：claude 工具面两程探针（前置 = 三站 load 引擎）**
+
+| 程 | 卡 `sensitivity` | 实测后端 | 结果 |
+|---|---|---|---|
+| 首程 | `public` | **`mode=or`（OpenRouter）** —— `.agent-run.json` 的 `model` = `thinkingmachines/inkling:free` | 三站**均** `exit=0` · `accept.passed=true`（`test -f` + `grep -q '^PROBE_DONE'` **双 `ACCEPT_RC=0`**）· 站 `st` 与 host 一致 |
+| 第二程 | `local-only` | **`mode=local`（站上引擎）** —— `ANTHROPIC_BASE_URL=http://127.0.0.1:8080` · `engine_ctx=131072` | **`ACCEPT_OK=1`** —— 但★ **三次全落在 A 站**（见 ②） |
+
+★ **结论**：**claude 执行器【有】工具调用能力**（accept 过了 ⇒ **文件真的被写出来** ⇒ 写文件这个工具**真的被调用过**）⇒ 手册 §2a.4「A-claude 纯文本模式 / 无工具调用能力」**在行为层也被否证**（此前只证了"该开关不存在"）。
+⚠ **两条如实保留**：① 本地档**慢**（首跑命中 300s 预算 `rc=124`、靠 resume 收口；`run_s` = 456 / 679 / 953 s）—— 与手册"3s 快速响应"**不符**；② claude 档**不采集 `usage`** ⇒ **"工具调用次数"这一读数拿不到**，只能用 accept 产物**间接**证。
+★ **前置**：三站引擎原为 **STOPPED** ⇒ 本轮 `cluster.py load gpt-oss-120b-a/-b/-c` 三站齐载（同模型 ⇒ 单变量），跑完**已卸载**（复原）。
+
+**② ★★ 新缺陷 `O-124`（P1 · claude 通道 `local` 档：`station=` 不被采纳 + 报告 `st=` 与实况不符）**
+
+- **实测**：同卡三行 `station=A/B/C` ⇒ 三份 `.agent-run.json` **全部** `station:A/main`、三份站级日志**全部** `scott-lau-NEX.local`（= A 站）；而批报告打出 `st=C / st=A / st=B` ⇒ **报告错**。
+- **机制（读码）**：`$backendLocal = ($sens -eq 'local-only')` ⇒ `route_station` 为空 ⇒ 站上脚本按 `P3_CANDIDATES: A,B,C` **顺序取第一个"本地引擎 ready"的站** ⇒ **批行 `station=` 没进 `pref=`**。
+- ⚠ **只在该 `local` 档**：出网档（首程）`st=` 与实况**一致**（三站各自 host）。
+- ⇒ **危害**：① 报告与实况不符（同族 `O-116`，错在**站**这一维）；② 「按站并行」失效（三次**串行**落同一站）。
+- ⇒ ★ **这也是 `O-111` 本地档只测到 A 站的原因**（B/C 覆盖归它的再触发）。
+
+**③ ★ 新缺陷 `O-125`（P2 · `sensitivity` 一字段双语义：内容档位 ∧ 后端选择）**
+
+- **一手踩到**：为 `O-111` 写探针卡时**先按内容**判成 `public` ⇒ 该卡**跑成了出网档** ⇒ **没测到本地引擎通道**；补一张 `local-only` 卡才命中。
+- ⇒ **危害**：「档位 = **人的判断**」而「执行路径 = 它的**副作用**」⇒ 同一处改动的后果**跨两个语义域**。
+
+**④ `O-123` 五条暂缓：按已裁路线**建卡**（摘要 + 卡 + 批清单，★ **未派发**）**
+
+- 5 张卡（卡面即**人工 public 摘要**，抽象掉一切项目名 / 路径 / 主机名 / 内部标识）+ 批清单 [ud45-dec.txt](./dogfood-cards/batches/ud45-dec.txt)（干跑实测 **行=5 · 可用=5 · A=2 B=2 C=1**）：
+  `ud4-closure-witness`(U4#3) · `ud4-derived-boundary`(U4#4) · `ud4-equivalence-proof`(U4#6) · `ud5-axiom-whitelist`(U5#4) · `ud5-recurrence-threshold`(U5#6)。
+- ★ 每张卡均声明 **`evidence-manifest.subjects`**（⇒ 产物会被回拉到 runDir，供主控独立复核）· 六节结构（事实认定 / 候选处置 / 决策+反转条件 / 可执行步骤 / 验收判据 / 不确定项）· accept 含**机读锚点**（小节名 + `^- ` 条数下限）· stdout 单个哨兵行。
+- ⚠ **边界（如实）**：摘要是**人写的**，**不是原文的等价替换** ⇒ 卡结论只对"摘要所描述的问题结构"负责。**派发待用户过目摘要后再定**。
+
+**验收（本轮）**：`rpc_check --quick` **PASS**（数值见提交记录）· 探针 6 份 `.agent-run.json` 全 `exit_code=0` · 两批 `BATCH_DONE: 失败或未完成=0`。
+**本轮未做（如实登记）**：`O-123` 五条的**派发与复核** · `O-124`/`O-125` 的**修法裁定**（两条均只登记 + 建议，未裁）· `O-111` 的 B/C 本地档覆盖。
+**关联**：`OPEN-ISSUES.md` **O-111**（✅ 闭环）/ **`O-124`**（新增 · 待裁）/ **`O-125`**（新增 · 待裁）/ **`O-123`**（续⑭ 口径不变）· 卡 = [probe-claude-tools.md](./dogfood-cards/probe-claude-tools.md) / [probe-claude-tools-local.md](./dogfood-cards/probe-claude-tools-local.md) / `ud4-*.md` ×3 / `ud5-*.md` ×2 · 批清单 = [o111-tools.txt](./dogfood-cards/batches/o111-tools.txt) / [o111-tools-local.txt](./dogfood-cards/batches/o111-tools-local.txt) / [ud45-dec.txt](./dogfood-cards/batches/ud45-dec.txt)。
+
 ### 2026-09-30（续⑭） — **O-118 甲落地 + O-122 两裁执行/立项 + O-123 `#4` 裁与索引 `blocker` 字段**
 
 > **定位**：承 `续⑬`（`#3`/`#8` 已裁）。本轮把 `O-123` 剩的两件（`D7-CC #4` 裁定 + 索引结构缺口）办掉，

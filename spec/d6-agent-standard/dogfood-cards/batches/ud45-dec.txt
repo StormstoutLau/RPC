@@ -1,0 +1,36 @@
+# UD45-DEC 批 —— U4×3 + U5×2 五条 `needs_decision` 取证批（2026-09-30 · `O-123` 续⑭）
+#
+#   为什么起这一批：`inventory/untested-index.yaml` 里 5 条 `needs_decision` 属于
+#   `U4-INVALIDATION-RULES`（3 条）与 `U5-TRUST-BASIS`（2 条）。这两份规范在
+#   `inventory/sensitivity.yaml` 里**维持 local-only**（U4 的规则原文来自他方 RFC；U5 含他项目内部实现细节，
+#   且无 public 载体可引）⇒ ★ **不得整篇出网**。
+#
+#   ★★ 本批的做法 = 用户裁定的「**人工 public 摘要 + 出网卡**」：
+#     每张卡的正文是**人写的抽象摘要**（只保留**问题结构与相邻事实**，删掉一切项目名 / 路径 / 主机名 /
+#     人名 / 内部标识），再走出网档。⇒ 出网的是**摘要**，不是原文。
+#     ⚠ **如实边界**：摘要毕竟由人写 ⇒ 它**不是原文的等价替换**；卡片结论只对"摘要所描述的问题结构"负责。
+#
+#   5 张卡（与索引条目一一对应）：
+#     ud4-closure-witness      = U4 #3  影响面"闭包化"靠调用方自报、判定方无法验证
+#     ud4-derived-boundary     = U4 #4  "只适用派生产物"的边界只写在文档、未落成判据
+#     ud4-equivalence-proof    = U4 #6  "增量等价"的证明程序不存在 ⇒ 只能人工断言真；保守默认吃掉全部收益
+#     ud5-axiom-whitelist      = U5 #4  判据的默认白名单**取自参考文献举例**，而非本仓裁定
+#     ud5-recurrence-threshold = U5 #6  "复发次数"阈值是新设、原文未给；且该 schema 零实例
+#
+#   站与模型（跨族铺开，照 `D7-P0-3` 的 J-1 精神；站内串行）：
+#     A · ultra-a ×2 · B · ultra ×1 + lightning ×1（跨族）· C · ultra-c ×1
+#   产物：out/ud4-closure.md / out/ud4-derived-boundary.md / out/ud4-equivalence-proof.md /
+#         out/ud5-axiom-whitelist.md / out/ud5-recurrence-threshold.md（文件名互不相同；三站各自工作区）
+#   ★ 每张卡都声明了 `evidence-manifest.subjects`（⇒ 产物**会被回拉到 runDir**，供主控独立复核）。
+#
+#   ⚠ **本清单尚未派发**（用户裁定「先写摘要 + 建卡」，派发待其看过摘要后再定）。
+#   命令:
+#     干跑: $env:AGENT_BATCH_DRYRUN=1; & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/ud45-dec.txt"
+#     实跑: & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/ud45-dec.txt"
+#
+#   格式: <卡路径> [station=A|B|C] [model=<别名>]      # 以 # 开头是注释；空行忽略
+spec/d6-agent-standard/dogfood-cards/ud4-closure-witness.md station=A model=ultra-a
+spec/d6-agent-standard/dogfood-cards/ud4-derived-boundary.md station=B model=ultra
+spec/d6-agent-standard/dogfood-cards/ud4-equivalence-proof.md station=C model=ultra-c
+spec/d6-agent-standard/dogfood-cards/ud5-axiom-whitelist.md station=B model=lightning
+spec/d6-agent-standard/dogfood-cards/ud5-recurrence-threshold.md station=A model=ultra-a

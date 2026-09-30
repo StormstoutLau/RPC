@@ -1,0 +1,21 @@
+# O-111 批（第二程）—— 三站 claude 工具面探针 · **本地引擎档**（2026-09-30）
+#
+#   ★ 为什么要有第二程（第一程的教训，**实测**）：
+#     第一程用的卡是 `sensitivity: public` ⇒ `agent-cli.ps1` 的 `$backendLocal = ($sens -eq 'local-only')`
+#     **为假** ⇒ 站上 claude 走的是 **`mode=or`（OpenRouter）**，`.agent-run.json` 的 `model` 实测写作
+#     `thinkingmachines/inkling:free` ⇒ 那测的是「claude CLI + 远端免费模型」，**不是** O-111 问的那条
+#     （站上 claude 配的是 `baseURL http://127.0.0.1:8080` **本地引擎**）。
+#   ⇒ 本程用 `sensitivity: local-only` 强制 `mode=local`（等价于站上 `~/.claude/settings.json` 的 baseURL）。
+#   ⚠ 如实标注：`sensitivity` 这一字段**同时承担**「内容档位」与「后端选择」两个语义；
+#     本卡内容实为 public，声明 `local-only` 属**过分类**（fail-closed 方向，安全）。
+#
+#   前置（已就绪）：三站 `gpt-oss-120b` 已 READY（本站同模型 ⇒ 仍是单变量）。
+#
+#   命令:
+#     干跑: $env:AGENT_BATCH_DRYRUN=1; & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/o111-tools-local.txt"
+#     实跑: & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/o111-tools-local.txt"
+#
+#   格式: <卡路径> [station=A|B|C] [model=<别名>]      # 以 # 开头是注释；空行忽略
+spec/d6-agent-standard/dogfood-cards/probe-claude-tools-local.md station=A
+spec/d6-agent-standard/dogfood-cards/probe-claude-tools-local.md station=B
+spec/d6-agent-standard/dogfood-cards/probe-claude-tools-local.md station=C

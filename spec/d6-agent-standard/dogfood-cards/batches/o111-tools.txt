@@ -1,0 +1,31 @@
+# O-111 批 —— 三站 claude 工具面探针（2026-09-30）
+#
+#   为什么起这一批：手册 §2a.4「铁律 5」原文称「A-claude 是纯文本模式（CLAUDE_CODE_DISABLE_TOOLS=1）
+#   —— 3s 快速响应，但无工具调用能力」。2026-09-28 三级取证（E1/E2）已证**该变量在站上根本不存在**
+#   （三站 claude 配置完全同构；`env` 仅 3 项）⇒ ★ 真问题不是「恢复」，而是「**工具面从未实测**」：
+#   既有冒烟探针用**纯文本 prompt**（`reply with exactly: OK`）⇒ **根本不触发工具**。
+#
+#   判据（本批要回答的唯一问题）：**A / B / C 三站的 claude 执行器，是否真的能调用工具？**
+#     · 能 ⇒ 产物 `out/probe-tools.md` 存在且首行为 `PROBE_DONE`（accept 过）
+#     · 不能 ⇒ **连写文件也做不到**（写文件也是工具）⇒ 该卡 accept 失败、stdout 出现 `PROBE_NO_TOOLS`
+#   ★ 设计要点：**同一张卡打三站**（唯一变量 = 站；提示词逐字相同）⇒ 结论可直接三站并列对照。
+#
+#   前置（实测 2026-09-30，`cluster.py status`）：**三站 llama :8080 全部 STOPPED / 未加载**
+#     ⇒ 本批**必须先 load 引擎**（claude 通道走 `127.0.0.1:8080`）。
+#   模型：`gpt-oss-120b`（infer-list 实测**覆盖 ABC**、59G）⇒ 三站同模型，仍是单变量。
+#
+#   命令（先 load、后派发）：
+#     py -3.12 ops/cluster.py load gpt-oss-120b            # 逐站/自动路由；三站各一次
+#     干跑: $env:AGENT_BATCH_DRYRUN=1; & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/o111-tools.txt"
+#     实跑: & ops/station-bin/agent-cli.ps1 batch dogfood -Card "spec/d6-agent-standard/dogfood-cards/batches/o111-tools.txt"
+#
+#   卡（1 张 × 3 站）：
+#     probe-claude-tools = 工具面探针（报告可用工具 + 真的跑一次 shell + 真的读一次文件）
+#
+#   产物：out/probe-tools.md（三站**各自**工作区，互不覆盖；runDir 各自独立）
+#   显式登记：本批产出的**失败**若因「无工具」而起，那是**结论**（`O-111` 的判据），不是事故。
+#
+#   格式: <卡路径> [station=A|B|C] [model=<别名>]      # 以 # 开头是注释；空行忽略
+spec/d6-agent-standard/dogfood-cards/probe-claude-tools.md station=A
+spec/d6-agent-standard/dogfood-cards/probe-claude-tools.md station=B
+spec/d6-agent-standard/dogfood-cards/probe-claude-tools.md station=C
