@@ -129,6 +129,57 @@ def test_entry_is_registered_and_quick():
     assert ids["spec-untested"]["quick"] is True, "spec-untested 必须 quick（否则提交时跑不到）"
 
 
+# ── ⑧ ★★ O-123（2026-09-30）：把 `inventory/untested-index.yaml` 的分诊**接上消费者** ─────────
+#   为什么加在这里而不是新开判据：**不新增 gate id**（本判据本来就管"未实测登记"这件事），
+#     且不给手册/CHECKS 计数添负担 —— 索引的"叶子节点"缺口靠**既有**门禁补上。
+#   ★ 口径（唯一判据）：`needs_decision: true` ⇒ **点名**（= 「**未裁项不许静默**」）。
+#   ⚠ **不判**：分诊**写得对不对**（人工判断）；也**不重做**闭集校验（那是
+#     `tests/test_untested_index_sync.py` 的职责 —— 判据只在一处）。
+def _item(spec="U4-INVALIDATION-RULES", n=1, state="todo", blocker="implementation", nd=False):
+    return {"spec": spec, "n": n, "state": state, "blocker": blocker, "needs_decision": nd}
+
+
+def test_triage_counts_distribution():
+    warn, st = R.summarize_untested_triage(
+        [_item(), _item(state="boundary", blocker="none"), _item(state="retired", blocker="none")])
+    assert st["n"] == 3, st
+    assert st["state"]["todo"] == 1 and st["state"]["boundary"] == 1, st
+    assert st["blocker"]["implementation"] == 1 and st["blocker"]["none"] == 2, st
+    assert st["needs_decision"] == 0, st
+    assert warn == [], "无未裁项 ⇒ 不该有告警"
+
+
+def test_triage_needs_decision_warns():
+    """★★ 本条唯一的**判据**：`needs_decision: true` ⇒ 点名（未裁项不许静默）。"""
+    warn, st = R.summarize_untested_triage([_item(), _item(spec="U5-TRUST-BASIS", n=6, nd=True)])
+    assert st["needs_decision"] == 1 and len(warn) == 1, (st, warn)
+    assert "U5-TRUST-BASIS#6" in warn[0], warn
+
+
+def test_triage_not_vacuous_and_empty_safe():
+    """★ 边界/先验红：全 `needs_decision: false` 与**空输入**都不得告警、不得崩（防恒真）。"""
+    assert R.summarize_untested_triage([])[0] == []
+    assert R.summarize_untested_triage(None)[0] == []
+    warn, st = R.summarize_untested_triage([_item(), _item(), _item()])
+    assert warn == [] and st["needs_decision"] == 0, (warn, st)
+
+
+def test_triage_repo_end_to_end():
+    """端到端：真读本仓索引 ⇒ 条目 ≥1（防空判）且 `needs_decision` 当前应为 **0**。"""
+    import yaml
+    inv = yaml.safe_load(R.UNTESTED_INDEX.read_text(encoding="utf-8"))
+    warn, st = R.summarize_untested_triage(inv.get("items"))
+    assert st["n"] >= 1, "★ 条目为 0 ⇒ 消费没有对象（会退化成空判）"
+    assert st["needs_decision"] == 0, f"仍有未裁项 ⇒ 必须被看见: {warn}"
+
+
+def test_triage_wiring_is_visible_in_gate():
+    """接线：门禁必须**报出**分诊分布（覆盖率），且用的是这个纯函数（不是另写一份判据）。"""
+    src = (ROOT / "ops" / "rpc_check.py").read_text(encoding="utf-8")
+    assert "summarize_untested_triage(" in src
+    assert "索引分诊" in src, "门禁 note 里必须带上分诊分布（否则消费者=隐形）"
+
+
 # ── 无 pytest 的自跑入口（本文件自己也要有！） ──────────────────────────────
 def _run_all() -> int:
     tests = [(n, f) for n, f in sorted(globals().items())
