@@ -4012,9 +4012,13 @@ mkdir -p "$stWorkDir/.attach/$nm2"
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $stateFile = Join-Path $scratch '.agent-state.json'
     # B3: 备路也落 P2 词（唯一真值同上）。
-    # ⚠⚠ **本行是「角色禁项 PRM」的冲突点**：备路在**主控本地**执行任务本体（`O-111` / `O-124`
-    #   实测），而契约 §1.4 写「主控站不执行任务本体」⇒ **冲突成立但本批不擅自裁决**，
-    #   已登记在契约 §未实测登记与台账 `O-136` 的 B3 段（本批只如实落词）。
+    # ⚠⚠ **本行是「角色禁项 PRM」的冲突点**：★ 冲突面 = **【出网档 且 无站路由/pin】** 那一路
+    #   —— 它 `$useStation=$false` ⇒ **主控本地 spawn**（本函数上方那段注释 L3709-3710 逐字：
+    #   "其余一律 OpenRouter …… 主控本地 或 站上, 由 $useStation 决定在哪台机器"），
+    #   而契约 §1.4 写「主控站不执行任务本体」⇒ **冲突成立**。
+    #   ⚠⚠ **不是 `local-only` 档**：那档 `$backendLocal=$true` ⇒ `$useStation=$true` ⇒ 跑在**站上**，
+    #   **不触** PRM。（B3 首版把冲突面误写成 "local 档在主控本地跑"，已就地更正。）
+    #   本批**不擅自裁决**：只如实落词 + 就地标注；裁法见契约 §1.6，台账 `O-136`。
     [IO.File]::WriteAllText($stateFile, '{"state":"' + $Script:STATE_EXECUTING + '","task_id":"' + $ts + '","host":"agent-cli-claude"}', $utf8NoBom)
 
     # P3: **只换 runner**, 上层编排(归档/accept/golden/usage/证据面/resume)零改动 —— 两者同契约。
