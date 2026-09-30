@@ -298,8 +298,8 @@ documents:
       按上一条同口径，把"兜住"变成"已登记"）。
       ⚠ 扩张条件：若补入**逐设备 MAC 清单** / **路由器或 BIOS 配置原文** / **完整 `dmesg`** ⇒ 命中新类别，须重裁。
 
-  # ── 2026-10-01 新增（halogen 引擎评估，`O-137`）──
-  - path: docs/research/2026-10-01_halogen-flash-server评估与本集群部署可行性.md
+  # ── 2026-10-01 新增（Qwen3.8 系列本地推理加速调研；原 halogen 评估，`O-137`）──
+  - path: docs/research/2026-10-01_Qwen3.8系列本地推理加速调研.md
     tier: local-only
     fails: [C3]
     why: >-
