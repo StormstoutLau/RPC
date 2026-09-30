@@ -19,6 +19,68 @@ upstream: \[d6-agent-standard-.* 全量文档]
 
 ## 历史回溯（2026-09-03 起）
 
+### 2026-09-30（续⑫） — **O-123 第二轮续证**：#3/#8 各自被加固（"相对根"的自洽解 = `runDir`；产物身份 = "卡已声明、review 不读"）
+
+> **定位**：承 `续⑪` 的「#3 候选集已收缩、#8 已登记」。本轮仍**不下裁**，仅**继续细化分析调研** —— 沿 #8 追问"到底缺什么"，并回填 #3。
+
+**③ `D7-CC #3` 的第二轮 —— 把"注入什么"定到具体字段**
+
+| 面 | 读数（E1） |
+|---|---|
+| `$card` / `$fm` | `Invoke-Review` L4790 `$card`（卡路径）· L4804 `$fm = Get-FrontMatter $card`（**含 `evidence-manifest.subjects`**） |
+| `$runDir` | L4828 `Get-ReviewRunDir` ⇒ **绝对路径**（`<projRoot>/agent-out/<runId>`） |
+| ★ 产物已在 runDir | 收集段 L2998 `$stDst = Join-Path $runDir $rp` ⇒ 站上 `$W/<state>` **scp 到 `$runDir/<subjects[].path>`** |
+
+⇒ ★★ **结论**：四个已知量**全在手**；`path` 相对根的**唯一自洽解 = `runDir`**（三条独立理由：判官看到的产物就在 runDir / 卡声明的 `subjects[].path` 本就相对 runDir / `line_range` 只能相对判官看到的那个文本）。**"相对仓根"仍不可实现**（结论不变）。
+
+**⑧ 第 8 条的第二轮 —— 卡其实【声明了】产物身份，是 review 没读**
+
+| 面 | 读数（E1） |
+|---|---|
+| 卡面 | `dec-cc` 卡 `evidence-manifest.subjects[0] = {name: dec-cc, path: dec-cc.md, state: out/dec-cc.md}` |
+| 已被谁用 | **收集链路**（L2939-3001 过 `Test-EvmStatePull` 白名单 ⇒ scp 到 `$runDir/dec-cc.md`） |
+| ★ 谁没用 | **`Invoke-Review`**（L4920 硬编码 `agent-output.txt`）—— 而 `$fm` 在 L4804 **已经读过** |
+
+⇒ ★★ **候选集收窄为四选**：① 取 `$fm['evidence-manifest']['subjects'][].path`（**零新机制**）/ ② `--product` 显式入口 / ③ 从卡 `accept:` 反推（正则脆弱，次优）/ ④ **不做 + 写明"判官只看终端回显"为已知边界**。
+
+★ **门禁实测旁证（同日 `--quick` 的 `evidence` 明细）**：存量 gap 有 **`dogfood/202609292038295460`：subject `xrev2` 声明的 `xrev2.md` 不在 runDir** ⇒ **候选① 的"已在 runDir"前提不成立**，**须带回退**（否则 `Invoke-Review` 走 `REVIEW_PRODUCT_MISSING` exit 3）⇒ ★ 由此见得 **声明 → runDir** 这一跳**有审计**（`evidence` 判据族），而 **runDir → 判官** 这一跳**无任何判据**（`review.$product` 不在审计内）。
+
+★ **如实标注**：全仓**零个真实 `review.json`** ⇒ 后果**系从实现 + 卡面 + 一条真实 runDir 推定，不是跑出来的**。
+★ **本轮不新增条目**（#3/#8 各自加固）⇒ 索引**仍 53 条**、`state` 分布与 `needs_decision` **不变**。
+
+**验收**：`py-tests`（`test_untested_index_sync.py` 双向对账 **PASS**，索引 **53** 不变）；`py -3.12 ops/rpc_check.py --quick` ⇒ **PASS · 38 绿 / 2 黄 / 0 红**。
+**关联**：`OPEN-ISSUES.md` **O-123** · [D7-PROTOCOL-CONCLUSION-CONTRACT.md](./D7-PROTOCOL-CONCLUSION-CONTRACT.md) §未实测登记（**第 3 条第二轮 + 第 8 条第二轮**）· [inventory/untested-index.yaml](../../inventory/untested-index.yaml) · `ops/station-bin/agent-cli.ps1`（`Invoke-Review` L4787-4941 / 收集段 L2939-3001 / `Merge-EvidenceSubjects` / `Test-EvmStatePull`）· `spec/d6-agent-standard/dogfood-cards/dec-cc-three-undefineds.md`。
+
+### 2026-09-30（续⑪） — **O-123 续证**：`D7-CC #3` 的候选集被收缩（"相对仓根"对判官不可实现），并**续证出第 8 条缺口**（被评产物身份）
+
+> **定位**：承 `续⑩` 的「#3/#4 取证已完成、待裁」。本轮**不下裁**，只**继续细化分析调研** —— 沿 #3 往下追问"判官到底能不能拿到一个根"。
+
+**③ `D7-CC #3` 的续证 —— 把"未定义"升级为"对判官不可定义"（三条新证据）**
+
+| 面 | 读数（E1） |
+|---|---|
+| 提示词字段 | `Build-JudgePrompt` 只替换 `{{RUBRIC}}`/`{{TASK}}`/`{{CARD_BODY}}`/`{{ACCEPT}}`/`{{GOLDEN}}`/`{{RUN_ID}}`/`{{PRODUCT}}` —— **无任何根字段** |
+| ★ `-cardPath` | `Invoke-Review` 传了 `-cardPath $card`，而函数**收下从不使用** ⇒ **死参数**（判官连卡文件在哪都不知道） |
+| 唯一路径来源 | `{{ACCEPT}}` 里卡的 `accept:` 串（`test -f out/…`）⇒ 那是**站上工作目录**相对（远端 `cd "$W"`）⇒ **既非 runDir 也非仓根** |
+
+⇒ ★★ **候选集收缩**：`dec-cc` 卡所选的「**规定 path 相对仓库根**（`git rev-parse --show-toplevel`）」**在本架构下不可实现**（判官**无从知道**仓根）；「新增 `root` 字段」同理。**可实现方向只剩一个 = 由外壳把它知道的东西注入提示词**。
+
+**⑧ 第 8 条新缺口 —— 被评产物的身份未定（★ 是 #3/#4 的前置）**
+
+| 面 | 读数（E1） |
+|---|---|
+| 实现 | `$product = Join-Path $runDir 'agent-output.txt'`，回退 `accept-output.txt` —— **无第三来源、无 `--product`**（**不看卡声明**） |
+| 它是什么 | 站上 `opencode run … > out/.agent-output.txt 2>&1` ⇒ **终端回显**（stdout+stderr） |
+| ★ 实测 | 真实 runDir 的 `agent-output.txt` = **235 字节**（与 `.agent-run.json` 的 `output_bytes` 一致）= ANSI 色码 + `$ mkdir -p out` + `← Write out/dec-cc.md` + `DOGFOOD_DECCC_OK` |
+| ★ 同目录 | 躺着卡声明的产物 `dec-cc.md`（卡 `accept:` 校验的正是它）⇒ **判官看不到它** |
+
+⇒ ★★★ **链**：**#8（判官看不到被指的文件）⇒ #3（臆造的名字没法归一）⇒ #4（臆造的行号没法校）** —— **"意见带位置、可核验"这一契约基石，在本架构下三层都不成立**。
+
+★ **如实标注**：全仓**零个真实 `review.json`** ⇒ 上述后果**系从实现 + 一条真实 runDir 推定，不是跑出来的**。
+
+**验收**：`py-tests`（含 `test_untested_index_sync.py` 双向对账 **PASS**，索引 **52 → 53**）；`state` = todo **42 → 43** · partial 5 · retired 3 · boundary 2 · **`needs_decision` 7**（未变）。
+**关联**：`OPEN-ISSUES.md` **O-123** · [D7-PROTOCOL-CONCLUSION-CONTRACT.md](./D7-PROTOCOL-CONCLUSION-CONTRACT.md) §未实测登记（**第 3 条续证 + 新增第 8 条**）· [inventory/untested-index.yaml](../../inventory/untested-index.yaml) · `ops/station-bin/agent-cli.ps1` 的 `Build-JudgePrompt` / `Invoke-Review` · `ops/station-bin/review/judge-prompt.tmpl` · 同日前十条 `续①–⑩`。
+
 ### 2026-09-30（续⑩） — **O-123 续**：`D7-CC #3/#4` 两条的**取证已完成**，并**取证出一条第 7 项新缺口**
 
 > **定位**：承 `续⑨` 的「待下一步 2 条」。用户裁「#3 先跑取证 / #4 先裁语义」⇒ 本轮**执行取证**。
