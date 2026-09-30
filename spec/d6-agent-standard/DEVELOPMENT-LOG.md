@@ -19,6 +19,36 @@ upstream: \[d6-agent-standard-.* 全量文档]
 
 ## 历史回溯（2026-09-03 起）
 
+### 2026-09-30（续㉓） — **派工视图【批 2】落地**：`D7-CC #8 → #3`（判官取哪件产物 + `path` 相对根）落成代码 + 接线（+ 新登记 `O-130`）
+
+> **定位**：承 `UNTESTED-TRIAGE-PLAN.md` §8 的**执行顺序**，本批 = **批 2**（`D7-PROTOCOL-CONCLUSION-CONTRACT` 的 `#8` → `#3`，**`#8` 是 `#3` 的前置**）。
+> ★ 纪律同批 1：**只实现裁定的方向**；**四件套** = 代码 + 夹具（离线真跑）+ 落回规范本体 + 台账/日志；**证据区分实测 vs 推定**。
+
+**① `#8`：判官**取哪件产物**** —— 旧实现逐字 `$product = Join-Path $runDir 'agent-output.txt'`（回退 `accept-output.txt`），
+而它只是 **opencode 的 stdout+stderr 终端回显**（实测量过一条真实 runDir = **235 字节**）⇒ 对**产文件型卡**，判官**从未见过被指的那件文件**。
+★ **落地**：新增纯函数 [`Resolve-ReviewProduct`](../../ops/station-bin/agent-cli.ps1)（**卡声明优先** `$fm['evidence-manifest'].subjects[].path`（相对 `runDir`）
+⇒ **强制回退** `agent-output.txt` → `accept-output.txt` ⇒ 三者都无 ⇒ `ok=$false` + **`tried` 逐项报出**）；
+**接线** `Invoke-Review`，并**新增一行 stdout 审计** `REVIEW_PRODUCT: <名> (source=…)`（此前**取哪件产物完全不可见**）。
+★ **安全边界（新加的，不在裁里但是必须的）**：`subjects[].path` 是**卡面作者给的串** ⇒ **只接受相对、且不许 `..` 越出 runDir**；
+绝对路径 / 含 `..` ⇒ **驳回 + 登记**（不静默忽略、也不 Join 出仓）。
+
+**② `#3`：`path` 的相对根 = `runDir`，实现 = 外壳注入** —— 判官**无从知道**任何根（提示词里原本没有根字段、`-cardPath` 是**死参数**）。
+★ **落地**：`Build-JudgePrompt` 加 `-productName` + 模板（[`judge-prompt.tmpl`](../../ops/station-bin/review/judge-prompt.tmpl)）注入 `{{PRODUCT_NAME}}`，
+并在输出契约里写明「**`path` 的相对根 = `runDir`**」+ **裂锚点后果**（绝对路径 / `./x` / 大小写与斜杠不一致 ⇒ 同一处意见**裂成多个锚点** ⇒ `consensus` 静默失效）。
+★ **不新造 `root` 字段**（= 裁原话）。
+
+**③ 夹具（离线真跑）**：`ops/station-bin/_fm_golden_test.ps1` **+11 条**（`cc-28`–`cc-38`）= 取声明 / 两级回退 / 全无（`tried` 逐项）/ **越界驳回** / 无声明 / 接线（不再硬编码）/ **注入无残留 `{{…}}`** / 相对根措辞 ⇒ 合计 **459/0**。
+★ **可离线真跑的关键**：存在性判据做成**可注入**（`-Exists`，缺省 = 真 `Test-Path`）⇒ 夹具**不碰文件系统**。
+★ **两条实测教训（就地记）**：**(a)** 第一版注入判据按**全路径**比 ⇒ **5 条红** —— 因为 `Join-Path` 在 Windows 上产出 `\run\x` 而非 `/run/x`（**改成按叶名判定**）；
+**(b)** 这 5 条红**同时是先验红证据**：证明 `cc-28`–`cc-32` **不是恒真断言**。
+
+**④ 落回本体 + 索引**：[`D7-PROTOCOL-CONCLUSION-CONTRACT.md`](./D7-PROTOCOL-CONCLUSION-CONTRACT.md) §未实测 **第 3 条 / 第 8 条**各加"已落（批 2）"段；
+索引两条 `state` **`todo → partial`**（`partial` 分布 **8 → 10**、`todo` **38 → 36**，仍 **53 条**）；派工视图 §8 加"批 2 已完成"；**台账** = 新 `O-130`。
+⚠⚠ **仍未实测（**不冒充实测**）**：**判官真调用** —— 全仓**零个真实 `review.json`** ⇒ 批 2 的判据只被**离线夹具**驱动过，**没有**一次真实 review 判决
+⇒ 两条 `state` 标 `partial`（= 已裁 + 代码已落 + **真跑未做**），且**再触发条件 = 一次真实 review 跑通**（届时 `#1`/`#2` 一并收口）。
+
+**关联**：`OPEN-ISSUES.md` **`O-130`**（✅）· 同批 = `O-128`（批 1）/ `O-129`（连带修）· 来源裁定 `O-123` · 派工视图 §8 批 2 · 规范本体 §未实测 3/8。
+
 ### 2026-09-30（续㉒） — **派工视图【批 1】落地**：`U4#3`/`#4`/`#6` 三条「已裁 + 待落地」落成可机判判据（+ 新登记 `O-128`）
 
 > **定位**：承用户「把这份清单落成文件，然后按照顺序执行」⇒ 文件 = [`UNTESTED-TRIAGE-PLAN.md`](./UNTESTED-TRIAGE-PLAN.md)（续㉑ 已落），

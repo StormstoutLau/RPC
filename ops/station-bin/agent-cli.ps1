@@ -4352,8 +4352,46 @@ function Get-ReviewRunDir {
     return $newest.FullName
 }
 
+function Resolve-ReviewProduct {
+    # ★★ D7-CC **#8**（2026-09-30 裁 / `O-123`）：判官**取哪件产物** = 卡 `evidence-manifest.subjects[].path`
+    #   （**相对 `runDir`**）+ **强制回退** ⇒ `agent-output.txt` → `accept-output.txt`（取不到 ⇒ 调用方 exit 3）。
+    # 为什么必须带回退：门禁 `evidence` 已**实测**一例"**声明在、runDir 无**"
+    #   （`dogfood/202609292038295460` 的 `xrev2.md`）⇒ "已在 runDir"**不是必然**，无回退会平白多一次 exit 3。
+    # 为什么"取卡声明"：`agent-output.txt` 是 **opencode 的 stdout+stderr 终端回显**（实测一条 runDir = 235 字节），
+    #   而**卡声明的产物就躺在同一 runDir 里** ⇒ 旧实现让判官**看不到被指的那件文件**（对产文件型卡是致命的）。
+    # ⚠ **安全边界**：`subjects[].path` 是**卡面作者给的串** ⇒ **只接受相对路径、且不许 `..` 越出 runDir**；
+    #   绝对路径 / 含 `..` ⇒ **驳回并如实登记**（不静默忽略、也不拿它去 Join 出仓）。
+    # ⚠ `-Exists` 是**可注入的存在性判据**（缺省 = 真 `Test-Path`）⇒ 本函数可在**离线夹具**上真跑（不碰文件系统）。
+    param($runDir, $fm, [scriptblock]$Exists)
+    if (-not $Exists) { $Exists = { param($p) Test-Path -LiteralPath $p } }
+    $tried = @()
+    $em = if ($fm) { $fm['evidence-manifest'] } else { $null }
+    if ($em) {
+        foreach ($s in @($em.subjects)) {
+            if (-not $s) { continue }
+            $rel = [string]$s.path
+            if ([string]::IsNullOrWhiteSpace($rel)) { continue }
+            $parts = @($rel -split '[\\/]')
+            if ([System.IO.Path]::IsPathRooted($rel) -or ($parts -contains '..')) {
+                $tried += ("$rel (驳回: 非相对 / 含 ..)")
+                continue
+            }
+            $tried += $rel
+            $p = Join-Path $runDir $rel
+            if (& $Exists $p) { return @{ ok = $true; path = $p; name = $rel; source = 'evidence-manifest.subjects'; tried = $tried } }
+        }
+    }
+    foreach ($n in @('agent-output.txt', 'accept-output.txt')) {
+        $tried += $n
+        $p = Join-Path $runDir $n
+        if (& $Exists $p) { return @{ ok = $true; path = $p; name = $n; source = 'fallback'; tried = $tried } }
+    }
+    return @{ ok = $false; path = ''; name = ''; source = 'none'; tried = $tried }
+}
+
+
 function Build-JudgePrompt {
-    param($fm, [string]$product, [string]$runId, [string]$cardPath)
+    param($fm, [string]$product, [string]$runId, [string]$cardPath, [string]$productName)
     $tmpl = Read-ReviewResource 'judge-prompt.tmpl'
     $rubric = Read-ReviewResource 'rubric-4level.txt'
     $taskLine = if ($fm['task']) { $fm['task'] } else { '' }
@@ -4370,6 +4408,10 @@ function Build-JudgePrompt {
     $p = $p.Replace('{{ACCEPT}}', $acceptMeta)
     $p = $p.Replace('{{GOLDEN}}', $goldenMeta)
     $p = $p.Replace('{{RUN_ID}}', $runId)
+    # ★★ D7-CC **#3**（2026-09-30 裁 / `O-123`）：**外壳注入**「产物**相对 `runDir` 的名字**」
+    #   —— 判官**无从知道**任何根（提示词里原本没有根、`-cardPath` 是死参数）
+    #   ⇒ "相对根 = `runDir`" 只能由**外壳把它已经知道的东西**喂进去（**不新造 `root` 字段**）。
+    $p = $p.Replace('{{PRODUCT_NAME}}', $productName)
     $p = $p.Replace('{{PRODUCT}}', $product)
     return $p
 }
@@ -5042,11 +5084,14 @@ function Invoke-Review {
     }
 
     $runName = Split-Path $runDir -Leaf
-    $product = Join-Path $runDir 'agent-output.txt'
-    if (-not (Test-Path $product)) {
-        $product = Join-Path $runDir 'accept-output.txt'
-        if (-not (Test-Path $product)) { Write-Host "REVIEW_PRODUCT_MISSING: no agent-output.txt in $runDir (exit 3)"; return 3 }
+    # ★★ D7-CC #8（2026-09-30 裁 / O-123）：产物身份 = **卡声明优先 + 强制回退**（旧实现硬编码 agent-output.txt，
+    #   而它只是 **opencode 的终端回显** ⇒ 判官**看不到卡声明的那件产物**）。判据本体 = 纯函数 `Resolve-ReviewProduct`。
+    $pr = Resolve-ReviewProduct -runDir $runDir -fm $fm
+    if (-not $pr['ok']) {
+        Write-Host ("REVIEW_PRODUCT_MISSING: 无可用产物（试过: " + ($pr['tried'] -join ' , ') + "）(exit 3)"); return 3
     }
+    Write-Host ("REVIEW_PRODUCT: " + $pr['name'] + " (source=" + $pr['source'] + ")")
+    $product = $pr['path']
 
     # advisory (O-16): review.json is a parallel key; NEVER alters run.json/task accept semantics
     $reviewPath = Join-Path $runDir 'review.json'
@@ -5063,7 +5108,7 @@ function Invoke-Review {
         $tail = $productText.Substring($productText.Length - 20000)
         $productText = $head + '...[TRUNCATED mid (head+tail 40K total)]...' + $tail
     }
-    $prompt = Build-JudgePrompt -fm $fm -product $productText -runId $runName -cardPath $card
+    $prompt = Build-JudgePrompt -fm $fm -product $productText -runId $runName -cardPath $card -productName $pr['name']
     # W1b 裁定 A（2026-09-22）: **判据提示词出网前也要过 scrub + block**，且位置必须在**发请求之前**。
     #   与派发路径同规矩（同一套 `Get-ScrubRules`）；决策本身是纯函数 `Resolve-ReviewPrompt` ⇒ 可离线单测。
     # ⚠ 打印顺序刻意如此: `SANITIZED gate:` 行**只在真抹了时**才打 —— 实测第一版把它放在判定之前，

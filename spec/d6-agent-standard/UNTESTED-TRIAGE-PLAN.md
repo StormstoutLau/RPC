@@ -33,8 +33,8 @@
 | `U4-INVALIDATION-RULES#4` | 「只适用派生产物」落成**可机判形态**：每项须带可核来源标记；显式非派生 ⇒ 硬拒；无标记 ⇒ 先软警 + 审计（灰度） · ★ **批 1 已落判据**（规范 §9；**未接线**）|
 | `U4-INVALIDATION-RULES#6` | 以「**证伪**」替代「证明」= 测例集 + 反例清单（须含历史真实失效）+ 运行时自检 + 白名单 · ★ **批 1 已落判据**（规范 §9；**未接线**）|
 | `U1-ARTIFACT-IDENTITY#8` | 截断长度变更 ⇒ **显式标注「旧代」+ 独立映射表**（缺失标注即**拒**，非警告） |
-| `D7-PROTOCOL-CONCLUSION-CONTRACT#8` | `$product` 取卡 `evidence-manifest.subjects[].path` + **强制回退**（→ `agent-output.txt` → `accept-output.txt` → exit 3） |
-| `D7-PROTOCOL-CONCLUSION-CONTRACT#3` | `path` 相对根 = **相对 `runDir`**，实现 = **外壳注入**（产物文本 + 其相对名），**不新造 `root` 字段** |
+| `D7-PROTOCOL-CONCLUSION-CONTRACT#8` | `$product` 取卡 `evidence-manifest.subjects[].path` + **强制回退**（→ `agent-output.txt` → `accept-output.txt` → exit 3） · ★ **批 2 已落**（`Resolve-ReviewProduct` + 接线）|
+| `D7-PROTOCOL-CONCLUSION-CONTRACT#3` | `path` 相对根 = **相对 `runDir`**，实现 = **外壳注入**（产物文本 + 其相对名），**不新造 `root` 字段** · ★ **批 2 已落**（`{{PRODUCT_NAME}}` 注入）|
 
 ## 3. `implementation` · 乙档（25 条 · 链路/机制尚未建）
 
@@ -89,7 +89,12 @@
   `#3` **已接消费者**（`--invalidate` 去掉自报位，实测落 `boundary`）；`#4`/`#6` **只落判据、未接线**
   （前置未满足）。**落回本体** = [`U4-INVALIDATION-RULES.md`](./U4-INVALIDATION-RULES.md) §9；
   索引三条 `state` `todo → partial`。详见开发日志 2026-09-30（续㉒）。
-- 批 2–5：**未开始**。
+- ★ **批 2 已完成（2026-09-30）**：`D7-CC #8 → #3`（`#8` 是前置）**已落** ——
+  `#8`：新增纯函数 `Resolve-ReviewProduct`（卡声明优先 + 两级强制回退 + `tried` 逐项报出 + 越界/绝对路径**驳回并登记**）
+  + `Invoke-Review` 接线；`#3`：`Build-JudgePrompt -productName` + 模板注入 `{{PRODUCT_NAME}}` 并写明"`path` 相对根 = `runDir`"。
+  **离线夹具真跑**（`cc-28`–`cc-38`，合计 **459/0**）；⚠ **判官真调用仍未能跑**（全仓零 `review.json`）
+  ⇒ 两条 `state` 如实标 **`partial`**（=「已裁 + 代码已落 + **真跑未做**」，**不冒充实测**）。
+- 批 3–5：**未开始**。
 
 ## 9. 维护
 
