@@ -197,6 +197,126 @@ def main() -> int:
     if not red:
         fails.append("先验红自证（执行侧）失败：防假绿硬约束可能恒真（装饰）")
 
+    # ── ★ 批 1（2026-09-30，`O-123` 裁 / 派工视图 §8 批 1）：三条「已裁 + 待落地」落成可机判判据 ──
+    #   #3 闭包**独立重算**（主判据）+ 逐跳证据（辅）· #4 派生产物边界（硬拒 / 灰度白名单）
+    #   · #6 证伪式测例集 + 反例清单 + 运行时自检 + 白名单
+    G = [("B", "A"), ("C", "B")]        # 方向 = **`src` 依赖 `dst`**：B 依赖 A；C 依赖 B
+
+    # #3-① 独立重算：A 变 ⇒ 影响面 = 依赖它的 {B, C}（**不含变更集自身**）
+    _rc = R.recompute_closure(["A"], G)
+    ok = _rc == ["B", "C"]
+    print(f"  {'ok  ' if ok else 'FAIL'} ★#3 独立重算闭包：A 变 ⇒ 依赖它的 B、C（不含 A 自身）\n"
+          f"        → {_rc}")
+    if not ok:
+        fails.append(f"recompute_closure(['A'], G) ⇒ {_rc}（期望 ['B','C']）")
+
+    # #3-② 取不到图查询面 ⇒ `None`（**不是**空集 —— 该区分是本仓头号形态）
+    ok = R.recompute_closure(["A"], None) is None and R.recompute_closure(["A"], []) is None
+    print(f"  {'ok  ' if ok else 'FAIL'} ★#3 取不到图查询面 ⇒ None（判不了，**不是**「确实没有下游」）")
+    if not ok:
+        fails.append("recompute_closure 在无图面时没返回 None")
+
+    CLOSURE_CASES = [
+        ("#3 正例 自报 == 独立重算 ⇒ consistent",
+         (["A"], ["B", "C"], G, None), "consistent"),
+        ("★#3 反例 自报**漏算**（只写 B）⇒ inconsistent ⇒ 拒收",
+         (["A"], ["B"], G, None), "inconsistent"),
+        ("★#3 反例 自报**多算**（凭空多 Z）⇒ inconsistent ⇒ 拒收",
+         (["A"], ["B", "C", "Z"], G, None), "inconsistent"),
+        ("★#3 反例 逐跳路径**伪造**（B→Z 不是边）⇒ inconsistent",
+         (["A"], ["B", "C"], G, [["C", "B", "A"], ["B", "Z"]]), "inconsistent"),
+        ("#3 正例 逐跳路径证据**真走通** ⇒ consistent",
+         (["A"], ["B", "C"], G, [["C", "B", "A"], ["B", "A"]]), "consistent"),
+        ("★#3 边界 取不到图查询面 ⇒ boundary（**不算通过**）",
+         (["A"], ["B", "C"], None, None), "boundary"),
+        ("★#3 边界 图面与本域**无交集**（不同域）⇒ boundary",
+         (["A"], ["col1"], [("x", "y")], None), "boundary"),
+    ]
+    for desc, (ch, aff, ed, hp), want in CLOSURE_CASES:
+        v, detail = R.verify_affected_closure(ch, aff, ed, hp)
+        ok = (v == want) and (v in R.U4_CLOSURE_VERDICTS) and bool(str(detail).strip())
+        print(f"  {'ok  ' if ok else 'FAIL'} {desc}\n        → verdict={v}（期望 {want}）")
+        if not ok:
+            fails.append(f"{desc} ⇒ {v} / {detail}")
+    # ★ 先验红自证（#3）：**采信自报**（旧形态：不看重算）时漏算抓不到 ⇒ 证明"拒收"非恒真
+    _selfok = (["B"] == ["B"])
+    _verok = R.verify_affected_closure(["A"], ["B"], G)[0] == "consistent"
+    red = _selfok and not _verok
+    print(f"  {'ok  ' if red else 'FAIL'} 先验红自证（#3）：采信自报 ⇒ 漏算抓不到；独立重算 ⇒ 拒收")
+    if not red:
+        fails.append("先验红自证（#3）失败：拒收断言可能恒真/恒假")
+
+    # ── #4 派生产物边界：可核来源标记 / 显式非派生硬拒 / 无标记软警（灰度）+ 白名单 ──────
+    DERIVED_CASES = [
+        ("#4 正例 全带可核来源标记 ⇒ ok",
+         ([{"id": "p1", "origin": "derived", "source": "hash:abc"},
+           {"id": "p2", "origin": "derived", "source": "filetrack:x"}], ()), "ok"),
+        ("★#4 反例 显式标为**非派生**（受理目录）⇒ hard-reject",
+         ([{"id": "p1", "origin": "derived", "source": "hash:a"},
+           {"id": "inbox/z", "origin": "non-derived", "source": "manual:受理目录"}], ()), "hard-reject"),
+        ("★#4 反例 **无标记** ⇒ 灰度期 soft-warn（先软警 + 审计）",
+         ([{"id": "p1", "origin": "derived", "source": "hash:a"}, "p9"], ()), "soft-warn"),
+        ("★#4 反例 `derived` 但**无 source** ⇒ 等同无标记 ⇒ soft-warn",
+         ([{"id": "p1", "origin": "derived"}], ()), "soft-warn"),
+        ("★#4 白名单：合法的无标记产物 ⇒ 放行（防「洗信号」/一律驳回）",
+         (["legacy-1"], ("legacy-1",)), "ok"),
+        ("★#4 最重一档：硬拒优先于软警",
+         (["p9", {"id": "z", "origin": "non-derived"}], ()), "hard-reject"),
+    ]
+    for desc, (items, wl), want in DERIVED_CASES:
+        v, hard, unmarked, notes = R.check_derived_boundary(items, wl)
+        ok = (v == want) and (v in R.U4_DERIVED_VERDICTS)
+        print(f"  {'ok  ' if ok else 'FAIL'} {desc}\n        → verdict={v}（期望 {want}）")
+        if not ok:
+            fails.append(f"{desc} ⇒ {v}")
+    # ★ 先验红自证（#4）：软警**不得**当硬拒（否则灰度期不复存在）、白名单**须**能翻转 verdict
+    _a = R.check_derived_boundary(["x"])[0]
+    _b = R.check_derived_boundary(["x"], ("x",))[0]
+    red = (_a == "soft-warn" and _b == "ok")
+    print(f"  {'ok  ' if red else 'FAIL'} 先验红自证（#4）：无标记 ⇒ soft-warn；入白名单 ⇒ 翻转 ok")
+    if not red:
+        fails.append(f"先验红自证（#4）失败：soft-warn={_a} 白名单后={_b}")
+
+    # ── #6 以「证伪」替代「证明」：测例集代数性质全覆盖 + 反例须含历史真实失效 + 白名单 ────
+    FULL = [{"id": "c1", "prop": "boundary"}, {"id": "c2", "prop": "idempotence"},
+            {"id": "c3", "prop": "commutativity"}]
+    REALX = [{"id": "x1", "historical": True, "kind": "real-failure"}]
+    FALSIFY_CASES = [
+        ("#6 正例 三类性质全覆盖 + 含历史真实失效 + 变换在白名单 ⇒ ok",
+         (FULL, REALX, "trim", ("trim",)), "ok"),
+        ("★#6 反例 测例集**缺一类**代数性质 ⇒ insufficient",
+         (FULL[:2], REALX, None, ()), "insufficient"),
+        ("★#6 反例 反例清单**无历史真实失效**（凭空造的不算）⇒ insufficient",
+         (FULL, [{"id": "x9", "historical": False, "kind": "real-failure"}], None, ()), "insufficient"),
+        ("★#6 反例 反例清单**空** ⇒ insufficient",
+         (FULL, [], None, ()), "insufficient"),
+        ("★#6 反例 变换**不在白名单** ⇒ blocked（不得开增量）",
+         (FULL, REALX, "fancy", ("trim",)), "blocked"),
+    ]
+    for desc, (cs, xs, tf, wl), want in FALSIFY_CASES:
+        v, missing, notes = R.check_falsification_suite(cs, xs, tf, wl)
+        ok = (v == want) and (v in R.U4_FALSIFY_VERDICTS)
+        print(f"  {'ok  ' if ok else 'FAIL'} {desc}\n        → verdict={v}（期望 {want}）")
+        if not ok:
+            fails.append(f"{desc} ⇒ {v}")
+
+    SELFCHECK_CASES = [
+        ("#6 正例 抽样逐键相等 ⇒ consistent", ({"a": 1}, {"a": 1}), "consistent"),
+        ("★#6 反例 抽样不一致 ⇒ mismatch（增量不可信 ⇒ 回落全量）", ({"a": 1}, {"a": 2}), "mismatch"),
+        ("★#6 反例 抽样为空 ⇒ inconclusive（**判不了 ≠ 通过**）", ({}, {}), "inconclusive"),
+    ]
+    for desc, (sf, si), want in SELFCHECK_CASES:
+        v, _ = R.runtime_selfcheck(sf, si)
+        ok = (v == want) and (v in R.U4_SELFCHECK_VERDICTS)
+        print(f"  {'ok  ' if ok else 'FAIL'} {desc}\n        → verdict={v}（期望 {want}）")
+        if not ok:
+            fails.append(f"{desc} ⇒ {v}")
+    # ★ 先验红自证（#6）：空抽样**不得**落 consistent（"没抽到" ≠ "没问题"）
+    red = R.runtime_selfcheck({}, {})[0] != "consistent"
+    print(f"  {'ok  ' if red else 'FAIL'} 先验红自证（#6）：空抽样不被当成通过")
+    if not red:
+        fails.append("先验红自证（#6）失败：空抽样被当成了通过")
+
     print(f"RESULT: {'ALL PASS' if not fails else f'失败 {len(fails)} 条'}")
     for f in fails:
         print("  FAIL " + f)

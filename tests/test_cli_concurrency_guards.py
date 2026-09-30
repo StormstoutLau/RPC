@@ -22,6 +22,12 @@
 - **O-27**：`.meta` 必须写 `RC_DOMAIN=v2`（TASK_RC 与 run.json 同域的标记）。
 - **O-28 RC①**（2026-09-26 补）：**站覆盖必须自洽** —— `-RemoteHost` 传入后**由 hostName 反推 `$station`**，
   且反推必须**早于** `$station` 被用于 slot-gate。退回"半覆盖"⇒ 同步/执行去 A 站而记账/加锁仍按 route 的站。
+  ⚠ **2026-09-30 判据改写（`O-124` 候选① 连带）**：实现侧把反查收进**唯一实现点** `Get-StationLetterFromHost`，
+  原地那两行 `foreach` 随之消失 ⇒ 旧判据**指向已删除的实现细节**（**恒红**）。⇒ 照本仓先例（同 `O-63`）
+  **改写断言、不回退代码**：改判「**唯一反查点形态正确**（`Get-TargetHost` 建 A/B/C 表 + 查不到返回 `''`）
+  + **两条通道都接它**（opencode 设 `$station` / claude 传 `-PreferredStation`）+ **反推早于 slot-gate**」。
+  ⚠ **它为什么会红着进仓**：本条只在 `py-tests` 里跑，而 `py-tests` **不在 `--quick`** ⇒ 上一轮改 `agent-cli.ps1`
+  后 `--quick` 仍绿；**红是 `py-tests` 抓到的**（这正是 `O-64` 把测试套件接进门禁的价值）。
 - **F-4**（2026-09-26 补）：ledger 追加必须走**真互斥**（`FileMode::Append` + `FileAccess::Write` +
   **`FileShare::Read`** + 退避）。只判"没有裸 `Add-Content`" 不够 —— **函数名留着、实现退化成裸追加照样绿**。
 """
@@ -125,18 +131,30 @@ def main() -> int:
     #   （`LOCK_HELD owner_pid=… mode=exclusive` 同一 owner）。
     #   ★ **位置断言是语义的一部分**：反推必须在 `$station` 被用于 slot-gate **之前** ——
     #     否则"自洽"只是一句注释（站定得太晚 ⇒ 早先那几步仍按错站走）。
+    #   ★★ **2026-09-30 判据改写（见文件头）**：反查已收进**唯一实现点** `Get-StationLetterFromHost`
+    #     （claude 通道要同一反查 ⇒ 不许抄第二份），旧判据盯的**就地 `foreach` 结构已删除** ⇒ 恒红。
+    #     ⇒ 改判三件：① 唯一反查点**形态正确**（`Get-TargetHost` 建 A/B/C 表 + **查不到返回 `''`** ——
+    #       后者正是防 `Get-TargetHost` 对**未知输入默认返回 B** 的坑）· ② **两条通道都接它**
+    #       （opencode 路径设 `$station` / claude 路径传 `-PreferredStation`）· ③ 反推**早于** slot-gate。
     rc1_param = "[string]$RemoteHost" in src
     rc1_forward = bool(re.search(r"Invoke-Task[^\n]*-hostName \$RemoteHost", src))
-    rc1_derive = ("foreach ($s in @('A', 'B', 'C')) {" in co
-                  and "if ((Get-TargetHost $s) -eq $hostName) { $station = $s; break }" in co)
+    rc1_helper = (bool(re.search(
+        r"function Get-StationLetterFromHost\s*\{[\s\S]{0,1500}?"
+        r"foreach \(\$s in @\('A', 'B', 'C'\)\) \{ \$map\[\(Get-TargetHost \$s\)\] = \$s \}"
+        r"[\s\S]{0,300}?return ''", co))
+        and "if ($map.ContainsKey($HostName)) { return [string]$map[$HostName] }" in co)
+    rc1_sites = (len(code_hits(src, "$revSt = Get-StationLetterFromHost $hostName")) == 1
+                 and "if ($revSt) { $station = $revSt }" in co
+                 and len(code_hits(src, "-PreferredStation $pinSt")) >= 1)
     _dl = [i for i, ln in enumerate(src.splitlines(), 1)
-           if "if ((Get-TargetHost $s) -eq $hostName) { $station = $s; break }" in ln.split('#', 1)[0]]
+           if "Get-StationLetterFromHost $hostName" in ln.split('#', 1)[0]]
     _sg = [i for i, ln in enumerate(src.splitlines(), 1)
            if "Invoke-SlotGate" in ln.split('#', 1)[0] and "function" not in ln.split('#', 1)[0]]
     rc1_order = bool(_dl) and bool(_sg) and min(_dl) < min(_sg)
     need("O-28 RC① 站覆盖自洽（-RemoteHost ⇒ 反推 station，且反推早于 slot-gate）",
-         rc1_param and rc1_forward and rc1_derive and rc1_order,
-         f"入参={rc1_param} dispatch 传参={rc1_forward} 反推结构={rc1_derive} 位置(反推<slot-gate)={rc1_order} ⇒ "
+         rc1_param and rc1_forward and rc1_helper and rc1_sites and rc1_order,
+         f"入参={rc1_param} dispatch 传参={rc1_forward} 唯一反查点={rc1_helper} 两通道接线={rc1_sites} "
+         f"位置(反推<slot-gate)={rc1_order} ⇒ "
          "半覆盖 ⇒ 三张卡被当成同站 ⇒ 撞 per-(proj,站) 锁（实测 LOCK_HELD 同一 owner）")
 
     # ── ★ 纪律断言化（2026-09-23）─────────────────────────────────────────────

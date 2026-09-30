@@ -29,9 +29,9 @@
 | 条目 | 已裁的内容（要落的就是它） |
 |---|---|
 | `U5-TRUST-BASIS#4` | 砍「默认公理名单」⇒ **必须显式声明**（缺失即判不通过）+ 支持显式空声明 `axioms: []`（区分「无需」与「未声明」） |
-| `U4-INVALIDATION-RULES#3` | 自报位 `affected_is_closure` ⇒ 换成**判定方独立重算**为主判据 + 逐跳路径证据为辅，不一致即拒收 |
-| `U4-INVALIDATION-RULES#4` | 「只适用派生产物」落成**可机判形态**：每项须带可核来源标记；显式非派生 ⇒ 硬拒；无标记 ⇒ 先软警 + 审计（灰度） |
-| `U4-INVALIDATION-RULES#6` | 以「**证伪**」替代「证明」= 测例集 + 反例清单（须含历史真实失效）+ 运行时自检 + 白名单 |
+| `U4-INVALIDATION-RULES#3` | 自报位 `affected_is_closure` ⇒ 换成**判定方独立重算**为主判据 + 逐跳路径证据为辅，不一致即拒收 · ★ **批 1 已落判据**（规范 §9；**已接消费者**）|
+| `U4-INVALIDATION-RULES#4` | 「只适用派生产物」落成**可机判形态**：每项须带可核来源标记；显式非派生 ⇒ 硬拒；无标记 ⇒ 先软警 + 审计（灰度） · ★ **批 1 已落判据**（规范 §9；**未接线**）|
+| `U4-INVALIDATION-RULES#6` | 以「**证伪**」替代「证明」= 测例集 + 反例清单（须含历史真实失效）+ 运行时自检 + 白名单 · ★ **批 1 已落判据**（规范 §9；**未接线**）|
 | `U1-ARTIFACT-IDENTITY#8` | 截断长度变更 ⇒ **显式标注「旧代」+ 独立映射表**（缺失标注即**拒**，非警告） |
 | `D7-PROTOCOL-CONCLUSION-CONTRACT#8` | `$product` 取卡 `evidence-manifest.subjects[].path` + **强制回退**（→ `agent-output.txt` → `accept-output.txt` → exit 3） |
 | `D7-PROTOCOL-CONCLUSION-CONTRACT#3` | `path` 相对根 = **相对 `runDir`**，实现 = **外壳注入**（产物文本 + 其相对名），**不新造 `root` 字段** |
@@ -81,6 +81,15 @@
 
 ★ **贯穿纪律（每批都必须）**：① 最小改动、不重写；② 严格 TDD（先写红）；③ **裁/做必须落回规范本体**（索引只是派生面）；
 ④ 证据区分**实测 vs 推定**；⑤ **不做也是一种结论，必须写下来**；⑥ 涉及站上的批（批 2 若真跑）须先确认引擎/前置。
+
+**执行状态（只记"做完没有"，分诊回索引改）**：
+
+- ★ **批 1 已完成（2026-09-30）**：三条**已落判据**（`ops/rpc_check.py`：`recompute_closure` +
+  `verify_affected_closure` · `check_derived_boundary` · `check_falsification_suite` + `runtime_selfcheck`）；
+  `#3` **已接消费者**（`--invalidate` 去掉自报位，实测落 `boundary`）；`#4`/`#6` **只落判据、未接线**
+  （前置未满足）。**落回本体** = [`U4-INVALIDATION-RULES.md`](./U4-INVALIDATION-RULES.md) §9；
+  索引三条 `state` `todo → partial`。详见开发日志 2026-09-30（续㉒）。
+- 批 2–5：**未开始**。
 
 ## 9. 维护
 

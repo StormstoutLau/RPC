@@ -274,10 +274,13 @@ def check():
 def invalidate(changed_paths):
     """★ **消费者**：把 changed（本仓**已登记 U-1 的文件**）接到 `decide_invalidation()`。
 
-    链条（四段各自有产出者，不再是手工）：
+    链条（五段各自有产出者，不再是手工）：
       ① **changed_ids**：由 `--changed <path>` 给出的文件 → 取其 `u1:` **声明**里的身份
          （⚠ 身份**由声明给出**，不靠反推 —— U-1 是哈希，反推不出 namespace）
       ② **affected**：`id_storage_census` 实测的存储面，按 **namespace** 归集
+      ③a ★ **闭包核验**（`U4#3`，2026-09-30）：判定方**独立重算**（`verify_affected_closure`）
+         —— **取代**旧的**自报位** `affected_is_closure=True`；本域无图查询面 ⇒ `boundary`
+         （照裁反转为「登记为边界 + 事后抽检」）⇒ **不声称已闭包**（fail-closed）
       ③ **判据 + 呈现位**：`rpc_check.decide_invalidation()` → `action / class / reason`，逐行打印
       ④ **执行侧**：`rpc_check.execute_invalidation()` → 执行报告（`status` 四档 + 逐项三态）
          ⚠ 重算交给注册表 `EXECUTORS`；本仓注册表**故意为空**（九项目 0/9）⇒ 有活时报 `not-executed`，
@@ -321,10 +324,28 @@ def invalidate(changed_paths):
     #   None   = "**判不了**"（H-3 的触发条件）
     #   写成 `affected or None` 会把"已知为空"错误升格成"判不了"，从而**白白付一次全量**。
     affected_labels = [f"{s['project']}.{s.get('table')}.{s['column']}" for s in aff]
+    changed_ids = [d["identity"] for d in changed]
+
+    # ★③a 闭包**独立重算**（`U4#3`，2026-09-30 / `O-123` 裁）：**去掉自报位** `affected_is_closure=True`
+    #   —— 旧形态是**调用方自称**"我做过闭包了"，判据**无法验证**（那正是"看起来更硬的判据其实没读到"）。
+    #   现改为：判定方拿**依赖图查询面**独立重算 ⇒ 与自报**逐项比对**，**不一致即拒收**。
+    #   ⚠ 本域的实况（**实测**）：本域要判的是**产物 → 存储列**，而 `edges.yaml` 是**产物 → 产物**
+    #     ⇒ **域不同**，把它当本域图面会**误拒**（实测：`--changed inventory/dialect.yaml` 会因
+    #     `edges.yaml` 依赖 `dialect.yaml` 而被判"漏算" ⇒ 拒收，而那是**两个域各自的真话**）
+    #     ⇒ 本域**没有**可用的图查询面 ⇒ 按裁的再触发条件**反转为「登记为边界 + 事后抽检」**。
+    #     ★ 所以这里**显式传 `edges=None`**（**不是**"忘了传"，是"查过了、没有"）。
+    closure_verdict, closure_detail = R.verify_affected_closure(
+        changed_ids=changed_ids, affected=affected_labels, edges=None)
+    print(f"[③a 闭包核验] verdict={closure_verdict}\n         {closure_detail}")
+    if closure_verdict == "inconsistent":
+        print("[FAIL] 自报影响面与判定方**独立重算**不一致 ⇒ **拒收**（不落盘、不改任何产物）")
+        return EXIT_MISMATCH
+
     action, class_, reason = R.decide_invalidation(
-        changed_ids=[d["identity"] for d in changed],
+        changed_ids=changed_ids,
         affected=affected_labels,
-        affected_is_closure=True,
+        # ★ 只有 `consistent` 才敢声称"已闭包"；`boundary`/`inconsistent` ⇒ **不声称**（fail-closed）
+        affected_is_closure=(closure_verdict == "consistent"),
         incremental_equivalent=False,     # ⚠ H-1 的证明**不存在** ⇒ 不敢说 True（说 True 就是编）
         build_failed=False,
     )
