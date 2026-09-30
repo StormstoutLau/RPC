@@ -107,8 +107,8 @@
 | 相 | 落点（既有载体，**不新增件**） | 现状 / B 段动作 |
 |---|---|---|
 | **P0 立契** | 卡 front-matter + `Get-CardIdentity` → `New-TaskContract` | ★ **已接（B 段）**：`Invoke-Task` 的 `require-gate` 之后产 `TaskContract` 信封（**新增** `criteria_hash` = 红线 3 的**固化动作**）⇒ `Write-D7Report` 调判据本体；`gaps` 3 项**如实报出**、**灰度期不阻断**。★ **复核更正**：claude 备路**也被覆盖**（`Invoke-Task` 的两处 `Invoke-Task-Claude` 调用在 L2133 / L3410，**都在 P0 块 L2067 之后**）—— B1 曾登记"claude 备路未接"，**该说法有误，已就地更正** |
-| **P1 领取** | 站上 `.agent-state.json` + `.agent-lock`（`Invoke-LockState`） | 状态**词汇**未对齐到 `claimed`（**未接** · B3） |
-| **P2 执行** | `Invoke-Task` 本体 | 状态名 `executing` 未落（**未接** · B3） |
+| **P1 领取** | 站上 `.agent-state.json` + `.agent-lock`（`Invoke-LockState`） | ★ **已接（B3）**：acquire 写 `claimed`（B3 之前写 `running`） |
+| **P2 执行** | `Invoke-Task` 本体 | ★ **已接（B3）**：任务体写 `executing`；claude 备路也落同一词（★ 该行**同时是 PRM 冲突点**，见下） |
 | **P3 回收** | runDir + `.agent-run.json` → `New-RunReport` | ★ **已接（B2）**：**两处** `.agent-run.json` 写出点（主路 + claude 备路）各产 `RunReport` ⇒ 判据校验；★ **刻意不含 `verdict`**（产出方不得自评）；`gaps` 3 项如实报出 |
 | **P4a 机械门** | ★ **`Resolve-L1Gate`（已存在）** | ★ **已接（B2）**：`Write-D7Adjudication` 逐跳调 `d7_transition`（`collected→mech_verified`） |
 | **P4b 语义复核** | ★ **`Invoke-Review` + 结论契约校验（已存在）** | ★ **已接（B2）**：L2 跑过 ⇒ 走 `sem_verified`；**没跑（判官调用失败）⇒ 如实跳过**；`l2_marks[]` = 结论契约段**原文照收** |
@@ -128,8 +128,33 @@
 
 ★ **各相从"灰度"转"硬拒"的条件（写死，免得靠记忆）**：对应信封的 `gaps` **清空** ⇒ 把 `D7_*_REJECT`
 分支改成 `return 3`（拒派发 / 拒收）。
-⚠ **仍未接**（B3 承接）：**P1/P2** 的状态名（站上状态件）· `d7_block` 的其余条目（`I-1` / `I-6` / `PRM` / `PRW`）·
-**`RunReport`/`Verdict` 的真跑**（C 段）—— 如实登记，不假装全覆盖。
+
+★★ **站上状态件的词汇边界（B3 落，2026-10-01）—— 这一节是"别把生命周期读成相"的护栏**：
+
+- **唯一真值**在 `ops/station-bin/agent-cli.ps1` 的 `$Script:STATE_*` 块（**不许在别处再抄一份词表**）；
+  判据 = 夹具 `b3①–⑨`（`_fm_golden_test.ps1`）。
+- **契约相（2 个）**：`claimed`（P1 领取）· `executing`（P2 执行）。
+- ★★ **非契约词（2 个，必须登记，否则下一个人会把它当相来读）**：
+  - `done` —— 锁释放 = **持锁进程退出**，是**进程生命周期**，**不是** D7 终态；
+  - `orphaned` —— 孤儿回收（`out/` 已归档到 `out/orphaned/`），同样是**生命周期**。
+  ⚠⚠ **为什么它们不许写成 `accepted` / `rejected`**：红线 1「**完成信号权只在主控站**」（§1.2）⇒
+  工作站写终态 = **产出方自评**。夹具 `b3⑥` 就钉这一条（站上状态件**从不**出现这两个词）。
+- ★★ **读侧必须与写侧同源 —— 本批的主判据**：孤儿判据原先**逐字比** `= running`，而写入侧不再写
+  `running` ⇒ **只改写方 = 孤儿检测静默失效**（fail-open，本仓最防的形态）。故活跃态谓词收进同一块、
+  被**两个** station body 插值；★ 且**保留 `running` 为 legacy 可读**（B3 之前写出的残留 state 件
+  仍是这个词 ⇒ 收掉它会让残留件的孤儿回收静默失效）。夹具 `b3②/④/⑤/⑧` 钉这四条。
+- ⚠ **本文件不承载"已加载/运行中"的语义**：站上状态件是**工作站自述**，与 `d7_transition` 的相
+  **不是同一个事实源** ⇒ 任何"用 `agent-state.json` 判 D7 到了哪一相"的读法都**无效**。
+
+⚠⚠ **B3 期间就地发现（未裁，如实登记）—— 角色禁项 `PRM` 与 claude 备路冲突**：
+契约 §1.4 写「**主控站不执行任务本体**」，而 `O-111` / `O-124` **实测**：claude 备路的 `local` 档
+**在主控本地跑**（批报告 `st=` 与实际站不符的那批即是）⇒ **冲突成立**。本批**只如实落词 + 就地标注**，
+**不擅自裁决**（裁法至少三选：① 认定"备路 = 主控代跑"属**已知例外**并登记；② 把 `PRM` 的
+`actor` 判据改成"**执行发生在主控 ⇒ 拒**"，从而**禁掉**备路本地档；③ 双轨：备路本地档只允许
+`readonly` 卡）。⇒ B3 的 `PRM` / `I-1` / `I-6` / `PRW` **接线待此项先裁**。
+
+⚠ **仍未接**（B3 剩余 + C 段）：`d7_block` 的其余条目（`I-1` / `I-6` / `PRM` / `PRW`）——
+★ 其中 `PRM` **须先裁上面那条冲突**；**`RunReport`/`Verdict` 的真跑**（C 段）—— 如实登记，不假装全覆盖。
 
 ---
 

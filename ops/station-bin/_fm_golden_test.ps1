@@ -2230,6 +2230,37 @@ Assert-True "b2⑮(先验红·同源对照): 加 `verdict` 的副本 与 真产�
     $rrCopy.Contains('verdict') -and (-not $RRT.report.Contains('verdict')) -and
     (@($rrCopy.Keys).Count -eq @($RRT.report.Keys).Count + 1))
 
+# --- b3 (2026-10-01, `O-136` **B3**): **P1/P2 状态名落站**（站上 `.agent-state.json` 词汇对齐契约）---
+#   ★★ 本批的真实风险（也是主判据的由来）：旧孤儿判据**逐字比** `= running`，而写入侧现在不再
+#     写 `running` ⇒ **只改写方 = 孤儿检测静默失效**（fail-open，本仓最防的形态）。
+#     ⇒ 判据不只是"词对不对"，而是"**读侧是否与写侧同源**"。
+#   ★ 口径：本块只测**接线形态 + 词汇守恒**（站上 bash 无法离线真跑）；相序列 / 判据本体那一半
+#     由 `tests/test_rpc_check_d7_protocol.py` 覆盖 ⇒ **不在此抄第二份**（同 b1/b2 的切分口径）。
+Assert-True "b3①: 唯一真值 —— 活跃态谓词**只定义一次**，两处 body 插值**同一变量**（不各写一份词表）" (
+    ([regex]::Matches($content, [regex]::Escape("STATE_ACTIVE_ERE = '^(claimed|executing|running)$'"))).Count -eq 1 -and
+    ([regex]::Matches($content, '\$activeEre\s*=\s*\$Script:STATE_ACTIVE_ERE')).Count -eq 2)
+Assert-True "b3②(★主判据): 孤儿判据**不再逐字比** legacy 词，改用活跃态谓词，且**两处都改**" (
+    -not $content.Contains('`$st" = running') -and
+    ([regex]::Matches($content, [regex]::Escape('if echo "`$st" | grep -qE "$activeEre"'))).Count -eq 2)
+Assert-True "b3③: 两个写入相各有**唯一真值来源**（P1 在 lock 函数 / P2 在任务体，各捕获一次局部名）" (
+    $content.Contains('$stClaimed = $Script:STATE_CLAIMED') -and
+    $content.Contains('$stExecuting = $Script:STATE_EXECUTING'))
+Assert-True "b3④(★词汇守恒): 写入侧**不再产出** legacy 词 `running`；两个契约相各**恰一个**写入点" (
+    ([regex]::Matches($content, [regex]::Escape('"state":"running"'))).Count -eq 0 -and
+    ([regex]::Matches($content, [regex]::Escape('"state":"$stClaimed"'))).Count -eq 1 -and
+    ([regex]::Matches($content, [regex]::Escape('"state":"$stExecuting"'))).Count -eq 1)
+Assert-True "b3⑤(★legacy 可读): 活跃态集合**含** `running` ⇒ 残留 state 件的孤儿回收不会静默失效" (
+    $content.Contains("STATE_ACTIVE_ERE = '^(claimed|executing|running)$'"))
+Assert-True "b3⑥(★红线 1): 站上状态件**从不**写 D7 终态 —— 完成信号权只在主控站（产出方不得自评）" (
+    -not $content.Contains('"state":"accepted"') -and -not $content.Contains('"state":"rejected"'))
+Assert-True "b3⑦: 两个**非契约词**仍在（锁释放 / 孤儿回收 = 生命周期，**不是**相）" (
+    $content.Contains('"state":"done"') -and $content.Contains('"state":"orphaned"'))
+Assert-True "b3⑧(先验红·同源对照): b3④ 那条**真的在看** —— 同串放进样本里计数为 1，而真源件为 0" (
+    ([regex]::Matches('x "state":"running" x', [regex]::Escape('"state":"running"'))).Count -eq 1 -and
+    ([regex]::Matches($content, [regex]::Escape('"state":"running"'))).Count -eq 0)
+Assert-True "b3⑨: 接线 —— 备路（claude 本地路）也落 P2 词，并**就地标注 PRM 冲突**（不静默放过）" (
+    $content.Contains('+ $Script:STATE_EXECUTING +') -and $content.Contains('角色禁项 PRM'))
+
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
 exit $(if ($fail -eq 0) { 0 } else { 1 })

@@ -761,6 +761,27 @@ function Get-ThroughputEstimate {
 
 # ---------------- M4 lock/state ----------------
 
+# ── D7-P1/P2 状态名落站（B3，2026-10-01；契约 `D7-PROTOCOL-CONTRACT.md` §1 与 §1.6）─────────
+# ★★ **本块是站上 `.agent-state.json` 词汇的唯一真值** —— 不许在别处再抄一份词表。
+#   契约 §1 的相序列 = `drafted→dispatched→claimed→executing→collected→mech_verified→…`
+#   而站上这个文件**只承载工作站侧的两个相** + 两个**非契约生命周期词**：
+#     `claimed`   ← P1 领取（B3 之前写的是 `running`）
+#     `executing` ← P2 执行（B3 之前写的是 `running`）
+#     `done`      ← ★ **非契约词**：锁释放 = 持锁进程退出。**不是** D7 终态。
+#     `orphaned`  ← ★ **非契约词**：孤儿回收（`out/` 已归档到 `out/orphaned/`）。
+#   ⚠⚠ **为什么 `done`/`orphaned` 不许写成 `accepted`/`rejected`**：红线 1「完成信号权
+#     只在主控站」（契约 §1.2 / `d7_block('RL1')`）⇒ 工作站写终态 = **产出方自评**。
+#     这两个词必须在契约 §1.6 登记为**非契约词**，否则下一个人会把它当相来读。
+#   ⚠⚠ **孤儿判据必须与写入点同批改**：旧判据逐字比 `= running`，而 `running` 已不再被写出
+#     ⇒ 只改写方 = 孤儿检测**静默失效**（fail-open，本仓最防的形态）。故活跃态判据也收进本块，
+#     作为**唯一表达式**被两个 station body 插值（不各写一份）。
+$Script:STATE_CLAIMED   = 'claimed'    # P1 领取（契约相）
+$Script:STATE_EXECUTING = 'executing'  # P2 执行（契约相）
+# 站上 bash 的"活跃态"谓词。★ `running` = **legacy**：B3 之前写出的残留 state 件仍是这个词
+#   ⇒ **保留可读**（否则残留件的孤儿回收会静默失效）；但**新写入点一律不产出它**。
+#   判据 = 夹具 `b3④/⑤`（"legacy 可读但不写"）。
+$Script:STATE_ACTIVE_ERE = '^(claimed|executing|running)$'
+
 function Invoke-LockState {
     # D6 M4: acquire/release/status on remote .agent-lock + .agent-state.json (orphan detection)
     # Lock held on station via flock fd 9 (R14: remote script on disk). Exit codes:
@@ -778,6 +799,10 @@ function Invoke-LockState {
 
     $sleepLine = ''
     if ($act -eq 'acquire' -and [int]$hold -gt 0) { $sleepLine = "sleep $hold  # hold fd open for A9 contention test" }
+    # B3: 用**朴素局部名**捕获（而不是在双引号 here-string 里赌 `$Script:x` 的插值行为；
+    #   本仓纪律：耦合点越少越好）。唯一真值仍是上面的 `$Script:STATE_*`。
+    $activeEre = $Script:STATE_ACTIVE_ERE
+    $stClaimed = $Script:STATE_CLAIMED
 
     # PS5.1 gotcha: inside here-string the REMOTE vars must be backtick-escaped.
     # Only PS-side vars ($act, $sleepLine) are interpolated here directly.
@@ -792,7 +817,7 @@ case "$act" in
     if [ -f "`$S" ]; then
       st=`$(grep -o '"state": *"[^"]*"' "`$S" | head -1 | cut -d'"' -f4 2>/dev/null)
       pid=`$(grep -o '"pid": *[0-9]*' "`$S" | grep -o '[0-9]*' | head -1)
-      if [ "`$st" = running ] && [ -n "`$pid" ] && ! kill -0 "`$pid" 2>/dev/null; then
+      if echo "`$st" | grep -qE "$activeEre" && [ -n "`$pid" ] && ! kill -0 "`$pid" 2>/dev/null; then
         mkdir -p "`$W/out/orphaned"
         cp -r "`$W/out/"* "`$W/out/orphaned/" 2>/dev/null || true
         printf '{"state":"orphaned","pid":%s,"ts_start":"%s","task_id":"","host":"agent-cli"}' "`$pid" "`$(date -Is)" > "`$S"
@@ -806,7 +831,7 @@ case "$act" in
       echo "LOCK_HELD owner_pid=`$owner"
       exit 3
     fi
-    printf '{"state":"running","pid":%d,"ts_start":"%s","task_id":"locktest","host":"agent-cli"}' "`$$" "`$(date -Is)" > "`$S"
+    printf '{"state":"$stClaimed","pid":%d,"ts_start":"%s","task_id":"locktest","host":"agent-cli"}' "`$$" "`$(date -Is)" > "`$S"
     echo "LOCK_ACQUIRED pid=`$$"
     $sleepLine
     ;;
@@ -2553,6 +2578,9 @@ echo "ACCEPT_GOLDEN_OK=`$ACCEPT_GOLDEN_OK"
     # 落盘段用它决定"是否解包 golden"。**刻意走 PS 字面量**(在 body 里落成 `1`/`0`),
     #   不引入新的远端变量 —— 少一个"两边名字必须对齐"的耦合点。
     $goldenHint = if ($goldenActive) { '1' } else { '0' }
+    # B3: P2 状态名 + 活跃态谓词（唯一真值 = 上面的 `$Script:STATE_*`；同样走朴素局部名）
+    $stExecuting = $Script:STATE_EXECUTING
+    $activeEre   = $Script:STATE_ACTIVE_ERE
     $body = @"
 set -u
 # ── ★★ O-72 (2026-09-25): 采样器子壳的**兜底杀**（父壳非正常死亡时 teardown 杀不到它）──────────
@@ -2600,7 +2628,7 @@ fi
 if [ -f "`$S" ]; then
   st=`$(grep -o '"state": *"[^"]*"' "`$S" | head -1 | cut -d'"' -f4 2>/dev/null)
   pid=`$(grep -o '"pid": *[0-9]*' "`$S" | grep -o '[0-9]*' | head -1)
-  if [ "`$st" = running ] && [ -n "`$pid" ] && ! kill -0 "`$pid" 2>/dev/null; then
+  if echo "`$st" | grep -qE "$activeEre" && [ -n "`$pid" ] && ! kill -0 "`$pid" 2>/dev/null; then
     mkdir -p "`$W/out/orphaned"
     cp -r "`$W/out/"* "`$W/out/orphaned/" 2>/dev/null || true
     echo "ORPHAN_RECOVERED pid=`$pid"
@@ -2634,7 +2662,7 @@ if [ "$goldenHint" = 1 ]; then
 fi
 rm -rf "`$STAGE"
 Q0=`$(date +%s%N)
-printf '{"state":"running","pid":%d,"ts_start":"%s","task_id":"%s","host":"agent-cli"}' "`$$" "`$(date -Is)" "$ts" > "`$S"
+printf '{"state":"$stExecuting","pid":%d,"ts_start":"%s","task_id":"%s","host":"agent-cli"}' "`$$" "`$(date -Is)" "$ts" > "`$S"
 sleep 2   # artificial intake gap (BP-4: makes queue_s measurable on contention holder)
 printf '%s' "$promptB64" | base64 -d > "`$W/out/.prompt.txt`$EV_SUF"
 echo "PIPE_STDIN_OK"
@@ -3983,7 +4011,11 @@ mkdir -p "$stWorkDir/.attach/$nm2"
     # ---- run + continue loop (stopwatch) ----
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $stateFile = Join-Path $scratch '.agent-state.json'
-    [IO.File]::WriteAllText($stateFile, '{"state":"running","task_id":"' + $ts + '","host":"agent-cli-claude"}', $utf8NoBom)
+    # B3: 备路也落 P2 词（唯一真值同上）。
+    # ⚠⚠ **本行是「角色禁项 PRM」的冲突点**：备路在**主控本地**执行任务本体（`O-111` / `O-124`
+    #   实测），而契约 §1.4 写「主控站不执行任务本体」⇒ **冲突成立但本批不擅自裁决**，
+    #   已登记在契约 §未实测登记与台账 `O-136` 的 B3 段（本批只如实落词）。
+    [IO.File]::WriteAllText($stateFile, '{"state":"' + $Script:STATE_EXECUTING + '","task_id":"' + $ts + '","host":"agent-cli-claude"}', $utf8NoBom)
 
     # P3: **只换 runner**, 上层编排(归档/accept/golden/usage/证据面/resume)零改动 —— 两者同契约。
     #   站上分支的型号用引擎接受的别名 `main`(站上既有 settings 也是这么做的:
