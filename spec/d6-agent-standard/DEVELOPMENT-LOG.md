@@ -19,6 +19,51 @@ upstream: \[d6-agent-standard-.* 全量文档]
 
 ## 历史回溯（2026-09-03 起）
 
+### 2026-09-30（续⑳） — **`O-124` 候选① 闭环（含【真跑验收】）+ `O-125` 候选① 落地（`backend` 拆字段）+ 新登记 `O-127`（批清单编码坑）**
+
+> **定位**：承 `续⑲` 的"④ 未做（如实）" —— 本轮**专门**做 `O-124①` 与 `O-125①`；执行中**又踩到**一个真实缺陷，就地登记为 `O-127`。
+
+**① `O-124` 候选① —— 让 `local` 档真的采纳 `station=`（`P1` · 判决级）**
+
+- **根因（读码）**：`$stPref = [string]$r['station']`，而卡的自然写法 `model: claude` 在 `Resolve-Model` 里解析出的 **`station` 本就是空** ⇒ `$stPref` 恒空 ⇒ `P3_CANDIDATES: A,B,C (pref= ...)`**不带偏好** ⇒ 三行 `station=A/B/C` 全落第一站。**且 `Invoke-Task` 的 claude 分支把 `--remotehost` 整条丢弃**（批行的 `station=` 经它换成 host 串传到 `-hostName`，随即无人使用）。
+- **修法**：新增纯函数 `Get-StationLetterFromHost`（host → 站字母，**唯一**反查点；⚠ `Get-TargetHost` 对**未知**输入默认返回 B 的 host ⇒ 反查须**建表查不到即 `''`**，不能逐个比）+ `Invoke-Task` claude 分支把 pin 反查后作 `-PreferredStation` 传下去 + `Invoke-Task-Claude` 在 route 无站时**回落**该值进 `-Preferred`（route 声明的站优先）+ `$useStation` 改为 `$backendLocal -or 路由站 -or pin`。
+- ★★ **真跑验收（前后对比 · 同一张卡 `probe-claude-tools-local.md` · 都钉 `station=C`）**：
+
+| | 修前（`_batch/20260930145623` 第 3 行） | 修后（`_batch/20260930193001`） |
+|---|---|---|
+| `P3_CANDIDATES` | `A,B,C (pref= avoid=)` | **`C,A,B (pref=C avoid=)`** |
+| `P3_STATION_SELECT` | `station=A host=scott-lau-NEX.local` | **`station=C host=192.168.10.37`** |
+| `.agent-run.json` | `station:A/main` | **`station:C/main`** |
+| 批报告 `st=` | 请求值（与实况不符） | **`st=C`** ＝ 实际站 ⇒ **判据达成** |
+| 耗时 / 退出 | 953 s（靠 resume 收口） | **225 s 一次过** · `ACCEPT_OK=1` |
+
+- ⚠ **同时登记两处更正（实测）**：① 台账原文"**出网档 `st=` 与实况一致**"是**误读** —— `O-111` 出网档那批**同样没采纳 pin**（三行全在**主控本地**跑、`model` = 云端型号 `thinkingmachines/inkling:free`），之所以"看着一致"是 `Get-ActualStation` 取不到那两行 ⇒ **如实回落请求值**；② 本次把"**钉站 ⇒ 走站上出网**"这一**出网档行为变更**一并纳入候选①。
+
+**② `O-125` 候选① —— `sensitivity` 拆出可选字段 `backend:`（`P2`）**
+
+- **先列影响面（实测，非估）**：卡区共 **85 文件**（**75 张**写了 `sensitivity`：`public` 52 · `local-only` 21 · `sanitized` 2；6 张无 front-matter）· ★ **`backend` 键此前 `0` 张卡在用** ⇒ **迁移面为空** · `sensitivity.yaml` 已登记 **29 条** · 档位枚举 **4 档**。
+- **决策 = 采纳候选①【推荐形态：只加可选字段 + 缺省推导】**（不做硬切、**不动任何存量卡**）。
+- **落地四处**：① `Get-FrontMatter` 白名单加 `backend`（⚠ 该函数是**白名单解析**，漏登记 = "写了却没人读"）；② 新增纯函数 `Resolve-CardBackendLocal`（**唯一解析点**，返回 `ok`/`local`/`why`）；③ `Invoke-Task-Claude` 的 `$backendLocal` 改由它定，且 `$useStation` 改吃 `$backendLocal`（**要害**：`backend: local` + 更宽档位时**必须**仍走站上通道，否则落到主控本地 = **反而出网**）；④ 批清单读取顺带修（见下③）。
+- **判据（fail-closed）**：`local-only` ∧ `backend: egress` ⇒ **REJECT（exit 4）**；**未知取值（拼错）⇒ REJECT**（不许静默退回推导值）。缺省（不写）与旧式**逐字等价**。
+- **文档同步四处**：`inventory/sensitivity.yaml` 表头 · `dogfood-cards/README.md` 档位顺序第 6 条 · `CROSS-PROJECT-WORK-STANDARD.md` §4 卡契约 · `DESIGN.md` §6.1 卡样。
+- ⚠ **未做（如实）**：**没有**新增 Python 侧"卡面静态扫"门禁 ⇒ 机判**只在派发时**；存量卡**不补**字段（按设计不需要）。
+
+**③ 新登记 `O-127` —— 批清单的编码坑（执行中踩到，修在根因侧）**
+
+- **症状**：新写的验收清单 `batches/o124-pref.txt` 首次派发即 `BATCH_ABORT: 清单里没有可解析的行`。
+- **病因（实测）**：`Invoke-BatchTask` 用**裸 `Get-Content`** 读清单，而 PS 5.1 对 **BOM-less UTF-8** 文件按**系统 ANSI(GBK)** 解码 ⇒ 中文注释的某些字节对**吃掉换行** ⇒ 相邻两行并成一行 ⇒ 卡行被并进注释（以 `#` 开头 ⇒ 跳过）⇒ **0 行**。★ 同一份文件：**裸读 25→16 行 / kept=0**；**加 `-Encoding UTF8` ⇒ 33 行 / kept=1**。
+- **修法（根因侧）**：清单读取改为 `Get-Content -LiteralPath $listFile -Encoding UTF8`（**与 BOM 无关**）。⚠ **不走"让文件带 BOM"的 workaround** —— 实测 Edit 类工具保存时会**丢 BOM**，那条路**本身不可靠**。
+
+**④ 夹具与门禁**
+
+- `_fm_golden_test.ps1`：**434 → 448**（`o124b①–⑥` · `o125①–⑥` · `o127` · **+1 条次序守卫**）；全绿 `pass=448 fail=0`。
+- ★ **新增的次序守卫是有来历的**：`$backendLocal` 必须**早于** `$useStation` 解析 —— 实现**第一版正是放在其后**，PS 下 `$null` 直接**静默走错通道**（与本函数顶上那条"`$stPref` 必须在 `$useStation` 之后"同族）。同时按新字面量更新了既有的两条位置/结构断言（**守卫语义一字未改**，只跟字面量）。
+- ⚠ **夹具编写须知（本次踩到，已写进夹具注释）**：`Assert-True "…"` 的**描述串不得以反引号结尾** —— `` `" `` 会被 PS 读成**转义引号** ⇒ 字符串不终止 ⇒ 报 `string is missing the terminator` 且**错报位置在文件末尾**（不在出错行）。
+- 门禁：`--only syntax` PASS（BOM 未丢）· `--quick` **PASS · 38 绿 / 2 黄 / 0 红**（与 `续⑲` 同）。
+- ⚠ **副作用（如实）**：为做上面的真跑验收，**C 站 `gpt-oss-120b` 引擎被加载**（`cluster.py load gpt-oss-120b-c`；前置状态 = C 站 STOPPED）—— 本次**未卸载**（站级卸载走 `cluster.py` 的 flow，不在本项范围）⇒ 需要时手工卸。
+
+**关联**：`OPEN-ISSUES.md` **`O-124`**（✅ 已闭环）/ **`O-125`**（✅ 已闭环）/ **`O-127`**（✅ 已闭环）。
+
 ### 2026-09-30（续⑲） — **`O-123` 收口：9 条 `needs_decision`【全部裁完】**（U4×3 + U5×2 下裁并落回本体）+ `O-126` 候选① 落
 
 > **定位**：承 `续⑰`（第二刀取证已备）。★ 用户裁 **【甲】**：4 条下裁（= **已裁 + 实现待落地**）+ `U5#6` **登记能力边界**。

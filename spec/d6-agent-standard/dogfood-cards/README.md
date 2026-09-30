@@ -73,11 +73,17 @@
 5. ⚠ **含 C3（IP/主机名/Linux 路径/用户名）的内容，`sanitized` 不提供保护** —— 不许靠它兜底。
 6. ★★ **`sensitivity` 还【决定执行后端】**（`O-125` · 2026-09-30 一手踩到）：
    `local-only` ⇒ **站上本地引擎**（`ANTHROPIC_BASE_URL=http://127.0.0.1:8080`）；`public`/`sanitized` ⇒ **出网**
-   —— 机制逐字 = [`agent-cli.ps1`](../../../ops/station-bin/agent-cli.ps1) `$backendLocal = ($sens -eq 'local-only')`。
-   ⇒ **写卡时若目的就是"测某一条执行链"，档位必须按【后端】选**，并在**卡的正文里写明为什么是这一档**。
+   —— 原机制逐字 = [`agent-cli.ps1`](../../../ops/station-bin/agent-cli.ps1) `$backendLocal = ($sens -eq 'local-only')`。
    ⚠ **"过分类"（把 `public` 写成 `local-only`）不只更安全 —— 它同时换了一条执行链**
    （后端 / 模型 / `ENGINE_CTX` / 超时与 resume 行为）⇒ **两档的结果不可当成"同一实验的两个读数"**。
-   ★ 真值表侧的同一句话写在 [`inventory/sensitivity.yaml`](../../../inventory/sensitivity.yaml) 表头。
+   ★★ **2026-09-30 起可以不必"过分类"了 —— 拆出可选字段 `backend:`**（`O-125` 候选① 已落）：
+   · **要测哪条执行链，就显式写哪条**：`backend: local`（站上本地引擎） / `backend: egress`（出网），
+     程序为 `sensitivity` **按内容**判（如 `public`）+ `backend: local` ⇒ **合法**（这正是原来"过分类"想干的事）；
+   · **不写 `backend` ⇒ 完全按旧式推导**（`local-only` ⇒ `local`，其余 ⇒ `egress`）⇒ **既有卡零改动**；
+   · ★ **矛盾即拒**：`sensitivity: local-only` ∧ `backend: egress` ⇒ **REJECT（exit 4）**；
+     未知取值（拼错）⇒ **REJECT**（都**不许**静默取一边）。
+   · ⚠ **射程**：`backend` **只管 claude 通道**；`opencode` 通道的后端由**路由 id** 决定，不读它。
+   ★ 真值表侧的同一段写在 [`inventory/sensitivity.yaml`](../../../inventory/sensitivity.yaml) 表头。
 
 ## 第一批（2026-09-24 起草 · **5 张卡已全部跑完**）
 
