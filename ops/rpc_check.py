@@ -1587,6 +1587,193 @@ def execute_invalidation(action, class_, reason, affected=None, executors=None):
     return rep
 
 
+# ── ★ U-4 批 1（2026-09-30）：三条「已裁 + 实现待落地」落成**可机判纯函数** ─────────
+# 来源 = `O-123` 的裁定 + 派工视图 `spec/d6-agent-standard/UNTESTED-TRIAGE-PLAN.md` §8 批 1。
+# ★ **只实现裁定的方向，不重新裁定**：
+#   #3 「自报位 `affected_is_closure`」⇒ **判定方独立重算**（主判据）+ **逐跳路径证据**（辅），
+#      二者**不一致即拒收**（`verify_affected_closure`）
+#   #4 「只适用派生产物」（D-26/D-51）⇒ **可核来源标记** / 显式非派生**硬拒** /
+#      无标记**软警 + 审计**（灰度期；白名单 = 裁点名的「洗信号」避法）
+#   #6 「以**证伪**替代**证明**」⇒ 测例集覆盖代数性质 + 反例清单**须含历史真实失效**
+#      + 运行时抽样自检 + **可开增量白名单**（`check_falsification_suite` / `runtime_selfcheck`）
+# ⚠ 三条**共用一个口径**：**「判不了」≠「通过」**（同 `O-22`/`O-119`）——
+#   "取不到图查询面" / "抽样为空" 一律落 `boundary`/`inconclusive`/`insufficient`，
+#   **绝不**落 `consistent`/`ok`（那正是本仓头号形态「静默变成没事」的入口）。
+# ⚠ 与 `decide_invalidation` 同：**不是 CHECKS 项**（本仓没有可判的对象 ⇒ 不新增 gate id）。
+U4_CLOSURE_VERDICTS = ("consistent", "inconsistent", "boundary")
+U4_ORIGINS = ("derived", "non-derived")
+U4_DERIVED_VERDICTS = ("ok", "soft-warn", "hard-reject")
+U4_ALGEBRAIC_PROPS = ("boundary", "idempotence", "commutativity")
+U4_FALSIFY_VERDICTS = ("ok", "insufficient", "blocked")
+U4_SELFCHECK_VERDICTS = ("consistent", "mismatch", "inconclusive")
+
+
+def _edge_pair(e):
+    """边实例 → `(dependent, dependency)`；方向 = **`src` 依赖 `dst`**（照 `inventory/edges.yaml` 的约定）。
+
+    ⚠ 该方向约定**尚未写进 U3 schema**（台账 `O-83` 已登记）⇒ 本函数把它**显式写在一处**，
+      不留给下游各自理解（"同一事实两个定义点"是本仓头号形态）。
+    """
+    if isinstance(e, dict):
+        return e.get("src"), e.get("dst")
+    if isinstance(e, (list, tuple)) and len(e) == 2:
+        return e[0], e[1]
+    return None, None
+
+
+def recompute_closure(changed_ids, edges):
+    """★ `U4#3`：判定方**独立重算**影响面闭包（**主判据**）。
+
+    方向：**`src` 依赖 `dst`** ⇒ 变了的是被依赖的一侧（`dst`）时，影响面 = **依赖它的 `src`**（反向遍历）。
+    返回 `sorted(list)`；⚠ **不含** `changed_ids` 自身（那是变更集，不是影响面）。
+    ⚠ `edges` 为 `None`/空 ⇒ 返回 `None` = **判不了**（**不是**"没有下游" —— 那个区分是本仓头号形态）。
+    """
+    if not edges:
+        return None
+    deps = {}                                        # dependency -> [dependents]
+    for e in edges:
+        dep, dty = _edge_pair(e)
+        if dep is None or dty is None:
+            continue
+        deps.setdefault(dty, []).append(dep)
+    seen, out = set(changed_ids or ()), set()
+    stack = list(changed_ids or ())
+    while stack:                                     # 反向 BFS：谁依赖它
+        for d in deps.get(stack.pop(), ()):
+            if d not in seen:
+                seen.add(d)
+                out.add(d)
+                stack.append(d)
+    return sorted(out)
+
+
+def verify_affected_closure(changed_ids, affected, edges=None, hops=None):
+    """★ `U4#3`：**双轨核验** —— 独立重算（主判据）+ 逐跳路径证据（辅）；**不一致即拒收**。
+
+    返回 `(verdict, detail)`，`verdict ∈ U4_CLOSURE_VERDICTS`：
+      · `consistent`   —— 重算结果与调用方 `affected` **逐项一致**（且路径证据无冲突）
+      · `inconsistent` —— **拒收**（自报与重算不符 / 路径证据与图不符 —— 后者视为**伪造**）
+      · `boundary`     —— **判不了**：① 取不到图查询面（`edges` 空）；② 图面与本域**无交集**
+        （不同域 ⇒ 它不是能裁决本域的查询面）。照 `O-123` 的再触发条件，此时**反转为
+        「登记为边界 + 事后抽检」**，**不算通过**。
+
+    `hops` = 逐跳路径证据：`[[affected_id, ..., changed_id], ...]`（沿依赖方向**倒着走**：
+    每一跳 `(p[i], p[i+1])` 须是图里的一条边 `src 依赖 dst`）。⚠ 它**只是辅** ——
+    只在重算**通过**后才用来加严（重算过不了 ⇒ 直接 `inconsistent`，不看证据）。
+    """
+    if edges is None or not edges:
+        return ("boundary", "取不到依赖图查询面（edges 为空/未提供）⇒ 按 `O-123` 反转为"
+                            "「登记为边界 + 事后抽检」—— **不算通过**")
+    nodes = {x for e in edges for x in _edge_pair(e) if x is not None}
+    if (changed_ids or affected) and not (nodes & (set(changed_ids or ()) | set(affected or ()))):
+        return ("boundary", "图查询面与本域**无交集**（不同域，如产物→产物 vs 产物→存储列）"
+                            "⇒ 判不了闭包 ⇒ 登记边界 + 事后抽检（**不算通过**）")
+    want = sorted(recompute_closure(changed_ids, edges) or ())
+    got = sorted(set(affected or ()))
+    if got != want:
+        miss = [x for x in want if x not in got]
+        extra = [x for x in got if x not in want]
+        return ("inconsistent",
+                f"自报 `affected`({len(got)}) 与判定方**独立重算**({len(want)}) 不一致 ⇒ **拒收**"
+                f"（漏算 {miss[:5]} · 多算 {extra[:5]}）")
+    if hops:
+        pairs = {_edge_pair(e) for e in edges}
+        ch, wa = set(changed_ids or ()), set(want)
+        for path in hops:
+            p = list(path or ())
+            if len(p) < 2 or any((p[i], p[i + 1]) not in pairs for i in range(len(p) - 1)):
+                return "inconsistent", f"逐跳路径证据与图不符（**伪造**）⇒ 拒收: {p[:6]}"
+            if p[0] not in wa or p[-1] not in ch:
+                return "inconsistent", f"路径端点不在 affected/changed 内 ⇒ 拒收: {p[:6]}"
+    return "consistent", f"独立重算与自报逐项一致（{len(want)} 项）⇒ 闭包**已核验**"
+
+
+def check_derived_boundary(items, whitelist=()):
+    """★ `U4#4`：把「**只适用派生产物**」（D-26）落成**可机判形态**（含 D-51 的受理目录排除）。
+
+    `items` 每项 = `str`（= 无标记）或 `dict`：`id` · `origin`(`U4_ORIGINS`) · `source`（**可核来源标记**，
+    如 `hash:…` / `filetrack:…` / `tool:…`）。`whitelist` = **合法无标记产物**（`O-123` 点名的
+    「**先建白名单**」避法 —— 防"一律驳回"把合法的无标记产物一起挡掉，即**洗信号**风险）。
+
+    规则（照裁定逐条）：
+      · 显式 **`non-derived`** ⇒ **`hard-reject`**（上游变更集只能指派生产物）
+      · `derived` **且有** `source` ⇒ 计入 ok
+      · **无标记**（缺 `origin` / `derived` 但无 `source`）⇒ 灰度期 **`soft-warn` + 审计**；
+        在**白名单**内 ⇒ 放行（不告警）
+    返回 `(verdict, hard, unmarked, notes)`；`verdict` 取**最重**的一档（hard > soft > ok）。
+    ⚠ **已知边界（如实记）**：`origin`/`source` 仍是**调用方自报** —— 本判据只判"**有没有**可核标记"，
+      **不判标记真假**（那要另一条链，未裁未做）。
+    """
+    hard, unmarked, notes = [], [], []
+    wl = set(whitelist or ())
+    for it in items or ():
+        if isinstance(it, dict):
+            iid, origin, src = it.get("id"), it.get("origin"), it.get("source")
+        else:
+            iid, origin, src = it, None, None
+        if origin == "non-derived":
+            hard.append(iid)
+            notes.append(f"{iid}: 显式标为**非派生产物** ⇒ **硬拒**（D-26/D-51）")
+        elif origin == "derived" and src:
+            continue
+        elif iid in wl:
+            notes.append(f"{iid}: 无标记但在**白名单**内 ⇒ 放行（不告警）")
+        else:
+            unmarked.append(iid)
+            notes.append(f"{iid}: **无可核来源标记** ⇒ 软警 + 审计（灰度期，收敛后收紧为硬拒）")
+    if hard:
+        return "hard-reject", hard, unmarked, notes
+    if unmarked:
+        return "soft-warn", hard, unmarked, notes
+    return "ok", hard, unmarked, notes
+
+
+def check_falsification_suite(cases, counterexamples, transform=None, whitelist=()):
+    """★ `U4#6`：**以「证伪」替代「证明」**（不证 H-1 的"等价"，改证"**不等价会失败**"）。
+
+    三件（照裁定逐条）：
+      ① **测例集** `cases` = `[{"id":…, "prop": <boundary|idempotence|commutativity>}, …]`
+         —— 三类**代数性质须全覆盖**（否则测例集不足以证伪）
+      ② **反例清单** `counterexamples` = `[{"id":…, "historical": bool, "kind": "real-failure"}, …]`
+         —— ★ 须含**至少一条「历史真实失效」**（凭空造的反例不算；"新失效必入"是纪律，机判不了）
+      ③ **白名单** `whitelist` 限定**可开增量**的变换；`transform` 不在其中 ⇒ **`blocked`**
+    返回 `(verdict, missing_props, notes)`，`verdict ∈ U4_FALSIFY_VERDICTS`。
+    ⚠ `cases` 空 / 反例缺历史项 ⇒ `insufficient`（**不算通过**）。
+    """
+    props = {c.get("prop") for c in (cases or ()) if isinstance(c, dict)}
+    missing = [p for p in U4_ALGEBRAIC_PROPS if p not in props]
+    hist = [c for c in (counterexamples or ()) if isinstance(c, dict)
+            and c.get("historical") and c.get("kind") == "real-failure"]
+    notes = []
+    if missing:
+        notes.append(f"测例集未覆盖代数性质 {missing} ⇒ 不足以证伪")
+    if not hist:
+        notes.append("反例清单**没有**「历史真实失效」项 ⇒ 不足以证伪（凭空造的反例不算）")
+    if missing or not hist:
+        return "insufficient", missing, notes
+    if transform is not None and transform not in set(whitelist or ()):
+        notes.append(f"变换 {transform!r} 不在**可开增量白名单**内 ⇒ 不得开增量（blocked）")
+        return "blocked", missing, notes
+    return "ok", missing, notes
+
+
+def runtime_selfcheck(sample_full, sample_incr):
+    """★ `U4#6` ②：**运行时自检**（第二道防线）—— 增量前后在受影响子图上**抽样核全量**。
+
+    `sample_full` / `sample_incr` = `{key: value}`。返回 `(verdict, detail)`：
+      · `consistent`   —— 抽样逐键相等
+      · `mismatch`     —— **不一致 ⇒ 增量结果不可信**（须回落全量）
+      · `inconclusive` —— **抽样为空 ⇒ 判不了**（**不算通过**！"没抽到" ≠ "没问题"）
+    """
+    sf, si = dict(sample_full or {}), dict(sample_incr or {})
+    if not sf and not si:
+        return "inconclusive", "抽样为空 ⇒ 自检**判不了**（**不是通过**）"
+    bad = [k for k in set(sf) | set(si) if sf.get(k) != si.get(k)]
+    if bad:
+        return "mismatch", f"抽样不一致 {sorted(bad)[:5]} ⇒ 增量结果**不可信**（回落全量）"
+    return "consistent", f"抽样 {len(sf)} 项一致"
+
+
 # ── D7-P1-5 (2026-09-26)：U-5 信任基座四问 V-1~V-4 + 晋升门 schema ────────────
 # 两部分：
 #   ① **四问各一条可机判判据**（`v1_definition_correspondence` / `v2_bridge_completeness` /
