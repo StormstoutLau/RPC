@@ -52,9 +52,9 @@ items:
   - {spec: D7-PROTOCOL-CONTRACT, n: 4, gist: "P3 回收与 P4a 机械验证从未被机判过（l1_results 无任何机判记录）", state: todo, needs_decision: false, refs: [], blocker: implementation}
   - {spec: D7-PROTOCOL-CONTRACT, n: 5, gist: "P4b 语义复核（可选分支）从未被触发（sem_verified / l2_marks，代码无实现）", state: todo, needs_decision: false, refs: [], blocker: implementation}
   - {spec: D7-PROTOCOL-CONTRACT, n: 6, gist: "P5 裁决登记 Verdict 从未被真实落盘", state: todo, needs_decision: false, refs: [], blocker: implementation}
-  - {spec: D7-PROTOCOL-CONTRACT, n: 7, gist: "三条红线从未被机制强制（完成信号权 / L1 先于 L2 / P0 固化）—— 文档约束，代码无拦截", state: todo, needs_decision: false, refs: [], blocker: implementation}
-  - {spec: D7-PROTOCOL-CONTRACT, n: 8, gist: "不变量 I-1 / I-3 / I-6 从未被运行时守护（无断言 / 无审计日志 / 无熔断）", state: todo, needs_decision: false, refs: [], blocker: implementation}
-  - {spec: D7-PROTOCOL-CONTRACT, n: 9, gist: "角色禁项从未被代码层阻断（主控站不执行 / 工作站不自评…全靠约定）", state: todo, needs_decision: false, refs: [], blocker: implementation}
+  - {spec: D7-PROTOCOL-CONTRACT, n: 7, gist: "三条红线从未被机制强制（完成信号权 / L1 先于 L2 / P0 固化）—— ★ 2026-10-01 已落（A 段 · 离线契约化）：三条落成纯函数拦截 d7_block 的 RL1/RL2/RL3 + 离线夹具；⚠ 仍未实测 = 从未拦过真实动作（本仓零个真实信封）且尚未接线（B 段）⇒ state=partial", state: partial, needs_decision: false, refs: [O-134], blocker: implementation}
+  - {spec: D7-PROTOCOL-CONTRACT, n: 8, gist: "不变量 I-1 / I-3 / I-6 从未被运行时守护（无断言 / 无审计日志 / 无熔断）—— ★ 2026-10-01 已落（A 段）：落成纯函数规则 I1/I3/I6（★ I3 与红线 1 同内容 ⇒ 共用同一份实现，不造第二份真值）；⚠ 仍未实测 = 无运行时断言/审计/熔断接入 ⇒ state=partial", state: partial, needs_decision: false, refs: [O-134], blocker: implementation}
+  - {spec: D7-PROTOCOL-CONTRACT, n: 9, gist: "角色禁项从未被代码层阻断（主控站不执行 / 工作站不自评…全靠约定）—— ★ 2026-10-01 已落（A 段）：落成 PRM/PRW 两条纯函数规则 + 状态机的驱动角色约束（d7_transition）；⚠ 仍未实测 = 未接编译期/运行期约束（仍靠调用方传 actor）⇒ state=partial", state: partial, needs_decision: false, refs: [O-134], blocker: implementation}
 
   # ── D7-PROTOCOL-CONCLUSION-CONTRACT（8 条）──────────────────────────────────
   - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 1, gist: "站上真跑未实测：校验器 / 综合器只跑过离线夹具；Invoke-Review 出网判官真调用未跑", state: todo, needs_decision: false, refs: [O-92], blocker: run}

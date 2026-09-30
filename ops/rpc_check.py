@@ -1964,6 +1964,258 @@ def runtime_selfcheck(sample_full, sample_incr):
     return "consistent", f"抽样 {len(sf)} 项一致"
 
 
+# ── ★ D7 协议契约（A 段 · 2026-10-01）：三信封 + 六相状态机 + 8 条纯函数拦截 ──────────
+# 真值源 = `spec/d6-agent-standard/D7-PROTOCOL-CONTRACT.md`（**唯一**；本库**逐字照其 §1**）。
+# 性质 = **纯函数判据库** —— 与 `decide_invalidation` / `verify_affected_closure` 同族：
+#   **不是 CHECKS 项**、**不新增 gate id**（协议链路的对象在站上，本仓**零个真实信封**
+#   ⇒ 眼下**没有可判的对象** ⇒ 只能判「**给一份信封 / 一次状态迁移 / 一次动作，它合法吗**」）。
+# ★ 三段式定位（用户 2026-10-01 裁）：**A 离线契约化 → B 外壳接线 → C 站上真跑**。
+#   A 段把"文档约束"变成"**可被机械拒绝的规则**" ⇒ B/C 段才有判据可接。本批 = **只做 A**。
+# ⚠⚠ 与规范 §未实测 1–6 的关系（**如实，不冒充实测**）：A 段**不动**六相真跑那 6 条
+#   （它们要真的站上跑，属 B/C）⇒ A 段只收口 **7 / 8 / 9**（三红线 / 三不变量 / 角色禁项）。
+# ⚠ 契约自身的两处含糊在 A 段**已裁**（落回规范 §1.1 / §1.5）：① `verdict` 词义冲突；
+#   ② §2 五行"依据不足"的处置 = **只判键在不在、不判内部结构**（射程到此为止，**不补齐**）。
+
+# 六相状态名序列（§1 末行逐字）+ 出边（照 §1 表的"相 → 产出/动作"）。
+D7_PHASES = ("drafted", "dispatched", "claimed", "executing", "collected",
+             "mech_verified", "sem_verified", "accepted", "rejected")
+D7_TERMINAL = ("accepted", "rejected")
+D7_TRANSITIONS = {
+    "drafted":       ("dispatched",),
+    "dispatched":    ("claimed",),
+    "claimed":       ("executing",),
+    "executing":     ("collected",),
+    "collected":     ("mech_verified",),
+    # P4b 可选：`mech_verified` 既可进语义复核，也可**直接**裁决（跳过 P4b）
+    "mech_verified": ("sem_verified", "accepted", "rejected"),
+    "sem_verified":  ("accepted", "rejected"),
+    "accepted":      (),
+    "rejected":      (),
+}
+# §1 每相的"谁"⇒ 迁移的**驱动角色**（P1/P2/P3 由工作站，其余由主控站）。
+D7_MASTER, D7_WORKER = "master", "worker"
+D7_TRANSITION_ACTOR = {
+    ("drafted", "dispatched"):        D7_MASTER,   # P0 立契
+    ("dispatched", "claimed"):        D7_WORKER,   # P1 领取
+    ("claimed", "executing"):         D7_WORKER,   # P2 执行
+    ("executing", "collected"):       D7_WORKER,   # P3 回收（工作站产出 RunReport）
+    ("collected", "mech_verified"):   D7_MASTER,   # P4a 机械验证
+    ("mech_verified", "sem_verified"): D7_MASTER,  # P4b 语义复核（可选）
+    ("mech_verified", "accepted"):    D7_MASTER,   # P5（跳过 P4b）
+    ("mech_verified", "rejected"):    D7_MASTER,
+    ("sem_verified", "accepted"):     D7_MASTER,   # P5
+    ("sem_verified", "rejected"):     D7_MASTER,
+}
+
+# 三信封（字段级，§1.1 逐字）。`nested` **只收摘要在字面上给出的子键**
+# （`golden{ref,checksum}` / `inputs{ref,digest}` / `evidence_budget{anchors,tool_calls}` /
+#  `artifact{digest,size}`）—— 摘要**没给**的一律**不判、不补**（§2 五行的处置）。
+D7_ENVELOPES = {
+    "TaskContract": {
+        "required": ("task_id", "task_desc", "accept", "golden", "inputs",
+                     "evidence_budget", "constraints", "timeout_s", "sensitivity", "readonly"),
+        "nested": {"golden": ("ref", "checksum"),
+                   "inputs": ("ref", "digest"),
+                   "evidence_budget": ("anchors", "tool_calls")},
+        "forbidden": (),
+    },
+    "RunReport": {
+        "required": ("run_id", "attempt", "artifact", "inputs_digest", "exit_code",
+                     "decisions", "evidence", "usage"),
+        "nested": {"artifact": ("digest", "size")},
+        # ★★ 红线「产出方不得自评」的**机判形态**：`RunReport` 刻意不含 verdict 字段（§1.1 ★）
+        "forbidden": ("verdict",),
+    },
+    "Verdict": {
+        "required": ("verdict", "phase", "l1_results", "recorded_at", "seq"),
+        "nested": {},
+        "forbidden": (),
+    },
+}
+# `review.json` 的判官**四值**（`judge-prompt.tmpl` / `test_rpc_check_u4.py` 的 `cc-*` 夹具）
+# —— ★ 与 D7 信封的 `verdict`（exit code）**同名不同物**；A 段裁 = 靠**值类型**机械切分。
+D7_VERDICT_WORDS = ("accept", "revise", "reject", "uncertain")
+D7_ENV_VERDICTS = ("ok", "reject")
+
+
+def validate_envelope(kind, env):
+    """★ D7 三信封的**离线校验器**（缺字段即拒；`RunReport` 含 `verdict` 即拒）。
+
+    返回 `(verdict, reason)`，`verdict ∈ D7_ENV_VERDICTS`（**封闭两值**）。
+    ⚠ **fail-closed**：`kind` 不在闭集 / `env` 不是对象 ⇒ **reject**（**不是**"跳过"）。
+    ⚠ **射程（= §2 五行「依据不足」的处置，落回规范 §1.5）**：只判**顶层必需键在不在** +
+      **摘要逐字给出的子键**；`constraints` / `decisions[]`（八字段）/ `sensitivity` /
+      `redispatch?` 的内部结构**一律不判、不补** —— 摘要没给 ⇒ 补它就是**编真值**。
+    ★ **红线 3 的机判入口**：`TaskContract.accept[]` 每项须同时有判据与 `criteria_hash`
+      （§1.1 逐字「判据 + `criteria_hash`」）—— 没有它，"判据在 P0 固化"无从机判。
+    """
+    if kind not in D7_ENVELOPES:
+        return "reject", (f"未知信封 kind={kind!r}（闭集 {tuple(D7_ENVELOPES)}）"
+                          f" ⇒ 拒（fail-closed：未知一律不放行）")
+    if not isinstance(env, dict):
+        return "reject", f"信封 {kind} 不是对象（{type(env).__name__}）⇒ 拒"
+    spec = D7_ENVELOPES[kind]
+    miss = [k for k in spec["required"] if k not in env]
+    if miss:
+        return "reject", f"{kind} 缺必需字段 {miss} ⇒ 拒（缺字段即拒）"
+    for k, sub in spec["nested"].items():
+        v = env.get(k)
+        if not isinstance(v, dict):
+            return "reject", f"{kind}.{k} 不是对象（摘要逐字给出子键 {sub}）⇒ 拒"
+        smiss = [s for s in sub if s not in v]
+        if smiss:
+            return "reject", f"{kind}.{k} 缺子键 {smiss} ⇒ 拒（逐字列出，不得省）"
+    hit = [k for k in spec["forbidden"] if k in env]
+    if hit:
+        return "reject", (f"{kind} 含禁字段 {hit} ⇒ **拒** —— 产出方不得自评"
+                          f"（§1.1 ★：`RunReport` 刻意不含 verdict 字段）")
+    if kind == "TaskContract":
+        acc = env.get("accept")
+        if not isinstance(acc, list) or not acc:
+            return "reject", "TaskContract.accept 必须**非空列表**（无判据 = 无从裁决）⇒ 拒"
+        for i, item in enumerate(acc):
+            if not isinstance(item, dict) or not item.get("criteria") or not item.get("criteria_hash"):
+                return "reject", (f"TaskContract.accept[{i}] 须**同时**给判据与 `criteria_hash`"
+                                  f" ⇒ 拒（红线 3 的机判入口：判据与 golden 哈希在 P0 固化）")
+    if kind == "RunReport" and not isinstance(env.get("decisions"), list):
+        return "reject", "RunReport.decisions 必须是列表（八字段在**每项**里；内部结构不判）⇒ 拒"
+    if kind == "Verdict":
+        v = env.get("verdict")
+        if isinstance(v, bool) or not isinstance(v, int):
+            return "reject", (f"Verdict.verdict 必须是**整数**（= exit code）；实得 {v!r}"
+                              f" ⇒ 拒（★ 词义冲突的机械切分：判官四值 {list(D7_VERDICT_WORDS)}"
+                              f" 属 `review.json`，**不属**本信封）")
+    return "ok", f"{kind} 信封**字段级合法**（顶层 {len(spec['required'])} 项齐）"
+
+
+def d7_transition(state, to_state, actor):
+    """★ D7 六相状态机（P0–P5）的**纯函数**：合法迁移给下一态，非法给**拒绝理由**。
+
+    返回 `(ok, next_state, reason)`；`next_state` 仅在 ok 时非 None。
+    规则（照 §1 的状态名序列 + 每相的"谁"）：
+      · **单链**：`drafted→dispatched→claimed→executing→collected→mech_verified`
+      · `mech_verified` 分叉：`→sem_verified`（P4b **可选**）或**直接** `→accepted|rejected`
+      · `sem_verified →accepted|rejected` · 终态**无出边**
+      · ★ **角色约束**：P1/P2/P3 段由**工作站**驱动，P0/P4a/P4b/P5 由**主控站**驱动
+        —— 角色不对 ⇒ **拒**（角色禁项的机判入口）。
+      · ⚠ **不得跳过 L1**：`collected` **不能**直落 `accepted|rejected`（红线 2）。
+      · ⚠ **fail-closed**：未知态 / 未知目标 / `actor` 不在闭集 ⇒ **拒**（不静默放行）。
+    """
+    if state not in D7_PHASES:
+        return False, None, f"未知当前态 {state!r}（闭集 {D7_PHASES}）⇒ 拒（fail-closed）"
+    if to_state not in D7_PHASES:
+        return False, None, f"未知目标态 {to_state!r} ⇒ 拒（fail-closed）"
+    allowed = D7_TRANSITIONS[state]
+    if not allowed:
+        return False, None, f"{state} 是**终态**（无出边）⇒ 拒绝任何迁移（到 {to_state}）"
+    if to_state not in allowed:
+        why = ("**不得跳过 L1 机械门**（红线 2：L1 先于 L2/裁决）"
+               if (state == "collected" and to_state in D7_TERMINAL) else f"合法出边只有 {allowed}")
+        return False, None, f"{state} → {to_state} **不是合法迁移**：{why} ⇒ 拒"
+    if actor not in (D7_MASTER, D7_WORKER):
+        return False, None, (f"未知角色 actor={actor!r}（闭集 {D7_MASTER}/{D7_WORKER}）"
+                             f" ⇒ 拒（fail-closed）")
+    want = D7_TRANSITION_ACTOR.get((state, to_state))
+    if want is not None and actor != want:
+        return False, None, f"{state} → {to_state} 应由**{want}**驱动，实为 {actor} ⇒ 拒（角色不对）"
+    return True, to_state, f"{state} → {to_state} 合法（{want} 驱动）"
+
+
+# ★ 8 条纯函数拦截 = **三红线 + 三不变量 + 两角色禁项**（§1.2 / §1.3 / §1.4 逐字）。
+# ⚠ 红线 1 与不变量 I-3 **内容相同**（完成信号权在主控站）⇒ **同一实现登记两个规则 id**，
+#   不写两份实现（"同一事实两处表达"是本仓头号失败形态）。
+D7_BLOCK_RULES = (
+    ("RL1", "红线 1 · 完成信号权只在主控站"),
+    ("RL2", "红线 2 · L1 机械门先于 L2 且 L2 无权改写"),
+    ("RL3", "红线 3 · 判据与 golden 哈希在 P0 固化"),
+    ("I1",  "不变量 I-1 · 单写者（事件流只有主控站可写）"),
+    ("I3",  "不变量 I-3 · 完成信号权在主控站"),
+    ("I6",  "不变量 I-6 · fail-closed"),
+    ("PRM", "角色禁项 · 主控站不执行任务本体"),
+    ("PRW", "角色禁项 · 工作站不自评/不写 verdict/不重派/不合并"),
+)
+D7_WORKER_FORBIDDEN = ("self_accept", "write_verdict", "redispatch", "merge")
+
+
+def _d7_blk_completion(actor=None):
+    """RL1 ≡ I-3：**完成信号权只在主控站**（同一实现登记两个 id）。"""
+    if actor == D7_MASTER:
+        return True, "主控站发出完成信号（accepted/rejected）⇒ 合法"
+    return False, f"{actor!r} 不得发出完成信号 ⇒ 拒（红线 1 / 不变量 I-3：完成信号权只在主控站）"
+
+
+def _d7_blk_l1_l2(l1_results=None, l2_marks=None, l2_rewrites_l1=False):
+    """RL2：**L1 机械门先于 L2，且 L2 无权改写 L1**。"""
+    if l2_rewrites_l1:
+        return False, "L2 改写了 L1 结果 ⇒ 拒（红线 2：L2 无权改写 L1）"
+    if l2_marks and not l1_results:
+        return False, "有 L2 结果却**无** L1 结果 ⇒ 拒（红线 2：L1 必须先于 L2）"
+    return True, "L1 先于 L2 且 L2 未改写 L1 ⇒ 合法"
+
+
+def _d7_blk_frozen(hash_p0=None, hash_now=None):
+    """RL3：**判据与 golden 哈希在 P0 固化**（= "判据不能事后改"）。"""
+    if not hash_p0 or not hash_now:
+        return False, ("P0 固值或现值缺失 ⇒ **判不了** ⇒ 拒（fail-closed：取不到固值就不能"
+                       "声称「未改」—— 红线 3 要求判据与 golden 哈希在 P0 固化）")
+    if hash_p0 != hash_now:
+        return False, (f"判据/golden 哈希与 P0 固值不符（{hash_p0!r} ≠ {hash_now!r}）"
+                       f" ⇒ 拒（红线 3：判据不能事后改）")
+    return True, "判据/golden 哈希与 P0 固值一致 ⇒ 合法"
+
+
+def _d7_blk_single_writer(actor=None, target=None):
+    """I-1：**单写者** —— 事件流只有主控站可写，工作站只产出不落账。"""
+    if target != "events":
+        return True, f"目标 {target!r} 不在本约束射程内（约束只覆盖 `events` 事件流）"
+    if actor == D7_MASTER:
+        return True, "主控站写事件流 ⇒ 合法"
+    return False, f"{actor!r} 不得写 `events` 事件流 ⇒ 拒（不变量 I-1：单写者）"
+
+
+def _d7_blk_fail_closed(decision=None):
+    """I-6：**fail-closed** —— 判不了 ⇒ 拒，**绝不**落通过。"""
+    if decision == "pass":
+        return True, "决策**显式** `pass` ⇒ 放行"
+    return False, (f"决策 {decision!r} 不是显式 `pass` ⇒ 拒（不变量 I-6：缺失 / 未知 / `reject`"
+                   f" 一律**不得**静默通过）")
+
+
+def _d7_blk_master_scope(actor=None, action=None):
+    """角色禁项：**主控站「不执行任务本体」**。"""
+    if actor == D7_MASTER and action == "execute_task":
+        return False, "主控站**执行任务本体** ⇒ 拒（角色禁项：主控站只立契/验证/裁决，不执行）"
+    return True, f"主控站未执行任务本体（action={action!r}）⇒ 合法"
+
+
+def _d7_blk_worker_scope(actor=None, action=None):
+    """角色禁项：**工作站「不自评通过、不写 verdict、不重派、不合并」**。"""
+    if actor == D7_WORKER and action in D7_WORKER_FORBIDDEN:
+        return False, f"工作站执行禁项 {action!r} ⇒ 拒（禁项集 {D7_WORKER_FORBIDDEN}）"
+    return True, f"工作站未触禁项（action={action!r}）⇒ 合法"
+
+
+# 规则 id → 实现（RL1 与 I3 **共用** `_d7_blk_completion`，见上）
+D7_BLOCK_FNS = {
+    "RL1": _d7_blk_completion, "I3": _d7_blk_completion,
+    "RL2": _d7_blk_l1_l2,      "RL3": _d7_blk_frozen,
+    "I1":  _d7_blk_single_writer, "I6": _d7_blk_fail_closed,
+    "PRM": _d7_blk_master_scope, "PRW": _d7_blk_worker_scope,
+}
+
+
+def d7_block(rule, **ctx):
+    """**统一入口**：按规则 id 调 8 条拦截之一 ⇒ `(ok, reason)`。
+
+    ⚠ 未知规则 id ⇒ **拒**（fail-closed；**不**静默返回 ok）。
+    """
+    fn = D7_BLOCK_FNS.get(rule)
+    if fn is None:
+        return False, (f"未知规则 id {rule!r}（闭集 {[r for r, _ in D7_BLOCK_RULES]}）"
+                       f" ⇒ 拒（fail-closed）")
+    return fn(**ctx)
+
+
 # ── D7-P1-5 (2026-09-26)：U-5 信任基座四问 V-1~V-4 + 晋升门 schema ────────────
 # 两部分：
 #   ① **四问各一条可机判判据**（`v1_definition_correspondence` / `v2_bridge_completeness` /
