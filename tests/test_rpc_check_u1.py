@@ -191,6 +191,92 @@ def test_the_legacy_mark_is_not_vacuous():
     assert R.u1_verify_declaration(_legacy_decl(**{R.U1_LEGACY_MARK: True})) is None
 
 
+# ── ⑤c ★★ `U1#5`（2026-10-01 裁）：**命名空间注册表 + 取值域判据** ─────────────
+# 缺口（本批实测）：旧判据**只复算** ⇒ `namespace: 任何字符串` 都能过（复算自洽即可）
+#   ⇒ D-25 的"前缀必填 + 取值域封闭"**只有前半句落地了**。
+_REG = {"namespaces": [
+    {"id": "open_data", "label": "Open_Data", "status": "active", "since": "2026-09-26", "aliases": ["Open_Data"]},
+    {"id": "old_proj", "label": "旧项目", "status": "retired", "since": "2026-09-26", "aliases": []},
+]}
+
+
+def _real_reg():
+    import yaml
+    return yaml.safe_load((ROOT / "inventory" / "namespaces.yaml").read_text(encoding="utf-8"))
+
+
+def test_namespace_registry_is_self_consistent():
+    """注册表自身的机判本体：正例无 bad；同一串属于两条 ⇒ 必红（**唯一**会判红的冲突）。"""
+    assert R.validate_namespaces(_REG)[0] == []
+    clash = {"namespaces": [
+        {"id": "a", "status": "active", "since": "2026-09-26", "aliases": ["shared"]},
+        {"id": "b", "status": "active", "since": "2026-09-26", "aliases": ["shared"]},
+    ]}
+    bad = R.validate_namespaces(clash)[0]
+    assert any("命名空间冲突" in b for b in bad), f"alias 撞车没被判出: {bad}"
+    # status / since 也要判（闭集 + 形态）
+    assert any("status" in b for b in R.validate_namespaces(
+        {"namespaces": [{"id": "a", "status": "??", "since": "2026-09-26"}]})[0])
+    assert any("since" in b for b in R.validate_namespaces(
+        {"namespaces": [{"id": "a", "status": "active", "since": "9/26"}]})[0])
+
+
+def test_namespace_domain_rule_is_strict():
+    """★ 取值域规则：**只认 active 的 canonical id** —— 别名 / retired / 未登记 **全拒**。"""
+    D = R.namespace_domain_error
+    assert D("open_data", _REG) is None, "active 的 canonical id 应放行"
+    alias = D("Open_Data", _REG)
+    assert alias and "canonical id" in alias, f"写别名必须拒并提示 canonical id: {alias!r}"
+    retired = D("old_proj", _REG)
+    assert retired and "retired" in retired
+    unknown = D("nope", _REG)
+    assert unknown and "未登记" in unknown
+
+
+def test_domain_rule_rejects_alias_to_avoid_two_identities():
+    """★ **为什么别名必须拒**（不是洁癖）：身份是 `sha256([ns,id,ver])` ⇒ 哈希吃**原字符串**
+    ⇒ 若 `open_data` 与 `Open_Data` 都放行，**同一个产物会有两个身份**。"""
+    a = R.u1_identity("open_data", IDENT, VER)
+    b = R.u1_identity("Open_Data", IDENT, VER)
+    assert a != b, "前提失效：两种写法竟然同值（那本条就没有论证对象了）"
+    # 而注册表把二者**算作同一个东西**（alias 指向同一 id）⇒ 故只在**身份**这一侧收紧
+    by_id, a2i = R.namespace_index(_REG)
+    assert a2i["Open_Data"] == "open_data" and "Open_Data" not in by_id
+
+
+def test_the_domain_rule_is_not_vacuous():
+    """★ **先验红自证**：拿本仓**真实声明**的 namespace，只**改一个字符串** ⇒ 判据必须翻红。
+
+    没有这条，"取值域判据"可能只是写了个 `return None`（本仓头号形态：判据什么都没判）。
+    """
+    d = _decl()                                   # 真声明的形状（namespace = "rpc"）
+    bad = dict(d); bad["namespace"] = "nope"
+    # ⚠ 只判**取值域**这一层：复算在改名后本来就会不符 ⇒ 故直接调值域判据，不混两层
+    assert R.namespace_domain_error(d["namespace"], _real_reg()) is None
+    assert R.namespace_domain_error(bad["namespace"], _real_reg()) is not None
+
+
+def test_repo_registry_covers_real_declarations_and_the_census_gap():
+    """★ 端到端：真读 `inventory/namespaces.yaml` —— ① 注册表自洽；② 两个真声明都在域内；
+    ③ **`U1#5` 普查出的缺口已补**：`auto_prover` 在域里、且 `Open_Data` 是 **alias 而非 id**。"""
+    reg = _real_reg()
+    assert R.validate_namespaces(reg)[0] == []
+    by_id, a2i = R.namespace_index(reg)
+    assert "auto_prover" in by_id, "普查缺口未补：Auto_Prover 仍没有合法 namespace"
+    assert "open_data" in by_id and a2i.get("Open_Data") == "open_data"
+    # 两个真声明（edges.yaml / dialect.yaml）的 namespace 必须在 active 域里
+    import yaml
+    for name in ("edges.yaml", "dialect.yaml"):
+        doc = yaml.safe_load((ROOT / "inventory" / name).read_text(encoding="utf-8"))
+        ns = doc["u1"]["namespace"]
+        assert R.namespace_domain_error(ns, reg) is None, f"{name} 的 namespace={ns!r} 不在取值域里"
+    # 消费侧换算（`--invalidate` 的 affected 归集）：census 的驼峰写法应换算回 canonical id
+    assert R.namespace_for_project("Open_Data", reg) == "open_data"
+    assert R.namespace_for_project("Auto_Prover", reg) == "auto_prover"
+    # ⚠ 未登记 ⇒ **原样返回**（不猜、不造白名单）—— 这是与旧行为一致的那一半
+    assert R.namespace_for_project("Unknown_Proj", reg) == "Unknown_Proj"
+
+
 # ── ⑥ 端到端真读：本仓真的写了这两个声明（消掉 U1 spec 未实测 #2）──────────
 def test_repo_inventory_declarations_exist_and_recompute():
     import yaml

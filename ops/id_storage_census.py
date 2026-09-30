@@ -39,6 +39,8 @@ sys.path.insert(0, str(ROOT / "ops"))
 import rpc_check as R  # noqa: E402  ★ 共用 U-1 判据（不另写正则）
 
 CENSUS = ROOT / "inventory" / "id-storage-census.yaml"
+# ★ `U1#5`（2026-10-01）：namespace 取值域的**唯一真值**（本脚本只消费；判据在门禁侧）
+NAMESPACE_REG = ROOT / "inventory" / "namespaces.yaml"
 
 # ── 口径（唯一实现；改这里 ⇒ 必须 --emit 重出真值）─────────────────────────────
 SHAPE_SHA256_32 = "sha256[:32] 无前缀"
@@ -367,8 +369,27 @@ def invalidate(changed_paths):
 
 
 def _ns_of_project(project):
-    """项目 → namespace。⚠ 这是**一张映射表**：它本身是"清单"，不是事实（见 `dialect.yaml`）。"""
-    return {"Open_Data": "Open_Data", "Auto_Prover": "Auto_Prover"}.get(project, project)
+    """项目 → canonical namespace。★ `U1#5`（2026-10-01）：**改由注册表解析**（唯一真值 = `namespaces.yaml`）。
+
+    原状 = 一张**硬编码 Python 映射表**（`{"Open_Data": "Open_Data", "Auto_Prover": "Auto_Prover"}`），
+    而它的取值（`Open_Data` / `Auto_Prover` 驼峰）**与注册表的 canonical id（`open_data` / `auto_prover`）不同写法**
+    ⇒ 这正是 `U1#5` 普查出的"同一个项目多个名字"。现走 `namespace_for_project()`：
+    **id/alias 精确命中才换算，未登记 ⇒ 原样返回**（与旧行为一致，不猜）。
+    """
+    return R.namespace_for_project(project, _namespace_reg())
+
+
+def _namespace_reg():
+    """读注册表（**唯一真值**）；缺失/不可解析 ⇒ **返回 `{}` 并按未登记处理**（不静默造白名单）。
+
+    ⚠ 这里**不** `raise`：本脚本是 `affected` 的**生产者**，它该"少算并可见"，而不是把整条链炸掉
+      —— 门禁 `u1-identity` / `dialect` 会在注册表坏掉时**判红**（判据只在一处）。
+    """
+    try:
+        import yaml
+        return yaml.safe_load(NAMESPACE_REG.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
 
 
 def main():
