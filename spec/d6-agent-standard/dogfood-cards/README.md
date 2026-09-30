@@ -71,6 +71,13 @@
 3. 若输入的**唯一**敏感项是**凭据类**（且有固定格式前缀）⇒ 可用 `sanitized`（scrubber 会抹）；
 4. 若输入**已不含 C1/C2/C3**（人工剔除后）⇒ 用 `public`，**保护来自"输入准备"，不来自档位**；
 5. ⚠ **含 C3（IP/主机名/Linux 路径/用户名）的内容，`sanitized` 不提供保护** —— 不许靠它兜底。
+6. ★★ **`sensitivity` 还【决定执行后端】**（`O-125` · 2026-09-30 一手踩到）：
+   `local-only` ⇒ **站上本地引擎**（`ANTHROPIC_BASE_URL=http://127.0.0.1:8080`）；`public`/`sanitized` ⇒ **出网**
+   —— 机制逐字 = [`agent-cli.ps1`](../../../ops/station-bin/agent-cli.ps1) `$backendLocal = ($sens -eq 'local-only')`。
+   ⇒ **写卡时若目的就是"测某一条执行链"，档位必须按【后端】选**，并在**卡的正文里写明为什么是这一档**。
+   ⚠ **"过分类"（把 `public` 写成 `local-only`）不只更安全 —— 它同时换了一条执行链**
+   （后端 / 模型 / `ENGINE_CTX` / 超时与 resume 行为）⇒ **两档的结果不可当成"同一实验的两个读数"**。
+   ★ 真值表侧的同一句话写在 [`inventory/sensitivity.yaml`](../../../inventory/sensitivity.yaml) 表头。
 
 ## 第一批（2026-09-24 起草 · **5 张卡已全部跑完**）
 

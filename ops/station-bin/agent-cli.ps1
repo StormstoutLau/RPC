@@ -4004,6 +4004,26 @@ function Resolve-ClaudeStationCandidates {
     return $order
 }
 
+function Get-ActualStation {
+    # O-124 (2026-09-30, 候选② 已落): 批报告必须报【实际执行站】，而不是"请求的站"。
+    #   为什么需要: `local-only` 档下 claude **自己按"引擎就绪顺序"选站**（实测三次全落 A 站，
+    #     而批报告打的是 A/B/C）⇒ 报告与实况不符（同族 O-116，但错在"**站**"这一维）。
+    #   真值来源 = 站级日志里**派发段自己写**的那两行（两条 claude 路径各一行）:
+    #     · `P3_STATION_SELECT: station=<A|B|C> host=... (local engine ready)`       ← local 档
+    #     · `CLAUDE_EGRESS_STATION_SELECT: station=<A|B|C> host=... (backend=...)`   ← 出网档
+    #   取**最后一条**（resume 可能重选）。返回 '' = 这两行都不在日志里 = **不可判**
+    #     ⇒ ★ 调用方必须**如实回落**到"请求的站"（**不许假装知道**）。
+    #   ⚠ 纯函数（只吃字符串数组）⇒ 夹具可离线单测（见 `o124`）。
+    param([string[]]$Lines)
+    $last = ''
+    foreach ($l in @($Lines)) {
+        if ("$l" -match '(P3_STATION_SELECT|CLAUDE_EGRESS_STATION_SELECT): station=([ABC])(\s|$)') {
+            $last = $Matches[2]
+        }
+    }
+    return $last
+}
+
 function Test-StationEngineReady {
     # P3: 探"某站本地引擎是否在服务"（这是选站的**唯一硬判据** —— 引擎不在 ⇒ 该站不可用）。
     # 复用既有站上件 `_station_ready.sh`（它已能区分 ERR_NO_ENGINE(10) / ERR_CHAT(12) / CHAT_OK）。
@@ -5345,7 +5365,12 @@ function Invoke-BatchTask {
             $s2 = $clines | Where-Object { "$_" -like '*RUNSTAMP:*' } | Select-Object -Last 1
             if ("$s2" -match 'RUNSTAMP: (\d+)') { $stamp = $Matches[1] }
             if ($exitReal -ne 0) { $bad++ }
-            Write-Host ("  {0,-52} st={1} ts={2} exit={3} src={5} runDir={4}" -f $c.card, $j.station, $stamp, $exitReal, $runDir, $exitSrc)
+            # ★ O-124 (2026-09-30): `st=` **必须报实际站** —— `local-only` 档下 claude 会自己按
+            #   "引擎就绪顺序"选站（实测三次全落 A 而报告打 A/B/C）⇒ 只报"请求的站"就是**报告在说谎**。
+            #   实际站取不到（`Get-ActualStation` 返回 ''）时**如实回落**请求值、**不假装知道**。
+            $stActual = Get-ActualStation -Lines $clines
+            $stLabel = if ($stActual -and $stActual -ne $j.station) { "$stActual(req=$($j.station))" } else { $j.station }
+            Write-Host ("  {0,-52} st={1} ts={2} exit={3} src={5} runDir={4}" -f $c.card, $stLabel, $stamp, $exitReal, $runDir, $exitSrc)
         }
     }
     foreach ($j in $jobs) { Remove-Job -Job $j.job -Force 2>$null }
