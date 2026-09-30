@@ -84,10 +84,10 @@ items:
   # ── U4-INVALIDATION-RULES（10 条）───────────────────────────────────────────
   - {spec: U4-INVALIDATION-RULES, n: 1, gist: "四条规则的参考实现未被生产链路调用（已有第一个真实调用方 --invalidate；仍人手触发 + 九项目 0/9；执行侧接口从未被第二方实现）", state: partial, needs_decision: false, refs: [], blocker: implementation}
   - {spec: U4-INVALIDATION-RULES, n: 2, gist: "「影响面」从何而来（声明式清单 + 只读实测已落地；仍：STORES 清单齐全性决定完整性 / 触发是人手 / 跨项目未落）", state: partial, needs_decision: false, refs: [], blocker: implementation}
-  - {spec: U4-INVALIDATION-RULES, n: 3, gist: "H-2 的「闭包化」由谁保证未定（affected_is_closure 是自报位，判据无法验证）", state: todo, needs_decision: true, refs: [], blocker: decision}
-  - {spec: U4-INVALIDATION-RULES, n: 4, gist: "「只适用派生产物」的边界未机判（D-26 / D-51 的排除未落成判据）", state: todo, needs_decision: true, refs: [D-26, D-51], blocker: decision}
+  - {spec: U4-INVALIDATION-RULES, n: 3, gist: "★ 已裁 2026-09-30（O-123）：自报位(`affected_is_closure`) ⇒ 换成可核验形态 = 判定方独立重算为主判据 + 逐跳路径证据为辅，不一致即拒收；⚠ 只裁方向、实现未落地（state 仍 todo）；再触发 = 先取依赖图查询面，取不到则反转为登记边界+抽检", state: todo, needs_decision: false, refs: [O-123], blocker: implementation}
+  - {spec: U4-INVALIDATION-RULES, n: 4, gist: "★ 已裁 2026-09-30（O-123）：把「只适用派生产物」落成可机判形态判据 = 集合每项须带可核来源标记；显式非派生 ⇒ 硬拒；无标记 ⇒ 先软警+审计（灰度）后收紧；⚠ 实现未落地（state 仍 todo）；再触发 = 先做全量边界普查（否则挡掉合法无标记产物）", state: todo, needs_decision: false, refs: [D-26, D-51, O-123], blocker: implementation}
   - {spec: U4-INVALIDATION-RULES, n: 5, gist: "与「非执行三分」的映射未在真实调度器上跑过（判据本身已被真实调用；仍无调度器承接 WARN）", state: partial, needs_decision: false, refs: [], blocker: implementation}
-  - {spec: U4-INVALIDATION-RULES, n: 6, gist: "H-1 的「等价」如何证明未定（无证明程序 ⇒ 只能人工断言 True）", state: todo, needs_decision: true, refs: [], blocker: decision}
+  - {spec: U4-INVALIDATION-RULES, n: 6, gist: "★ 已裁 2026-09-30（O-123）：以「证伪」替代「证明」= 结构化测例集 + 反例清单（须含历史真实失效）+ 运行时自检 + 白名单；⚠ 实现面最重、未落地（state 仍 todo）；再触发 = 先梳理现有夹具覆盖的变换类型", state: todo, needs_decision: false, refs: [O-123], blocker: implementation}
   - {spec: U4-INVALIDATION-RULES, n: 7, gist: "首靶未触碰（Macro_Data 的 revision_propagation 本轮未读未改）", state: todo, needs_decision: false, refs: [], blocker: external}
   - {spec: U4-INVALIDATION-RULES, n: 8, gist: "（已消掉）affected 可产出性在本仓之外 —— 三条假缺口已全消掉；★ 元教训：**「取证缺口」本身要先被取证**", state: retired, needs_decision: false, refs: [], blocker: none}
   - {spec: U4-INVALIDATION-RULES, n: 9, gist: "「清单 vs 实测」的偏差未被机判 ⇒「每个数字标依据」是**纪律，不是判据**", state: todo, needs_decision: false, refs: [O-70], blocker: implementation}
@@ -97,9 +97,9 @@ items:
   - {spec: U5-TRUST-BASIS, n: 1, gist: "四条判据从未被真实对象驱动（无真实输入；与 Textbook / Auto_Prover 从未对接）", state: todo, needs_decision: false, refs: [], blocker: external}
   - {spec: U5-TRUST-BASIS, n: 2, gist: "v1 的「对应得对不对」判不了 —— **已知能力边界，不是待办**（语义正确性仍是人的活）", state: boundary, needs_decision: false, refs: [], blocker: none}
   - {spec: U5-TRUST-BASIS, n: 3, gist: "v2 是新造形式（V-2 实测真空 ⇒「什么算一跳」无第二方实现可对照）", state: todo, needs_decision: false, refs: [], blocker: implementation}
-  - {spec: U5-TRUST-BASIS, n: 4, gist: "v3 的默认白名单未经裁定（取自原文**举例** ≠ 裁定）", state: todo, needs_decision: true, refs: [], blocker: decision}
+  - {spec: U5-TRUST-BASIS, n: 4, gist: "★ 已裁 2026-09-30（O-123）：裁掉「默认名单」形态 ⇒ 必须显式声明（缺失即判不通过）+ 支持显式空声明（如 `axioms: []`）以区分「无需」与「未声明」；⚠ 只裁方向、未落地（state 仍 todo）；再触发 = 出现第一个真实形式化证明输入", state: todo, needs_decision: false, refs: [O-123], blocker: implementation}
   - {spec: U5-TRUST-BASIS, n: 5, gist: "晋升门 entries 实例 0 条（schema 从未被真实条目走过一遍）", state: todo, needs_decision: false, refs: [], blocker: run}
-  - {spec: U5-TRUST-BASIS, n: 6, gist: "min_recurrence 的阈值是「新设」、未定（已进 promotion.yaml 的 unverified）", state: todo, needs_decision: true, refs: [], blocker: decision}
+  - {spec: U5-TRUST-BASIS, n: 6, gist: "★ 已裁 2026-09-30（O-123）：登记为「能力边界」不裁（state→boundary）—— min_recurrence 取值是设计选择、不是可验结论，且 schema 零实例；边界声明 = 该字段当前不得参与自动判定，要参与须先在真实实例上校准（届时升回待办）", state: boundary, needs_decision: false, refs: [O-123], blocker: none}
   - {spec: U5-TRUST-BASIS, n: 7, gist: "★ structure 两条（不对称配置 / 双盲）不可机判 ⇒ 结构性约束**还没有判据**（自认本批最大缺口，正扛着「不得自审」）", state: todo, needs_decision: false, refs: [], blocker: implementation}
   - {spec: U5-TRUST-BASIS, n: 8, gist: "「三种判据任一满足」的并列语义无人验证（是本仓的**合并假设**，不是实测结论）", state: todo, needs_decision: false, refs: [], blocker: run}
   - {spec: U5-TRUST-BASIS, n: 9, gist: "（O-92）「双盲重推导」的站上真调用从未跑过；且与 §11.7 的「双盲」不是一回事；op 六项枚举未针对本仓语料校准", state: todo, needs_decision: false, refs: [O-92], blocker: run}
