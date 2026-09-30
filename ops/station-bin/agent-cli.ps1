@@ -886,7 +886,7 @@ function Add-LedgerLine {
     #   证据链里的 run 记录就被损坏(**比"漏一行"更难查**)。
     #   判据同 BLINDSCAN-v3 §3 的跨条目纪律: 共享路径**要么带 per-invocation 身份、要么走真锁**;
     #   ledger **必须共享**(它是全局台账), 故只能走锁 —— 这里用 `FileShare.Read` 隐式互斥 + 退避重试。
-    param([string]$Path, [string]$Line)
+    param([string]$Path, [string]$Line, [System.Collections.IDictionary]$GuardSink = $null)
     # ── ★★ B3（2026-10-01）：`I-1` 单写者 —— **事件流写点**就是它的正确调用点 ──────────────────
     # 契约 §1.6「不堆在 P5 一处」：`I-1` 归**事件流写点**（`Add-LedgerLine`）；四条目各有其位。
     # ★ **放在重试循环之前 ⇒ 只跑一次**（判的是"谁在写"，与本次 append 成功与否无关）——
@@ -896,6 +896,8 @@ function Add-LedgerLine {
     if ($d7i1['code'] -ne 0) {
         Write-Host ("D7_I1_REJECT: " + $d7i1['line'] + " ⇒ **灰度期：不阻断**")
     }
+    # ★ 报数落点（2026-10-01 · task 侧）：`I1` 的三态码（缺省 `$null` ⇒ 既有调用零影响）
+    if ($GuardSink) { $GuardSink['I1'] = [int]$d7i1['code'] }
     for ($i = 0; $i -lt 10; $i++) {
         try {
             $fs = [IO.File]::Open($Path, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::Read)
@@ -2298,8 +2300,15 @@ function Invoke-Task {
     #   ③ 此时硬拒 = 把**已知缺口**变成"**谁都派不了**" ⇒ 假红的结局是**被加进例外名单**
     #      （O-70 同族，本仓已有教训）。
     #   ⇒ 只**如实报出**（`D7_CONTRACT_*` 行）；**收紧为硬拒的时机 = `gaps` 清空**（见契约 §1.6）。
+    # ★★ 报数收集器（2026-10-01 · **task 侧**）：P0/P3/`I-1` 的三态码 —— 落 `.agent-run.json`。
+    #   为什么 task 侧**不能**复用 review 侧的 `review.json.d7_guard`：这三段发生在**创建
+    #   `review.json` 之前**，且该 run **可能永不 review** ⇒ 不落在这里就**永远算不出来**。
+    #   ★ 落 `.agent-run.json` **不破** `l1.record_sha256`：键是在 run **写盘时一并落**的
+    #     ⇒ 它本来就是 run 的**原始字节**（⚠ 与 `O-139` 排除的"**事后**再写"**不是一回事**）。
+    $d7t = [ordered]@{}
     $d7tc = New-TaskContract -Fm $fm -CardId $cardId
-    Write-D7Report -Kind 'TaskContract' -Obj $d7tc['contract'] -Gaps $d7tc['gaps'] -Tag 'CONTRACT' -Card $card
+    Write-D7Report -Kind 'TaskContract' -Obj $d7tc['contract'] -Gaps $d7tc['gaps'] -Tag 'CONTRACT' -Card $card `
+                   -GuardSink $d7t
     # A1 / ADR-0009 §2 (2026-09-29): **派发前**对三条判据求值（纯函数，无副作用）⇒ 层级归属落 run.json。
     #   为什么求值点选这里：与 `require-gate` 同处"流程前置" —— 三键**全部来自卡**（派发方在派发前、
     #   受理方在受理阶段写入）⇒ 此刻即可算出，**不依赖任何运行结果**（这正是 ADR-0009 §机制原理 的要害：
@@ -2362,7 +2371,7 @@ function Invoke-Task {
         #   且出网档的 pin 也被静默忽略（那批实测三次全在**主控本地**跑，`model` = 云端型号）。
         #   ⚠ 反查不到（''）= 不可判 ⇒ 如实回落（不猜站）；route 自己声明了站时**以 route 为准**（见下）。
         $pinSt = Get-StationLetterFromHost $hostName
-        return Invoke-Task-Claude -proj $proj -card $card -model $m -sensitive $sens -attach $attach -complexity $complexity -taskType $taskType -PreferredStation $pinSt
+        return Invoke-Task-Claude -proj $proj -card $card -model $m -sensitive $sens -attach $attach -complexity $complexity -taskType $taskType -PreferredStation $pinSt -GuardSink $d7t
     }
     elseif ($effectiveCli -ne 'opencode') {
         Write-Host "REJECT unknown-cli ($effectiveCli) - only opencode|claude supported"
@@ -3342,7 +3351,7 @@ exit `$FINAL_RC
     #   故与 run.json 的取值保持一致。**注**: claude 本地备路**不在本修范围** —— 其 .meta 本就写
     #   QUEUE_S=0(本地执行无远端队列), 台账/run.json 同为 0, 自洽。
     $line = "$ts,$proj,$id,$sens,$code,$queue_s,$run_s"
-    $ledgerOk = Add-LedgerLine -Path $ledger -Line $line
+    $ledgerOk = Add-LedgerLine -Path $ledger -Line $line -GuardSink $d7t   # ★ 顺带记 `I1` 的三态码
     if (-not $ledgerOk) { Write-Host "LEDGER_WARN: append failed after 10 retries (F-4: 并发追加有互斥+退避)" }
 
     # 7) .agent-run.json under <proj>/agent-out/<ts>/ (DESIGN §6.2)
@@ -3448,14 +3457,19 @@ exit `$FINAL_RC
             # ⚠ 归零纪律：赋值语句无管道输出 ⇒ 安全。
             $d7h = Resolve-D7Hosts -Station $station
             $run['exec_host'] = $d7h.exec_host; $run['arbiter_host'] = $d7h.arbiter_host
-            $run | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $runDir '.agent-run.json') -Encoding utf8
             # ── ★★ B 段（2026-10-01）：**D7 协议 P3 回收**（工作站产出 `RunReport`）────────────
             # ★ 契约 §1.1 的 ★：`RunReport` **刻意不含 `verdict`**（**产出方不得自评**，红线 1）——
             #   故 `New-RunReport` 里**没有**这个字段（判据见到它即拒）。
             # ★ 灰度期只报不阻断（口径与收紧条件同 P0，见契约 §1.6）；
             #   ⚠ 本块在**归零纪律**内 ⇒ 调用一律 `| Out-Null`（不许有对象混进返回值）。
+            # ★★ 2026-10-01 **顺序承重**（同 `O-139`）：P3 报数**必须挪到写盘之前** ——
+            #   否则 `RUNREPORT.*` 那两码**赶不上这次写盘**（review 侧首版就是这么错的）。
             $d7rr = New-RunReport -Run $run -RunDir $runDir
-            Write-D7Report -Kind 'RunReport' -Obj $d7rr['report'] -Gaps $d7rr['gaps'] -Tag 'RUNREPORT' -Card $card | Out-Null
+            Write-D7Report -Kind 'RunReport' -Obj $d7rr['report'] -Gaps $d7rr['gaps'] -Tag 'RUNREPORT' -Card $card `
+                           -GuardSink $d7t | Out-Null
+            # ★ task 侧报数落点（与 review 侧同款"跑过才加"；此处 sink 至少含 P0 与 `I1` ⇒ 必非空）
+            if ($d7t.Count -gt 0) { $run['d7_guard'] = $d7t }
+            $run | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $runDir '.agent-run.json') -Encoding utf8
             # move pulled output into runDir
             if (Test-Path $outTxt) { Move-Item $outTxt (Join-Path $runDir 'agent-output.txt') -Force | Out-Null }
             if (Test-Path $accTxt) { Move-Item $accTxt (Join-Path $runDir 'accept-output.txt') -Force | Out-Null }
@@ -3648,7 +3662,7 @@ exit `$FINAL_RC
         }
         Write-Host "AUTO_FALLBACK: opencode rc=$code -> local claude backup (explicit -AutoFallback)"
         Write-Host "AUTO_FALLBACK_MODEL: $taskModel -> $fbModel"
-        return (Invoke-Task-Claude -proj $proj -card $card -model $fbModel -sensitive $sens -attach $attach -complexity $complexity -taskType $taskType -AvoidStation $station)
+        return (Invoke-Task-Claude -proj $proj -card $card -model $fbModel -sensitive $sens -attach $attach -complexity $complexity -taskType $taskType -AvoidStation $station -GuardSink $d7t)
     }
     return $code
 }
@@ -3863,8 +3877,14 @@ function Invoke-Task-Claude {
         [string]$AvoidStation = '',
         # O-124 候选① (2026-09-30): 调用方**请求的站**（来自批行 `station=` / `--remotehost`）。
         #   只在 route 未声明站时用作 `-Preferred`；'' = 没有请求站（不可判 ⇒ 不改行为）。
-        [string]$PreferredStation = ''
+        [string]$PreferredStation = '',
+        # ★ 2026-10-01（task 侧报数）：由 `Invoke-Task` **传进来的收集器** —— 这样备路的
+        #   `.agent-run.json` 能一并带上 **P0 的 `CONTRACT.*`**（P0 在备路被调用**之前**就跑过了；
+        #   备路自己重建一个 sink 会**丢掉那两码** ⇒ "同一次派发的报数被劈成两半"）。
+        [System.Collections.IDictionary]$GuardSink = $null
     )
+    if (-not $GuardSink) { $GuardSink = [ordered]@{} }
+    $d7t = $GuardSink
     if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
         Write-Host "REJECT claude-not-installed (exit 13) - run: npm i -g @anthropic-ai/claude-code, then: claude auth login"
         return 13
@@ -4339,7 +4359,7 @@ mkdir -p "$stWorkDir/.attach/$nm2"
     $finalCode = if ($rc -eq 0 -and $acceptOk -eq 1 -and $acceptGoldenOk -eq 1) { 0 } elseif ($rc -eq 6) { 6 } else { 1 }
     $ledger = 'd:\RPC\ops\station-bin\agent-runs.log'
     $line = "$ts,$proj,$execModel,$sens,$finalCode,0,$runS"
-    if (-not (Add-LedgerLine -Path $ledger -Line $line)) { Write-Host "LEDGER_WARN: append failed after 10 retries (F-4)" }
+    if (-not (Add-LedgerLine -Path $ledger -Line $line -GuardSink $d7t)) { Write-Host "LEDGER_WARN: append failed after 10 retries (F-4)" }
 
     $collectOk = $true; $runDir = ''
     try {
@@ -4397,11 +4417,15 @@ mkdir -p "$stWorkDir/.attach/$nm2"
             #   正是 `PRH` 要看见的形态；`O-124` 实测批 `20260930145220`）。
             $d7h = Resolve-D7Hosts -Station $st
             $run['exec_host'] = $d7h.exec_host; $run['arbiter_host'] = $d7h.arbiter_host
-            $run | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $runDir '.agent-run.json') -Encoding utf8
             # ── ★★ B 段（2026-10-01）：**P3 回收**（claude 备路同一处置）──────────────────────
             # ★ 与主路**共用同一实现**（`New-RunReport` + 共享汇报壳）⇒ 不复制第二份判据/映射。
+            # ★ 顺序承重（同主路）：P3 报数**在写盘之前**，否则 `RUNREPORT.*` 赶不上这次写盘。
             $d7rr = New-RunReport -Run $run -RunDir $runDir
-            Write-D7Report -Kind 'RunReport' -Obj $d7rr['report'] -Gaps $d7rr['gaps'] -Tag 'RUNREPORT' -Card $card | Out-Null
+            Write-D7Report -Kind 'RunReport' -Obj $d7rr['report'] -Gaps $d7rr['gaps'] -Tag 'RUNREPORT' -Card $card `
+                           -GuardSink $d7t | Out-Null
+            # ★ task 侧报数落点（与主路**同一处置**；备路还带着 P0 传来的 `CONTRACT.*`）
+            if ($d7t.Count -gt 0) { $run['d7_guard'] = $d7t }
+            $run | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $runDir '.agent-run.json') -Encoding utf8
             # ⚠ 归零纪律(见 Invoke-Task 内注): 本函数返回 `$finalCode`, 故以下副作用一律 `| Out-Null`。
             if (Test-Path $outTxt) { Copy-Item $outTxt (Join-Path $runDir 'agent-output.txt') -Force | Out-Null }
             if (Test-Path $accTxt) { Copy-Item $accTxt (Join-Path $runDir 'accept-output.txt') -Force | Out-Null }

@@ -2459,6 +2459,38 @@ $bSink = [regex]::Matches($badOrder, [regex]::Escape('-GuardSink $d7g'))[0].Inde
 $bInj  = [regex]::Matches($badOrder, [regex]::Escape("if (`$d7g.Count -gt 0) { `$review['d7_guard'] = `$d7g }"))[0].Index
 Assert-True "b3㊳(先验红·同源对照): **错顺序**样本上 `sink < 注入` 为假 ⇒ b3㊲ 非恒真" (
     -not ($bSink -lt $bInj))
+
+# --- b3 第八刀 (2026-10-01, `O-136` 测收益的 ②·task 侧): 报数落进 `.agent-run.json` -----------------
+#   ★ 为什么 task 侧必须另找落点：P0/P3/`I-1` 发生在**创建 `review.json` 之前**，且该 run
+#     **可能永不 review** ⇒ 不落在 run 记录里就**永远算不出来**。
+#   ★ 落 `.agent-run.json` **不破** `l1.record_sha256`：键在 run **写盘时一并落** ⇒ 它本来就是
+#     run 的**原始字节**（⚠ 与 `O-139` 排除的"**事后**再写"**不是一回事**）。
+$tSink = @(); foreach ($m in [regex]::Matches($content, [regex]::Escape("`$run['d7_guard'] = `$d7t"))) { $tSink += $m.Index }
+$tSinkWrt = @(); foreach ($m in [regex]::Matches($content, [regex]::Escape("`$run | ConvertTo-Json -Depth 6 | Set-Content"))) { $tSinkWrt += $m.Index }
+$tRep = @(); foreach ($m in [regex]::Matches($content, [regex]::Escape("-Tag 'RUNREPORT' -Card `$card ``"))) { $tRep += $m.Index }
+Assert-True "b3㊴(★两处写点 + 顺序): 主路与 claude 备路**都**落 `d7_guard`，且**都在写盘之前**（先落键后写盘）" (
+    ($tSink.Count -eq 2) -and ($tSinkWrt.Count -eq 2) -and
+    ($tSink[0] -lt $tSinkWrt[0]) -and ($tSink[1] -lt $tSinkWrt[1]))
+Assert-True "b3㊵(★顺序承重·主判据): P3 报数**挪到了写盘之前**（旧位置在写盘之后 ⇒ `RUNREPORT.*` 赶不上）" (
+    ($tRep.Count -eq 2) -and
+    ($tRep[0] -lt $tSinkWrt[0]) -and ($tRep[1] -lt $tSinkWrt[1]))
+Assert-True "b3㊶(★P0 与 I1 入 sink): P0 的 `CONTRACT.*`（经汇报壳 `-GuardSink $d7t`）与 `I1`（经 Add-LedgerLine）都记" (
+    # P0 一处 + 主路 P3 一处 + 备路 P3 一处 ≥3；`I1` 两处（主路 + 备路 ledger 追加）
+    ([regex]::Matches($content, [regex]::Escape('-GuardSink $d7t')).Count -ge 3) -and
+    ([regex]::Matches($content, [regex]::Escape("-Line `$line -GuardSink `$d7t")).Count -eq 2))
+Assert-True "b3㊷(★备路带上 P0): `Add-LedgerLine` 与 `Invoke-Task-Claude` **都**收 sink ⇒ 备路 run 记录含 CONTRACT.*" (
+    # 三个函数各有形参（汇报壳 / ledger / 备路）
+    ([regex]::Matches($content, [regex]::Escape('[System.Collections.IDictionary]$GuardSink = $null')).Count -ge 3) -and
+    # `Invoke-Task-Claude` 的**两处调用**都传（站路由路 + AUTO_FALLBACK 路）
+    ([regex]::Matches($content, 'Invoke-Task-Claude[^\r\n]*-GuardSink \$d7t').Count -eq 2) -and
+    # 备路内的 `$d7t = $GuardSink` 别名（缺省自建）—— 缺它则备路写的是一个**空的新 sink**
+    ([regex]::Matches($content, [regex]::Escape('$d7t = $GuardSink')).Count -eq 1))
+# ★ 先验红·同源对照：**写盘后**才落键的样本上，"键在写盘之前"必须为假
+$badT = "`$run | ConvertTo-Json -Depth 6 | Set-Content x`nif (`$d7t.Count -gt 0) { `$run['d7_guard'] = `$d7t }"
+$bW = [regex]::Matches($badT, [regex]::Escape("`$run | ConvertTo-Json -Depth 6 | Set-Content"))[0].Index
+$bK = [regex]::Matches($badT, [regex]::Escape("`$run['d7_guard'] = `$d7t"))[0].Index
+Assert-True "b3㊸(先验红·同源对照): **写盘后才落键**样本上 `键 < 写盘` 为假 ⇒ b3㊴ 非恒真" (
+    -not ($bK -lt $bW) -and ($tSink[0] -lt $tSinkWrt[0]))
 Assert-True "b3㉜(先验红·同源对照): 恒 open 桩把 constraints 也说成 open ⇒ b3㉘ 非恒真" (
     (@($redOpen.boundary).Count -eq 0) -and (@($gTC.boundary) -join ',') -eq 'constraints')
 Assert-True "b3㉒(先验红·同源对照): **旧顺序**样本上同一条判据为假（b3⑳ 非恒真）" (
