@@ -42,12 +42,12 @@ items:
   # ── D7-PROTOCOL-CONCLUSION-CONTRACT（8 条）──────────────────────────────────
   - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 1, gist: "站上真跑未实测：校验器 / 综合器只跑过离线夹具；Invoke-Review 出网判官真调用未跑", state: todo, needs_decision: false, refs: [O-92]}
   - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 2, gist: "判官是否真按新契约输出未实测（尤其「不得自报 agreement」无样本）⇒ 不合契约即判不通过", state: todo, needs_decision: false, refs: []}
-  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 3, gist: "path 的相对根未定义（runDir / 项目根 / 仓根）；★ 2026-09-30 续证：提示词里根本没有根（cardPath 死参数、无 root 字段）⇒「相对仓根」不可实现；★★ 第二轮：外壳已知量含 $fm 的 evidence-manifest.subjects 且收集段已把产物 scp 到 runDir/<subjects.path> ⇒ 唯一自洽解 = 相对 runDir（注入产物名 + 文本）", state: todo, needs_decision: true, refs: [O-123]}
+  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 3, gist: "★ 已裁 2026-09-30（O-123）：path 相对根定为【相对 runDir】、实现 = 外壳注入（产物文本 + 产物相对 runDir 的名字），不新造 root 字段；依据 = 提示词无根（cardPath 死参数）⇒「相对仓根」不可实现，且外壳已知量含 $fm 的 evidence-manifest.subjects（收集段已 scp 产物到 runDir/<subjects.path>）；⚠ 实现未落地（故 state 仍 todo）", state: todo, needs_decision: false, refs: [O-123]}
   - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 4, gist: "line_range 越界未校验（只校形态）；「越界即无效」未裁（升级需读产物）", state: todo, needs_decision: true, refs: []}
   - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 5, gist: "★ 已裁 2026-09-30（O-123）：登记为「能力边界」不裁 —— 阈值是设计选择而非可验结论；若日后要用于自动裁决须先校准", state: boundary, needs_decision: false, refs: [O-123]}
   - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 6, gist: "disagreement 只覆盖「同一锚点下的矛盾」⇒ 跨锚点立场冲突识别不到", state: todo, needs_decision: false, refs: []}
   - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 7, gist: "★ 2026-09-30 新登记（O-123 取证）：契约要求锚点「归一化后」对齐，实现**只做 .Trim()** ⇒ 同位置会裂成多锚点 ⇒ consensus 静默失效（全仓零 review.json ⇒ 后果为推定非实测）", state: todo, needs_decision: false, refs: [O-123]}
-  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 8, gist: "★ 2026-09-30 续证新登记（O-123）：Invoke-Review 固定判 agent-output.txt（回退 accept-output.txt），不看卡声明 ⇒ 产文件型卡的判官看不到被指的文件 ⇒ findings 的 path/line_range 属臆造；本条是 #3/#4 的前置；★★ 第二轮：卡其实已声明产物身份（evidence-manifest.subjects.path，$fm 已在手）⇒ 候选集窄（取 subjects.path / --product / 从 accept 反推 / 不做并写边界）；候选①须带回退（evidence 已实测一例「声明在、runDir 无」）（全仓零 review.json ⇒ 推定非实测）", state: todo, needs_decision: false, refs: [O-123]}
+  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 8, gist: "★ 已裁 2026-09-30（O-123）：采纳候选①（$product 取卡 evidence-manifest.subjects[].path）+ 强制回退（取不到即回 agent-output.txt → accept-output.txt → exit 3）；⚠ 实现未落地（state 仍 todo）—— 缺口本体：Invoke-Review 固定判 agent-output.txt、不看卡声明 ⇒ 产文件型卡的判官看不到被指的文件 ⇒ findings 的 path/line_range 属臆造；本条是 #3/#4 的前置；候选①必须带回退（evidence 已实测一例「声明在、runDir 无」）（全仓零 review.json ⇒ 推定非实测）", state: todo, needs_decision: false, refs: [O-123]}
 
   # ── U1-ARTIFACT-IDENTITY（8 条；1/2 已被划掉）──────────────────────────────
   - {spec: U1-ARTIFACT-IDENTITY, n: 1, gist: "（已消掉）「规范化 JSON 数组」作哈希输入 —— 移入上方「已消掉的未实测项」", state: retired, needs_decision: false, refs: []}
