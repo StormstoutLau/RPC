@@ -2418,6 +2418,47 @@ Assert-True "b3㉛(★接线): 分类**只在一处**（唯一汇报壳），且
 #   ⇒ 证明 b3㉘ 真的在看那张表，而不是恒真。
 $stubAllOpen = { param($g) @{ open = @($g); boundary = @(); unknown = @() } }
 $redOpen = & $stubAllOpen @('constraints')
+# --- b3 第七刀 (2026-10-01, `O-136` **测收益的 ②**): D7 判据报数落点 ----------------------------
+#   ★ 由来：`D7_*` 那些行此前**只走 stdout** ⇒「每千次 review 拦了多少」**算不出来**
+#     （与 `O-139` 的 `Verdict` 只走 stdout **同病**，只是病在**报数面**）。
+#   ★ 机制：`-GuardSink`（`IDictionary`）—— 靠 **PS 引用语义**把三态码写回调用方；
+#     ⚠ **不用返回值**：那两个函数是**裸调用**的 ⇒ 加返回值会往管道吐对象，破**归零纪律**。
+$sinkProbe = [ordered]@{}
+function _sinkProbeFn { param([System.Collections.IDictionary]$Sink) $Sink['k'] = 7 }
+_sinkProbeFn -Sink $sinkProbe
+Assert-True "b3㉝(★口径自证): PS 引用语义成立 —— 被调方写 sink，**调用方看得见**（否则全部落点是空的假绿）" (
+    ($sinkProbe['k'] -eq 7) -and ($sinkProbe -is [System.Collections.IDictionary]))
+Assert-True "b3㉞(★类型坑): sink 形参必须是 `IDictionary` —— `[ordered]@{}` **不是** `[hashtable]`（写错会绑定失败）" (
+    $content.Contains('[System.Collections.IDictionary]$GuardSink') -and
+    -not $content.Contains('[hashtable]$GuardSink'))
+Assert-True "b3㉟(★记录点齐): 九台判据各有一处入 sink（transition 记两键 + RL2/RL1/PRM/PRW/PRH + 信封·I6 由汇报壳记）" (
+    ([regex]::Matches($content, '\$GuardSink\[')).Count -ge 8 -and
+    $content.Contains("`$GuardSink['transition.rejected']") -and
+    $content.Contains("`$GuardSink['completed'] = 1") -and
+    # ★ 汇报壳两处入 sink（envelope / i6）—— 靠 `$Tag` 前缀区分用具名 tag
+    ([regex]::Matches($content, [regex]::Escape('$GuardSink["$Tag.envelope"]')).Count -eq 1) -and
+    ([regex]::Matches($content, [regex]::Escape('$GuardSink["$Tag.i6"]')).Count -eq 1))
+Assert-True "b3㊱(★假绿防护): 报「跑完了」的 `completed` 标记**只在函数末尾** ⇒ 聚合能分开「没跑」与「跑了且全 ok」" (
+    $content.IndexOf("`$GuardSink['completed'] = 1") -gt $content.IndexOf("`$GuardSink['PRH'] =") -and
+    $content.IndexOf("`$GuardSink['completed'] = 1") -lt $content.IndexOf('return $d7v[''verdict'']'))
+# ⚠⚠ **必须判【顺序】，不能只判【存在】**（2026-10-01 真跑当场抓到）：首版把注入行写在
+#   `Get-D7Adjudication` **之前** ⇒ 那时 sink 还空 ⇒ `Count -gt 0` 为假 ⇒ **什么都没落盘**；
+#   而**只计数**的断言照样全绿 —— 这就是"**假绿**"的教科书形态（同 `O-139` 的"顺序承重"家族）。
+$sinkIdx = @(); foreach ($m in [regex]::Matches($content, [regex]::Escape('-GuardSink $d7g'))) { $sinkIdx += $m.Index }
+$injIdx  = @(); foreach ($m in [regex]::Matches($content, [regex]::Escape('if ($d7g.Count -gt 0) { $review[''d7_guard''] = $d7g }'))) { $injIdx += $m.Index }
+$wrtIdx  = @(); foreach ($m in [regex]::Matches($content, [regex]::Escape('Set-Content $reviewPath'))) { $wrtIdx += $m.Index }
+Assert-True "b3㊲(★接线两处 + 顺序承重): 每处都是 sink → 注入 → 写盘（先注入后填充 = 空落盘，只计数会假绿）" (
+    ($sinkIdx.Count -eq 2) -and ($injIdx.Count -eq 2) -and ($wrtIdx.Count -eq 2) -and
+    ($sinkIdx[0] -lt $injIdx[0]) -and ($injIdx[0] -lt $wrtIdx[0]) -and
+    ($sinkIdx[1] -lt $injIdx[1]) -and ($injIdx[1] -lt $wrtIdx[1]) -and
+    # ⚠ 必须 `Escape`：`[ordered]` 在**正则**里是**字符类**（匹配单个 o/r/d/e）⇒ 不转义则计数为 0（本批踩到）
+    ([regex]::Matches($content, [regex]::Escape('$d7g = [ordered]@{}')).Count -eq 1))
+# ★ 先验红·同源对照：把**错顺序**（先注入、后填充）放进样本 ⇒ 同一条判据必须当场为假
+$badOrder = "if (`$d7g.Count -gt 0) { `$review['d7_guard'] = `$d7g }`n-A' -GuardSink `$d7g  |  Set-Content `$reviewPath"
+$bSink = [regex]::Matches($badOrder, [regex]::Escape('-GuardSink $d7g'))[0].Index
+$bInj  = [regex]::Matches($badOrder, [regex]::Escape("if (`$d7g.Count -gt 0) { `$review['d7_guard'] = `$d7g }"))[0].Index
+Assert-True "b3㊳(先验红·同源对照): **错顺序**样本上 `sink < 注入` 为假 ⇒ b3㊲ 非恒真" (
+    -not ($bSink -lt $bInj))
 Assert-True "b3㉜(先验红·同源对照): 恒 open 桩把 constraints 也说成 open ⇒ b3㉘ 非恒真" (
     (@($redOpen.boundary).Count -eq 0) -and (@($gTC.boundary) -join ',') -eq 'constraints')
 Assert-True "b3㉒(先验红·同源对照): **旧顺序**样本上同一条判据为假（b3⑳ 非恒真）" (
