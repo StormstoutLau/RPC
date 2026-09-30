@@ -50,6 +50,9 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 #   ⚠ 必须一并提取 `Get-TargetHost`（上面已有）—— 它推产出机时用的就是**同一个** host 表，
 #     另抄一份 host 表 = "同一事实两处表达"（本仓头号形态）。
 'Resolve-D7Hosts',
+# O-140 (2026-10-01 裁【甲·可机判版】): **该 run 是否已入证据链**（纯函数：吃链件路径 + proj/run_id）；
+#   ⚠ 它只吃**路径**、不碰 `$Script:REPO_ROOT` ⇒ 夹具喂**临时链件**即可**真跑**三态（不是形态断言）。
+'Resolve-RunChained',
 # D7-CC #8 + #3 (2026-09-30): 判官**取哪件产物**（卡声明 + 强制回退）与**提示词注入产物相对名**
 #   （`Resolve-ReviewProduct` 的 `-Exists` 可注入 ⇒ 离线真跑；`Build-JudgePrompt` 依赖已提取的 `Read-ReviewResource`）。
 # B 段 (2026-10-01): **P0 立契**的产信封本体（纯函数：只吃已解析的 $fm/$cardId ⇒ 可离线单测）
@@ -2345,6 +2348,39 @@ Assert-True "b3㉑(★O-139 甲): 组装点**只有一个**（`New-Verdict` 仅�
 $oldOrder = "`$review | ConvertTo-Json -Depth 8 | Set-Content `$reviewPath`n`$review['d7_verdict'] = Get-D7Adjudication -L1Section `$l1Section"
 $oldInj = [regex]::Matches($oldOrder, [regex]::Escape("`$review['d7_verdict'] = Get-D7Adjudication -L1Section"))
 $oldWrt = [regex]::Matches($oldOrder, [regex]::Escape('Set-Content $reviewPath'))
+# --- b3 第五刀 (2026-10-01, `O-140` **裁【甲·可机判版】**): 入链后再 review ⇒ 默认拦（可机判）------
+#   ★★ 判据的由来（`O-140` 实测）：`review.json` 是链钉住的 subject，而 `review` 可重跑 ⇒ 对已入链的
+#      run 写 review.json 会让门禁 `evidence` 报 `digest 不符` **FAIL**，且 `chain`（幂等去重）与
+#      `--reanchor`（只重写锚）**都改不了已有条目** ⇒ 只能事后恢复。**本刀把它提前成"动手前判"**。
+#   ★ 口径：判据本体 = **纯函数** `Resolve-RunChained` ⇒ 本块**真跑三态**（喂临时链件），
+#      外加接线/顺序的**形态**断言（外壳那半起子进程，不进离线夹具）。
+$chTmp = Join-Path $tmpCards 'chain-probe.json'
+# ⚠ 链件是**对象**（`{entries:[…]}`），不是裸数组 —— 第一次就写错成裸数组，
+#   而判据**当场报"判不了"**（不是静默放行）⇒ 这一条本身就是"形状不对 ⇒ fail-closed"的现场证据。
+[IO.File]::WriteAllText($chTmp, '{"entries":[{"proj":"dogfood","run_id":"202601010000000001"},{"proj":"paper","run_id":"ts-b"}],"head":{"proj":"paper"}}', [Text.UTF8Encoding]::new($false))
+$chHit = Resolve-RunChained -ChainPath $chTmp -Proj 'dogfood' -RunId '202601010000000001'
+$chMiss = Resolve-RunChained -ChainPath $chTmp -Proj 'dogfood' -RunId '202601010000000099'
+$chGone = Resolve-RunChained -ChainPath (Join-Path $tmpCards 'no-such-chain.json') -Proj 'dogfood' -RunId 'x'
+[IO.File]::WriteAllText($chTmp, '{"head":{}}', [Text.UTF8Encoding]::new($false))
+$chEmpty = Resolve-RunChained -ChainPath $chTmp -Proj 'dogfood' -RunId 'x'
+Assert-True "b3㉓(★O-140 主判据): 三态不可混 —— 已在链内 ⇒ true · 不在 ⇒ false · 链件缺/无 entries ⇒ **不可判(null)**" (
+    ($chHit.chained -eq $true) -and ($chMiss.chained -eq $false) -and
+    ($null -eq $chGone.chained) -and ($null -eq $chEmpty.chained))
+Assert-True "b3㉔(★fail-closed): 外壳对**不可判**按「已入链」处理 —— 条件必须是 -ne `$false（含 `$null`）" (
+    $content.Contains("if (`$acChk['chained'] -ne `$false) {") -and
+    $content.Contains('REJECT REVIEW_AFTER_CHAIN') -and $content.Contains('return 9'))
+Assert-True "b3㉕(★顺序承重): 入链拦在**幂等守卫之后**（那个守卫不写盘 ⇒ 不该被拦）" (
+    $content.IndexOf('REVIEW_IDEMPOTENT') -lt $content.IndexOf('REJECT REVIEW_AFTER_CHAIN'))
+Assert-True "b3㉖: 显式通道**降级但留痕** —— `--allow-after-chain` 写进 review.json（**两处**写点各一）" (
+    ([regex]::Matches($content, [regex]::Escape('if ($acSection) { $review[''after_chain_guard''] = $acSection }')).Count -eq 2) -and
+    $content.Contains('REVIEW_AFTER_CHAIN_ALLOWED') -and
+    $content.Contains('$AllowAfterChain') -and $content.Contains('[switch]$allowAfterChain'))
+# ★ 先验红·同源对照：**恒 false 桩**（= "什么都不在链内"）在同一批样本上必须**当场红**
+#   ⇒ 证明 b3㉓ 真的在看链内容，而不是恒真。
+$stubSaysNotChained = { param($p, $j) @{ chained = $false; reason = 'stub' } }
+$redHit = & $stubSaysNotChained $chTmp '202601010000000001'
+Assert-True "b3㉗(先验红·同源对照): 恒 false 桩在「已在链内」样本上给出 false ⇒ b3㉓ 非恒真" (
+    ($redHit.chained -eq $false) -and ($chHit.chained -eq $true))
 Assert-True "b3㉒(先验红·同源对照): **旧顺序**样本上同一条判据为假（b3⑳ 非恒真）" (
     ($oldInj.Count -eq 1) -and ($oldWrt.Count -eq 1) -and
     -not ($oldInj[0].Index -lt $oldWrt[0].Index))
