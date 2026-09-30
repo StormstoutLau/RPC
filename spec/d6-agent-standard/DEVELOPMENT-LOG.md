@@ -19,6 +19,53 @@ upstream: \[d6-agent-standard-.* 全量文档]
 
 ## 历史回溯（2026-09-03 起）
 
+### 2026-09-30（续⑭） — **O-118 甲落地 + O-122 两裁执行/立项 + O-123 `#4` 裁与索引 `blocker` 字段**
+
+> **定位**：承 `续⑬`（`#3`/`#8` 已裁）。本轮把 `O-123` 剩的两件（`D7-CC #4` 裁定 + 索引结构缺口）办掉，
+> 并把 `O-118` / `O-122` 从"待裁"推到"已裁 + 已落地/已立项"。★ 全程遵守「**裁**必须落回规范本体」与「**不做也是结论**」。
+
+**① `O-123` / `D7-CC #4`（`line_range` 越界）⇒ 裁「登记为不可判 + 保持形态校验」**
+
+| 面 | 落点 |
+|---|---|
+| 规范本体 | [D7-PROTOCOL-CONCLUSION-CONTRACT.md](./D7-PROTOCOL-CONCLUSION-CONTRACT.md) §未实测登记 **第 4 条**（原"未裁" ⇒ 三条理由 + 再触发条件） |
+| 索引 | `n:4`：`state` **todo → boundary** · `needs_decision` **true → false** · `refs: [O-123]` |
+| 口径 | `state` 分布 **todo 43→42 / boundary 2→3**；`needs_decision` **6→5** |
+
+★ **为何只剩"不可判"**：① `Test-FindingShape` 是**纯函数**（无产物入参）；② 相对根 `#3` **实现未落地** ⇒ 校验器**不知道打开哪个文件**；
+③ 判官**看不到**被指产物（`#8`）⇒ 连"被指文件有几行"的前提都不成立。⇒ 「无效」「警告」都落地不了，同 `O-22`/`O-119` 的「**不可判 ≠ 通过**」。
+
+**② `O-123` / 索引结构缺口 ⇒ 新增 `blocker` 字段（闭集）**
+
+- 字段：`blocker ∈ { run | implementation | decision | external | none }` —— 回答「**卡在哪**」（现行 `state` **记不出"没跑"与"没实现"之别**，两者成本差一个数量级）。
+- 53 条**逐条填值** + 索引头写明语义 + [`tests/test_untested_index_sync.py`](../../tests/test_untested_index_sync.py) 加**闭集校验**与 `blocker` 分布**算出来打印**。
+- ★ **实测分布**（同步测试打印，非写死）：`run 10 · implementation 28 · decision 6 · external 2 · none 7`；★ 抽样印证「`D7-PROTOCOL-CONTRACT` 9 条**全 `implementation`**」。
+
+**③ `O-118` ⇒ 裁【甲】并**已落地**：wrapper 侧"同一步重复 N 次 ⇒ 判循环并终止续跑"**
+
+- 承前置问：**换 CLI（Codex）买不到**循环检测（其 `auto_review` = **批准面/沙箱**；未见拦"同一条无害命令重复 N 次"的证据）⇒ 治死循环的正确位置在 wrapper。
+- [`ops/station-bin/agent-cli.ps1`](../../ops/station-bin/agent-cli.ps1) `$body`：首跑后**只读** `out/.agent-output.txt` 统计"**同一行重复数**"（**排除空行**以降假阳）⇒ 超阈值 `LOOP_DETECTED=1` ⇒ **续跑 `while` 加 `LOOP_DETECTED -eq 0` 闸**；`.meta` 与 `executor-trace` **各显式报** `LOOP_DETECTED`（可审计、不静默）。
+- ⚠ **如实标注**：`LOOP_N=20` 是**设计选择、未实测**（已知样本 273 ⇒ 20 远离它）；假阳代价**被限制在"不给续跑"**（不杀首跑 = `timeout -k 10` 的职责 · 不改 rc）。
+- **验收**：夹具 [`_fm_golden_test.ps1`](../../ops/station-bin/_fm_golden_test.ps1) `o118①–⑤`（**静态 3 + 行为 2**）⇒ **429/0**；★ **变异自证**：删掉 `while` 的闸 ⇒ `o118②` **红**（`428/1`），**字节级恢复**（sha256 前后一致）。
+- ★★ **顺带记一条夹具侧老坑**：`& $bashPath -c $cmd` 走 **PS 原生参数** ⇒ `-cmd` 串里**不得含双引号**（实测 `echo "AA BB CC"` 只吐 `AA` ⇒ 命令被截断）。本段用**单引号/裸词**改写；`.ps1` **正文侧不受限**（那是写进文件的 bash）。
+
+**④ `O-122` 两裁：①`8080` 谁让位 = **searxng 让位**（**已执行**）· ②Docker 栈纳管 = **走 ADR-0004 立项**（**ADR 已立**）**
+
+| # | 裁定 | 落地 |
+|---|---|---|
+| ① | A 站 `~/searxng/docker-compose.yml` 宿主端口 **`8080:8080` → `8888:8080`** + `SEARXNG_BASE_URL` 同步 | **已执行（经 `cluster_ssh.ssh_run` = ADR-0004 的 SSH 层，未新造入口）**；备份 `docker-compose.yml.bak_20260930`；sha256 `c8ef140f…` → `af0f3260…` |
+| ② | 该栈**纳入唯一管理面**（不新增并列入口） | 新立 [ADR-0012](../../adr/ADR-0012-A站容器栈纳管.md)（accepted；**实现未落地**，登记在案） |
+
+- ★ **选 8888 的依据（E1）**：它是该 skill 文档**自带示例端口**（`SEARXNG_URL=http://localhost:8888`）⇒ compose 与文档一致。⚠ 实测 `SEARXNG_URL` 站上**未设置**（无 shell profile / `environment.d` 绑定）⇒ 本项**同步的是文档口径**，非改绑定。
+- **端口登记**：[`inventory/ports.yaml`](../../inventory/ports.yaml) 新增 `managed/8888`（`scope: [A]` · `mode: on_demand` + `status: configured_but_stopped` ⇒ **未监听不算故障**，豁免"声明在用却没监听"的反向对账）。★ 这正是此前「**冲突必须先裁谁让位，才谈得上登记**」的兑现。
+- **校验器**：`docker compose config`（**离线可解析**，无需 daemon）实测 `published: "8888"`。
+
+**验收（本轮）**：`test_untested_index_sync.py` **ALL PASS**（`规范 6 份 · 索引 53 · todo 42 / partial 5 / retired 3 / boundary 3 · needs_decision 5` · `blocker 分布` 见上）；
+`pwsh … _fm_golden_test.ps1` **429/0**；`rpc_check --only ports,inventory,adr,doclinks,md-tables,scripts` **PASS · 6 绿 / 0 黄 / 0 红**（`adr 12 份` · 真值表 **32 端口**）。
+
+**本轮未做（如实登记）**：`O-111` 三站工具面实测（**需先 load 本地引擎**，触 `load-gate`）· `O-123` 的 **5 条暂缓**（U4×3 + U5×2；裁「**人工 public 摘要 + 出网卡**」，摘要与派发**未做**）· `ADR-0012` D2 的 `containers status` **未实现**。
+**关联**：`OPEN-ISSUES.md` **O-118 / O-122 / O-123** · [ADR-0012](../../adr/ADR-0012-A站容器栈纳管.md) · [inventory/untested-index.yaml](../../inventory/untested-index.yaml) · [inventory/ports.yaml](../../inventory/ports.yaml)。
+
 ### 2026-09-30（续⑬） — **O-123 两裁落地**：`D7-CC #3`（相对根 = `runDir`）与 `#8`（采纳候选① + 强制回退）已写进规范本体
 
 > **定位**：承 `续⑫` 的两条加固。本轮把 `O-123` 待裁的 **2 条**下裁，**裁定落在规范原文**（不只是索引 / 台账）。

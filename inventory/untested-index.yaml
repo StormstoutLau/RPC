@@ -8,7 +8,7 @@
 # ★ 真值源分工（**不造第二份真值**）：
 #   · **条目的存在与编号** ⇒ 真值在**各规范的 `## 未实测登记` 节**（本文件**不得**增删条目）；
 #     由 `tests/test_untested_index_sync.py` **双向对账**（编号集合相等）+ 字段闭集校验。
-#   · **分诊字段**（`state` / `needs_decision` / `refs`）⇒ 真值**只在本文件**
+#   · **分诊字段**（`state` / `needs_decision` / `refs` / `blocker`）⇒ 真值**只在本文件**
 #     （各规范节里**不写**分诊 ⇒ 不存在"同一事实两处表达"）。
 #
 # ⚠ 本文件**不是生成物**（分诊是人工判断）⇒ **故意不登记** `inventory/artifacts.yaml`
@@ -26,69 +26,80 @@
 #                      boundary = 文档**明写**"已知能力边界，不是待办"
 #   needs_decision : true **仅当**文档明写「未裁 / 未定 / 待裁」（其余 false —— **不推断**）
 #   refs           : 条目文本里**显式出现**的 O-/D- 编号（没写就是 [] —— **不推断**）
+#   blocker        : ★ 2026-09-30 新增（`O-123`）：答案 = 「**卡在哪**」—— 现行 `state` 记不出
+#                      「**没跑**」与「**没实现**」之别，而两者成本差一个数量级（抽样已证
+#                      `D7-PROTOCOL-CONTRACT` 9 条**全 `implementation`**：`RunReport` / `l1_results`
+#                      在 `ops/` **零命中**）。闭集 { run | implementation | decision | external | none }：
+#                      run            = 需**真跑 / 实测**（对象在站上，或需运行时）
+#                      implementation = 需**写代码 / 建机制**（能力尚未实现）
+#                      decision       = 待**人裁定**（值 / 规则未定）
+#                      external       = 卡在**本仓之外**（上游 / 别项目 / 等外部动作）
+#                      none           = **不待外部动作**（`boundary` 能力边界 / `retired` 已消掉）
+#                      ⚠ **不推断**：取值是人工判读该条目**下一步动作的最近阻碍**（一条可有多重阻碍，取最近的那个）。
+#                      ⚠ **不放阈值/计数**（同 `state`：**标签比事实硬**）；分布由同步测试**算出来打印**。
 
 items:
   # ── D7-PROTOCOL-CONTRACT（9 条：整节 = "新定案、无真实运行"）────────────────
-  - {spec: D7-PROTOCOL-CONTRACT, n: 1, gist: "P0 立契阶段从未真实跑通（TaskContract 生成 / 固化判据与 golden 哈希 / 分发全链路）", state: todo, needs_decision: false, refs: []}
-  - {spec: D7-PROTOCOL-CONTRACT, n: 2, gist: "P1 领取状态迁移从未被触发（claimed 事件，代码无实现）", state: todo, needs_decision: false, refs: []}
-  - {spec: D7-PROTOCOL-CONTRACT, n: 3, gist: "P2 执行阶段 RunReport 从未被真实写过（decisions 八字段 / evidence 锚点 / usage）", state: todo, needs_decision: false, refs: []}
-  - {spec: D7-PROTOCOL-CONTRACT, n: 4, gist: "P3 回收与 P4a 机械验证从未被机判过（l1_results 无任何机判记录）", state: todo, needs_decision: false, refs: []}
-  - {spec: D7-PROTOCOL-CONTRACT, n: 5, gist: "P4b 语义复核（可选分支）从未被触发（sem_verified / l2_marks，代码无实现）", state: todo, needs_decision: false, refs: []}
-  - {spec: D7-PROTOCOL-CONTRACT, n: 6, gist: "P5 裁决登记 Verdict 从未被真实落盘", state: todo, needs_decision: false, refs: []}
-  - {spec: D7-PROTOCOL-CONTRACT, n: 7, gist: "三条红线从未被机制强制（完成信号权 / L1 先于 L2 / P0 固化）—— 文档约束，代码无拦截", state: todo, needs_decision: false, refs: []}
-  - {spec: D7-PROTOCOL-CONTRACT, n: 8, gist: "不变量 I-1 / I-3 / I-6 从未被运行时守护（无断言 / 无审计日志 / 无熔断）", state: todo, needs_decision: false, refs: []}
-  - {spec: D7-PROTOCOL-CONTRACT, n: 9, gist: "角色禁项从未被代码层阻断（主控站不执行 / 工作站不自评…全靠约定）", state: todo, needs_decision: false, refs: []}
+  - {spec: D7-PROTOCOL-CONTRACT, n: 1, gist: "P0 立契阶段从未真实跑通（TaskContract 生成 / 固化判据与 golden 哈希 / 分发全链路）", state: todo, needs_decision: false, refs: [], blocker: implementation}
+  - {spec: D7-PROTOCOL-CONTRACT, n: 2, gist: "P1 领取状态迁移从未被触发（claimed 事件，代码无实现）", state: todo, needs_decision: false, refs: [], blocker: implementation}
+  - {spec: D7-PROTOCOL-CONTRACT, n: 3, gist: "P2 执行阶段 RunReport 从未被真实写过（decisions 八字段 / evidence 锚点 / usage）", state: todo, needs_decision: false, refs: [], blocker: implementation}
+  - {spec: D7-PROTOCOL-CONTRACT, n: 4, gist: "P3 回收与 P4a 机械验证从未被机判过（l1_results 无任何机判记录）", state: todo, needs_decision: false, refs: [], blocker: implementation}
+  - {spec: D7-PROTOCOL-CONTRACT, n: 5, gist: "P4b 语义复核（可选分支）从未被触发（sem_verified / l2_marks，代码无实现）", state: todo, needs_decision: false, refs: [], blocker: implementation}
+  - {spec: D7-PROTOCOL-CONTRACT, n: 6, gist: "P5 裁决登记 Verdict 从未被真实落盘", state: todo, needs_decision: false, refs: [], blocker: implementation}
+  - {spec: D7-PROTOCOL-CONTRACT, n: 7, gist: "三条红线从未被机制强制（完成信号权 / L1 先于 L2 / P0 固化）—— 文档约束，代码无拦截", state: todo, needs_decision: false, refs: [], blocker: implementation}
+  - {spec: D7-PROTOCOL-CONTRACT, n: 8, gist: "不变量 I-1 / I-3 / I-6 从未被运行时守护（无断言 / 无审计日志 / 无熔断）", state: todo, needs_decision: false, refs: [], blocker: implementation}
+  - {spec: D7-PROTOCOL-CONTRACT, n: 9, gist: "角色禁项从未被代码层阻断（主控站不执行 / 工作站不自评…全靠约定）", state: todo, needs_decision: false, refs: [], blocker: implementation}
 
   # ── D7-PROTOCOL-CONCLUSION-CONTRACT（8 条）──────────────────────────────────
-  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 1, gist: "站上真跑未实测：校验器 / 综合器只跑过离线夹具；Invoke-Review 出网判官真调用未跑", state: todo, needs_decision: false, refs: [O-92]}
-  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 2, gist: "判官是否真按新契约输出未实测（尤其「不得自报 agreement」无样本）⇒ 不合契约即判不通过", state: todo, needs_decision: false, refs: []}
-  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 3, gist: "★ 已裁 2026-09-30（O-123）：path 相对根定为【相对 runDir】、实现 = 外壳注入（产物文本 + 产物相对 runDir 的名字），不新造 root 字段；依据 = 提示词无根（cardPath 死参数）⇒「相对仓根」不可实现，且外壳已知量含 $fm 的 evidence-manifest.subjects（收集段已 scp 产物到 runDir/<subjects.path>）；⚠ 实现未落地（故 state 仍 todo）", state: todo, needs_decision: false, refs: [O-123]}
-  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 4, gist: "line_range 越界未校验（只校形态）；「越界即无效」未裁（升级需读产物）", state: todo, needs_decision: true, refs: []}
-  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 5, gist: "★ 已裁 2026-09-30（O-123）：登记为「能力边界」不裁 —— 阈值是设计选择而非可验结论；若日后要用于自动裁决须先校准", state: boundary, needs_decision: false, refs: [O-123]}
-  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 6, gist: "disagreement 只覆盖「同一锚点下的矛盾」⇒ 跨锚点立场冲突识别不到", state: todo, needs_decision: false, refs: []}
-  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 7, gist: "★ 2026-09-30 新登记（O-123 取证）：契约要求锚点「归一化后」对齐，实现**只做 .Trim()** ⇒ 同位置会裂成多锚点 ⇒ consensus 静默失效（全仓零 review.json ⇒ 后果为推定非实测）", state: todo, needs_decision: false, refs: [O-123]}
-  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 8, gist: "★ 已裁 2026-09-30（O-123）：采纳候选①（$product 取卡 evidence-manifest.subjects[].path）+ 强制回退（取不到即回 agent-output.txt → accept-output.txt → exit 3）；⚠ 实现未落地（state 仍 todo）—— 缺口本体：Invoke-Review 固定判 agent-output.txt、不看卡声明 ⇒ 产文件型卡的判官看不到被指的文件 ⇒ findings 的 path/line_range 属臆造；本条是 #3/#4 的前置；候选①必须带回退（evidence 已实测一例「声明在、runDir 无」）（全仓零 review.json ⇒ 推定非实测）", state: todo, needs_decision: false, refs: [O-123]}
+  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 1, gist: "站上真跑未实测：校验器 / 综合器只跑过离线夹具；Invoke-Review 出网判官真调用未跑", state: todo, needs_decision: false, refs: [O-92], blocker: run}
+  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 2, gist: "判官是否真按新契约输出未实测（尤其「不得自报 agreement」无样本）⇒ 不合契约即判不通过", state: todo, needs_decision: false, refs: [], blocker: run}
+  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 3, gist: "★ 已裁 2026-09-30（O-123）：path 相对根定为【相对 runDir】、实现 = 外壳注入（产物文本 + 产物相对 runDir 的名字），不新造 root 字段；依据 = 提示词无根（cardPath 死参数）⇒「相对仓根」不可实现，且外壳已知量含 $fm 的 evidence-manifest.subjects（收集段已 scp 产物到 runDir/<subjects.path>）；⚠ 实现未落地（故 state 仍 todo）", state: todo, needs_decision: false, refs: [O-123], blocker: implementation}
+  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 4, gist: "★ 已裁 2026-09-30（O-123）：登记为「不可判」保持形态校验（state→boundary）—— 纯函数无产物入参 + 相对根未落地 ⇒ 越界无从判定；再触发 = #3/#8 落地后若仍需「越界即无效」则升回待办", state: boundary, needs_decision: false, refs: [O-123], blocker: none}
+  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 5, gist: "★ 已裁 2026-09-30（O-123）：登记为「能力边界」不裁 —— 阈值是设计选择而非可验结论；若日后要用于自动裁决须先校准", state: boundary, needs_decision: false, refs: [O-123], blocker: none}
+  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 6, gist: "disagreement 只覆盖「同一锚点下的矛盾」⇒ 跨锚点立场冲突识别不到", state: todo, needs_decision: false, refs: [], blocker: implementation}
+  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 7, gist: "★ 2026-09-30 新登记（O-123 取证）：契约要求锚点「归一化后」对齐，实现**只做 .Trim()** ⇒ 同位置会裂成多锚点 ⇒ consensus 静默失效（全仓零 review.json ⇒ 后果为推定非实测）", state: todo, needs_decision: false, refs: [O-123], blocker: implementation}
+  - {spec: D7-PROTOCOL-CONCLUSION-CONTRACT, n: 8, gist: "★ 已裁 2026-09-30（O-123）：采纳候选①（$product 取卡 evidence-manifest.subjects[].path）+ 强制回退（取不到即回 agent-output.txt → accept-output.txt → exit 3）；⚠ 实现未落地（state 仍 todo）—— 缺口本体：Invoke-Review 固定判 agent-output.txt、不看卡声明 ⇒ 产文件型卡的判官看不到被指的文件 ⇒ findings 的 path/line_range 属臆造；本条是 #3/#4 的前置；候选①必须带回退（evidence 已实测一例「声明在、runDir 无」）（全仓零 review.json ⇒ 推定非实测）", state: todo, needs_decision: false, refs: [O-123], blocker: implementation}
 
   # ── U1-ARTIFACT-IDENTITY（8 条；1/2 已被划掉）──────────────────────────────
-  - {spec: U1-ARTIFACT-IDENTITY, n: 1, gist: "（已消掉）「规范化 JSON 数组」作哈希输入 —— 移入上方「已消掉的未实测项」", state: retired, needs_decision: false, refs: []}
-  - {spec: U1-ARTIFACT-IDENTITY, n: 2, gist: "（已消掉）头部注释前缀 # u1:sha256:<截断> —— 移入上方第 2 条", state: retired, needs_decision: false, refs: []}
-  - {spec: U1-ARTIFACT-IDENTITY, n: 3, gist: "32 字符截断在全量产物集上的碰撞概率：零碰撞实测记录缺失（性质不因改 32 而变）", state: todo, needs_decision: false, refs: []}
-  - {spec: U1-ARTIFACT-IDENTITY, n: 4, gist: "不追溯迁移下的共存期工具链未编写未跑通（长度启发式会误判 —— 必须靠前缀，不能靠长度）", state: todo, needs_decision: false, refs: []}
-  - {spec: U1-ARTIFACT-IDENTITY, n: 5, gist: "namespace 的跨项目唯一性治理：没有注册机制（谁能新增 / 冲突怎么裁）", state: todo, needs_decision: false, refs: []}
-  - {spec: U1-ARTIFACT-IDENTITY, n: 6, gist: "version 兜底 0.0.0 会让「同 identifier 不同版本」同哈希 ⇒ 该维度实际失效", state: todo, needs_decision: false, refs: []}
-  - {spec: U1-ARTIFACT-IDENTITY, n: 7, gist: "inbox 双轨维护（全 64 MANIFEST.sha256 + 带前缀 32 新索引）双写工作流未跑通", state: todo, needs_decision: false, refs: []}
-  - {spec: U1-ARTIFACT-IDENTITY, n: 8, gist: "★ 已裁 2026-09-30（O-123）：采纳候选①（显式标注「旧代」）+ 显式映射表 ⇒ 走哪条路已定；⚠ 实现仍未落地（故 state 仍 todo）", state: todo, needs_decision: false, refs: [D-25, O-123]}
+  - {spec: U1-ARTIFACT-IDENTITY, n: 1, gist: "（已消掉）「规范化 JSON 数组」作哈希输入 —— 移入上方「已消掉的未实测项」", state: retired, needs_decision: false, refs: [], blocker: none}
+  - {spec: U1-ARTIFACT-IDENTITY, n: 2, gist: "（已消掉）头部注释前缀 # u1:sha256:<截断> —— 移入上方第 2 条", state: retired, needs_decision: false, refs: [], blocker: none}
+  - {spec: U1-ARTIFACT-IDENTITY, n: 3, gist: "32 字符截断在全量产物集上的碰撞概率：零碰撞实测记录缺失（性质不因改 32 而变）", state: todo, needs_decision: false, refs: [], blocker: run}
+  - {spec: U1-ARTIFACT-IDENTITY, n: 4, gist: "不追溯迁移下的共存期工具链未编写未跑通（长度启发式会误判 —— 必须靠前缀，不能靠长度）", state: todo, needs_decision: false, refs: [], blocker: implementation}
+  - {spec: U1-ARTIFACT-IDENTITY, n: 5, gist: "namespace 的跨项目唯一性治理：没有注册机制（谁能新增 / 冲突怎么裁）", state: todo, needs_decision: false, refs: [], blocker: decision}
+  - {spec: U1-ARTIFACT-IDENTITY, n: 6, gist: "version 兜底 0.0.0 会让「同 identifier 不同版本」同哈希 ⇒ 该维度实际失效", state: todo, needs_decision: false, refs: [], blocker: implementation}
+  - {spec: U1-ARTIFACT-IDENTITY, n: 7, gist: "inbox 双轨维护（全 64 MANIFEST.sha256 + 带前缀 32 新索引）双写工作流未跑通", state: todo, needs_decision: false, refs: [], blocker: implementation}
+  - {spec: U1-ARTIFACT-IDENTITY, n: 8, gist: "★ 已裁 2026-09-30（O-123）：采纳候选①（显式标注「旧代」）+ 显式映射表 ⇒ 走哪条路已定；⚠ 实现仍未落地（故 state 仍 todo）", state: todo, needs_decision: false, refs: [D-25, O-123], blocker: implementation}
 
   # ── U3-EDGE-FORMAT（9 条）───────────────────────────────────────────────────
-  - {spec: U3-EDGE-FORMAT, n: 1, gist: "字段集完整性：无实现 / 无真实边实例 / 与现状的相容解析未试", state: todo, needs_decision: false, refs: []}
-  - {spec: U3-EDGE-FORMAT, n: 2, gist: "kind 枚举的封闭性未验证（是否遗漏摘要之外的隐性依赖类型）", state: todo, needs_decision: false, refs: []}
-  - {spec: U3-EDGE-FORMAT, n: 3, gist: "provenance 四前缀的机器解析未与现存「人工记录」习惯对齐", state: todo, needs_decision: false, refs: []}
-  - {spec: U3-EDGE-FORMAT, n: 4, gist: "invalid(e) 的拦截率 / 误杀率：只测过 1 条合成用例，脏数据分布未知", state: todo, needs_decision: false, refs: []}
-  - {spec: U3-EDGE-FORMAT, n: 5, gist: "src/dst 作 U-1 身份的端到端解析：RFC 8785 跨语言 / 跨工具链的字节级一致性未验证", state: todo, needs_decision: false, refs: []}
-  - {spec: U3-EDGE-FORMAT, n: 6, gist: "双向关系拆两条单向边的迁移路径未试（未试过让维护者按新 schema 补反向边）", state: todo, needs_decision: false, refs: []}
-  - {spec: U3-EDGE-FORMAT, n: 7, gist: "增量迁移下的长期共存风险未压测（新旧格式混存时消费端未压测）", state: todo, needs_decision: false, refs: []}
-  - {spec: U3-EDGE-FORMAT, n: 8, gist: "★ 卡面「不许探索」其实是软约束（模型读到同步到站上的 dogfood-cards/README 并抄进产物）⇒ 该目录 public 与出站口径的冲突 = O-82（README 已脱敏 ⇒ 冲突这一半已闭环）；仍成立的是「软约束」这一般结论", state: partial, needs_decision: false, refs: [O-82]}
-  - {spec: U3-EDGE-FORMAT, n: 9, gist: "★ §1.1 方向约定：存量边未逐一核过方向（**没有任何断言**检查「src 真的依赖 dst」）⇒ 方向错不报错、只让 U-4 静默多算 / 漏算；修法候选未实现", state: todo, needs_decision: false, refs: [O-83]}
+  - {spec: U3-EDGE-FORMAT, n: 1, gist: "字段集完整性：无实现 / 无真实边实例 / 与现状的相容解析未试", state: todo, needs_decision: false, refs: [], blocker: implementation}
+  - {spec: U3-EDGE-FORMAT, n: 2, gist: "kind 枚举的封闭性未验证（是否遗漏摘要之外的隐性依赖类型）", state: todo, needs_decision: false, refs: [], blocker: run}
+  - {spec: U3-EDGE-FORMAT, n: 3, gist: "provenance 四前缀的机器解析未与现存「人工记录」习惯对齐", state: todo, needs_decision: false, refs: [], blocker: implementation}
+  - {spec: U3-EDGE-FORMAT, n: 4, gist: "invalid(e) 的拦截率 / 误杀率：只测过 1 条合成用例，脏数据分布未知", state: todo, needs_decision: false, refs: [], blocker: run}
+  - {spec: U3-EDGE-FORMAT, n: 5, gist: "src/dst 作 U-1 身份的端到端解析：RFC 8785 跨语言 / 跨工具链的字节级一致性未验证", state: todo, needs_decision: false, refs: [], blocker: run}
+  - {spec: U3-EDGE-FORMAT, n: 6, gist: "双向关系拆两条单向边的迁移路径未试（未试过让维护者按新 schema 补反向边）", state: todo, needs_decision: false, refs: [], blocker: implementation}
+  - {spec: U3-EDGE-FORMAT, n: 7, gist: "增量迁移下的长期共存风险未压测（新旧格式混存时消费端未压测）", state: todo, needs_decision: false, refs: [], blocker: run}
+  - {spec: U3-EDGE-FORMAT, n: 8, gist: "★ 卡面「不许探索」其实是软约束（模型读到同步到站上的 dogfood-cards/README 并抄进产物）⇒ 该目录 public 与出站口径的冲突 = O-82（README 已脱敏 ⇒ 冲突这一半已闭环）；仍成立的是「软约束」这一般结论", state: partial, needs_decision: false, refs: [O-82], blocker: none}
+  - {spec: U3-EDGE-FORMAT, n: 9, gist: "★ §1.1 方向约定：存量边未逐一核过方向（**没有任何断言**检查「src 真的依赖 dst」）⇒ 方向错不报错、只让 U-4 静默多算 / 漏算；修法候选未实现", state: todo, needs_decision: false, refs: [O-83], blocker: implementation}
 
   # ── U4-INVALIDATION-RULES（10 条）───────────────────────────────────────────
-  - {spec: U4-INVALIDATION-RULES, n: 1, gist: "四条规则的参考实现未被生产链路调用（已有第一个真实调用方 --invalidate；仍人手触发 + 九项目 0/9；执行侧接口从未被第二方实现）", state: partial, needs_decision: false, refs: []}
-  - {spec: U4-INVALIDATION-RULES, n: 2, gist: "「影响面」从何而来（声明式清单 + 只读实测已落地；仍：STORES 清单齐全性决定完整性 / 触发是人手 / 跨项目未落）", state: partial, needs_decision: false, refs: []}
-  - {spec: U4-INVALIDATION-RULES, n: 3, gist: "H-2 的「闭包化」由谁保证未定（affected_is_closure 是自报位，判据无法验证）", state: todo, needs_decision: true, refs: []}
-  - {spec: U4-INVALIDATION-RULES, n: 4, gist: "「只适用派生产物」的边界未机判（D-26 / D-51 的排除未落成判据）", state: todo, needs_decision: true, refs: [D-26, D-51]}
-  - {spec: U4-INVALIDATION-RULES, n: 5, gist: "与「非执行三分」的映射未在真实调度器上跑过（判据本身已被真实调用；仍无调度器承接 WARN）", state: partial, needs_decision: false, refs: []}
-  - {spec: U4-INVALIDATION-RULES, n: 6, gist: "H-1 的「等价」如何证明未定（无证明程序 ⇒ 只能人工断言 True）", state: todo, needs_decision: true, refs: []}
-  - {spec: U4-INVALIDATION-RULES, n: 7, gist: "首靶未触碰（Macro_Data 的 revision_propagation 本轮未读未改）", state: todo, needs_decision: false, refs: []}
-  - {spec: U4-INVALIDATION-RULES, n: 8, gist: "（已消掉）affected 可产出性在本仓之外 —— 三条假缺口已全消掉；★ 元教训：**「取证缺口」本身要先被取证**", state: retired, needs_decision: false, refs: []}
-  - {spec: U4-INVALIDATION-RULES, n: 9, gist: "「清单 vs 实测」的偏差未被机判 ⇒「每个数字标依据」是**纪律，不是判据**", state: todo, needs_decision: false, refs: [O-70]}
-  - {spec: U4-INVALIDATION-RULES, n: 10, gist: "执行侧只有框架、没有执行器（EXECUTORS = {} 空 ⇒ 能力仍是 0，只是缺口变机读可见）", state: partial, needs_decision: false, refs: []}
+  - {spec: U4-INVALIDATION-RULES, n: 1, gist: "四条规则的参考实现未被生产链路调用（已有第一个真实调用方 --invalidate；仍人手触发 + 九项目 0/9；执行侧接口从未被第二方实现）", state: partial, needs_decision: false, refs: [], blocker: implementation}
+  - {spec: U4-INVALIDATION-RULES, n: 2, gist: "「影响面」从何而来（声明式清单 + 只读实测已落地；仍：STORES 清单齐全性决定完整性 / 触发是人手 / 跨项目未落）", state: partial, needs_decision: false, refs: [], blocker: implementation}
+  - {spec: U4-INVALIDATION-RULES, n: 3, gist: "H-2 的「闭包化」由谁保证未定（affected_is_closure 是自报位，判据无法验证）", state: todo, needs_decision: true, refs: [], blocker: decision}
+  - {spec: U4-INVALIDATION-RULES, n: 4, gist: "「只适用派生产物」的边界未机判（D-26 / D-51 的排除未落成判据）", state: todo, needs_decision: true, refs: [D-26, D-51], blocker: decision}
+  - {spec: U4-INVALIDATION-RULES, n: 5, gist: "与「非执行三分」的映射未在真实调度器上跑过（判据本身已被真实调用；仍无调度器承接 WARN）", state: partial, needs_decision: false, refs: [], blocker: implementation}
+  - {spec: U4-INVALIDATION-RULES, n: 6, gist: "H-1 的「等价」如何证明未定（无证明程序 ⇒ 只能人工断言 True）", state: todo, needs_decision: true, refs: [], blocker: decision}
+  - {spec: U4-INVALIDATION-RULES, n: 7, gist: "首靶未触碰（Macro_Data 的 revision_propagation 本轮未读未改）", state: todo, needs_decision: false, refs: [], blocker: external}
+  - {spec: U4-INVALIDATION-RULES, n: 8, gist: "（已消掉）affected 可产出性在本仓之外 —— 三条假缺口已全消掉；★ 元教训：**「取证缺口」本身要先被取证**", state: retired, needs_decision: false, refs: [], blocker: none}
+  - {spec: U4-INVALIDATION-RULES, n: 9, gist: "「清单 vs 实测」的偏差未被机判 ⇒「每个数字标依据」是**纪律，不是判据**", state: todo, needs_decision: false, refs: [O-70], blocker: implementation}
+  - {spec: U4-INVALIDATION-RULES, n: 10, gist: "执行侧只有框架、没有执行器（EXECUTORS = {} 空 ⇒ 能力仍是 0，只是缺口变机读可见）", state: partial, needs_decision: false, refs: [], blocker: implementation}
 
   # ── U5-TRUST-BASIS（9 条）───────────────────────────────────────────────────
-  - {spec: U5-TRUST-BASIS, n: 1, gist: "四条判据从未被真实对象驱动（无真实输入；与 Textbook / Auto_Prover 从未对接）", state: todo, needs_decision: false, refs: []}
-  - {spec: U5-TRUST-BASIS, n: 2, gist: "v1 的「对应得对不对」判不了 —— **已知能力边界，不是待办**（语义正确性仍是人的活）", state: boundary, needs_decision: false, refs: []}
-  - {spec: U5-TRUST-BASIS, n: 3, gist: "v2 是新造形式（V-2 实测真空 ⇒「什么算一跳」无第二方实现可对照）", state: todo, needs_decision: false, refs: []}
-  - {spec: U5-TRUST-BASIS, n: 4, gist: "v3 的默认白名单未经裁定（取自原文**举例** ≠ 裁定）", state: todo, needs_decision: true, refs: []}
-  - {spec: U5-TRUST-BASIS, n: 5, gist: "晋升门 entries 实例 0 条（schema 从未被真实条目走过一遍）", state: todo, needs_decision: false, refs: []}
-  - {spec: U5-TRUST-BASIS, n: 6, gist: "min_recurrence 的阈值是「新设」、未定（已进 promotion.yaml 的 unverified）", state: todo, needs_decision: true, refs: []}
-  - {spec: U5-TRUST-BASIS, n: 7, gist: "★ structure 两条（不对称配置 / 双盲）不可机判 ⇒ 结构性约束**还没有判据**（自认本批最大缺口，正扛着「不得自审」）", state: todo, needs_decision: false, refs: []}
-  - {spec: U5-TRUST-BASIS, n: 8, gist: "「三种判据任一满足」的并列语义无人验证（是本仓的**合并假设**，不是实测结论）", state: todo, needs_decision: false, refs: []}
-  - {spec: U5-TRUST-BASIS, n: 9, gist: "（O-92）「双盲重推导」的站上真调用从未跑过；且与 §11.7 的「双盲」不是一回事；op 六项枚举未针对本仓语料校准", state: todo, needs_decision: false, refs: [O-92]}
+  - {spec: U5-TRUST-BASIS, n: 1, gist: "四条判据从未被真实对象驱动（无真实输入；与 Textbook / Auto_Prover 从未对接）", state: todo, needs_decision: false, refs: [], blocker: external}
+  - {spec: U5-TRUST-BASIS, n: 2, gist: "v1 的「对应得对不对」判不了 —— **已知能力边界，不是待办**（语义正确性仍是人的活）", state: boundary, needs_decision: false, refs: [], blocker: none}
+  - {spec: U5-TRUST-BASIS, n: 3, gist: "v2 是新造形式（V-2 实测真空 ⇒「什么算一跳」无第二方实现可对照）", state: todo, needs_decision: false, refs: [], blocker: implementation}
+  - {spec: U5-TRUST-BASIS, n: 4, gist: "v3 的默认白名单未经裁定（取自原文**举例** ≠ 裁定）", state: todo, needs_decision: true, refs: [], blocker: decision}
+  - {spec: U5-TRUST-BASIS, n: 5, gist: "晋升门 entries 实例 0 条（schema 从未被真实条目走过一遍）", state: todo, needs_decision: false, refs: [], blocker: run}
+  - {spec: U5-TRUST-BASIS, n: 6, gist: "min_recurrence 的阈值是「新设」、未定（已进 promotion.yaml 的 unverified）", state: todo, needs_decision: true, refs: [], blocker: decision}
+  - {spec: U5-TRUST-BASIS, n: 7, gist: "★ structure 两条（不对称配置 / 双盲）不可机判 ⇒ 结构性约束**还没有判据**（自认本批最大缺口，正扛着「不得自审」）", state: todo, needs_decision: false, refs: [], blocker: implementation}
+  - {spec: U5-TRUST-BASIS, n: 8, gist: "「三种判据任一满足」的并列语义无人验证（是本仓的**合并假设**，不是实测结论）", state: todo, needs_decision: false, refs: [], blocker: run}
+  - {spec: U5-TRUST-BASIS, n: 9, gist: "（O-92）「双盲重推导」的站上真调用从未跑过；且与 §11.7 的「双盲」不是一回事；op 六项枚举未针对本仓语料校准", state: todo, needs_decision: false, refs: [O-92], blocker: run}

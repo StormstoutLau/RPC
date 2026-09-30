@@ -40,8 +40,8 @@
 #   - 新增服务 => 改本表
 # ============================================================================
 version: 1
-updated: 2026-09-29
-measured_by: "sudo ss -ltnup + 服务配置核对 + 进程归属反查, 三站实测 2026-09-15"
+updated: 2026-09-30
+measured_by: "sudo ss -ltnup + 服务配置核对 + 进程归属反查, 三站实测 2026-09-15; 2026-09-30 补登 A 站 8888 (searxng, `O-122`)"
 
 # ── 本项目自管的服务端口 ────────────────────────────────────────────
 managed:
@@ -119,6 +119,24 @@ managed:
     owner: hermes (platforms.api_server)
     status: configured_but_stopped
     note: 配置已启用, 但 2026-09-14 实测无监听
+
+  - port: 8888
+    proto: http
+    purpose: 自建 SearXNG 元搜索引擎 (Agent 检索基础设施)
+    scope: [A]
+    bind: 127.0.0.1
+    owner: "docker (compose: ~/searxng, 容器未起)"
+    mode: on_demand
+    status: configured_but_stopped
+    note: |
+      2026-09-30 登记 (`O-122`)：宿主端口由 `8080` **改让**为 `8888`（承「8080 双重声明谁让位」裁定）。
+      原 compose 写死 `8080:8080`，与 A 站推理引擎 (unsloth studio, 本表 managed/8080) 撞声明；
+      实测 2026-09-30：8080 空闲、无 searxng 容器 ⇒ 当时无冲突，但 `compose up` 即撞。
+      ⇒ 改 `"8888:8080"` + `SEARXNG_BASE_URL` 同步；选 8888 因它是该 skill 文档**自带的示例端口**
+      （`SEARXNG_URL=http://localhost:8888`）⇒ compose 与文档一致。
+      ⚠ `SEARXNG_URL` 站上**未设置**（无 shell profile / environment.d 绑定）⇒ 本项**同步的是文档口径**，非改绑定。
+      证据：`docker compose config` 实测 `published: "8888"`；备份件 `docker-compose.yml.bak_20260930`。
+      mode/status 双标 ⇒ **未监听不算故障**（豁免本表"声明在用却没监听"的反向对账）。
 
 # ── 非我方开发, 但我方依赖 (实测登记) ───────────────────────────────
 third_party:

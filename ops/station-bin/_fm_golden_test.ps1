@@ -1911,6 +1911,50 @@ Assert-True "a1: 接线：求值点在**派发前**（早于主路 body 的 `out
     ($content.IndexOf('Resolve-D6D7Boundary $fm')) -gt 0 -and
     ($content.IndexOf('Resolve-D6D7Boundary $fm')) -lt $content.IndexOf('out/.progress'))
 
+# ══════════════════════════════════════════════════════════════════════════════
+# --- o118 (2026-09-30, `O-118` 甲): 循环检测 —— 「同一步重复 N 次 ⇒ 判循环并终止续跑」---
+#   动机: opencode **无内置循环检测 / 打断** ⇒ 死循环只能人工监控
+#     （实测本地 qwen3-coder-next 良率 0% / 死循环 273 次 grep）。
+#   设计: 只读本站**已留痕**的 `out/.agent-output.txt`（不新增采集面 / 不改协议 / 不出网）;
+#     检测到即**终止续跑**（把同一循环重跑一遍 = 白烧 token）; 不杀首跑（那是 `timeout -k 10` 的职责）。
+#   阈值 `LOOP_N=20` = **设计选择、未实测**（无真实死循环样本可校准; 已知样本 273 ⇒ 20 远离它）。
+#   ★ 本条**必须**有行为测试: 静态断言只能证"那段文本在"——
+#     正是 o117 的教训（查'串在不', 查不出'这条链现在跑不跑得起来'）。
+Assert-True "o118①: body 在循环检测段（LOOP_DETECTED + **排除空行** + LOOP_N 阈值）" (
+    $content.Contains('LOOP_DETECTED=1') -and
+    $content.Contains("grep -v '^[[:space:]]*$'") -and
+    $content.Contains('LOOP_N=20'))
+Assert-True "o118②: 续跑 while **必须**带 `LOOP_DETECTED -eq 0` 闸（检测到循环 ⇒ 不续跑; 缺闸 = 白烧 token）" (
+    $content.Contains('[ "`$LOOP_DETECTED" -eq 0 ]'))
+Assert-True "o118③: 两处**显式报** LOOP_DETECTED（`.meta` + executor-trace）⇒ 可审计, 不静默" (
+    $content.Contains('LOOP_DETECTED=%s') -and $content.Contains('loop_detected=%s'))
+# 行为: 用**本地 Git Bash** 跑同一段 bash 结构（含阈值判定 + 续跑闸）。
+# ⚠ 传参纪律（本仓老坑）: `& $bashPath -c $cmd` 走 **PowerShell 原生参数** ⇒ `-cmd` 串里
+#   **不得含双引号**（PS 会剥引号 + 按空白重切 ⇒ 命令被截断；实测 `echo "AA BB CC"` 只吐 `AA`）。
+#   ⇒ 本段用**单引号 / 裸词**改写（等价结构，非等价引号）。body 侧不受此限（那是**写进文件**的 bash）。
+$q = [char]39
+$fLoopP = Join-Path $env:TEMP 'fm_o118_pos.txt'
+$fLoopN = Join-Path $env:TEMP 'fm_o118_neg.txt'
+$logLoopP = Join-Path $env:TEMP 'fm_o118_pos.log'
+$logLoopN = Join-Path $env:TEMP 'fm_o118_neg.log'
+foreach ($f in @($logLoopP, $logLoopN)) { Remove-Item $f -ErrorAction SilentlyContinue }
+# 正例: 同一行重复 **25** 次 **且** 混入 **30 个空行**（空行必须被排除, 否则空行会把计数堆到假阳）
+Set-Content -Path $fLoopP -Encoding ASCII -Value (@(1..25 | ForEach-Object { 'grep -rn FOO .' }) + @(1..30 | ForEach-Object { '' }))
+# 负例: 40 行**互不相同**（一条正常失败日志的样子 —— 不该被判成循环）
+Set-Content -Path $fLoopN -Encoding ASCII -Value (1..40 | ForEach-Object { "step line $_" })
+$snipBody = 'LOOP_N=20; LOOP_MAX=$(grep -v ' + $q + '^[[:space:]]*$' + $q + ' $F 2>/dev/null | sort | uniq -c | sort -rn | head -1 | awk ' + $q + '{print $1}' + $q + '); LOOP_DETECTED=0; if [ x$LOOP_MAX != x ] && [ $LOOP_MAX -ge $LOOP_N ]; then LOOP_DETECTED=1; fi; RC=1; CONT_ATTEMPT=0; N=0; while [ $RC -ne 0 ] && [ $CONT_ATTEMPT -lt 3 ] && [ $LOOP_DETECTED -eq 0 ]; do N=$((N+1)); CONT_ATTEMPT=$((CONT_ATTEMPT+1)); break; done; echo LD=$LOOP_DETECTED MAX=$LOOP_MAX RESUME_RAN=$N'
+$cmdLoopP = 'F=' + $q + ($fLoopP -replace '\\', '/') + $q + '; ' + $snipBody
+$cmdLoopN = 'F=' + $q + ($fLoopN -replace '\\', '/') + $q + '; ' + $snipBody
+$rcLoopP = Invoke-LocalBashCmd -bashPath $lb -cwd $env:TEMP -logFile $logLoopP -cmd $cmdLoopP
+$rcLoopN = Invoke-LocalBashCmd -bashPath $lb -cwd $env:TEMP -logFile $logLoopN -cmd $cmdLoopN
+$outLoopP = "$(Get-Content $logLoopP -Raw -ErrorAction SilentlyContinue)"
+$outLoopN = "$(Get-Content $logLoopN -Raw -ErrorAction SilentlyContinue)"
+Assert-True "o118④(行为): 同行重复 25 次（且 30 空行被排除）⇒ LD=1 · 续跑**未跑**（RESUME_RAN=0）" (
+    $rcLoopP -eq 0 -and $outLoopP -match 'LD=1' -and $outLoopP -match 'MAX=25' -and $outLoopP -match 'RESUME_RAN=0')
+Assert-True "o118⑤(行为·先验红): **无**重复行 ⇒ LD=0 · 续跑**照常跑**（RESUME_RAN=1）（否则判据会把正常失败也当循环）" (
+    $rcLoopN -eq 0 -and $outLoopN -match 'LD=0' -and $outLoopN -match 'RESUME_RAN=1')
+foreach ($f in @($fLoopP, $fLoopN)) { Remove-Item $f -ErrorAction SilentlyContinue }
+
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
 exit $(if ($fail -eq 0) { 0 } else { 1 })
