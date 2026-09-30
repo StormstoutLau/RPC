@@ -8,7 +8,9 @@
   ① **三信封字段级**：缺字段即拒 · `RunReport` 含 `verdict` 即拒（红线「产出方不得自评」变机判）·
      ★ **词义冲突的机械切分**：`Verdict.verdict` 是 exit code（整数），判官四值属 `review.json`；
   ② **六相状态机**：单链 + P4b 可选分叉 + **不得跳过 L1** + **驱动角色固定**（角色不对即拒）；
-  ③ **8 条拦截**（三红线 + 三不变量 + 两角色禁项）：逐条一组正反用例 + 注册表自洽。
+  ③ **8 条拦截**（三红线 + 三不变量 + 两角色禁项）：逐条一组正反用例 + 注册表自洽；
+  ④ ★ **B3（2026-10-01，裁【甲】）**：角色**同机**可见性 `PRH` —— **报数、不是拦截** ⇒ 断言它的
+     三态（分离 / 同机 / 不可判）+ 它**不在** `D7_BLOCK_RULES` 里（混进去会让那 8 条的计数失去意义）。
 
 ★ **先验红自证**：本文件每条断言都配一个"**恒真桩**"反证（见 `main()` 末段）——
   一个"永远 ok / 永远放行"的实现必须能**当场红**，否则"全绿"没有信息量（本仓 O-89 同族教训）。
@@ -280,6 +282,47 @@ def main() -> int:
               f"★ 同源对照：去掉 verdict ⇒ {rc_ok} / 加上 verdict ⇒ {rc_bad}")
         if (rc_ok, rc_bad) != (0, 1):
             fails.append("[CLI] 同源对照失败")
+
+    # ── ⑦ ★ B3（2026-10-01，用户裁【甲】）：角色**同机**可见性 `PRH` ──────────────────────
+    #   甲 = §1.4 的「主控站/工作站」定义为**角色**（不是机器）⇒ PRM 按 `actor` 判、不由机器归属判；
+    #   ★ **但"同一台机器既产出又裁决"必须被看见** ⇒ `PRH` 把这件事变成读数。
+    #   ★★ 它**刻意不是拦截**（不进 `D7_BLOCK_RULES`）—— 混进去会让那 8 条的计数失去意义。
+    #   ⚠ 不设阈值（`O-126`）：判据只给"同不同机"，**收紧条件写死**在契约 §1.6。
+    print("── ⑦ 同机可见性 PRH（B3 · 裁【甲】）──")
+    _hs = [
+        ("分离（站上执行 vs 主控裁决）", ("station-C", "master-01"), False),
+        ("同机（出网档主控本地执行 + 主控裁决）", ("master-01", "master-01"), True),
+        ("不可判：缺产出机", ("", "master-01"), None),
+        ("不可判：缺裁决机", ("master-01", ""), None),
+        ("同机口径 = **逐字相等**（不做主机名归一 ⇒ 大小写不同即判分离，如实）",
+         ("Master-01", "master-01"), False),
+    ]
+    for _d, (_e, _a), _w in _hs:
+        _same, _why = R.d7_host_separation(_e, _a)
+        _ok = (_same is _w)
+        print(f"  {'ok  ' if _ok else 'FAIL'} {_d} ⇒ same={_same}")
+        if not _ok:
+            fails.append(f"[PRH] {_d}: same={_same} 期望 {_w}")
+    _ok = (R.D7_HOST_SEP_RULE == "PRH") and ("PRH" not in dict(R.D7_BLOCK_RULES))
+    print(f"  {'ok  ' if _ok else 'FAIL'} PRH **不在** 8 条拦截集内（报数 ≠ 拦截）")
+    if not _ok:
+        fails.append("[PRH] PRH 混进了 D7_BLOCK_RULES（会让那 8 条的计数失去意义）")
+    # ★ 先验红自证：恒真桩（永远 separate）必须**当场红** —— 否则"全绿"没有信息量。
+    _stub = lambda e, a: (False, "stub")            # noqa: E731
+    _bad = [_d for _d, (_e, _a), _w in _hs if _stub(_e, _a)[0] is not _w]
+    _ok = len(_bad) > 0
+    print(f"  {'ok  ' if _ok else 'FAIL'} ★ 恒真桩（永远 separate）⇒ 红 {len(_bad)} 条")
+    if not _ok:
+        fails.append("[PRH] 恒真桩没有变红 ⇒ 本组断言是恒真的")
+    # CLI 面：三态不可混（0=分离 / 1=同机 / 2=不可判）。
+    #   ⚠ **空值在 argv 上不可表达**（PS 与 argparse 都会吃掉空串 ⇒ argparse 退 2）⇒ 调用方**必须先判空**、
+    #     自家报"不可判"，**不要**把空串交给 CLI（这里只测能表达的两态）。
+    rc_sep, out_sep = _cli(["--d7-host-sep", "station-C", "master-01"])
+    rc_same, out_same = _cli(["--d7-host-sep", "master-01", "master-01"])
+    _ok = (rc_sep, rc_same) == (0, 1) and "separate" in out_sep and "same" in out_same
+    print(f"  {'ok  ' if _ok else 'FAIL'} CLI 三态：分离 ⇒ {rc_sep} / 同机 ⇒ {rc_same}")
+    if not _ok:
+        fails.append(f"[PRH-CLI] 期望 (0,1)，实为 ({rc_sep},{rc_same})")
 
     print(f"RESULT: {'ALL PASS' if not fails else f'失败 {len(fails)} 条'}")
     for f in fails:
