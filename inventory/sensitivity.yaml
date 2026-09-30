@@ -298,6 +298,20 @@ documents:
       按上一条同口径，把"兜住"变成"已登记"）。
       ⚠ 扩张条件：若补入**逐设备 MAC 清单** / **路由器或 BIOS 配置原文** / **完整 `dmesg`** ⇒ 命中新类别，须重裁。
 
+  # ── 2026-10-01 新增（halogen 引擎评估，`O-137`）──
+  - path: docs/research/2026-10-01_halogen-flash-server评估与本集群部署可行性.md
+    tier: local-only
+    fails: [C3]
+    why: >-
+      含**站标识与各站磁盘余量** / **站上权重挂载路径**（`/data/models/gguf/…`）/
+      **三站内核参数与 IOMMU 状态**（B 缺 `iommu=pt`、C 为 `amdgpu` iommu off）/
+      **容器运行时就绪盘点**（daemon 归属站）—— 属**基础设施指纹 + 站上实况**
+      （与 DwarfStar 清退 / CIRU / LAN 漂移三篇**同理由**）。
+      ★ 性质 = **显式留痕**（`default_tier: local-only` 本来也兜得住；按上两条同口径，
+      把"兜住"变成"已登记"）。⚠ 本文**不含**站 IP 原文，但"哪站什么状态"本身即指纹。
+      ⚠ 扩张条件：若补入**逐设备 MAC 清单** / **BIOS 配置原文** / **完整 `dmesg`** /
+      **镜像拉取日志**（含 registry mirror 与凭据形态）⇒ 命中新类别，须重裁。
+
 # ── 常被卡引用的契约/载体文档 ──
 contracts:
   - path: docs/三机推理集群使用手册.md
