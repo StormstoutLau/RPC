@@ -2237,9 +2237,43 @@ def _d7_cli_read(src):
     return json.loads(raw)
 
 
+# ── ★★ B3（2026-10-01）：角色**同机**可见性判据 `PRH`（**不是拦截**，是"看得见"）──────────
+# 裁定依据（用户 2026-10-01 裁【甲】；落点 = 契约 §1.4 的角色化 + §1.6 的三句裁）：
+#   §1.4 的「主控站 / 工作站」= **角色**（主控角色驱动 P0/P4a/P4b/P5；工作站角色驱动 P1/P2/P3），
+#   **不是机器** ⇒ 主控机器上的出网通道以 `worker` 角色登记，**不触** `PRM`。
+#   ★ **但**"同一台机器既产出又裁决"这件事**必须被看见** —— 它直接影响裁决独立性
+#     （红线 1「完成信号权只在主控站」真正想保的是"**产出方不得自评**"）。
+# ⚠⚠ **它刻意不进 `D7_BLOCK_RULES` / `D7_BLOCK_FNS`**：那 8 条的口径是"三红线 + 三不变量 +
+#   两角色禁项"，本项**不属于**其中任何一类；把"报数"混进"拦截"会让 8 条的计数失去意义
+#   （同 `inventory/ops.yaml` 把 `entry_modules` 从 `entry` 拆出的理由）。
+# ⚠ **不设阈值**（`O-126`：不许用凭空数值满足可机判）—— **先量后定档**：读数出来再由人裁
+#   要不要把它升级为**拒**（= PRM 分析里的方案②「物理分离」）。
+#   ★ 收紧条件（写死）：**同机占比有读数 + 用户裁「升级为拒」** ⇒ 才改调用方，**不改本判据**。
+D7_HOST_SEP_RULE = "PRH"
+
+
+def d7_host_separation(exec_host=None, arbiter_host=None):
+    """`PRH`：**产出机 vs 裁决机**的同机可见性 ⇒ `(same, reason)`，`same ∈ {True, False, None}`。
+
+    ⚠ **fail-closed 的方向在这里是"不可判"而不是"拒"**：缺任一 host ⇒ `same=None`
+      （**不可判**）⇒ 调用方必须**如实报出**，**不许**静默读成"不同机"
+      （本仓口径：判不了 ≠ 通过，同 `O-22` / `O-119`）。
+    ⚠ 本判据**只判"是否同一台机器"**：它**不判**"该形态合不合规"（那是用户的裁）。
+    """
+    e = str(exec_host or "").strip()
+    a = str(arbiter_host or "").strip()
+    if not e or not a:
+        return None, (f"判不了（exec_host={exec_host!r} / arbiter_host={arbiter_host!r}）"
+                      f" ⇒ **不可判**（缺一即不可判，不得静默读成「不同机」）")
+    if e == a:
+        return True, (f"**同机**：产出机 == 裁决机 == {e} ⇒ 裁决独立性打折"
+                      f"（红线 1 想保的「产出方不得自评」，此形态下**只有角色分离、无机器分离**）")
+    return False, f"**分离**：产出机 {e} ≠ 裁决机 {a} ⇒ 机械独立"
+
+
 def d7_cli(args):
     """**消费面**：按 `args` 跑对应判据 ⇒ 退出码（见上）。命中则返回 int，未命中返回 `None`。"""
-    if not (args.d7_envelope or args.d7_transition or args.d7_block):
+    if not (args.d7_envelope or args.d7_transition or args.d7_block or args.d7_host_sep):
         return None
     try:                                  # 只在本入口改编码：门禁自身的输出行为**零改动**
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -2261,6 +2295,17 @@ def d7_cli(args):
         ok, _nxt, why = d7_transition(a, b, actor)
         print(f"D7_TRANSITION {'ok' if ok else 'reject'} {a} -> {b} ({actor}): {why}")
         return 0 if ok else 1
+    if args.d7_host_sep:
+        # ★ 三态不可混：0 = 分离 · 1 = **同机**（判据确实给出了结论）· 2 = 不可判（缺 host）。
+        #   ⚠ 调用方（外壳）对 `1` 按 **WARN** 处理（灰度，同 B1 的 gaps）—— 那是**调用方的政策**，
+        #   不是本判据的语义（本判据只说"同不同机"）。
+        e, a = args.d7_host_sep
+        same, why = d7_host_separation(e, a)
+        if same is None:
+            print(f"D7_HOSTSEP undecidable: {why}")
+            return D7_CLI_EXIT_UNDECIDABLE
+        print(f"D7_HOSTSEP {'same' if same else 'separate'}: {why}")
+        return 1 if same else 0
     try:
         ctx = _d7_cli_read(args.d7_ctx) if args.d7_ctx else {}
     except Exception as e:
@@ -9127,6 +9172,9 @@ def main():
                     help="D7 8 条拦截之一（RL1/RL2/RL3/I1/I3/I6/PRM/PRW）")
     ap.add_argument("--d7-ctx", default="", metavar="JSON",
                     help="--d7-block 的上下文（JSON 文件或 -）")
+    ap.add_argument("--d7-host-sep", nargs=2, default=None, metavar=("EXEC_HOST", "ARBITER_HOST"),
+                    help="★ B3 `PRH`：产出机 vs 裁决机的**同机可见性**（0=分离 / 1=同机 / 2=不可判）"
+                         "—— 报数用，调用方按 WARN 处理（不阻断）")
     args = ap.parse_args()
 
     rc = d7_cli(args)                      # 命中 D7 消费面 ⇒ 直接返回（不跑门禁）
