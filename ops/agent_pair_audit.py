@@ -38,10 +38,16 @@ def _read(p: Path):
 
 
 def collect():
-    """扫可达项目 ⇒ `[(proj, run_id, producer_model, judge_model, p_sha, j_sha)]` + 计数。"""
+    """扫可达项目 ⇒ `[(proj, run_id, producer_model, judge_model, p_sha, j_sha)]` + 计数。
+
+    ★★ 2026-10-01（`O-136` 的 `PRH` 定档前置）：**同一趟遍历顺带取 `exec_host`/`arbiter_host`**
+      ⇒ `PRH`（产出机 vs 裁决机同机可见性）的读数**不需要新落点、不需要新件**：
+      两侧事实早在 B3 就随 `.agent-run.json` 落盘了（见 `Resolve-D7Hosts`）。
+      ⚠ 这一条正是"**读侧必须与写侧同源**"（同 C 段那次教训的形态）—— 缺的从来不是落点，是**读侧**。
+    """
     import cluster as C
     roots, note = C._agent_proj_roots()
-    pairs, n_rec, n_rev, n_no_pair = [], 0, 0, 0
+    pairs, hosts, n_rec, n_rev, n_no_pair = [], [], 0, 0, 0
     for proj, root in sorted(roots.items()):
         d = root / "agent-out"
         if not d.is_dir():
@@ -53,6 +59,7 @@ def collect():
             if rec is None:
                 continue
             n_rec += 1
+            hosts.append((proj, sub.name, rec.get("exec_host"), rec.get("arbiter_host")))
             rev = _read(sub / "review.json")
             if rev is None:
                 n_no_pair += 1
@@ -65,7 +72,33 @@ def collect():
                 n_no_pair += 1
                 continue
             pairs.append((proj, sub.name, pm, jm, ps, js))
-    return roots, note, pairs, {"run_records": n_rec, "with_review": n_rev, "no_pair": n_no_pair}
+    return roots, note, pairs, {"run_records": n_rec, "with_review": n_rev, "no_pair": n_no_pair}, hosts
+
+
+def prh_distribution(hosts):
+    """`PRH` 的**分层读数**（`O-136` 定档前置）。
+
+    ⚠⚠ **判据本体不在这里** —— 逐字比与三态由 `rpc_check.d7_host_separation` 给（`O-134` 落的本体）。
+      本函数只做**计数与分层标注**（消费侧），**不重写一份判据**（本仓头号失败形态）。
+
+    ★★ **为什么必须分层，而不能只报一个"总占比"**：`exec_host` 只有**三种来源**，而其中两种
+      **按构造就是必然结论** ⇒ 混在一起算出来的占比**没有信息量**：
+        · `exec_host` = **站 host** ⇒ 站上跑 ⇒ **必然分离**（送分样本，不能当"机械独立"的证据）
+        · `exec_host` = **裁决机名** ⇒ 主控本地跑 ⇒ **必然同机**（★ 这才是 `PRH` 要看见的形态，
+          `O-124` 实测批 `20260930145220`：「出网档 且 无站路由 ⇒ 主控本地 spawn」）
+        · `exec_host` 为空 / 缺 ⇒ **不可判**（早于 B3 的 run 没这个键 ⇒ 单独一桶，不混入分母）
+      ⇒ 三桶**就是**分层；★ 每桶都带"为什么必然"的标注，免得"分离 9/9"被误读成安全证明。
+    """
+    buckets = {"station": [], "local": [], "unknown": [], }
+    for proj, rid, eh, ah in hosts:
+        same, _why = R.d7_host_separation(eh, ah)
+        if same is None:
+            buckets["unknown"].append((proj, rid, eh))
+        elif same is True:
+            buckets["local"].append((proj, rid, eh, ah))
+        else:
+            buckets["station"].append((proj, rid, eh, ah))
+    return buckets
 
 
 def main():
@@ -75,7 +108,7 @@ def main():
     a = ap.parse_args()
 
     idx = R.load_family_index()
-    roots, note, pairs, cnt = collect()
+    roots, note, pairs, cnt, hosts = collect()
 
     t1, t2, same, unknown, j2_same = {}, {}, [], [], []
     for proj, rid, pm, jm, ps, js in pairs:
@@ -102,10 +135,29 @@ def main():
     print(f"[J-2 输入独立] " + " · ".join(f"{k}={v}" for k, v in sorted(t2.items())))
     if j2_same:
         print(f"   ⚠ 两侧输入摘要**相同**（⇒ 判据红）: {len(j2_same)} 对 · 例 {j2_same[:3]}")
+    # ── ★★ PRH（同机可见性）分层读数（2026-10-01 · O-136 定档前置）────────────────────────────
+    # 判据本体 = `R.d7_host_separation`（本文件只计数、只分层）；读数落在 `.agent-run.json` 上。
+    ph = prh_distribution(hosts)
+    n_st, n_lo, n_un = len(ph["station"]), len(ph["local"]), len(ph["unknown"])
+    n_ok = n_st + n_lo
+    print(f"[PRH 同机可见性] 可判 {n_ok}（**同机 {n_lo}** / 分离 {n_st}）· 不可判 {n_un}")
+    print(f"   ★ 分离桶（{n_st}）= `exec_host` 是**站 host** ⇒ 站上跑 ⇒ **按构造必然分离**"
+          f"（送分样本，**不构成「机械独立」的证据**）")
+    for x in ph["station"][:a.max]:
+        print(f"      · {x[0]}/{x[1]}  {x[2]}  ≠  {x[3]}")
+    print(f"   ★★ 同机桶（{n_lo}）= `exec_host` **等于裁决机** ⇒ **主控本地跑** ⇒ 这才是 `PRH` 要看见的形态"
+          f"（`O-124`：出网档 且 无站路由 ⇒ 主控本地 spawn）")
+    for x in ph["local"][:a.max]:
+        print(f"      · {x[0]}/{x[1]}  {x[2]}  ==  {x[3]}")
+    print(f"   ⚠ 不可判桶（{n_un}）= 无 `exec_host`（早于 B3 的 run 没有这个键）⇒ **不入分母**、也不读成「不同机」")
     print("[口径] 只读报数，**不判灯**（先量后定档，同 O-69/O-97）；`unknown` 不等于失败")
+    print("[口径·PRH] ★ 定档**不看占比阈值**（`O-126` 禁凭空数值）：三桶按构造就有结论 ⇒ "
+          "先看**同机桶是否非空**（= 该形态是否真出现过），再裁「要不要把这一路升级为拒」")
     if a.json:
         print(json.dumps({"t1": t1, "t2": t2, "pairs": len(pairs),
-                          "same": same[:20], "unknown": unknown[:20]}, ensure_ascii=False))
+                          "same": same[:20], "unknown": unknown[:20],
+                          "prh": {"station": n_st, "local": n_lo, "unknown": n_un,
+                                  "local_examples": ph["local"][:10]}}, ensure_ascii=False))
     return 0
 
 

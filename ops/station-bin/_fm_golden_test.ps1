@@ -50,6 +50,10 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 #   ⚠ 必须一并提取 `Get-TargetHost`（上面已有）—— 它推产出机时用的就是**同一个** host 表，
 #     另抄一份 host 表 = "同一事实两处表达"（本仓头号形态）。
 'Resolve-D7Hosts',
+# 2026-10-01（`O-136` "灰度转硬拒"前置）：`gaps` 的**两分**（纯函数：吃 gaps 名数组）。
+#   ⚠ 它依赖 `$Script:D7_GAP_CLASS` 表 ⇒ 必须**一并提取那张表**（同 ROUTE_TABLE/JUDGE_TABLE 的处置）——
+#     否则在夹具里表为 `$null` ⇒ 每一项都落 `unknown` ⇒ **断言会假绿**（"看起来分了类"）。
+'Split-D7Gaps',
 # O-140 (2026-10-01 裁【甲·可机判版】): **该 run 是否已入证据链**（纯函数：吃链件路径 + proj/run_id）；
 #   ⚠ 它只吃**路径**、不碰 `$Script:REPO_ROOT` ⇒ 夹具喂**临时链件**即可**真跑**三态（不是形态断言）。
 'Resolve-RunChained',
@@ -98,7 +102,11 @@ foreach ($asn in @('$Script:GATE_TABLE', '$Script:GATE_SUMMARY_RE', '$Script:GAT
                    # ⚠ **刻意不含 `$Script:REVIEW_DIR`** —— 它那条赋值读 `$PSScriptRoot`，
                    #   而 **`Invoke-Expression` 的子作用域里取不到 `$PSScriptRoot`**（下文 O-92⓪ 有实测记录）
                    #   ⇒ 提取它会抛 "Cannot bind argument to parameter 'Path' ... empty string"。
-                   '$Script:ASSERT_BLOCK_RE', '$Script:ASSERT_OPS')) {
+                   '$Script:ASSERT_BLOCK_RE', '$Script:ASSERT_OPS',
+                   # 2026-10-01（`O-136` "灰度转硬拒"前置）：`gaps` 两分的**唯一真值表**。
+                   #   ⚠ 漏提取 ⇒ `Split-D7Gaps` 见到的表是 `$null` ⇒ **每一项都落 `unknown`** ⇒
+                   #     下面的分类断言会**假绿**（"看起来分了类"）—— 故必须提取**真表**。
+                   '$Script:D7_GAP_CLASS')) {
     $a = @($ast.FindAll({ param($n)
         $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
         $n.Left.Extent.Text -eq $asn }, $true)) | Select-Object -First 1
@@ -2381,6 +2389,37 @@ $stubSaysNotChained = { param($p, $j) @{ chained = $false; reason = 'stub' } }
 $redHit = & $stubSaysNotChained $chTmp '202601010000000001'
 Assert-True "b3㉗(先验红·同源对照): 恒 false 桩在「已在链内」样本上给出 false ⇒ b3㉓ 非恒真" (
     ($redHit.chained -eq $false) -and ($chHit.chained -eq $true))
+
+# --- b3 第六刀 (2026-10-01, `O-136` 的「灰度转硬拒」前置): `gaps` 两分 ---------------------------
+#   ★★ 由来（读码 + 契约核对）：契约 §1.6 的收紧条件写的是「对应信封的 `gaps` **清空** ⇒ 转硬拒」，
+#      但 TaskContract 的 `constraints` 与 RunReport 的 `decisions` 属 §1.5 **射程边界（明令不判不补）**
+#      ⇒ **永不消失** ⇒ 「清空」**按构造不可达**。「规则对、门槛错」—— 本刀只把两类**分开报**，
+#      **不动门槛**（改门槛 = 待用户裁）。
+$gTC = Split-D7Gaps -Gaps @('evidence_budget', 'constraints', 'golden.checksum')
+$gRR = Split-D7Gaps -Gaps @('attempt', 'decisions', 'evidence')
+$gVD = Split-D7Gaps -Gaps @('seq')
+Assert-True "b3㉘(★主判据): 两分正确 —— TC 的 `constraints` 与 RR 的 `decisions` 归 **boundary**（永久不补）" (
+    (@($gTC.boundary) -join ',') -eq 'constraints' -and
+    (@($gRR.boundary) -join ',') -eq 'decisions' -and
+    (@($gTC.open) -join ',') -eq 'evidence_budget,golden.checksum' -and
+    (@($gRR.open) -join ',') -eq 'attempt,evidence' -and
+    # ★ Verdict 无 boundary ⇒ 「唯一便宜的那条路」=（定义 seq 语义即可清）
+    (@($gVD.boundary).Count -eq 0) -and (@($gVD.open) -join ',') -eq 'seq')
+Assert-True "b3㉙(★fail-closed): **未登记的 gap 名 ⇒ unknown**，不许静默当成 open（那会高估「可清」）" (
+    (@((Split-D7Gaps -Gaps @('brand.new.gap')).unknown) -join ',') -eq 'brand.new.gap' -and
+    (@((Split-D7Gaps -Gaps @('brand.new.gap')).open).Count -eq 0))
+Assert-True "b3㉚: 表**非空且只有两个值**（防空表 ⇒ 全落 unknown 的假绿；也防将来有人加第三个类而不说清）" (
+    (@($Script:D7_GAP_CLASS.Keys).Count -ge 8) -and
+    (@($Script:D7_GAP_CLASS.Values | Sort-Object -Unique) -join ',') -eq 'boundary,open')
+Assert-True "b3㉛(★接线): 分类**只在一处**（唯一汇报壳），且分类行明示「不计入转硬拒门槛」" (
+    ([regex]::Matches($content, [regex]::Escape('$gc = Split-D7Gaps -Gaps $Gaps')).Count -eq 1) -and
+    $content.Contains('_GAPS_CLASS: ') -and $content.Contains('不计入「转硬拒」门槛'))
+# ★ 先验红·同源对照：**恒 open 桩**（= "什么都能清"）在同一批样本上必须**当场红**
+#   ⇒ 证明 b3㉘ 真的在看那张表，而不是恒真。
+$stubAllOpen = { param($g) @{ open = @($g); boundary = @(); unknown = @() } }
+$redOpen = & $stubAllOpen @('constraints')
+Assert-True "b3㉜(先验红·同源对照): 恒 open 桩把 constraints 也说成 open ⇒ b3㉘ 非恒真" (
+    (@($redOpen.boundary).Count -eq 0) -and (@($gTC.boundary) -join ',') -eq 'constraints')
 Assert-True "b3㉒(先验红·同源对照): **旧顺序**样本上同一条判据为假（b3⑳ 非恒真）" (
     ($oldInj.Count -eq 1) -and ($oldWrt.Count -eq 1) -and
     -not ($oldInj[0].Index -lt $oldWrt[0].Index))

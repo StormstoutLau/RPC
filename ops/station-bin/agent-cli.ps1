@@ -1475,6 +1475,17 @@ function Write-D7Report {
     if (@($Gaps).Count -gt 0) {
         Write-Host ("D7_" + $Tag + "_GAPS: 本仓当前**不提供真值**的字段 = [" + (@($Gaps) -join ', ') +
                     "]（判据只判键在不在 ⇒ 通过 ≠ 有值）")
+        # ── ★★ 2026-10-01：**分类行**（`O-136` "灰度转硬拒"的前置）──────────────────────────
+        # 为什么加：契约 §1.6 的收紧条件写的是「`gaps` **清空** ⇒ 转硬拒」，但三个信封里各有**一项**
+        #   是 §1.5 的**射程边界**（明令不判不补）⇒ **永不消失** ⇒ 「清空」按构造不可达。
+        #   ⇒ 把两类**分开报**，读的人（和人裁）才分得清"**缺真值**"与"**边界 ⇒ 永远不补**"。
+        # ⚠ **只多打一行，行为零变化**：判据不动、`gaps` 本体不动、**门槛不动**（改门槛 = 待用户裁）。
+        $gc = Split-D7Gaps -Gaps $Gaps
+        Write-Host ("D7_" + $Tag + "_GAPS_CLASS: open（本仓可控，可清）= [" + (@($gc.open) -join ', ') +
+                    "] · boundary（§1.5 射程边界 ⇒ **永久不补**，不计入「转硬拒」门槛）= [" +
+                    (@($gc.boundary) -join ', ') + "]" +
+                    $(if (@($gc.unknown).Count -gt 0) {
+                        " · ⚠unknown（未登记 ⇒ **不静默当 open**）= [" + (@($gc.unknown) -join ', ') + "]" } else { "" }))
     }
     # ── ★★ B3（2026-10-01）：`I-6` fail-closed —— **决策点就在上面那三态**（判据 = `$r['code']`）──
     # 契约 §1.6「不堆在 P5 一处」：`I-6` 归**各判据的决策点** ⇒ 这里（唯一的汇报壳）是它的正确调用点。
@@ -1559,6 +1570,48 @@ function New-Verdict {
     $gaps = @('seq')          # ★ seq 语义未定 ⇒ 它不是真值，如实标出
     if ($v['l1_results'].Count -eq 0) { $gaps += 'l1_results' }
     return @{ verdict = $v; gaps = $gaps }
+}
+
+# ── ★★ 2026-10-01（`O-136` 的"灰度转硬拒"前置）：**`gaps` 两分 —— 唯一真值表** ──────────────
+# 为什么要有它（读码 + 契约核对）：契约 §1.6 写死的收紧条件是「对应信封的 `gaps` **清空** ⇒ 把
+#   `D7_*_REJECT` 分支改成 `return 3`」；但三个信封的 `gaps` 里各有**一项**属于契约 §1.5 明令
+#   「**射程边界 ⇒ 不判、不补**」的键（补它们 = **由本仓发明真值**）⇒ ★★ **那一项永远不会消失**
+#   ⇒ 「清空」**按构造不可达** ⇒ 该条件**实际上等于一张"永久灰度"的许可证**。
+#   规则本身是为了**防假红**（存量卡都不带这些真值 ⇒ 硬拒 = 谁都派不了，`O-70` 同族），**坏在门槛选错**。
+# ★ 本表把 `gaps` 的每一项**定级**（**只此一处**，不许在别处再判一次 —— 本仓头号失败形态）：
+#   · `boundary` = **射程边界**（§1.5 明令不判不补）⇒ **永久项**，**不计入**"转硬拒"门槛；
+#   · `open`     = **本仓可控**（缺真值 / 缺接线 / 占位）⇒ **可清**，**应当**计入门槛。
+# ⚠ 本表**只分类、不判决**：门槛要不要改成"只看 `open`"= **待用户裁**（`O-136` 三处待裁之一）；
+#   在裁之前，**行为零变化**（判据与 `gaps` 本体都不动，只**多打印一行**分类）。
+$Script:D7_GAP_CLASS = [ordered]@{
+    # TaskContract
+    'constraints'     = 'boundary'   # ★ §1.5：禁止项清单 = 射程边界（不判不补）
+    'evidence_budget' = 'open'       # 事前预算：需卡声明（改卡契约）
+    'golden.checksum' = 'open'       # ★ 可清但有代价：`$g`/`$goldenActive` 在 P0 之后才算（见契约 §1.6）
+    # RunReport
+    'decisions'       = 'boundary'   # ★ §1.5：八字段内部结构 = 射程边界（不判不补）
+    'attempt'         = 'open'       # 本仓无 attempt 计数
+    'evidence'        = 'open'       # 锚点在审计报告侧 ⇒ 要接线到 run 产出侧
+    'artifact.digest' = 'open'
+    # Verdict
+    'seq'             = 'open'       # ★ 唯一"便宜"的：定义语义即可（现为固定 1 占位）
+    'l1_results'      = 'open'
+}
+
+function Split-D7Gaps {
+    # **纯函数**：把 `gaps` 按 `$Script:D7_GAP_CLASS` 两分 ⇒ `@{ open = @(); boundary = @(); unknown = @() }`。
+    # ⚠ **未登记的 gap 名 ⇒ 归 `unknown`**（fail-closed：**不静默当成 `open`** —— 那会让"可清"被高估）。
+    param([string[]]$Gaps)
+    $open = @(); $bd = @(); $unk = @()
+    foreach ($g in @($Gaps)) {
+        $k =([string]$g).Trim()
+        if (-not $k) { continue }
+        $cls = $Script:D7_GAP_CLASS[$k]
+        if ($cls -eq 'boundary')     { $bd  += $k }
+        elseif ($cls -eq 'open')     { $open += $k }
+        else                         { $unk += $k }
+    }
+    return @{ open = @($open); boundary = @($bd); unknown = @($unk) }
 }
 
 function Get-D7Adjudication {
