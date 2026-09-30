@@ -1066,6 +1066,20 @@ U1_TRUNC = 32                 # 128 bit。★ **2026-09-26 Scott 裁定：改 `3
                               #   128 bit ⇒ 碰撞阈值 ≈ 2⁶⁴，比 16（≈ 2³²）**强**，代价只是 ID 长一倍。
 U1_PREFIX = f"u1:{U1_ALGO}:{U1_TRUNC}"
 U1_DEFAULT_VERSION = "0.0.0"  # 无版本者（spec §1.3）
+# ── ★★ `U1#8`（2026-09-30 裁 / `O-123`）：**截断长度变更的映射表**（唯一真值源 = 本表；规范只指向它，不复述）──
+# 背景：上面对 `U1_TRUNC` 的注释自己写着「这 2 个身份**从未被任何外部消费** ⇒ 重算无副作用
+#   （**若已外发过，就必须另立兼容路径**）」—— **本表就是那条兼容路径**（把"永不改长度"这条口头纪律换成判据）。
+# ⚠ **只登记真实发生过的那一次**（`16 → 32`，`O-84`，2026-09-26）；**不预置没发生的行**（预置 = 编历史）。
+U1_TRUNC_MAP = (
+    {"from_length": 16, "to_length": U1_TRUNC, "algorithm": U1_ALGO, "effective_date": "2026-09-26"},
+)
+# "旧代"标注的**字段名唯一字面定义点**（声明里带它 = 承认这是历史长度的身份）
+U1_LEGACY_MARK = "legacy"
+
+
+def _u1_prefix(trunc):
+    """`u1:<algo>:<trunc>` —— **唯一**拼前缀的地方（历史长度复算也要用同一处拼法）。"""
+    return f"u1:{U1_ALGO}:{trunc}"
 
 
 def u1_canonical_bytes(namespace, identifier, version=U1_DEFAULT_VERSION) -> bytes:
@@ -1084,13 +1098,51 @@ def u1_canonical_bytes(namespace, identifier, version=U1_DEFAULT_VERSION) -> byt
     return json.dumps(arr, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
-def u1_identity(namespace, identifier, version=U1_DEFAULT_VERSION) -> str:
-    """算出一个**合规的 U-1 产物身份**（形态 = `U1_PREFIX` + `:` + `U1_TRUNC` 位小写 hex）。
+def u1_identity(namespace, identifier, version=U1_DEFAULT_VERSION, trunc=U1_TRUNC) -> str:
+    """算出一个**合规的 U-1 产物身份**（形态 = `u1:<algo>:<trunc>` + `:` + `trunc` 位小写 hex）。
 
     ⚠ 取值（算法 / 截断）**只在本文件定义一次** ⇒ 这里**不重抄数字**（抄了就是第二个定义点）。
+    ⚠ `trunc` 参数**只为** `U1#8` 的**历史长度复算**而存在（本函数每天都在 `U1_TRUNC` 上被调用，日常**不传**它）。
     """
-    h = hashlib.sha256(u1_canonical_bytes(namespace, identifier, version)).hexdigest()[:U1_TRUNC]
-    return f"{U1_PREFIX}:{h}"
+    h = hashlib.sha256(u1_canonical_bytes(namespace, identifier, version)).hexdigest()[:trunc]
+    return f"{_u1_prefix(trunc)}:{h}"
+
+
+def u1_classify(identity, decl=None):
+    """★★ `U1#8`（2026-09-30 裁 / `O-123`）：把身份串分类 ⇒ `(kind, info, reason)`。
+
+    `kind` ∈ `('current', 'legacy', None)`：
+      · `current` —— 前缀长度 = 当前 `U1_TRUNC` 且自描述一致（与 `u1_parse` 同口径）
+      · `legacy`  —— 长度命中 `U1_TRUNC_MAP` 的 `from_length`，**且**声明里有"旧代"标注（`U1_LEGACY_MARK`）
+      · `None`    —— 不合规（`reason` 给理由）
+
+    ★ 两阶段（裁里的配套纪律，逐条落地）：
+      ① **无"旧代"标注 ⇒ 【拒绝】**（**不是警告** —— 旧实现连"检测"都没有：它只会以格式为由静默失败，
+         于是"该失败的旧身份"与"随手编的乱串"**同一种表现** ⇒ 无从区分）；
+      ② **有标注 ⇒ 接受**，且 `info` **携带"旧代"标记**（`from_length`/`to_length`/`effective_date`），
+         供消费方**自行降级**（= 结果里带得走的信息，而不是一句口头约定）。
+    """
+    if not isinstance(identity, str):
+        return None, None, "身份不是字符串"
+    m = re.match(r"^u1:([a-z0-9]+):(\d+):([0-9a-f]+)$", identity)
+    if not m:
+        return None, None, f"身份形态不合规（应形如 `{U1_PREFIX}:<{U1_TRUNC} 位小写 hex>`）: {identity!r}"
+    algo, trunc, h = m.group(1), int(m.group(2)), m.group(3)
+    if algo != U1_ALGO or len(h) != trunc:
+        return None, None, (f"前缀自描述与实现不一致（algo={algo!r} 长度 {len(h)} ≠ 前缀写的 {trunc}）: {identity!r}")
+    if trunc == U1_TRUNC:
+        return "current", {"trunc": trunc, "legacy": False}, ""
+    row = next((r for r in U1_TRUNC_MAP if r["from_length"] == trunc and r["algorithm"] == algo), None)
+    if row is None:
+        return None, None, (f"**从未作为 U-1 长度**的取值 `{trunc}`（也不在 `U1_TRUNC_MAP` 里）⇒ 拒收: {identity!r}")
+    marked = bool(isinstance(decl, dict) and decl.get(U1_LEGACY_MARK))
+    if not marked:
+        return None, None, (f"★ 检测到**历史截断长度** `{trunc}`（现为 `{U1_TRUNC}`）**但声明缺「旧代」标注**"
+                            f"（`{U1_LEGACY_MARK}`）⇒ **拒绝**（不是警告）：不标注会让旧身份被静默接受，"
+                            f"标注则让结果携带旧代号、消费方可自行降级")
+    info = {"trunc": trunc, "legacy": True, "from_length": row["from_length"],
+            "to_length": row["to_length"], "effective_date": row["effective_date"]}
+    return "legacy", info, ""
 
 
 def u1_parse(s):
@@ -1114,20 +1166,35 @@ def u1_parse(s):
     return algo, trunc
 
 
+def u1_legacy_marker(decl):
+    """★ `U1#8` ②：声明若是**旧代**（历史截断长度 + 带标注）⇒ 返回"旧代"标记；否则 `None`。
+
+    供消费方**自行降级**用（标记 = `from_length`/`to_length`/`effective_date` —— 与 `U1_TRUNC_MAP` 同源）。
+    """
+    kind, info, _ = u1_classify((decl or {}).get("identity"), decl)
+    return info if kind == "legacy" else None
+
+
 def u1_verify_declaration(decl):
     """复算一个 `u1:` **声明**（`{namespace, identifier, version, identity}`）⇒ 返回错误串，或 `None` 表示通过。
 
     ★ 这才是"身份"这个词**唯一可判的含义**：身份不是一句自述，而是**能从 `(ns,id,ver)` 复算出来**。
       ⇒ 只判格式是**假绿**（编个 16 位 hex 就能过）；本条把"可复算"变成判据。
+    ★★ **`U1#8`（2026-09-30 裁 / `O-123`）**：**历史截断长度**（`U1_TRUNC_MAP`）**必须带"旧代"标注**
+      ⇒ 无标注**拒**（不是警告）；有标注 ⇒ 接受，但**结果携带旧代标记**（`u1_legacy_marker()`）。
     """
     if not isinstance(decl, dict):
         return "`u1` 必须是映射（namespace / identifier / version / identity）"
     miss = [k for k in ("namespace", "identifier", "version", "identity") if not decl.get(k)]
     if miss:
         return f"`u1` 缺字段: {miss} —— 四项都要写（只写 identity 就**无法复算**，那正是本条要防的）"
-    if u1_parse(decl["identity"]) is None:
-        return f"`u1.identity` 不合规（应形如 `{U1_PREFIX}:<{U1_TRUNC} 位小写 hex>`）: {decl['identity']!r}"
-    want = u1_identity(decl["namespace"], decl["identifier"], decl["version"])
+    # ★★ `U1#8`（2026-09-30 裁）：本行的旧写法是 `u1_parse(...) is None` ⇒ 历史长度会被**以格式为由**拦下
+    #   （= 与"随手编的乱串"**同一种表现**，无从区分）。现改走 `u1_classify`：**历史长度只认"带旧代标注"的**，
+    #   且**换把尺子再核一遍**（用历史长度复算）—— 即"接受"不等于"放行"，只是**兼容路径**。
+    kind, info, why = u1_classify(decl["identity"], decl)
+    if kind is None:
+        return why
+    want = u1_identity(decl["namespace"], decl["identifier"], decl["version"], trunc=info["trunc"])
     if want != decl["identity"]:
         return (f"`u1.identity` **复算不符** ⇒ 声明与取值自相矛盾："
                 f"声明 {decl['identity']!r}；按 namespace={decl['namespace']!r} · "
@@ -1930,19 +1997,23 @@ def check_promotion(ctx):
 #   ⇒ 本仓没有对象 ⇒ 只被测试驱动（与 U-4 的 `decide_invalidation` 同形）。
 # ★ 四条判据各自对上一处"最接近"的实现（§6.3），并把它从"人看"升为"机判"——
 #   尤其 V-3：原文要求「从**关键词级**升为**白名单级**」，本判据就是白名单比对。
-V3_WHITELIST_DEFAULT = ("propext", "Classical.choice", "Quot.sound")
-
-
 def v3_axiom_whitelist(axioms, whitelist=None):
-    """V-3 信任基座：**公理集必须 ⊆ 白名单**（白名单为空 ⇒ fail，不许"空白名单全过"）。
+    """V-3 信任基座：**公理集必须 ⊆ 显式声明的白名单**。
 
-    ⚠ **`None` 与 `[]` 必须分开**（这是本函数第一版的自伤，被测试用例抓出来的）：
-       `whitelist=[]` 是"**显式给了空白名单**"，**绝不许**静默回落到默认值 ——
-       否则"白名单为空 ⇒ fail"这段**永远到不了** = 判据恒真的近亲。
+    ★★ **`U5#4`（2026-09-30 裁 / `O-123`）：裁掉"默认名单"这一形态。**
+      · `whitelist is None` = **根本没声明** ⇒ **判不通过**（fail-closed）。
+        旧实现回落到 `("propext","Classical.choice","Quot.sound")` —— 而那是**原文举例**；
+        本规范自己写着「**取自举例 ≠ 裁定**」⇒ 拿它当缺省 = **把举例升格成裁定**（本仓最典型的一类**假精确**）。
+      · `whitelist == []` = **显式空声明** ⇒ **合法**（语义 = 「**确实不需要额外公理**」）。
+        ★ 这正是本裁要区分的那对：**「确实不需要额外公理」 vs 「根本没声明」**（旧实现里二者**同值** ⇒ 无法区分）。
+    ⚠ 空声明**不是**"判据恒真"：此时任何公理都落在白名单外 ⇒ 仍会红（见 `extra` 分支）。
+    ⚠ 本函数第一版的自伤（历史，见 `docs/2026-09-23_D6-D7分阶段执行方案.md`）：把 `whitelist=[]` 与 `None` 混同
+      ⇒ "白名单为空 ⇒ fail" 那段**永远到不了**。
     """
-    wl = V3_WHITELIST_DEFAULT if whitelist is None else tuple(whitelist)
-    if not wl:
-        return False, ["白名单为空 ⇒ 判据恒真（本仓头号形态）⇒ 必须显式给出白名单"]
+    if whitelist is None:
+        return False, ["**未声明公理白名单** ⇒ 判不通过（本题已裁掉「默认名单」形态："
+                       "「取自原文举例」**不等于裁定**；缺声明 = 判不了 ⇒ fail-closed）"]
+    wl = tuple(whitelist)                       # 显式空 ⇒ 合法（"确实不需要额外公理"）
     extra = sorted(set(axioms or []) - set(wl))
     if extra:
         return False, [f"白名单外公理 {extra}（V-3 要求白名单级，不许关键词级放过）"]

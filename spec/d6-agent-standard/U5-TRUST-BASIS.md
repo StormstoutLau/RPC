@@ -25,7 +25,7 @@
 |---|---|---|---|---|---|
 | **V-1** | **定义对应性** | 形式化的定义**是否精确对应**官方问题陈述（形式化了别的东西也算通过） | `v1_definition_correspondence(rows)`：`claim` / `formal` / `anchor` **三者齐备且逐条对应** | `Auto_Prover` 的 Auditor read-back（"Translate the code, not the intent"） | 仅 1 项目 ★ |
 | **V-2** | **桥接完整性** | 解析正文与 Lean 定理之间**有无缺失的一跳** | `v2_bridge_completeness(steps)`：每跳有 `from`/`to`/`evidence`，且**首尾连续**（无断链） | **无**（❌） | ★ **真空** |
-| **V-3** | **信任基座** | 用了哪些**公理 / 库 / 比较器** | `v3_axiom_whitelist(axioms, wl)`：**`axioms ⊆ 白名单`**（默认白名单 = `propext` / `Classical.choice` / `Quot.sound`） | `Textbook` 的 `audit_lean4_axioms.py` + `Auto_Prover` 的正则检测 | 仅**关键词级** ◐ |
+| **V-3** | **信任基座** | 用了哪些**公理 / 库 / 比较器** | `v3_axiom_whitelist(axioms, wl)`：**`axioms ⊆ 白名单`** —— ★ **`wl` 必须显式声明**（`None` ⇒ 判不通过；**默认名单形态已裁掉**，见 §未实测 4；`propext` / `Classical.choice` / `Quot.sound` 只是**原文举例**，不是裁定值） | `Textbook` 的 `audit_lean4_axioms.py` + `Auto_Prover` 的正则检测 | 仅**关键词级** ◐ |
 | **V-4** | **构建可复现性** | 第三方**能否复现构建**？依赖是否钉住？ | `v4_build_reproducible(deps, ledger)`：每个依赖**钉 `rev`** + ledger 记 `tool_versions` 与 `input_hash` | `Textbook` 的 `lake-manifest.json` + `verification_ledger` | 仅 1 项目 ★ |
 
 ### 1.1 ★ V-1 的判据边界（不许把"有对照表"说成"定义正确"）
@@ -99,7 +99,12 @@ V-1 / V-3 / V-4 都是把**已有实现**的做法升为机判；
    ★ **2026-09-30 已裁（`O-123`）**：**裁掉"默认名单"这一形态** —— 改为**必须显式声明**：
    声明**缺失 ⇒ 判不通过**；且声明格式**必须支持「显式空声明」**（如 `axioms: []` / `axiom_set: empty`），
    以区分「**确实不需要额外公理**」与「**根本没声明**」（★ 产物点名了这个混淆并给出该修法）。
-   ⚠ **只裁方向、未实现**（`state` 仍 `todo`）；⚠ 且该层**从未被真实对象驱动**（无真实输入）⇒ 本裁**不承诺近期落地**。
+   ~~⚠ **只裁方向、未实现**（`state` 仍 `todo`）~~ ⇒ ★★ **2026-09-30 已落（批 3）**：
+   `ops/rpc_check.py` 的 `v3_axiom_whitelist()` —— **缺省回落已删除**：`whitelist=None` ⇒ **判不通过**
+   （"**未声明公理白名单**"）；`whitelist=[]`/`()` ⇒ **合法**（=「确实不需要额外公理」），
+   且此时**任何公理都落在白名单外 ⇒ 仍会红**（空声明**不是**判据恒真）。
+   ⇒ **「无需」与「未声明」这对语义** 由"同值、不可区分"变成**可区分**。⚠ **仍未实测的部分**：**真实形式化证明输入**
+   （该层**从未被真实对象驱动**、无真实输入）⇒ `state` = **`partial`**（判据已落、被核对象不存在）。
    ★ **再触发条件**：出现**第一个真实形式化证明输入**时实施；届时顺带定"空声明"的字面形态。
    ⚠ **取证旁证**（第十一批 `ud5-axiom-whitelist`，已复核）：5 条候选**各带"判据性：是判据 / 非判据"**，本裁取其主项。
 5. **晋升门 `entries` 实例 0 条**：本仓没有共享记忆层 ⇒ **schema 从未被真实条目走过一遍**。
