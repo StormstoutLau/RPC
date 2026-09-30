@@ -2443,13 +2443,32 @@ ET_FREEM=`$(free -m 2>/dev/null | awk '/^Mem:/{print `$7}')
 #   ⇒ opencode 挂死时**永不返回**、留孤儿占槽(B 站实测孤儿曾活 17.2h)。
 timeout -k 10 $timeout opencode run -m "$id" < "`$W/out/.prompt.txt`$EV_SUF" > "`$W/out/.agent-output.txt`$EV_SUF" 2>&1
 RC=`$?
+# ★★ O-118 甲 (2026-09-30): 循环检测 —— 「同一步重复 N 次 ⇒ 判循环并终止（终止续跑）」。
+#   动机: opencode **无内置循环检测 / 打断** ⇒ 死循环只能人工监控（实测本地 qwen3-coder-next 良率 0%
+#   / 死循环 273 次 grep; docs/research/2026-09-28_Textbook…调研.md §6.2）。
+#   ★★ 换 CLI（Codex）**买不到**这条能力: 其 ``auto_review`` 是**批准面 / 沙箱**, 不是循环检测
+#   （未见拦"同一条无害命令重复 N 次"的证据）⇒ 治死循环的正确位置在 wrapper 侧。
+#   ★ 判据**只读本站已留痕**的 ``out/.agent-output.txt``（不新增采集面 / 不改协议 / 不出网）。
+#   ★ 与 ``CONT_ATTEMPT`` 上限的分工: 上限治"失败**重试**"; 本条治"**同一动作**被无意义重复" ——
+#     后者**续跑无用**（会接着循环）⇒ 检测到即**终止续跑**（不烧 token 把同一循环再跑一遍）。
+#   ⚠ 阈值 ``LOOP_N`` = **设计选择、未实测**（无真实死循环样本可校准）: 取 20 **远离**已知样本 273;
+#     且**排除空行**以降假阳（长日志的空行会堆出高计数）。假阳的代价被**限制在"不给续跑"** ——
+#     不杀首跑（那是 ``timeout -k 10`` 的职责）、不改 rc（下游判据不受扰）、只记 marker。
+#   ⚠ 与 O-117 同坑: 本段在**双引号 here-string** 内 ⇒ 注释里凡写字面反引号**一律双写**（PS 先做转义）。
+LOOP_N=20
+LOOP_MAX=`$(grep -v '^[[:space:]]*$' "`$W/out/.agent-output.txt`$EV_SUF" 2>/dev/null | sort | uniq -c | sort -rn | head -1 | awk '{print `$1}')
+LOOP_DETECTED=0
+if [ -n "`$LOOP_MAX" ] && [ "`$LOOP_MAX" -ge "`$LOOP_N" ]; then
+  LOOP_DETECTED=1
+  echo "=== LOOP_DETECTED: 同一行重复 `$LOOP_MAX 次 (>=`$LOOP_N) ⇒ 判循环, 终止续跑 ===" >> "`$W/out/.agent-output.txt`$EV_SUF"
+fi
 # O-24 P0-① resume loop: on failure retry <=3 via ``--continue`` (opencode isolates sessions
 # per workspace path -> in $W it resumes THIS run's session, verified 2026-09-09 on A station;
 # no session-id parsing needed; base64 prompt keeps ASCII discipline)
 CONT_ATTEMPT=0
 # O-46 (2026-09-24): resume cap 2→3 + 前置 provider 冷却退避. B2 实测 5/7 中断于上游
 #   503/504 (provider_overloaded / idle timeout), "连续双重试" 全落空 —— 须等冷却窗再续接.
-while [ `$RC -ne 0 ] && [ `$CONT_ATTEMPT -lt 3 ]; do
+while [ `$RC -ne 0 ] && [ `$CONT_ATTEMPT -lt 3 ] && [ "`$LOOP_DETECTED" -eq 0 ]; do
   CONT_ATTEMPT=`$((CONT_ATTEMPT+1))
   # O-46 退避: 上次输出命中上游过载/超时 → 长退避(30s)尊重 provider 冷却; 否则短退避(5s)
   if grep -qE '503|504|provider_overloaded|Service temporarily overloaded|idle timeout' "`$W/out/.agent-output.txt`$EV_SUF" 2>/dev/null; then
@@ -2490,7 +2509,7 @@ echo "WORKSPACE_DIFF_LINES=`$(wc -l < "`$W/out/.workspace-diff.txt`$EV_SUF" 2>/d
 # ★★ A2 (2026-09-29): 追加 cmd/fs/tool/artifact 四项留痕（``[env]`` 已在启动器采集）。
 #   ⚠ ``[tool]`` 由**执行体内部**产生 ⇒ 恒标 ``uncore``（不可核）—— 本件**如实**记"这一项核不了", 不假装覆盖。
 {
-  printf '[cmd] cmd="opencode run -m %s" t_start_ns=%s t_end_ns=%s rc=%s resume_attempts=%s\n' "$id" "`$R0" "`$R1" "`$RC" "`$CONT_ATTEMPT"
+  printf '[cmd] cmd="opencode run -m %s" t_start_ns=%s t_end_ns=%s rc=%s resume_attempts=%s loop_detected=%s\n' "$id" "`$R0" "`$R1" "`$RC" "`$CONT_ATTEMPT" "`$LOOP_DETECTED"
   printf '[fs] diff_pointer=out/.workspace-diff.txt lines=%s\n' "`$(wc -l < "`$W/out/.workspace-diff.txt`$EV_SUF" 2>/dev/null || echo 0)"
   printf '[tool] chain=uncore reason=executor-internal\n'
   printf '[artifact] hashes=main-side note=主控侧回收时计算并与 run.json 摘要交叉锚定\n'
@@ -2539,7 +2558,7 @@ if { [ "`$GOLDEN_ACTIVE" -eq 1 ] && [ "`$ACCEPT_GOLDEN_OK" -ne 1 ]; } \
 echo "TASK_RC=`$FINAL_RC"
 echo "ACCEPT_OK=`$ACCEPT_OK"
 echo "OUT_BYTES=`$(wc -c < "`$W/out/.agent-output.txt`$EV_SUF" 2>/dev/null)"
-printf 'TASK_ID=%s\nQUEUE_S=%s\nRUN_S=%s\nTASK_RC=%s\nRC_DOMAIN=v2\nACCEPT_OK=%s\nACCEPT_GOLDEN_OK=%s\nREVIEW_NEEDED=%s\n' "$ts" "`$QUEUE" "`$RUNS" "`$FINAL_RC" "`$ACCEPT_OK" "`$ACCEPT_GOLDEN_OK" "`$RN" > "`$W/out/.meta`$EV_SUF"
+printf 'TASK_ID=%s\nQUEUE_S=%s\nRUN_S=%s\nTASK_RC=%s\nRC_DOMAIN=v2\nACCEPT_OK=%s\nACCEPT_GOLDEN_OK=%s\nREVIEW_NEEDED=%s\nLOOP_DETECTED=%s\n' "$ts" "`$QUEUE" "`$RUNS" "`$FINAL_RC" "`$ACCEPT_OK" "`$ACCEPT_GOLDEN_OK" "`$RN" "`$LOOP_DETECTED" > "`$W/out/.meta`$EV_SUF"
 # task succeeds only if agent ok AND (golden active -> golden ok) AND (no accept criteria OR accept all pass)
 # O-12 P3-1: exit 9 reused for BOTH golden-fail and self-accept-fail (deliberate; run.json
 # accept_golden.passed / accept.passed disambiguate at contract layer - IMPLEMENTATION §6.2)
