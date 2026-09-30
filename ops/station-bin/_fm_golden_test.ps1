@@ -40,7 +40,9 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 # D7-P3-2 (2026-09-26): **编排层 —— 谁审谁** 的选择器（纯函数）。
 'Select-Reviewer',
 # A1 / ADR-0009 §2 (2026-09-29): **D6/D7 层级归属**的求值本体（纯函数：只吃三个布尔 ⇒ 可离线单测）。
-'Resolve-D6D7Boundary')) {
+'Resolve-D6D7Boundary',
+# O-124 (2026-09-30): 批报告取【实际执行站】的判定本体（纯函数：只吃日志行数组 ⇒ 可离线单测）。
+'Get-ActualStation')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -1954,6 +1956,34 @@ Assert-True "o118④(行为): 同行重复 25 次（且 30 空行被排除）⇒
 Assert-True "o118⑤(行为·先验红): **无**重复行 ⇒ LD=0 · 续跑**照常跑**（RESUME_RAN=1）（否则判据会把正常失败也当循环）" (
     $rcLoopN -eq 0 -and $outLoopN -match 'LD=0' -and $outLoopN -match 'RESUME_RAN=1')
 foreach ($f in @($fLoopP, $fLoopN)) { Remove-Item $f -ErrorAction SilentlyContinue }
+
+# ══════════════════════════════════════════════════════════════════════════════
+# --- o124 (2026-09-30, `O-124` 候选②): 批报告的 `st=` 必须取【实际站】（不可判时如实回落）---
+#   一手事故: `local-only` 档下 claude **自己按"引擎就绪顺序"选站** ⇒ 三次实测**全落 A 站**
+#     （三份 `.agent-run.json` 均 `station:A/main`），而批报告打的是 `st=A / st=B / st=C`。
+#   ★ 本函数**只报事实**: 日志里没有那两行 ⇒ 返回 ''（= **不可判**）⇒ 调用方**如实回落**请求值。
+$stLogLocal = @(
+    'P3_CANDIDATES: A,B,C (pref= avoid=)',
+    'P3_STATION_SELECT: station=A host=scott-lau-NEX.local (local engine ready) avoid=',
+    'RUNSTAMP: 202609301456389799 (atomic claim; O-63)'
+)
+$stLogEgress = @('CLAUDE_EGRESS_STATION_SELECT: station=C host=192.168.10.37 (backend=OpenRouter)')
+$stLogNone = @('BATCH_PLAN: 行=3', 'RUNSTAMP: 123 (atomic claim; O-63)')
+$stLogResel = @(
+    'P3_STATION_SELECT: station=A host=h1 (local engine ready) avoid=',
+    'P3_STATION_SELECT: station=B host=h2 (local engine ready) avoid='
+)
+Assert-True "o124①: local 档日志 ⇒ 实际站 = A（报告将打 A 而不是请求值）" (
+    (Get-ActualStation -Lines $stLogLocal) -eq 'A')
+Assert-True "o124②: 出网档日志 ⇒ 实际站 = C（**另一种行名也认**）" (
+    (Get-ActualStation -Lines $stLogEgress) -eq 'C')
+Assert-True "o124③(先验红·边界): 日志里**没有**那两行 ⇒ 返回 ''（**不可判**）—— 必须回落, 不许猜" (
+    (Get-ActualStation -Lines $stLogNone) -eq '')
+Assert-True "o124④: 同名多行（resume 重选）⇒ 取**最后一条**（= 最终实际用的站）" (
+    (Get-ActualStation -Lines $stLogResel) -eq 'B')
+Assert-True "o124⑤: 接线 —— 批报告用 `Get-ActualStation` 取实际站, 且**取不到时回落请求值**" (
+    $content.Contains('$stActual = Get-ActualStation -Lines $clines') -and
+    $content.Contains('$stLabel = if ($stActual -and $stActual -ne $j.station)'))
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
