@@ -2219,7 +2219,7 @@ Assert-True "b2⑪(如实): gaps 含 `seq`（摘要未给其语义 ⇒ 固定 1 
 Assert-True "b2⑫: 接线 —— P3 在**两处** `.agent-run.json` 写出点（主路 + claude 备路）" (
     ([regex]::Matches($content, [regex]::Escape("Write-D7Report -Kind 'RunReport'"))).Count -eq 2)
 Assert-True "b2⑬: 接线 —— P5 在**两处** review 写出点，且 L2 没跑时**如实**传 -L2Ran false" (
-    ([regex]::Matches($content, [regex]::Escape('Write-D7Adjudication -L1Section'))).Count -eq 2 -and
+    ([regex]::Matches($content, [regex]::Escape('Get-D7Adjudication -L1Section'))).Count -eq 2 -and
     $content.Contains('-L2Ran $false'))
 Assert-True "b2⑭: 接线 —— 三个判据入口都被调（envelope / block / transition **各至少一处**）" (
     ([regex]::Matches($content, [regex]::Escape('--d7-envelope'))).Count -ge 1 -and
@@ -2323,6 +2323,31 @@ Assert-True "b3⑲(★真缺陷③): 无读数的两个**列表**字段填空 = 
     ($RRT.report.evidence -is [array]) -and @($RRT.report.evidence).Count -eq 0 -and
     # ★ 同源对照：**仍是** gaps 里的三项（"类型合规" 不冒充 "有真值"）
     (@($RRT.gaps) -join ',') -eq 'attempt,decisions,evidence')
+
+# --- b3 第四刀 (2026-10-01, `O-139` **甲**): P5 登记面落地 —— Verdict 段随 review.json 落盘 ----
+#   ★★ 判据的由来：C 段真跑查出旧实现把 P5 跑在 `Set-Content` **之后** ⇒ 判据校验过的 `Verdict`
+#      **只活在 stdout**（契约叫「裁决登记」而登记面是空的）⇒ 本刀的**唯一技术含量 = 顺序**。
+#   ★ 口径同前：夹具只做**形态/顺序**断言（真跑要站 + py 子进程）。
+# ⚠ 钉到**调用形态**（带 `-L1Section`）：只钉前半段会**把注释里的引用也算进去** ⇒ 计数失真（第一次就踩了）。
+$inj = @([regex]::Matches($content, [regex]::Escape("`$review['d7_verdict'] = Get-D7Adjudication -L1Section")))
+$wrt = @([regex]::Matches($content, [regex]::Escape('Set-Content $reviewPath')))
+Assert-True "b3⑳(★O-139 甲·主判据): Verdict 段在**两处**写盘点**之前**注入（一次写盘；旧实现是写盘后才跑）" (
+    $inj.Count -eq 2 -and $wrt.Count -eq 2 -and
+    $inj[0].Index -lt $wrt[0].Index -and $inj[1].Index -lt $wrt[1].Index)
+Assert-True "b3㉑(★O-139 甲): 组装点**只有一个**（`New-Verdict` 仅在 `Get-D7Adjudication` 内被调），且段**逐字取既有事实**" (
+    ([regex]::Matches($content, [regex]::Escape('$d7v = New-Verdict -ExitCode'))).Count -eq 1 -and
+    ([regex]::Matches($content, [regex]::Escape('Get-D7Adjudication -L1Section $l1Section -CcSection $ccSection'))).Count -eq 2 -and
+    $content.Contains("return `$d7v['verdict']") -and
+    # ★ 改名要**收干净**：旧名不许再作为**调用**出现（注释里提到旧名不算 —— 故钉 ` -L1Section`）
+    ([regex]::Matches($content, [regex]::Escape('Write-D7Adjudication -L1Section'))).Count -eq 0)
+# ★ 先验红·同源对照：把**旧顺序**（先写盘、后裁决）放进样本 ⇒ 同一条顺序判据必须**当场为假**
+#   ⇒ 证明 b3⑳ 真的在看顺序，而不是恒真。
+$oldOrder = "`$review | ConvertTo-Json -Depth 8 | Set-Content `$reviewPath`n`$review['d7_verdict'] = Get-D7Adjudication -L1Section `$l1Section"
+$oldInj = [regex]::Matches($oldOrder, [regex]::Escape("`$review['d7_verdict'] = Get-D7Adjudication -L1Section"))
+$oldWrt = [regex]::Matches($oldOrder, [regex]::Escape('Set-Content $reviewPath'))
+Assert-True "b3㉒(先验红·同源对照): **旧顺序**样本上同一条判据为假（b3⑳ 非恒真）" (
+    ($oldInj.Count -eq 1) -and ($oldWrt.Count -eq 1) -and
+    -not ($oldInj[0].Index -lt $oldWrt[0].Index))
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
