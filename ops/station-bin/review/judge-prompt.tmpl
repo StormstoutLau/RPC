@@ -26,6 +26,7 @@ golden 判据(若有)：{{GOLDEN}}
 本评审关联 run_id：{{RUN_ID}}
 
 ===== 被评产物（候选输出） =====
+产物相对路径：{{PRODUCT_NAME}}（**这就是下面 `path` 字段的相对根** —— 相对根 = 该产物所在目录，即本次 runDir）
 {{PRODUCT}}
 
 ===== 输出契约 =====
@@ -34,7 +35,7 @@ golden 判据(若有)：{{GOLDEN}}
   "verdict": "accept|revise|reject|uncertain",
   "findings": [
     { "id": "F1", "statement": "一句话（可被逐条核验）", "hit": true 或 false,
-      "priority": 3, "confidence": 0.8, "path": "相对路径", "line_range": "L120-L134",
+      "priority": 3, "confidence": 0.8, "path": "相对路径（相对根 = 上面那件产物所在目录）", "line_range": "L120-L134",
       "note": "可选：证据链/推理" }
   ],
   "score": "优秀|良好|合格|不合格",
@@ -49,6 +50,9 @@ score 取四者之一；pass 表示是否达到可接受（良好及以上为 tr
 - `findings`：逐条意见。`priority` **整数**（≥0，越大越优先）；`confidence` **浮点** 0.0~1.0；
   `hit` = 该锚点**是否达标**（与 `evidence[].hit` 同义）；`path` 与 `line_range`（形如 `L120-L134`）
   **必填** —— 落不到行的意见**不可核验**，会被判为不合契约。
+  ⚠ **`path` 的相对根 = `runDir`（= 上面那件产物所在目录）** —— 写出**相对它的路径**；
+    绝对路径、`./x` 这类前缀、以及大小写/斜杠写法不一致，都会让**同一处意见裂成多个锚点**（共识机制随之失效）。
+  ⚠ `line_range` 的行号**也只能相对你看到的那件产物**（你看到的就是上面那段文本）。
 - ⚠⚠ **禁止输出 `agreement` / `consensus` / `disagreement` / `unique` 任何字段**：
   "这条意见是多家共识还是孤例"**不由你判断**（那是综合阶段在多判官之间对齐后算出来的）。
   你只对自己看到的东西负责 —— 自报分类会被**直接判为不合契约**。

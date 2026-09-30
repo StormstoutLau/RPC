@@ -45,7 +45,10 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 # O-124 候选① (2026-09-30): host -> 站字母 的**唯一反查点** + 它的真值源 `Get-TargetHost`
 #   （⚠ 必须一并提取 `Get-TargetHost` —— 反查若自己另抄一份 host 表, 就是"同一事实两处表达"）。
 # O-125 候选① (2026-09-30): 卡面 `backend:` 的**唯一解析点**（纯函数：吃档位 + 字段值 ⇒ 离线可单测）。
-'Get-ActualStation', 'Get-StationLetterFromHost', 'Get-TargetHost', 'Resolve-CardBackendLocal')) {
+'Get-ActualStation', 'Get-StationLetterFromHost', 'Get-TargetHost', 'Resolve-CardBackendLocal',
+# D7-CC #8 + #3 (2026-09-30): 判官**取哪件产物**（卡声明 + 强制回退）与**提示词注入产物相对名**
+#   （`Resolve-ReviewProduct` 的 `-Exists` 可注入 ⇒ 离线真跑；`Build-JudgePrompt` 依赖已提取的 `Read-ReviewResource`）。
+'Resolve-ReviewProduct', 'Build-JudgePrompt')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -1793,6 +1796,50 @@ $ccTmpl = [System.IO.File]::ReadAllText((Join-Path (Split-Path $cli) 'review\jud
 Assert-True "cc-26 提示词模板**明确禁止**判官自报分类" ($ccTmpl -match '禁止输出 `agreement`')
 Assert-True "cc-27 提示词模板要求 `path`/`line_range` 必填" (
     $ccTmpl -match 'line_range' -and $ccTmpl -match '必填')
+# ⑪b D7-CC **#8 + #3**（2026-09-30 裁 / O-123）：判官**取哪件产物** + **注入产物相对名**（`path` 相对根 = runDir）
+# ★ `Resolve-ReviewProduct` 的 `-Exists` **可注入** ⇒ 下列断言**离线真跑**（不碰文件系统、不发请求）。
+# ⚠ 注入的存在性判据按**叶名**判（`Join-Path` 在 Windows 上产出 `\run\x` 而不是 `/run/x` —— 第一版按全路径比，实测 5 红）。
+$present = @('dec-cc.md')
+$ex = { param($p) $present -contains (Split-Path $p -Leaf) }
+$exAgent = { param($p) (Split-Path $p -Leaf) -eq 'agent-output.txt' }
+$exAcc = { param($p) (Split-Path $p -Leaf) -eq 'accept-output.txt' }
+$exNone = { param($p) $false }
+$fmSub = @{ 'evidence-manifest' = @{ subjects = @(@{ name = 'dec-cc'; path = 'dec-cc.md'; state = 'out/dec-cc.md' }) } }
+$r1 = Resolve-ReviewProduct -runDir '/run' -fm $fmSub -Exists $ex
+Assert-True "cc-28 ★#8 卡声明产物**在 runDir** ⇒ 取它（source=evidence-manifest.subjects）" (
+    $r1['ok'] -and $r1['name'] -eq 'dec-cc.md' -and $r1['source'] -eq 'evidence-manifest.subjects')
+$r2 = Resolve-ReviewProduct -runDir '/run' -fm $fmSub -Exists $exAgent
+Assert-True "cc-29 ★#8 声明产物**不在 runDir** ⇒ 回退 agent-output.txt（source=fallback）" (
+    $r2['ok'] -and $r2['name'] -eq 'agent-output.txt' -and $r2['source'] -eq 'fallback')
+$r3 = Resolve-ReviewProduct -runDir '/run' -fm $fmSub -Exists $exAcc
+Assert-True "cc-30 #8 两级回退：agent-output 也没有 ⇒ accept-output.txt" (
+    $r3['ok'] -and $r3['name'] -eq 'accept-output.txt')
+$r4 = Resolve-ReviewProduct -runDir '/run' -fm $fmSub -Exists $exNone
+Assert-True "cc-31 ★#8 三者都无 ⇒ ok=false 且 tried 逐项列出（不静默）" (
+    (-not $r4['ok']) -and (@($r4['tried']) -contains 'dec-cc.md') -and
+    (@($r4['tried']) -contains 'agent-output.txt') -and (@($r4['tried']) -contains 'accept-output.txt'))
+$fmEvil = @{ 'evidence-manifest' = @{ subjects = @(@{ path = '../../etc/passwd' }, @{ path = 'C:\win\evil.md' }) } }
+$r5 = Resolve-ReviewProduct -runDir '/run' -fm $fmEvil -Exists $exAgent
+Assert-True "cc-32 ★#8 安全边界：绝对路径 / 含 .. 的声明**驳回并登记**，不 Join 出仓" (
+    $r5['ok'] -and $r5['source'] -eq 'fallback' -and
+    @($r5['tried'] | Where-Object { $_ -match '驳回' }).Count -eq 2)
+$r6 = Resolve-ReviewProduct -runDir '/run' -fm @{} -Exists $exAgent
+Assert-True "cc-33 #8 无 evidence-manifest ⇒ 直接走回退（不报错）" (
+    $r6['ok'] -and $r6['source'] -eq 'fallback' -and $r6['name'] -eq 'agent-output.txt')
+Assert-True "cc-34 接线：Invoke-Review 用 Resolve-ReviewProduct（不再硬编码产物名）" (
+    $content.Contains('Resolve-ReviewProduct -runDir $runDir -fm $fm') -and
+    (-not $content.Contains("`$product = Join-Path `$runDir 'agent-output.txt'")))
+# ── #3 注入面：真跑 `Build-JudgePrompt`（读**真模板**）──
+$p1 = Build-JudgePrompt -fm @{ task = 'T'; body = 'B'; accept = @('test -f out/dec-cc.md') } `
+                        -product 'PRODUCT_TEXT' -runId 'RUNX' -cardPath 'x.md' -productName 'dec-cc.md'
+Assert-True "cc-35 ★#3 注入：提示词带**产物相对名**，且**无未替换占位**（{{…}} 一个不剩）" (
+    $p1 -match 'dec-cc\.md' -and (-not ($p1 -match '\{\{')))
+Assert-True "cc-36 ★#3 注入面写明相对根 = runDir（判官无从自推 ⇒ 只能由外壳喂）" (
+    $p1 -match '相对根 = `runDir`')
+Assert-True "cc-37 #3 既有占位仍全部替换（PRODUCT / RUN_ID 逐字在）" (
+    $p1 -match 'PRODUCT_TEXT' -and $p1 -match 'RUNX')
+Assert-True "cc-38 模板已写明 `path` 相对根 = runDir（#3 的注入面）" (
+    $ccTmpl -match '相对根 = `runDir`' -and $ccTmpl -match 'PRODUCT_NAME')
 
 # ⑫ D7-P3-1（2026-09-26）：**不得自审**（权限模型四要素之一）
 # 为什么要有：站上**只做粗判（归一后同名 ⇒ 自审）**；族级细判在本仓（`agent_pair_audit.py`）
