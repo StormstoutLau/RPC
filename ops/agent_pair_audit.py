@@ -47,7 +47,7 @@ def collect():
     """
     import cluster as C
     roots, note = C._agent_proj_roots()
-    pairs, hosts, n_rec, n_rev, n_no_pair = [], [], 0, 0, 0
+    pairs, hosts, guards, n_rec, n_rev, n_no_pair = [], [], [], 0, 0, 0
     for proj, root in sorted(roots.items()):
         d = root / "agent-out"
         if not d.is_dir():
@@ -61,6 +61,8 @@ def collect():
             n_rec += 1
             hosts.append((proj, sub.name, rec.get("exec_host"), rec.get("arbiter_host")))
             rev = _read(sub / "review.json")
+            if isinstance(rev, dict) and isinstance(rev.get("d7_guard"), dict):
+                guards.append((proj, sub.name, rev["d7_guard"]))
             if rev is None:
                 n_no_pair += 1
                 continue
@@ -72,7 +74,8 @@ def collect():
                 n_no_pair += 1
                 continue
             pairs.append((proj, sub.name, pm, jm, ps, js))
-    return roots, note, pairs, {"run_records": n_rec, "with_review": n_rev, "no_pair": n_no_pair}, hosts
+    return (roots, note, pairs,
+            {"run_records": n_rec, "with_review": n_rev, "no_pair": n_no_pair}, hosts, guards)
 
 
 def prh_distribution(hosts):
@@ -101,6 +104,28 @@ def prh_distribution(hosts):
     return buckets
 
 
+def d7_guard_tally(guards):
+    """**D7 判据报数**的聚合（`O-136` 测收益的 ②）。
+
+    ★ 这是"每千次 review 拦了多少"的**分母与分子**：`review.json.d7_guard`（本批新增的**报数落点**）
+      里记着每台判据的**三态码**（`0` ok / `1` reject / `2` 不可判，与 CLI 一致）。
+    ⚠⚠ **必须报"多少份 review 真的跑过这段"**（`covered`）：否则「**没跑**」与「**跑了且全 ok**」
+      在聚合里**都表现为 0 个 reject** —— 那是最典型的假绿。
+    ⚠ 本函数**只计数**，不判灯（同本文件其余部分；`PRH` 的三态照原码报，不合并）。
+    """
+    keys, covered, n = {}, 0, 0
+    for _proj, _rid, g in guards:
+        n += 1
+        if g.get("completed") == 1:
+            covered += 1
+        for k, v in g.items():
+            if k == "completed":
+                continue
+            d = keys.setdefault(k, {})
+            d[str(v)] = d.get(str(v), 0) + 1
+    return keys, covered, n
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
@@ -108,7 +133,7 @@ def main():
     a = ap.parse_args()
 
     idx = R.load_family_index()
-    roots, note, pairs, cnt, hosts = collect()
+    roots, note, pairs, cnt, hosts, guards = collect()
 
     t1, t2, same, unknown, j2_same = {}, {}, [], [], []
     for proj, rid, pm, jm, ps, js in pairs:
@@ -150,6 +175,19 @@ def main():
     for x in ph["local"][:a.max]:
         print(f"      · {x[0]}/{x[1]}  {x[2]}  ==  {x[3]}")
     print(f"   ⚠ 不可判桶（{n_un}）= 无 `exec_host`（早于 B3 的 run 没有这个键）⇒ **不入分母**、也不读成「不同机」")
+    # ── ★★ D7 判据报数聚合（2026-10-01 · 测收益的 ②）────────────────────────────────────────
+    # 这是"**每千次 review 拦了多少**"的分子/分母。★ 分母必须报 `covered`（见 `d7_guard_tally`）。
+    gk, g_covered, g_n = d7_guard_tally(guards)
+    print(f"[D7 判据报数] 有 d7_guard 的 review {g_n} 份 · **其中跑完 guard 段的 {g_covered}**")
+    if g_n == 0:
+        print("   ⚠ **零份** ⇒ 本项**算不出来**（不是「零拦截」）：报数落点是本批才加的 ⇒ "
+              "旧的 review.json 里没有 `d7_guard`（**不可回溯**：那些行当时只走了 stdout）")
+    else:
+        for k in sorted(gk):
+            dist = " · ".join(f"{v}→{c}" for v, c in sorted(gk[k].items()))
+            print(f"   · {k}: {dist}   （0=ok / 1=reject / 2=不可判，与 CLI 同码）")
+    print("[口径·报数] ★ 聚合**只计数、不判灯**；⚠ 「没跑」必须与「跑了且全 ok」分得开 "
+          "（故单列 covered）——否则 0 个 reject 会被读成「很干净」（假绿）")
     print("[口径] 只读报数，**不判灯**（先量后定档，同 O-69/O-97）；`unknown` 不等于失败")
     print("[口径·PRH] ★ 定档**不看占比阈值**（`O-126` 禁凭空数值）：三桶按构造就有结论 ⇒ "
           "先看**同机桶是否非空**（= 该形态是否真出现过），再裁「要不要把这一路升级为拒」")
@@ -157,7 +195,9 @@ def main():
         print(json.dumps({"t1": t1, "t2": t2, "pairs": len(pairs),
                           "same": same[:20], "unknown": unknown[:20],
                           "prh": {"station": n_st, "local": n_lo, "unknown": n_un,
-                                  "local_examples": ph["local"][:10]}}, ensure_ascii=False))
+                                  "local_examples": ph["local"][:10]},
+                          "d7_guard": {"reviews": g_n, "covered": g_covered, "tally": gk}},
+                         ensure_ascii=False))
     return 0
 
 

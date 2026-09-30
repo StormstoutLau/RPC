@@ -1460,8 +1460,19 @@ function Write-D7Report {
     # ★ **灰度口径（写死）**：**只报不阻断** —— 理由与收紧条件见契约 §1.6。
     # ⚠ **有副作用**（起子进程）⇒ 不进离线夹具；只 `Write-Host`（**不**往管道吐对象 ⇒ 不破坏
     #   `Invoke-Task` 的**归零纪律**）。
-    param([string]$Kind, $Obj, [string[]]$Gaps, [string]$Tag, [string]$Card = '')
+    # ★ 2026-10-01（测收益的前置）：`-GuardSink` = **可选**的报数收集器（`IDictionary`）。
+    #   ★ 为什么用"收集器"而不是"返回值"：本函数在 P0/P3 **裸调用**（语句位置）⇒ 一旦它有返回值，
+    #     那个对象会**混进 `Invoke-Task` 的输出流** ⇒ 撞本仓的**归零纪律**（L2340 那条实测事故）。
+    #   ⇒ 靠 PS 的**引用语义**（`[ordered]@{}` 与 `[hashtable]` 都是引用类型）在**调用方**看到写入。
+    #   ⚠ 类型写 `IDictionary` 而**不是** `[hashtable]`：`[ordered]@{}` 是 `OrderedDictionary`，
+    #     **不继承** `Hashtable` ⇒ 写 `[hashtable]` 会**绑定失败**（PS 5.1 实测过的坑）。
+    #   ⚠ 缺省 `$null` ⇒ **对 P0/P3 的既有调用零影响**（`if ($GuardSink)` 直接跳过）。
+    param([string]$Kind, $Obj, [string[]]$Gaps, [string]$Tag, [string]$Card = '',
+          [System.Collections.IDictionary]$GuardSink = $null)
     $r = Test-D7Envelope -Kind $Kind -Obj $Obj -Card $Card
+    # ★ 报数落点（只记"这台判据这一趟给的三态码"，**不记理由文本** —— 理由在 stdout 已有，
+    #   而聚合只需要可计数的三态 ⇒ 不复制一份文本 = 不造第二份真值）。
+    if ($GuardSink) { $GuardSink["$Tag.envelope"] = [int]$r['code'] }
     if ($r['code'] -eq 0) {
         Write-Host ("D7_" + $Tag + "_OK: " + $Kind + " 信封字段级合法")
     }
@@ -1493,6 +1504,7 @@ function Write-D7Report {
     #   pass ⇒ 交给判据判（判据见非 `pass` 即拒）—— **绝不在这里把"判不了"静默读成通过**。
     $dec = if ($r['code'] -eq 0) { 'pass' } else { 'not-pass' }
     $i6 = Invoke-D7Cli -Argv @('--d7-block', 'I6') -Json @{ decision = $dec }
+    if ($GuardSink) { $GuardSink["$Tag.i6"] = [int]$i6['code'] }
     if ($i6['code'] -ne 0) {
         Write-Host ("D7_" + $Tag + "_I6_REJECT: " + $i6['line'] + "（decision=" + $dec +
                     "）⇒ **灰度期：不阻断**")
@@ -1637,29 +1649,39 @@ function Get-D7Adjudication {
     #   ⚠ 收的是 **host 串**（不是站字母）：本函数的两个调用点在 `Invoke-Review` 里，那里**只有** run
     #     记录可读（`$l1Record.exec_host`），**没有**站字母 ⇒ 传 host 才是**事实直传**（传字母要反查，
     #     反查不到又会回落成"本地"⇒ **假报同机**）。缺 = 空串 ⇒ 判"不可判"（见 ⑤）。
-    param($L1Section, $CcSection, [int]$ExitCode, [bool]$L2Ran = $true, [string]$Card = '', [string]$ExecHost = '')
+    param($L1Section, $CcSection, [int]$ExitCode, [bool]$L2Ran = $true, [string]$Card = '',
+          [string]$ExecHost = '', [System.Collections.IDictionary]$GuardSink = $null)
     $actor = 'master'
+    # ★ 报数落点（2026-10-01）：`-GuardSink` = 可选收集器，记**本趟 review** 每台判据的三态码
+    #   ⇒ 「每千次 review 拦了多少」才算得出来（此前这些行只走 stdout = 与 `O-139` 同病）。
+    #   ⚠ 只记**可计数的三态码**，不记理由文本（理由在 stdout；复制一份 = 第二份真值）。
     # ① 状态机（P4a→P4b 可选→P5）**逐跳调判据** —— 非法跳（如跳过 L1）会当场报 reject
     $chain = Resolve-D7PhaseChain -L1Verdict ([string]$L1Section['verdict']) -L2Ran $L2Ran
+    $hopRej = 0
     for ($i = 0; $i -lt $chain.states.Count - 1; $i++) {
         $t = Invoke-D7Cli -Argv @('--d7-transition', $chain.states[$i], $chain.states[$i + 1], $actor)
         if ($t['code'] -ne 0) {
+            $hopRej++
             Write-Host ("D7_PHASE_REJECT: " + $t['line'] + " ⇒ **灰度期：不阻断**")
         }
     }
+    if ($GuardSink) { $GuardSink['transition.hops'] = [int]($chain.states.Count - 1); $GuardSink['transition.rejected'] = [int]$hopRej }
     Write-Host ("D7_PHASES: " + ($chain.states -join ' -> '))
     # ② 红线 2（L1 先于 L2 且 L2 无权改写）：L1 事实与 L2 结论**分开存** ⇒ 结构上不改写；
     #    可审计凭据 = `$L1Section.record_sha256`（回算 run 记录即可比对）
     $rb2 = Invoke-D7Cli -Argv @('--d7-block', 'RL2') -Json @{
         l1_results = @($L1Section); l2_marks = @($CcSection); l2_rewrites_l1 = $false }
     if ($rb2['code'] -ne 0) { Write-Host ("D7_" + 'RL2_REJECT' + ": " + $rb2['line'] + " ⇒ **灰度期：不阻断**") }
+    if ($GuardSink) { $GuardSink['RL2'] = [int]$rb2['code'] }
     # ③ 红线 1（完成信号权只在主控站）
     $rb1 = Invoke-D7Cli -Argv @('--d7-block', 'RL1') -Json @{ actor = $actor }
     if ($rb1['code'] -ne 0) { Write-Host ("D7_RL1_REJECT: " + $rb1['line'] + " ⇒ **灰度期：不阻断**") }
+    if ($GuardSink) { $GuardSink['RL1'] = [int]$rb1['code'] }
     # ④ P5 裁决登记：Verdict 信封（`verdict` = review 的 exit code）
     $d7v = New-Verdict -ExitCode $ExitCode -Phase 'P5' -L1Section $L1Section `
                        -L2Marks $(if ($L2Ran) { @($CcSection) } else { $null })
-    Write-D7Report -Kind 'Verdict' -Obj $d7v['verdict'] -Gaps $d7v['gaps'] -Tag 'VERDICT' -Card $Card
+    Write-D7Report -Kind 'Verdict' -Obj $d7v['verdict'] -Gaps $d7v['gaps'] -Tag 'VERDICT' -Card $Card `
+                   -GuardSink $GuardSink      # ★ 顺带记 `VERDICT.envelope` / `VERDICT.i6`（缺省 $null ⇒ 无副作用）
     # ── ★★ B3（2026-10-01）：角色禁项 `PRM` / `PRW` —— **角色动作点**（契约 §1.6「不堆在 P5 一处」）──
     # ⚠ 为什么是**这里**：本函数正是"**谁执行 / 谁裁决**"两个角色事实**第一次相遇**的地方（③ 之后）。
     #   · `PRM` 的动作 = `execute_task` ⇒ 执行由 **worker 角色**登记 —— 裁【甲】（契约 §1.4）：§1.4 的
@@ -1670,8 +1692,10 @@ function Get-D7Adjudication {
     #     （PRW 约束的是 worker：不自评/不写 verdict/不重派/不合并）。价值 = **防将来把 P5 搬到站上**。
     $rpm = Invoke-D7Cli -Argv @('--d7-block', 'PRM') -Json @{ actor = 'worker'; action = 'execute_task' }
     if ($rpm['code'] -ne 0) { Write-Host ("D7_PRM_REJECT: " + $rpm['line'] + " ⇒ **灰度期：不阻断**") }
+    if ($GuardSink) { $GuardSink['PRM'] = [int]$rpm['code'] }
     $rpw = Invoke-D7Cli -Argv @('--d7-block', 'PRW') -Json @{ actor = $actor; action = 'write_verdict' }
     if ($rpw['code'] -ne 0) { Write-Host ("D7_PRW_REJECT: " + $rpw['line'] + " ⇒ **灰度期：不阻断**") }
+    if ($GuardSink) { $GuardSink['PRW'] = [int]$rpw['code'] }
     # ── ★★ B3（2026-10-01）：`PRH` 同机可见性 —— **报数不阻断**（契约 §1.6 ②）──────────────────
     # ★ 判据 = `d7_host_separation`（**不属于**那 8 条拦截 ⇒ 单独调 `--d7-host-sep`，不进 `--d7-block`）。
     # ★ 两侧事实：产出机 = `-ExecHost`（run 记录里的 `exec_host`）· 裁决机 = `$env:COMPUTERNAME`。
@@ -1688,7 +1712,12 @@ function Get-D7Adjudication {
         }
         elseif ($hsep['code'] -eq 0) { Write-Host ("D7_PRH_SEPARATE: " + $hsep['line']) }
         else { Write-Host ("D7_PRH_UNDECIDABLE: " + $hsep['line'] + " ⇒ 灰度期不阻断") }
+        # ★ 报数：`PRH` 的**三态**原样入 sink（`0` 分离 / `1` 同机 / `2` 不可判 —— 与 CLI 一致，不另立编码）。
+        if ($GuardSink) { $GuardSink['PRH'] = [int]$hsep['code'] }
     }
+    # ★ 报数：能走到这里 = 本趟 review 的**三态全跑过** ⇒ 记一个"完成"标记，
+    #   使聚合侧能区分「**这段根本没跑**」与「跑了但全 ok」（否则两者都表现为"没有 reject"，是假绿）。
+    if ($GuardSink) { $GuardSink['completed'] = 1 }
     # ★ 甲（2026-10-01）：**把段还给调用方**（由它在 `$review | ConvertTo-Json | Set-Content` **之前**注入）。
     #   ⚠ 位置在**函数末尾**（不许提前 return —— 那会跳过上面的 PRM/PRW/PRH 三条角色检查）。
     #   ⚠ 归零纪律：本函数其余输出一律 `Write-Host`（不占管道）⇒ 这里的 return 是**唯一**进管道的对象；
@@ -5603,6 +5632,13 @@ function Invoke-Review {
     $acChk = Resolve-RunChained -ChainPath (Join-Path $Script:REPO_ROOT 'ops/station-bin/agent-chain.json') `
                                  -Proj $proj -RunId $runName
     $acSection = $null
+    # ★ 测收益的前置（2026-10-01）：**D7 判据报数收集器** —— 本趟 review 各台判据的三态码。
+    #   为什么需要它：`D7_*` 那些行此前**只走 stdout** ⇒ "每千次 review 拦了多少"**算不出来**
+    #   （与 `O-139` 的 `Verdict` 只活在 stdout **同病**，只是这次病在**报数面**）。
+    #   ⚠ 用**收集器**而非返回值：`Get-D7Adjudication`/`Write-D7Report` 都是被裸调用的
+    #     ⇒ 加返回值会往管道吐对象，破本仓**归零纪律**（见 `Write-D7Report` 的参数注释）。
+    #   ★ 声明点放在**两条路之前**（失败路 / 正常路都要用）。
+    $d7g = [ordered]@{}
     if ($acChk['chained'] -ne $false) {
         if (-not $allowAfterChain) {
             Write-Host ("REJECT REVIEW_AFTER_CHAIN (" + $acChk['reason'] + ") exit 9 - " +
@@ -5718,6 +5754,7 @@ function Invoke-Review {
         # O-140 裁【甲】：走显式通道（对已入链 run 的 review）⇒ **留痕**（"降级 ≠ 隐藏"）。
         #   ⚠ 与 `blind` 段同款：**仅在走通道时才加** ⇒ 不走时 `review.json` schema 与本批之前一致。
         if ($acSection) { $review['after_chain_guard'] = $acSection }
+
         # ── ★★ 甲（2026-10-01）：**P4a/P4b/P5 在【写盘之前】跑**，Verdict 段随本次写盘落地 ──────
         # ⚠ 顺序是**承重的**（`O-139`）：旧实现把它放在 `Set-Content` **之后** ⇒ 判据校验过的那个
         #   `Verdict` **只活在 stdout**、磁盘上找不到 ⇒ P5 叫「裁决**登记**」而**登记面是空的**。
@@ -5727,7 +5764,13 @@ function Invoke-Review {
         #   ⇒ `PRH` 两侧事实**同源**（不在这里另推一份机器名）。
         # ⚠ 归零纪律：`Get-D7Adjudication` 的返回值就是该段 ⇒ **必须具名赋值**（裸跑会往管道吐对象）。
         $review['d7_verdict'] = Get-D7Adjudication -L1Section $l1Section -CcSection $ccSection `
-            -ExitCode $callCode -L2Ran $false -Card $card -ExecHost ([string]$l1Record.exec_host)
+            -ExitCode $callCode -L2Ran $false -Card $card -ExecHost ([string]$l1Record.exec_host) `
+            -GuardSink $d7g
+        # ★★ 报数落点**必须在【填充它的那次调用之后】**（2026-10-01 真跑当场抓到：首版把这一行写在
+        #   `Get-D7Adjudication` **之前** ⇒ 那时 sink 还是空的 ⇒ `Count -gt 0` 为假 ⇒ **什么都没落盘**，
+        #   而夹具只**计数不判序** ⇒ **假绿**）。⇒ 同 `O-139` 的"**顺序承重**"家族；与 `blind` /
+        #   `after_chain_guard` 同款"跑过才加"（sink 非空即证跑过）。
+        if ($d7g.Count -gt 0) { $review['d7_guard'] = $d7g }
         $review | ConvertTo-Json -Depth 8 | Set-Content $reviewPath -Encoding utf8
         Write-Host "REVIEW_WRITTEN(advisory,error) $reviewPath"
         if ($callCode -ge 5) { return $callCode }   # NETFAIL(5)/timeout(6)/unparseable(7) surfaced, non-blocking
@@ -5816,12 +5859,16 @@ function Invoke-Review {
     $review['self_review_guard'] = $sgSection
     # O-140 裁【甲】：显式通道留痕（与失败路**同一处置**；不走通道时 schema 不变）
     if ($acSection) { $review['after_chain_guard'] = $acSection }
+
     # ── ★★ 甲（2026-10-01）：**P4a/P4b/P5 在【写盘之前】跑**（与上面那条失败路**同一处置**）───────
     # ★ 只**登记事实**：`review` 仍是 advisory ⇒ 本调用**不改**退出码（下面仍 `return 0`）。
     # ★ B3：`-ExecHost` = run 记录的**产出机**（与失败路**同一来源** ⇒ 两侧事实同源）。
     # ⚠ 归零纪律：返回值即该段 ⇒ **具名赋值**（裸跑会往管道吐对象，污染 `Invoke-Review` 的返回）。
     $review['d7_verdict'] = Get-D7Adjudication -L1Section $l1Section -CcSection $ccSection `
-        -ExitCode 0 -L2Ran $true -Card $card -ExecHost ([string]$l1Record.exec_host)
+        -ExitCode 0 -L2Ran $true -Card $card -ExecHost ([string]$l1Record.exec_host) `
+        -GuardSink $d7g
+    # ★ 报数落点**在填充它的调用之后**（顺序承重，同 `O-139`；与失败路**同一处置**）
+    if ($d7g.Count -gt 0) { $review['d7_guard'] = $d7g }
     $review | ConvertTo-Json -Depth 8 | Set-Content $reviewPath -Encoding utf8
     Write-Host "REVIEW_WRITTEN(advisory) $reviewPath"
     Write-Host ("REVIEW score=" + $review.output.score + " pass=" + $review.output.pass + " judge=" + $judge['id'] + " elapsed_s=" + $elapsed)
