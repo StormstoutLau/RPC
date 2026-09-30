@@ -19,6 +19,21 @@ upstream: \[d6-agent-standard-.* 全量文档]
 
 ## 历史回溯（2026-09-03 起）
 
+### 2026-09-30（续⑬） — **O-123 两裁落地**：`D7-CC #3`（相对根 = `runDir`）与 `#8`（采纳候选① + 强制回退）已写进规范本体
+
+> **定位**：承 `续⑫` 的两条加固。本轮把 `O-123` 待裁的 **2 条**下裁，**裁定落在规范原文**（不只是索引 / 台账）。
+
+| # | 裁定 | 落点 | 索引影响 |
+|---|---|---|---|
+| ③ | `path` 相对根定为 **相对 `runDir`**；实现 = **外壳注入**（产物文本 + 产物相对 runDir 的名字），**不新造 `root` 字段** | §未实测登记 **第 3 条**（首段重写 + "裁定落地状态"） | `needs_decision` **true → false** |
+| ⑧ | `$product` 取 **卡 `evidence-manifest.subjects[].path`（相对 runDir）**，**取不到即回退**（`agent-output.txt` → `accept-output.txt` → exit 3） | §未实测登记 **第 8 条**（加"已裁"段） | 无（本就 `false`） |
+
+★ **两裁共同的性质**：**只定"该怎么做"，未改代码** ⇒ 两条 `state` 仍 `todo`（= "**已裁 + 待实现**"）。这是本仓既有形态（同 U1 #8）。
+★ **口径变化（唯一）**：`needs_decision` **7 → 6**；索引**仍 53 条**、`state` 分布不变。
+
+**验收**：`test_untested_index_sync.py` **ALL PASS**（`needs_decision 6`）；`py -3.12 ops/rpc_check.py --quick` ⇒ **PASS · 38 绿 / 2 黄 / 0 红**。
+**关联**：`OPEN-ISSUES.md` **O-123**（`needs_decision` **7 → 6**；**`#4` 未动**）· [D7-PROTOCOL-CONCLUSION-CONTRACT.md](./D7-PROTOCOL-CONCLUSION-CONTRACT.md) §未实测登记 **第 3 / 8 条** · [inventory/untested-index.yaml](../../inventory/untested-index.yaml) · 提交 `857b26a`（续⑫）。
+
 ### 2026-09-30（续⑫） — **O-123 第二轮续证**：#3/#8 各自被加固（"相对根"的自洽解 = `runDir`；产物身份 = "卡已声明、review 不读"）
 
 > **定位**：承 `续⑪` 的「#3 候选集已收缩、#8 已登记」。本轮仍**不下裁**，仅**继续细化分析调研** —— 沿 #8 追问"到底缺什么"，并回填 #3。
