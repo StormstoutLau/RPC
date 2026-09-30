@@ -2270,7 +2270,16 @@ def d7_cli(args):
     if not isinstance(ctx, dict):
         print(f"D7_BLOCK undecidable {args.d7_block}: ctx 不是对象 ⇒ fail-closed")
         return D7_CLI_EXIT_UNDECIDABLE
-    ok, why = d7_block(args.d7_block, **ctx)
+    try:
+        ok, why = d7_block(args.d7_block, **ctx)
+    except Exception as e:
+        # ★★ B2 实测抓到的**真缺陷**：`ctx` 与判据的**输入契约不符**（多传/拼错键）时，
+        #   `**ctx` 展开会抛 `TypeError` ⇒ 进程**非零退出（1）** —— 而 1 在本 CLI 的语义是
+        #   **reject**（判据给出了拒绝理由）⇒ **崩溃被冒充成"判据拒绝了"**（三态不可混被破坏）。
+        #   ⇒ 归 **`undecidable`（2）**：这不是"判据说不行"，是"**判据没能跑**"（同 O-22/`O-119` 口径）。
+        print(f"D7_BLOCK undecidable {args.d7_block}: ctx 与判据的输入契约不符 "
+              f"（{type(e).__name__}: {e}）⇒ fail-closed —— **不是 reject**")
+        return D7_CLI_EXIT_UNDECIDABLE
     print(f"D7_BLOCK {'ok' if ok else 'reject'} {args.d7_block}: {why}")
     return 0 if ok else 1
 

@@ -1330,30 +1330,167 @@ function New-TaskContract {
     return @{ contract = $tc; gaps = $gaps }
 }
 
-function Test-D7Envelope {
-    # ── ★★ B 段（2026-10-01）：**调判据本体** —— 协议判据的**唯一消费点** ─────────────────
-    # 形态同 `Invoke-GateCheck`（外壳调 `py ops/rpc_check.py`），理由同：判据**只在一处**。
-    # ⚠ **有副作用**（起子进程 + 临时文件）⇒ **不进离线夹具**（判据本体由
-    #   `tests/test_rpc_check_d7_protocol.py` 的 CLI 用例覆盖；此处只做**接线形态**断言）。
-    # 退出码**三态不可混**：0 = ok · 1 = reject · 2 = **无法判**（fail-closed，**不冒充** ok/reject）。
+function Invoke-D7Cli {
+    # ── ★★ B 段（2026-10-01）：**唯一的"判据调用壳"** —— 外壳与判据的**唯一交界** ──────────────
+    # 判据本体一律在 `ops/rpc_check.py`（**外壳不重写判据** —— 否则同一事实两处表达，本仓头号形态）。
+    # ⚠ **有副作用**（起子进程 + 临时文件）⇒ **不进离线夹具**（判据本体由 py 侧用例覆盖；
+    #   夹具只做**接线形态**断言）。
+    # 退出码**三态不可混**：`0` = ok · `1` = reject · `2` = **无法判**（fail-closed，**不冒充** ok/reject）。
     # ⚠ 用**临时文件**而非 stdin 管道：`ConvertTo-Json` 的产出含中文 ⇒ PS 5.1 管道会用 ANSI 编码
     #   写进子进程 stdin（IMP §2.3 同款坑）⇒ 显式 `WriteAllText` + UTF-8 无 BOM。
-    param([string]$Kind, $Env, [string]$Card = '')
-    $tmp = Join-Path $env:TEMP ("d7-env-" + [Guid]::NewGuid().ToString('N') + ".json")
-    $out = ''; $code = 2
+    param([string[]]$Argv, $Json = $null)
+    $tmp = ''; $out = ''; $code = 2
     Push-Location $Script:REPO_ROOT
     try {
-        [IO.File]::WriteAllText($tmp, ($Env | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
-        $out = (& py ops/rpc_check.py --d7-envelope $Kind $tmp 2>&1 | Out-String)
+        $a = @($Argv)
+        if ($null -ne $Json) {
+            $tmp = Join-Path $env:TEMP ("d7-" + [Guid]::NewGuid().ToString('N') + ".json")
+            [IO.File]::WriteAllText($tmp, ($Json | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+            $a += $tmp
+        }
+        $out = (& py ops/rpc_check.py @a 2>&1 | Out-String)
         $code = if ($null -eq $LASTEXITCODE) { 2 } else { [int]$LASTEXITCODE }
     }
     catch { $out = "$out`n$($_.Exception.Message)"; $code = 2 }
     finally {
         Pop-Location
-        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue | Out-Null
+        if ($tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue | Out-Null }
     }
-    $line = ([string]($out -split "`r?`n" | Where-Object { $_ -match '^D7_ENVELOPE ' } | Select-Object -Last 1)).Trim()
-    return @{ code = $code; ok = ($code -eq 0); line = $line; card = $Card }
+    $line = ([string]($out -split "`r?`n" | Where-Object { $_ -match '^D7_' } | Select-Object -Last 1)).Trim()
+    return @{ code = $code; ok = ($code -eq 0); line = $line }
+}
+
+function Test-D7Envelope {
+    # ★ B 段：三信封校验 ⇒ **唯一的消费点**（判据本体 = `ops/rpc_check.py` 的 `validate_envelope`）。
+    param([string]$Kind, $Obj, [string]$Card = '')
+    $r = Invoke-D7Cli -Argv @('--d7-envelope', $Kind) -Json $Obj
+    $r['card'] = $Card
+    return $r
+}
+
+function Write-D7Report {
+    # **共享汇报壳**：把"产信封 → 调判据 → 如实报出（含 gaps）"这一段收敛到**一处**
+    #   （P0/P3 各有两处调用点 ⇒ 不复制四份）。
+    # ★ **灰度口径（写死）**：**只报不阻断** —— 理由与收紧条件见契约 §1.6。
+    # ⚠ **有副作用**（起子进程）⇒ 不进离线夹具；只 `Write-Host`（**不**往管道吐对象 ⇒ 不破坏
+    #   `Invoke-Task` 的**归零纪律**）。
+    param([string]$Kind, $Obj, [string[]]$Gaps, [string]$Tag, [string]$Card = '')
+    $r = Test-D7Envelope -Kind $Kind -Obj $Obj -Card $Card
+    if ($r['code'] -eq 0) {
+        Write-Host ("D7_" + $Tag + "_OK: " + $Kind + " 信封字段级合法")
+    }
+    elseif ($r['code'] -eq 1) {
+        Write-Host ("D7_" + $Tag + "_REJECT: " + $r['line'] + " ⇒ **灰度期：不阻断**（判据已接线）")
+    }
+    else {
+        Write-Host ("D7_" + $Tag + "_UNDECIDABLE: 判据**跑不起来**（exit=" + $r['code'] +
+                    "）⇒ 灰度期不阻断，但**必须有人看**（判不了 ≠ 通过）")
+    }
+    if (@($Gaps).Count -gt 0) {
+        Write-Host ("D7_" + $Tag + "_GAPS: 本仓当前**不提供真值**的字段 = [" + (@($Gaps) -join ', ') +
+                    "]（判据只判键在不在 ⇒ 通过 ≠ 有值）")
+    }
+}
+
+function New-RunReport {
+    # ── ★★ B 段（2026-10-01）：**P3 回收** —— `.agent-run.json` → `RunReport` 信封（契约 §1.1）──
+    # ★ 纯函数（只吃已解析的 `$Run` + runDir）⇒ 可离线单测。
+    # ★★ **本函数【刻意不含】`verdict`** —— 契约 §1.1 的 ★：「`RunReport` 刻意不含 verdict 字段
+    #   ⇒ **产出方不得自评**」：这份信封由**产出方**（工作站）写，而完成信号权在主控站（红线 1）。
+    # ⚠ 如实（不冒充当已具备）：下列字段本仓**当前无对应读数** ⇒ 填空并进 `gaps`：
+    #   · `attempt`（本仓无 attempt 计数）· `decisions[]`（摘要只说"八字段"，本仓无此产出）
+    #   · `evidence[]`（协议指**锚点** E1–E4；本仓锚点在**审计报告**里，不在 run 产出侧）。
+    # ⚠ **映射是本地选择**（摘要没给"哪个字段对哪个"）⇒ 已写进契约 §1.6，免得下次另发明一套：
+    #   `run_id` ← `task_id`（本仓 run 的既有标识）· `artifact.digest` ← `content_digest` ·
+    #   `artifact.size` ← `output_bytes` · `inputs_digest` ← `card.sha256`（卡 = 最大的注入物）。
+    param($Run, [string]$RunDir = '')
+    $rr = [ordered]@{
+        run_id        = [string]$Run['task_id']
+        attempt       = $null
+        artifact      = [ordered]@{ digest = [string]$Run['content_digest']; size = [int]$Run['output_bytes'] }
+        inputs_digest = [string]$Run['card']['sha256']
+        exit_code     = [int]$Run['exit_code']
+        decisions     = $null
+        evidence      = $null
+        usage         = $Run['usage']
+    }
+    $gaps = @()
+    if ($null -eq $rr['attempt'])       { $gaps += 'attempt' }
+    if ($null -eq $rr['decisions'])     { $gaps += 'decisions' }
+    if ($null -eq $rr['evidence'])      { $gaps += 'evidence' }
+    if (-not $rr['artifact']['digest']) { $gaps += 'artifact.digest' }
+    return @{ report = $rr; gaps = $gaps; run_dir = $RunDir }
+}
+
+function Resolve-D7PhaseChain {
+    # **纯函数**：本仓的**相序列 + 终态**（P4a → P4b 可选 → P5）。
+    # ⚠ **本地映射（摘要没给 ⇒ 写进契约 §1.6）**：
+    #   · 起点 = `collected`（P1/P2 在站上状态件里，本仓**尚未**把这套状态名落到站 ⇒ **未接**）·
+    #   · 终态 = `accepted` **iff L1 verdict = green**（机械门通过 = 本仓"完成信号"的来源）；
+    #     L2 是 **advisory** ⇒ **不翻转**终态。
+    param([string]$L1Verdict, [bool]$L2Ran)
+    $s = @('collected', 'mech_verified')
+    if ($L2Ran) { $s += 'sem_verified' }
+    $terminal = if ($L1Verdict -eq 'green') { 'accepted' } else { 'rejected' }
+    return @{ states = @($s + $terminal); terminal = $terminal }
+}
+
+function New-Verdict {
+    # ── ★★ B 段（2026-10-01）：**P5 裁决登记** —— L1/L2 事实 → `Verdict` 信封（契约 §1.1）──────
+    # ★ 纯函数（只吃已解析的 L1/L2 事实 + exit code）⇒ 可离线单测。
+    # ★★ `verdict` = **exit code（整数）** —— 契约 §1.1 的裁定；★ 与**判官四值**（`accept`/`revise`/
+    #   `reject`/`uncertain`）**同名不同物**：四值属**结论契约**、落在 `review.json.contract.verdict`
+    #   （**嵌套**；`review.json` **顶层没有** `verdict` 键）。判据靠**值类型**切分（非整数即拒）。
+    # ★ `l1_results` / `l2_marks` = **原文照收**（不新造结构）：分别取 `review.json` 已有的 `l1` 段
+    #   与结论契约段 —— §1.5 已登记"内部结构**不判、不补**"。
+    # ⚠ 如实：`seq` 的语义摘要未给（只写 `recorded_at + seq`）⇒ 本仓**固定 1** 并标进 `gaps`（**不是真值**）。
+    param([int]$ExitCode, [string]$Phase = 'P5', $L1Section = $null, $L2Marks = $null)
+    $v = [ordered]@{
+        verdict     = [int]$ExitCode
+        phase       = [string]$Phase
+        recorded_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        seq         = 1
+    }
+    # ⚠ 用**下标赋值**（而非在 `[ordered]@{}` 里写 `$(if …)`）：`$()` **会把单元素数组摊平**，
+    #   而 `l1_results` 必须是**数组**（消费方按 `[0]` 取；摊平成哈希表会让 `.Count` 变成键数）。
+    $v['l1_results'] = $(if ($null -ne $L1Section) { @($L1Section) } else { @() })
+    if ($v['l1_results'] -isnot [array]) { $v['l1_results'] = @($v['l1_results']) }
+    if ($null -ne $L2Marks) { $v['l2_marks'] = @($L2Marks) }
+    $gaps = @('seq')          # ★ seq 语义未定 ⇒ 它不是真值，如实标出
+    if ($v['l1_results'].Count -eq 0) { $gaps += 'l1_results' }
+    return @{ verdict = $v; gaps = $gaps }
+}
+
+function Write-D7Adjudication {
+    # ── ★★ B 段（2026-10-01）：**P4a/P4b/P5 接线** —— 状态机 + 红线 1/2 + Verdict 登记 ────────
+    # ★ 只**消费既有事实**（`$L1Section` / `$CcSection` / review 的 exit code），**不改任何判定**：
+    #   `review` 仍是 **advisory**（本函数只打印 + 调判据，**不影响退出码**）。
+    # ⚠ **有副作用**（子进程）⇒ 不进离线夹具（纯的那半 = `Resolve-D7PhaseChain` / `New-Verdict` 已离线测）。
+    # ⚠ 诚实：`actor` 在本架构里**恒为 `master`**（外壳只在主控跑）⇒ 红线 1 的实用价值是
+    #   **防将来有人把 P5 搬到站上**（届时 `actor` 变 ⇒ 判据立刻拦）—— **不是**"已拦过真实动作"。
+    param($L1Section, $CcSection, [int]$ExitCode, [bool]$L2Ran = $true, [string]$Card = '')
+    $actor = 'master'
+    # ① 状态机（P4a→P4b 可选→P5）**逐跳调判据** —— 非法跳（如跳过 L1）会当场报 reject
+    $chain = Resolve-D7PhaseChain -L1Verdict ([string]$L1Section['verdict']) -L2Ran $L2Ran
+    for ($i = 0; $i -lt $chain.states.Count - 1; $i++) {
+        $t = Invoke-D7Cli -Argv @('--d7-transition', $chain.states[$i], $chain.states[$i + 1], $actor)
+        if ($t['code'] -ne 0) {
+            Write-Host ("D7_PHASE_REJECT: " + $t['line'] + " ⇒ **灰度期：不阻断**")
+        }
+    }
+    Write-Host ("D7_PHASES: " + ($chain.states -join ' -> '))
+    # ② 红线 2（L1 先于 L2 且 L2 无权改写）：L1 事实与 L2 结论**分开存** ⇒ 结构上不改写；
+    #    可审计凭据 = `$L1Section.record_sha256`（回算 run 记录即可比对）
+    $rb2 = Invoke-D7Cli -Argv @('--d7-block', 'RL2') -Json @{
+        l1_results = @($L1Section); l2_marks = @($CcSection); l2_rewrites_l1 = $false }
+    if ($rb2['code'] -ne 0) { Write-Host ("D7_" + 'RL2_REJECT' + ": " + $rb2['line'] + " ⇒ **灰度期：不阻断**") }
+    # ③ 红线 1（完成信号权只在主控站）
+    $rb1 = Invoke-D7Cli -Argv @('--d7-block', 'RL1') -Json @{ actor = $actor }
+    if ($rb1['code'] -ne 0) { Write-Host ("D7_RL1_REJECT: " + $rb1['line'] + " ⇒ **灰度期：不阻断**") }
+    # ④ P5 裁决登记：Verdict 信封（`verdict` = review 的 exit code）
+    $d7v = New-Verdict -ExitCode $ExitCode -Phase 'P5' -L1Section $L1Section `
+                       -L2Marks $(if ($L2Ran) { @($CcSection) } else { $null })
+    Write-D7Report -Kind 'Verdict' -Obj $d7v['verdict'] -Gaps $d7v['gaps'] -Tag 'VERDICT' -Card $Card
 }
 
 function Test-CardSafetyDeclared([string]$card, $cardId, [string]$sensitive) {
@@ -1930,21 +2067,7 @@ function Invoke-Task {
     #      （O-70 同族，本仓已有教训）。
     #   ⇒ 只**如实报出**（`D7_CONTRACT_*` 行）；**收紧为硬拒的时机 = `gaps` 清空**（见契约 §1.6）。
     $d7tc = New-TaskContract -Fm $fm -CardId $cardId
-    $d7chk = Test-D7Envelope -Kind 'TaskContract' -Env $d7tc['contract'] -Card $card
-    if ($d7chk.code -eq 0) {
-        Write-Host ("D7_CONTRACT_OK: P0 立契信封字段级合法 · task_id=" + $d7tc['contract']['task_id'])
-    }
-    elseif ($d7chk.code -eq 1) {
-        Write-Host ("D7_CONTRACT_REJECT: " + $d7chk.line + " ⇒ **灰度期：不阻断**（判据已接线）")
-    }
-    else {
-        Write-Host ("D7_CONTRACT_UNDECIDABLE: 判据**跑不起来**（exit=" + $d7chk.code +
-                    "）⇒ 灰度期不阻断，但**必须有人看**（判不了 ≠ 通过）")
-    }
-    if (@($d7tc['gaps']).Count -gt 0) {
-        Write-Host ("D7_CONTRACT_GAPS: 本仓当前**不提供真值**的字段 = [" + (@($d7tc['gaps']) -join ', ') +
-                    "]（如实报出：判据只判键在不在 ⇒ 它们通过 ≠ 它们有值）")
-    }
+    Write-D7Report -Kind 'TaskContract' -Obj $d7tc['contract'] -Gaps $d7tc['gaps'] -Tag 'CONTRACT' -Card $card
     # A1 / ADR-0009 §2 (2026-09-29): **派发前**对三条判据求值（纯函数，无副作用）⇒ 层级归属落 run.json。
     #   为什么求值点选这里：与 `require-gate` 同处"流程前置" —— 三键**全部来自卡**（派发方在派发前、
     #   受理方在受理阶段写入）⇒ 此刻即可算出，**不依赖任何运行结果**（这正是 ADR-0009 §机制原理 的要害：
@@ -3085,6 +3208,13 @@ exit `$FINAL_RC
             #   实测: 环境层 `Remove-Item` 包装器在"回收站失败"时往管道吐了 `$null` ⇒ 契约字段畸形。
             #   ⇒ 本段所有 `Move-Item`/`Copy-Item`/`Remove-Item` 一律 `| Out-Null`(它们本就无返回值语义)。
             $run | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $runDir '.agent-run.json') -Encoding utf8
+            # ── ★★ B 段（2026-10-01）：**D7 协议 P3 回收**（工作站产出 `RunReport`）────────────
+            # ★ 契约 §1.1 的 ★：`RunReport` **刻意不含 `verdict`**（**产出方不得自评**，红线 1）——
+            #   故 `New-RunReport` 里**没有**这个字段（判据见到它即拒）。
+            # ★ 灰度期只报不阻断（口径与收紧条件同 P0，见契约 §1.6）；
+            #   ⚠ 本块在**归零纪律**内 ⇒ 调用一律 `| Out-Null`（不许有对象混进返回值）。
+            $d7rr = New-RunReport -Run $run -RunDir $runDir
+            Write-D7Report -Kind 'RunReport' -Obj $d7rr['report'] -Gaps $d7rr['gaps'] -Tag 'RUNREPORT' -Card $card | Out-Null
             # move pulled output into runDir
             if (Test-Path $outTxt) { Move-Item $outTxt (Join-Path $runDir 'agent-output.txt') -Force | Out-Null }
             if (Test-Path $accTxt) { Move-Item $accTxt (Join-Path $runDir 'accept-output.txt') -Force | Out-Null }
@@ -4014,6 +4144,10 @@ mkdir -p "$stWorkDir/.attach/$nm2"
     if ($collectOk) {
         try {
             $run | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $runDir '.agent-run.json') -Encoding utf8
+            # ── ★★ B 段（2026-10-01）：**P3 回收**（claude 备路同一处置）──────────────────────
+            # ★ 与主路**共用同一实现**（`New-RunReport` + 共享汇报壳）⇒ 不复制第二份判据/映射。
+            $d7rr = New-RunReport -Run $run -RunDir $runDir
+            Write-D7Report -Kind 'RunReport' -Obj $d7rr['report'] -Gaps $d7rr['gaps'] -Tag 'RUNREPORT' -Card $card | Out-Null
             # ⚠ 归零纪律(见 Invoke-Task 内注): 本函数返回 `$finalCode`, 故以下副作用一律 `| Out-Null`。
             if (Test-Path $outTxt) { Copy-Item $outTxt (Join-Path $runDir 'agent-output.txt') -Force | Out-Null }
             if (Test-Path $accTxt) { Copy-Item $accTxt (Join-Path $runDir 'accept-output.txt') -Force | Out-Null }
@@ -5295,6 +5429,9 @@ function Invoke-Review {
         $review['self_review_guard'] = $sgSection   # D7-P3-1：不得自审的事实也留档
         $review | ConvertTo-Json -Depth 8 | Set-Content $reviewPath -Encoding utf8
         Write-Host "REVIEW_WRITTEN(advisory,error) $reviewPath"
+        # ── ★★ B 段（2026-10-01）：**D7 协议 P4a/P4b/P5**（状态机 + 红线 1/2 + Verdict 登记）────
+        # ⚠ 判官调用失败 ⇒ `$judgeObj` 为 null ⇒ **L2 没跑**（只走 P4a→P5）⇒ 如实传 `-L2Ran $false`。
+        Write-D7Adjudication -L1Section $l1Section -CcSection $ccSection -ExitCode $callCode -L2Ran $false -Card $card | Out-Null
         if ($callCode -ge 5) { return $callCode }   # NETFAIL(5)/timeout(6)/unparseable(7) surfaced, non-blocking
         return 0
     }
@@ -5381,6 +5518,9 @@ function Invoke-Review {
     $review['self_review_guard'] = $sgSection
     $review | ConvertTo-Json -Depth 8 | Set-Content $reviewPath -Encoding utf8
     Write-Host "REVIEW_WRITTEN(advisory) $reviewPath"
+    # ── ★★ B 段（2026-10-01）：**D7 协议 P4a/P4b/P5**（状态机 + 红线 1/2 + Verdict 登记）────────
+    # ★ 只**登记事实**：`review` 仍是 advisory ⇒ 本调用**不改**退出码（下面仍 `return 0`）。
+    Write-D7Adjudication -L1Section $l1Section -CcSection $ccSection -ExitCode 0 -L2Ran $true -Card $card | Out-Null
     Write-Host ("REVIEW score=" + $review.output.score + " pass=" + $review.output.pass + " judge=" + $judge['id'] + " elapsed_s=" + $elapsed)
     return 0   # advisory: score=不合格 does NOT block; exit 0 signals commit (O-16 closed)
 }

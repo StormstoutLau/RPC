@@ -51,7 +51,11 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 # B 段 (2026-10-01): **P0 立契**的产信封本体（纯函数：只吃已解析的 $fm/$cardId ⇒ 可离线单测）
 #   ⚠ 必须一并提取 `Get-Sha256Text` —— 它是 `criteria_hash` 的**唯一**实现点（不许另抄一份哈希）。
 'Resolve-ReviewProduct', 'Build-JudgePrompt',
-'Get-Sha256Text', 'New-TaskContract')) {
+'Get-Sha256Text', 'New-TaskContract',
+# B2 (2026-10-01): **P3 回收 / P4a-P4b-P5** 的**纯**那半（产 RunReport / 相序列 / 产 Verdict）
+#   ⚠ 有副作用的那半（`Invoke-D7Cli` / `Write-D7Report` / `Write-D7Adjudication`）**刻意不提取** ——
+#     它们起子进程；只在本夹具里做**接线形态**断言（判据本体由 py 侧用例覆盖）。
+'New-RunReport', 'Resolve-D7PhaseChain', 'New-Verdict')) {
     $f = @($fns) | Where-Object { $_.Name -eq $nm } | Select-Object -First 1
     if (-not $f) { throw "$nm not found in agent-cli.ps1" }
     Invoke-Expression $f.Extent.Text
@@ -2145,15 +2149,86 @@ Assert-True "b1⑦: 空白判据串被跳过（不产生 criteria_hash 空哈希
                              timeout_s = 900; sensitivity = ''; readonly = $false } -CardId $cidT).contract.accept.Count -eq 1)
 Assert-True "b1⑧: 接线 —— P0 立契在 `Invoke-Task` 内，且**调判据本体**（外壳不重写判据）" (
     $content.Contains('$d7tc = New-TaskContract -Fm $fm -CardId $cardId') -and
-    $content.Contains("Test-D7Envelope -Kind 'TaskContract'") -and
-    $content.Contains('--d7-envelope'))
+    $content.Contains("Write-D7Report -Kind 'TaskContract'") -and
+    $content.Contains('Invoke-D7Cli -Argv') -and
+    ([regex]::Matches($content, [regex]::Escape('--d7-envelope'))).Count -ge 1)
 $d7blk = ''
 $bi0 = $content.IndexOf('$d7tc = New-TaskContract')
 $bi1 = $content.IndexOf('# A1 / ADR-0009', $bi0)
 if ($bi0 -ge 0 -and $bi1 -gt $bi0) { $d7blk = $content.Substring($bi0, $bi1 - $bi0) }
 Assert-True "b1⑨: 接线 —— **灰度期不阻断**（P0 块内**无** return/die；收紧时机 = gaps 清空）" (
     $d7blk.Length -gt 0 -and -not ($d7blk -match '\breturn\b') -and
-    $content.Contains('D7_CONTRACT_GAPS'))
+    $content.Contains('-Gaps $d7tc'))
+
+# --- b2 (2026-10-01, `O-136` **B2**): **P3 回收 + P4a/P4b/P5**（产信封 / 相序列 / 判据接线）-------
+#   ★ 纯的那半（`New-RunReport` / `Resolve-D7PhaseChain` / `New-Verdict`）**离线真跑**；
+#     有副作用的那半（`Invoke-D7Cli` / `Write-D7Report` / `Write-D7Adjudication`）只做**接线形态**断言
+#     （判据本体由 `tests/test_rpc_check_d7_protocol.py` 覆盖 ⇒ **不在此处抄第二份**）。
+$runT = [ordered]@{
+    task_id = 'task-20260101000000000000'; exit_code = 0
+    content_digest = 'sha256:aaaa'; output_bytes = 123
+    usage = [ordered]@{ total_tokens = 7 }
+    card = [ordered]@{ sha256 = 'sha256:card' }
+}
+$RRT = New-RunReport -Run $runT -RunDir 'C:\runs\1'
+Assert-True "b2①: RunReport 取到**真值**的五项（run_id/artifact{digest,size}/inputs_digest/exit_code/usage）" (
+    $RRT.report.run_id -eq 'task-20260101000000000000' -and
+    $RRT.report.artifact.digest -eq 'sha256:aaaa' -and $RRT.report.artifact.size -eq 123 -and
+    $RRT.report.inputs_digest -eq 'sha256:card' -and $RRT.report.exit_code -eq 0 -and
+    $RRT.report.usage.total_tokens -eq 7)
+Assert-True "b2②(★红线): RunReport **不含 verdict**（产出方不得自评 —— 契约 §1.1 的 ★）" (
+    -not $RRT.report.Contains('verdict'))
+Assert-True "b2③: gaps 如实报出本仓无读数的三项（attempt/decisions/evidence）" (
+    (@($RRT.gaps) -join ',') -eq 'attempt,decisions,evidence')
+Assert-True "b2④: RunReport 顶层**恰**八键（摘要逐字；多一个少一个都算漂）" (
+    (@($RRT.report.Keys) -join ',') -eq 'run_id,attempt,artifact,inputs_digest,exit_code,decisions,evidence,usage')
+
+$pcA = Resolve-D7PhaseChain -L1Verdict 'green' -L2Ran $true
+$pcB = Resolve-D7PhaseChain -L1Verdict 'green' -L2Ran $false
+$pcC = Resolve-D7PhaseChain -L1Verdict 'red'   -L2Ran $true
+Assert-True "b2⑤: 相序列 —— L2 跑过 ⇒ 走 `sem_verified`；**没跑 ⇒ 跳过**（P4b 可选）" (
+    ($pcA.states -join '>') -eq 'collected>mech_verified>sem_verified>accepted' -and
+    ($pcB.states -join '>') -eq 'collected>mech_verified>accepted')
+Assert-True "b2⑥: 终态 = `accepted` **iff L1=green**（L2 是 advisory ⇒ **不翻转**终态）" (
+    $pcA.terminal -eq 'accepted' -and $pcC.terminal -eq 'rejected' -and $pcC.states[2] -eq 'sem_verified')
+Assert-True "b2⑦(★非法跳自证): 相序列**从不**跳过 `mech_verified`（跳过 L1 = 红线 2 违规）" (
+    $pcA.states[1] -eq 'mech_verified' -and $pcB.states[1] -eq 'mech_verified' -and
+    $pcC.states[1] -eq 'mech_verified')
+
+$l1T = [ordered]@{ verdict = 'green'; status = 'completed'; exit_code = 0; accept_passed = $true
+                   golden_active = $false; golden_passed = $null; allowed_red = $false
+                   record_sha256 = 'sha256:rec' }
+$ccT = [ordered]@{ ok = $true; reasons = @(); verdict = 'accept'; findings_count = 2 }
+$V1 = New-Verdict -ExitCode 0 -L1Section $l1T -L2Marks @($ccT)
+Assert-True "b2⑧: Verdict.verdict = **整数**（exit code；★ 不是判官四值 —— 值类型即切分）" (
+    ($V1.verdict.verdict -is [int]) -and $V1.verdict.verdict -eq 0)
+Assert-True "b2⑨: phase/recorded_at/seq 在；`l1_results` = **原文照收**（复算凭据未丢）" (
+    $V1.verdict.phase -eq 'P5' -and $V1.verdict.recorded_at -match '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$' -and
+    $V1.verdict.seq -eq 1 -and $V1.verdict.l1_results.Count -eq 1 -and
+    $V1.verdict.l1_results[0].verdict -eq 'green' -and
+    $V1.verdict.l1_results[0].record_sha256 -eq 'sha256:rec')
+Assert-True "b2⑩: `l2_marks` **可选** —— 传则有键、不传则**键不存在**（不是 null 占位）" (
+    $V1.verdict.Contains('l2_marks') -and $V1.verdict.l2_marks[0].verdict -eq 'accept' -and
+    -not (New-Verdict -ExitCode 0 -L1Section $l1T).verdict.Contains('l2_marks'))
+Assert-True "b2⑪(如实): gaps 含 `seq`（摘要未给其语义 ⇒ 固定 1 是**占位不是真值**）" (
+    (@($V1.gaps) -join ',') -eq 'seq')
+Assert-True "b2⑫: 接线 —— P3 在**两处** `.agent-run.json` 写出点（主路 + claude 备路）" (
+    ([regex]::Matches($content, [regex]::Escape("Write-D7Report -Kind 'RunReport'"))).Count -eq 2)
+Assert-True "b2⑬: 接线 —— P5 在**两处** review 写出点，且 L2 没跑时**如实**传 -L2Ran false" (
+    ([regex]::Matches($content, [regex]::Escape('Write-D7Adjudication -L1Section'))).Count -eq 2 -and
+    $content.Contains('-L2Ran $false'))
+Assert-True "b2⑭: 接线 —— 三个判据入口都被调（envelope / block / transition **各至少一处**）" (
+    ([regex]::Matches($content, [regex]::Escape('--d7-envelope'))).Count -ge 1 -and
+    ([regex]::Matches($content, [regex]::Escape('--d7-block'))).Count -ge 2 -and
+    ([regex]::Matches($content, [regex]::Escape('--d7-transition'))).Count -ge 1)
+# ★ 先验红自证（同源对照）：**同一份信封**，只多一个 `verdict` 键 ⇒ 两者必须不同
+#   （= 证明 b2② 那条断言**真的在看**这个键，而不是恒真）。
+$rrCopy = [ordered]@{}
+foreach ($k in $RRT.report.Keys) { $rrCopy[$k] = $RRT.report[$k] }
+$rrCopy['verdict'] = 0
+Assert-True "b2⑮(先验红·同源对照): 加 `verdict` 的副本 与 真产物 **不同**（b2② 非恒真）" (
+    $rrCopy.Contains('verdict') -and (-not $RRT.report.Contains('verdict')) -and
+    (@($rrCopy.Keys).Count -eq @($RRT.report.Keys).Count + 1))
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"

@@ -235,6 +235,16 @@ def main() -> int:
         badf.write_text(json.dumps({**RR, "verdict": 0}, ensure_ascii=False), encoding="utf-8")
         ctxf = Path(d) / "ctx_worker.json"
         ctxf.write_text(json.dumps({"actor": R.D7_WORKER}), encoding="utf-8")
+        # ★ B2：红线 2 的**真实形态**（L1 事实 + L2 结论分开），三种组合各一
+        rl2ok = Path(d) / "rl2_ok.json"
+        rl2ok.write_text(json.dumps({"l1_results": [{"verdict": "green"}],
+                                     "l2_marks": [{"hit": True}], "l2_rewrites_l1": False}),
+                         encoding="utf-8")
+        rl2nol1 = Path(d) / "rl2_nol1.json"
+        rl2nol1.write_text(json.dumps({"l1_results": [], "l2_marks": [{"hit": True}]}), encoding="utf-8")
+        rl2rw = Path(d) / "rl2_rewrite.json"
+        rl2rw.write_text(json.dumps({"l1_results": [{"verdict": "green"}],
+                                     "l2_rewrites_l1": True}), encoding="utf-8")
         cli_cases = [
             (["--d7-envelope", "RunReport", str(okf)], None, 0, "D7_ENVELOPE ok"),
             (["--d7-envelope", "RunReport", str(badf)], None, 1, "D7_ENVELOPE reject"),
@@ -246,6 +256,14 @@ def main() -> int:
             (["--d7-block", "NOPE"], None, 1, "D7_BLOCK reject"),           # 未知规则 ⇒ 拒
             (["--d7-transition", "drafted", "dispatched", "master"], None, 0, "D7_TRANSITION ok"),
             (["--d7-transition", "collected", "accepted", "master"], None, 1, "D7_TRANSITION reject"),
+            # ★ B2：红线 2 的消费面（P4a/P4b 接线调的就是它）
+            (["--d7-block", "RL2", "--d7-ctx", str(rl2ok)], None, 0, "D7_BLOCK ok"),
+            (["--d7-block", "RL2", "--d7-ctx", str(rl2nol1)], None, 1, "D7_BLOCK reject"),
+            (["--d7-block", "RL2", "--d7-ctx", str(rl2rw)], None, 1, "D7_BLOCK reject"),
+            # ★★ B2 实测抓到的真缺陷：`ctx` 与判据**输入契约不符**（多传/拼错键）⇒ 归
+            #   **undecidable（2）** —— 旧实现里 `**ctx` 抛 TypeError 会让进程退 **1**，
+            #   与 `reject` **不可区分**（崩溃被冒充成"判据拒绝了" ⇒ 三态不可混被破坏）。
+            (["--d7-block", "I6", "--d7-ctx", str(okf)], None, 2, "D7_BLOCK undecidable"),
         ]
         for args, stdin, want_rc, want_mark in cli_cases:
             rc, out = _cli(args, stdin)
