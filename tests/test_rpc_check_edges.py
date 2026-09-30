@@ -141,6 +141,36 @@ def main() -> int:
     except ImportError:
         pass
 
+    # ── ★★ `U3#4`（2026-09-30 · 批 4）：**拦截率 / 误杀率**（实测读数，不是"只测过一条合成用例"）──
+    # 口径：把上面的 `CASES` 按 `want_ok` 分成两族 ——
+    #   `拦截率` = 反例里被判出问题的比例（判据"会咬"）；`误杀率` = 正例里被判出问题的比例（判据"不滥杀"）。
+    # ⚠⚠ **如实标注射程**：样例是**构造的**（实测 n = **17 反例 / 3 正例**），**不代表脏数据分布**
+    #   —— 规范 §未实测 4 的原话"脏数据分布未知"**仍然成立**，本条只把它从"**只测过 1 条**"推进到"**有 n 条**"。
+    pos = [d for _desc, d, w, _kw in CASES if w]
+    neg = [d for _desc, d, w, _kw in CASES if not w]
+    killed = sum(1 for d in pos if R.validate_edges(d)[0])
+    caught = sum(1 for d in neg if R.validate_edges(d)[0])
+
+    def _naive(doc):
+        """**先验红用的桩**：只判「有没有 `provenance` 字段」（= 最容易被写成的那版假绿判据）。"""
+        if not isinstance(doc, dict):
+            return []                                  # 顶层不是映射 —— 桩**看不见**（正是它的盲区）
+        return [1 for e in (doc.get("edges") or [])
+                if isinstance(e, dict) and "provenance" not in e]
+    naive_caught = sum(1 for d in neg if _naive(d))
+
+    ok = (caught == len(neg)) and (killed == 0)
+    print(f"  {'ok  ' if ok else 'FAIL'} ★#4 拦截率 {caught}/{len(neg)} · 误杀率 {killed}/{len(pos)}"
+          f"（口径 = 本文件 CASES；⚠ 样例**构造**，脏数据分布仍未知）")
+    if not ok:
+        fails.append(f"#4 拦截率/误杀率不达标: caught={caught}/{len(neg)} killed={killed}/{len(pos)}")
+    # ★ 先验红自证：假绿桩**抓不全**反例 ⇒ 证明上面那个 `caught == len(neg)` 不是恒真
+    red = naive_caught < len(neg)
+    print(f"  {'ok  ' if red else 'FAIL'} 先验红自证（#4）：只判「有没有 provenance 字段」的桩 "
+          f"只抓到 {naive_caught}/{len(neg)} ⇒ 真判据的拦截率不是恒真")
+    if not red:
+        fails.append("先验红自证（#4）失败：假绿桩与真判据拦截数相同 ⇒ 断言可能恒真")
+
     print(f"RESULT: {'ALL PASS' if not fails else f'失败 {len(fails)} 条'}")
     for f in fails:
         print("  FAIL " + f)

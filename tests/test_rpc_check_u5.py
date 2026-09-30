@@ -213,6 +213,40 @@ def main() -> int:
         if not red:
             fails.append("先验红自证失败：真文件上加孤儿字段没被识别 ⇒ 映射闭包规则形同虚设")
 
+    # ── ★★ `U5#5`（2026-09-30 · 批 4）：**把 gate 变"可走"** + 第一条真实条目 ──────────
+    # 缺口（本批实测发现）：此前 `validate_promotion` 只判 schema **自身** ⇒ **即便加一条也没有任何东西检查它**。
+    E = R.promotion_entry_verdict
+    _gate = _doc()["gate"]
+    _good = {"id": "X", "anchor": "a", "verified": True, "recurrence": 0, "success_count": 0}
+    ok_e, why, sat = E(_good, _gate)
+    print(f"  {'ok  ' if (ok_e and sat == ['verified']) else 'FAIL'} "
+          f"★5-1 条目 `verified:true` ⇒ 可晋升（三种判据**任一**满足）· satisfied={sat}")
+    if not (ok_e and sat == ["verified"]):
+        fails.append(f"entry walker 正例不过: ok={ok_e} why={why} sat={sat}")
+    ok_e, why, _ = E({k: v for k, v in _good.items() if k != "anchor"}, _gate)
+    print(f"  {'ok  ' if (not ok_e and any('缺必填字段' in w for w in why)) else 'FAIL'} "
+          f"★5-2 先验红：**缺 anchor** ⇒ 拦（Spec_Workflow『缺锚点不得登记』）")
+    if ok_e:
+        fails.append("缺 anchor 的条目被放行 ⇒ required 形同虚设")
+    ok_e, why, _ = E({"id": "X", "anchor": "a", "recurrence": 0, "success_count": 0}, _gate)
+    print(f"  {'ok  ' if (not ok_e and any('没有任何判据满足' in w for w in why)) else 'FAIL'} "
+          f"★5-3 先验红：**一个判据都不满足** ⇒ 拦（且点名「阈值未定不许假定」）")
+    if ok_e:
+        fails.append("无判据满足的条目被放行 ⇒ criteria 形同虚设")
+    # ★ 门槛未给 ⇒ 该判据**不满足**，但**不编数**（`O-126`）
+    ok_e2, _why2, sat2 = E({"id": "X", "anchor": "a", "success_count": 5}, _gate)
+    print(f"  {'ok  ' if ((not ok_e2) and sat2 == []) else 'FAIL'} "
+          f"★5-4 只给 `success_count` 但**门槛未给** ⇒ 该判据不满足（**不许替它假定阈值**）")
+    if ok_e2:
+        fails.append("门槛未给却被判满足 ⇒ 假精确（O-126 同族）")
+    # 容量件套：条数超 max ⇒ 拦
+    _over = _doc(entries=[dict(_good, id=f"e{i}") for i in range(51)])
+    bad_c, _n = R.validate_promotion(_over)
+    print(f"  {'ok  ' if any('capacity.max' in b for b in bad_c) else 'FAIL'} "
+          f"★5-5 容量件套：51 条 > max=50 ⇒ 拦")
+    if not any("capacity.max" in b for b in bad_c):
+        fails.append("容量件套被绕过（条数超上限没人管）")
+
     # ── 结构护栏 ────────────────────────────────────────────────────────
     ids = {c["id"] for c in R.CHECKS}
     if "promotion" not in ids:

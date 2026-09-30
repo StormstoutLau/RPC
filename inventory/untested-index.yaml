@@ -80,7 +80,7 @@ items:
   - {spec: U3-EDGE-FORMAT, n: 1, gist: "字段集完整性：无实现 / 无真实边实例 / 与现状的相容解析未试", state: todo, needs_decision: false, refs: [], blocker: implementation}
   - {spec: U3-EDGE-FORMAT, n: 2, gist: "kind 枚举的封闭性未验证（是否遗漏摘要之外的隐性依赖类型）", state: todo, needs_decision: false, refs: [], blocker: run}
   - {spec: U3-EDGE-FORMAT, n: 3, gist: "provenance 四前缀的机器解析未与现存「人工记录」习惯对齐", state: todo, needs_decision: false, refs: [], blocker: implementation}
-  - {spec: U3-EDGE-FORMAT, n: 4, gist: "invalid(e) 的拦截率 / 误杀率：只测过 1 条合成用例，脏数据分布未知", state: todo, needs_decision: false, refs: [], blocker: run}
+  - {spec: U3-EDGE-FORMAT, n: 4, gist: "invalid(e) 的拦截率 / 误杀率；★ 2026-09-30 已扩样例并出读数（批 4）：拦截率 17/17 · 误杀率 0/3（口径 = test_rpc_check_edges 的 CASES；含先验红自证 = 假绿桩只抓到 1/17）；⚠ 样例**构造** ⇒ 原话「脏数据分布未知」仍成立 ⇒ state=partial；再触发 = 出现真实边清单后用真实数据复测", state: partial, needs_decision: false, refs: [], blocker: run}
   - {spec: U3-EDGE-FORMAT, n: 5, gist: "src/dst 作 U-1 身份的端到端解析：RFC 8785 跨语言 / 跨工具链的字节级一致性未验证", state: todo, needs_decision: false, refs: [], blocker: run}
   - {spec: U3-EDGE-FORMAT, n: 6, gist: "双向关系拆两条单向边的迁移路径未试（未试过让维护者按新 schema 补反向边）", state: todo, needs_decision: false, refs: [], blocker: implementation}
   - {spec: U3-EDGE-FORMAT, n: 7, gist: "增量迁移下的长期共存风险未压测（新旧格式混存时消费端未压测）", state: todo, needs_decision: false, refs: [], blocker: run}
@@ -104,7 +104,7 @@ items:
   - {spec: U5-TRUST-BASIS, n: 2, gist: "v1 的「对应得对不对」判不了 —— **已知能力边界，不是待办**（语义正确性仍是人的活）", state: boundary, needs_decision: false, refs: [], blocker: none}
   - {spec: U5-TRUST-BASIS, n: 3, gist: "v2 是新造形式（V-2 实测真空 ⇒「什么算一跳」无第二方实现可对照）", state: todo, needs_decision: false, refs: [], blocker: implementation}
   - {spec: U5-TRUST-BASIS, n: 4, gist: "★ 已裁 2026-09-30（O-123）：裁掉「默认名单」形态 ⇒ 必须显式声明（缺失即判不通过）+ 支持显式空声明以区分「无需」与「未声明」；★ 2026-09-30 已落（批 3）：v3_axiom_whitelist 删除缺省回落（None ⇒ 判不通过；[] ⇒ 合法且仍会因 extra 红）；V-3 表行同步改（propext 等 = 原文举例、非裁定值）；⚠ 仍未实测 = 真实形式化证明输入（该层从未被真实对象驱动）⇒ state=partial；再触发 = 出现第一个真实形式化证明输入", state: partial, needs_decision: false, refs: [O-123], blocker: implementation}
-  - {spec: U5-TRUST-BASIS, n: 5, gist: "晋升门 entries 实例 0 条（schema 从未被真实条目走过一遍）", state: todo, needs_decision: false, refs: [], blocker: run}
+  - {spec: U5-TRUST-BASIS, n: 5, gist: "晋升门 entries 实例 0 条（schema 从未被真实条目走过一遍）；★ 2026-09-30 已走一遍（批 4）：★ 走出的缺口 = gate 此前**不可走**（validate_promotion 只判 schema 自身、从不把条目喂给 gate.required/criteria）⇒ 补 promotion_entry_verdict + 接上容量件套；第一条真实条目 = O-127（verified:true ⇒ 满足判据③）⇒ 实测「实例 1 条 · 可晋升 1 · 拦截 0」；⚠ 阈值故意不给（未定 ⇒ 不编数，O-126）；⚠ 仍未实测 = 真实记忆晋升（本仓无共享记忆层）⇒ state=partial", state: partial, needs_decision: false, refs: [O-126, O-127], blocker: run}
   - {spec: U5-TRUST-BASIS, n: 6, gist: "★ 已裁 2026-09-30（O-123）：登记为「能力边界」不裁（state→boundary）—— min_recurrence 取值是设计选择、不是可验结论，且 schema 零实例；边界声明 = 该字段当前不得参与自动判定，要参与须先在真实实例上校准（届时升回待办）", state: boundary, needs_decision: false, refs: [O-123], blocker: none}
   - {spec: U5-TRUST-BASIS, n: 7, gist: "★ structure 两条（不对称配置 / 双盲）不可机判 ⇒ 结构性约束**还没有判据**（自认本批最大缺口，正扛着「不得自审」）", state: todo, needs_decision: false, refs: [], blocker: implementation}
   - {spec: U5-TRUST-BASIS, n: 8, gist: "「三种判据任一满足」的并列语义无人验证（是本仓的**合并假设**，不是实测结论）", state: todo, needs_decision: false, refs: [], blocker: run}
