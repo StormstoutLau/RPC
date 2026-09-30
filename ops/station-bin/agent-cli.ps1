@@ -5508,7 +5508,10 @@ function Invoke-Review {
         [string]$sensitive
     )
     if (-not $proj) { $proj = $env:AGENT_CLI_PROJ }
-    if (-not $card) { Write-Host 'usage: agent-cli review <proj> --card <task.md> [--run-id <ts>] [--model <judge-alias>] [--overwrite] [--allow-l1-red] [--allow-self-review] [--allow-after-chain]'; return 2 }
+    # ★ 2026-10-01 就地更正：参数字面量此前写 `--run-id`，而顶层实参是 **`-RunId`**
+    #   （`$Script` 顶部的 param 块；`--run-id` 在 PS 里**绑不到**该参数 ⇒ 照旧串抄会静默取"最新完成 run"）。
+    #   ⚠ 同时补上此前漏列的两个既有开关 `--allow-self-review` / `--allow-after-chain` 的说明。
+    if (-not $card) { Write-Host 'usage: agent-cli review <proj> -Card <task.md> -RunId <ts> [-Model <judge-alias>] [-Overwrite] [-AllowL1Red] [-AllowSelfReview] [-AllowAfterChain]'; return 2 }
     if (-not (Test-Path $card)) { Write-Host "card not found: $card"; return 3 }
     $projRoot = $Script:PROJECTS[$proj]
     if (-not $projRoot -or -not (Test-Path $projRoot)) { Write-Host "unknown/missing project: $proj (registered: $($Script:PROJECTS.Keys -join ','))"; return 2 }
