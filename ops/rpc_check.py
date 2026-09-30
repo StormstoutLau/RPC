@@ -2700,6 +2700,10 @@ SPEC_UNTESTED_HEAD = "未实测登记"
 #   ⇒ 报数须覆盖"**放断言的地方**"，并在 note 里**写明射程**。
 SPEC_EMARK_DIRS = (SPEC_DIR, ROOT / "adr")
 SPEC_EMARK_RE = re.compile(r"（(E[1-5])([^）]*)）")
+# ★ O-123（2026-09-30）：`inventory/untested-index.yaml`（6 份规范 `## 未实测登记` 节的**分诊索引**）。
+#   在那之前它是**叶子节点**（全仓只有它自己和它自己的同步测试引用它）⇒ 本项把它的**分诊接上门禁**，
+#   补掉"存在但无人读"那一半（同 `O-51` 的 `sensitivity.yaml` 形态）。
+UNTESTED_INDEX = ROOT / "inventory" / "untested-index.yaml"
 
 
 def validate_spec_untested(text):
@@ -3010,12 +3014,48 @@ def check_ledger_status(ctx):
     return ("FAIL" if bad else "PASS"), note, detail
 
 
+def summarize_untested_triage(items):
+    """**纯函数**：消费 `untested-index.yaml` 的**分诊**（O-123 · 2026-09-30）⇒ 返回 `(warn, stats)`。
+
+    ★ **这是该索引的【首个消费者】**（此前它是叶子节点：只有它自己和它自己的同步测试引用它）。
+    ★ **唯一的判据**：任一条 `needs_decision: true` ⇒ 点名 —— 口径 = 「**未裁项不许静默**」。
+      `needs_decision` 只在**文档明写**「未裁 / 未定 / 待裁」时为 true（索引表头的定义，不是我推断），
+      而"未裁"意味着**下一步动作是人**⇒ 它必须**有人看见**（本仓 fail-closed 精神；同 `O-119` 的"不可判 ≠ 通过"）。
+    📊 `stats` = 报数（`state` / `blocker` / `needs_decision` 分布）—— **只报不判**（本仓"标签比事实硬"教训）。
+    ⚠⚠ **不判什么**（防读过头）：
+      · 不判"**该闭环多少条**"（开着不是错误）；
+      · 不判分诊**写得对不对**（那是人工判断）；
+      · **不重做**闭集/对账校验 —— 那是 `tests/test_untested_index_sync.py` 的职责（**判据只在一处**）。
+    """
+    warn = []
+    n = 0
+    by_state, by_blocker, n_dec = {}, {}, 0
+    for it in (items or []):
+        if not isinstance(it, dict):
+            continue
+        n += 1
+        st = str(it.get("state") or "?")
+        bl = str(it.get("blocker") or "?")
+        by_state[st] = by_state.get(st, 0) + 1
+        by_blocker[bl] = by_blocker.get(bl, 0) + 1
+        if it.get("needs_decision") is True:
+            n_dec += 1
+            warn.append(f"{it.get('spec')}#{it.get('n')}: `needs_decision: true` ⇒ **未裁项不许静默**"
+                        f"（要么裁掉并落回规范本体，要么在索引里写明为何仍是 true）")
+    stats = {"n": n, "state": by_state, "blocker": by_blocker, "needs_decision": n_dec}
+    return warn, stats
+
+
 def check_spec_untested(ctx):
     """O-91: 规范类文档（`U[0-9]-*.md` / `D7-PROTOCOL-*.md`）必须带**非空**的 `## 未实测登记` 节。
 
     ★ 判什么：① **命中集 ≥1**（否则判据**没有对象** ⇒ FAIL，防退化成空判）；
-      ② 每份**恰 1 个**该节；③ 节体**非空**。
+      ② 每份**恰 1 个**该节；③ 节体**非空**；
+      ④ ★ **O-123（2026-09-30）**：顺带**消费** `inventory/untested-index.yaml` 的分诊 ——
+         **报数**（state / blocker / needs_decision 分布）+ **一条判据**（任一条 `needs_decision: true` ⇒ **WARN**，
+         口径 = 「**未裁项不许静默**」）。⇒ 该索引由此**不再是叶子节点**（此前只有它自己的同步测试引用它）。
     ⚠⚠ **不判**：正文里有没有**无证据断言** —— 那不可机判、**仍是纪律**（见上方那段注释）。
+      ⚠ 也**不判**分诊**写得对不对**，更**不重做**索引的对账/闭集校验（那是 `py-tests` 的职责 —— 判据只在一处）。
     📊 **附一条报数（不判）**：E 级内联标注里"带具体取证 vs 裸"的分布。
       ⚠ 为什么是**报数而不是判据**：实测 ADR 侧 **57% 是裸标**（`（E1）`），而"裸"**不等于"错"**
         （有的结论句本身不必带命令，命令写在同段别处）；且**连计数都口径敏感** ——
@@ -3044,12 +3084,41 @@ def check_spec_untested(ctx):
                 else:
                     em_bare += 1
     n_bad_file = len({x.split(":", 1)[0] for x in bad})
+    # ★ O-123（2026-09-30）：**索引分诊的消费者**（本条判据的第三件事，也是"叶子节点"缺口的另一半）。
+    #   形态：**报数**（分布进 note）+ **一条判据**（`needs_decision: true` ⇒ WARN）。
+    #   ⚠ 索引坏了/缺了 ⇒ **WARN 而非 FAIL**：本判据的对象是"规范的那一节"，索引是**附加消费对象**；
+    #     索引自身的完整性/对账由 `py-tests`（`tests/test_untested_index_sync.py`）判 ⇒ **不在此处重复判**。
+    tri_note, tri_warn = "", []
+    try:
+        import yaml
+    except Exception:
+        tri_warn = ["缺 pyyaml ⇒ **分诊无从消费**（本判据新增射程跳过；规范侧判定不受影响）"]
+    else:
+        if not UNTESTED_INDEX.is_file():
+            tri_warn = [f"`inventory/{UNTESTED_INDEX.name}` 不存在 ⇒ **分诊无从消费**"]
+        else:
+            try:
+                inv = yaml.safe_load(_read_text(UNTESTED_INDEX)) or {}
+                tri_warn, tri = summarize_untested_triage(inv.get("items"))
+                _fmt = lambda d: " · ".join(f"{k}={v}" for k, v in sorted(d.items()))
+                tri_note = (f" · **索引分诊** 条目 {tri['n']}"
+                            f"（state {_fmt(tri['state'])}；blocker {_fmt(tri['blocker'])}；"
+                            f"needs_decision {tri['needs_decision']}）")
+                if tri["n"] == 0:
+                    tri_warn = ["索引 `items` **为 0 条** ⇒ 分诊消费没有对象（防退化成空判）"]
+            except Exception as e:
+                tri_warn = [f"`inventory/{UNTESTED_INDEX.name}` 不可消费: {type(e).__name__}: {e}"]
     note = (f"规范 {len(files)} 份 · 违规 {n_bad_file} 份 · "
             f"E 标报数 带取证 {em_detail} / 裸 {em_bare}"
-            f"（**报数，不判**；射程 = spec/d6-agent-standard/*.md + adr/ADR-*.md 共 {em_files} 份）")
+            f"（**报数，不判**；射程 = spec/d6-agent-standard/*.md + adr/ADR-*.md 共 {em_files} 份）" + tri_note)
     if not bad:
         note += f"（全部含 `## {SPEC_UNTESTED_HEAD}` 且非空）"
-    return ("FAIL" if bad else "PASS"), note, summ + bad
+    if bad:
+        return "FAIL", note, summ + bad
+    if tri_warn:
+        # 未裁项不许静默 ⇒ 非阻断发现（本仓 WARN 语义：执行后有发现、不拦提交）
+        return "WARN", note, summ + tri_warn
+    return "PASS", note, summ
 
 
 def check_adr(ctx):
@@ -7812,6 +7881,11 @@ CHECKS = [
             "\n📊 note 里附一条 **报数（不判）**：E 级内联标注的「带具体取证 / 裸」分布 —— "
             "实测 ADR 侧 **57% 是裸标**，而「裸」**不等于「错」**，且**连计数都口径敏感**"
             "（同一棵树两个正则数出 4 vs 8）⇒ 做成 FAIL 会造假红，假红 → 例外名单 → 判据失效。"
+            "\n★★ **O-123（2026-09-30）新增第四件事**：本判据**顺带消费** `inventory/untested-index.yaml` 的分诊"
+            "（该索引由此**不再是叶子节点**）—— **报数** state / blocker / needs_decision 分布；"
+            "**一条判据**：任一条 `needs_decision: true` ⇒ **WARN**（口径 =「**未裁项不许静默**」）。"
+            "⚠ 索引缺失/不可解析/`items` 为 0 ⇒ **WARN（非 FAIL）** —— 索引自身的对账与闭集校验由 `py-tests` 判，"
+            "**不在此处重复判**（判据只在一处）。"
             "\n⚠ **逃逸（如实记）**：新规范若取名不带 `U\\d-` 前缀，本判据**看不到它** —— "
             "spec 与 adr 实测**全部无 front-matter**（无 `type:` 可锚）⇒ 靠「命中集在输出里可见」缓解。"},
     {"id": "doclinks", "title": "文档链接可达", "fn": check_doclinks, "quick": True,
