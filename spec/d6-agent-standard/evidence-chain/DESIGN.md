@@ -86,6 +86,14 @@ recipe v1:  run_digest = sha256( "v1\n" + 逐件 "name:hex|-\n" )      # 分簇:
 
 - **判定**：`anchor_mismatch`（锚与链不符 → 链被整体重写）/ `cold_mismatch`（冷路径与链不符）/ `digest_mismatch`（归档件被改，**定位到条与件**）/ `chain_break`（prev 不闭合）。
 - **`chain` 不静默重锚**：锚与链不符时 `agent chain` **刻意不动锚**（否则攻击者重写链后跑一次 chain 就把痕迹抹平）；确要重锚须显式 `--reanchor`。已实测。
+- ★★ **与 `review` 的时序（`O-140`，2026-10-01 实测 + 已拦）**：`review.json` 是 **manifest 里已声明的 subject**
+  （v2 recipe 把它算进 run 摘要），而 `review` 子命令**天生可重跑**（`--overwrite`）⇒ **对【已入链】的 run
+  写 `review.json` 会让该 run `digest 不符` ⇒ 门禁 `evidence` FAIL**；而本链**按 `(proj,run_id)` 幂等去重**
+  （`chain` 不更新已有条目）、`--reanchor` **只重写锚** ⇒ **没有合法更新通道**，唯一出路是"**恢复归档件字节**"
+  （多份 DESIGN/ADR-0007 负向用例的标准收场）。⇒ **纪律：要在入链前 review**；★ 该纪律**已落成可机判的拦**
+  —— `agent-cli.ps1` 的 `Invoke-Review` 在**幂等守卫之后**调 `Resolve-RunChained` 判"在不在链内"，
+  **已入链或判不了 ⇒ 默认拒（exit 9，fail-closed）**，显式 `--allow-after-chain` 才放行且留痕
+  （`review.json.after_chain_guard`）。⚠ **不因此把 `review.json` 移出钉住面**：那会把篡改检测从**裁决登记面**上撤掉（乙被否）。
 - **为什么只把锚入库**：链体积随 run 数线性增长且**可重算**（入库是噪声）；锚不可重算，且一页纯文本、人类可读，**可 git 提交并 push 到 origin** ⇒ 由 **GitHub remote** 充当第 3 个信任域的见证。
 - ⚠ **强度诚实（关键，不许含糊）**：
   1. 该锚**只在 `git push` 到 origin 后才成立**；只提交不推送 = 仍在本地单点。

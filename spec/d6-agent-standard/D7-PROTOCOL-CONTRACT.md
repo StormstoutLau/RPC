@@ -69,7 +69,11 @@
 > FAIL（阻断）**，而 `cluster.py agent chain`（幂等去重）与 `--reanchor`（只重写锚）**都改不了已有条目的
 > 摘要** ⇒ 该机制下**唯一出路是"恢复归档件字节"**（ADR-0007 历次负向用例的标准收场）。
 > **本仓实测（2026-10-01）**：重评后撞 `[288] … digest 不符, 变了: review` ⇒ 逐字还原该件 ⇒ 回 PASS。
-> ★ **本注只登记事实，不裁**（三条候选见 `O-140`）；★ 留持久凭证的**安全姿势** = **在该 run 入链之前** review。
+> ★★ **已裁【甲·可机判版】并已拦（2026-10-01 · 见 `O-140`）**：`Invoke-Review` 在**幂等守卫之后**调
+> `Resolve-RunChained` 判"该 run 是否在链内" ⇒ **已入链（或判不了）⇒ 默认拒**（exit 9，fail-closed），
+> 只有显式 `--allow-after-chain` 才放行、且**留痕** `review.json.after_chain_guard`。
+> ⇒ ★ 留持久凭证的**安全姿势**（也是默认姿势）= **在该 run 入链之前** review。
+> **真跑实测**：已入链 run ⇒ `REJECT REVIEW_AFTER_CHAIN … exit 9`；未入链 run ⇒ 放行 + `d7_verdict` 在案。
 > ★ 为什么不做 `verdict.json`（乙）：增量收益只是换个文件名，代价是**改本契约的「不新增信封件」裁**
 > + 两条 `Get-*FrameworkSubjects` 基线各加一件 + 一份**必然与 review.json 重复**的拷贝
 > ⇒ 撞本仓头号失败形态（同一事实两处表达）。三项候选的完整五维对照见 `O-139`。

@@ -30,6 +30,7 @@ param(
     [int]$EngineCtxHint = 0,     # route cmd (test): simulate engine n_ctx to exercise clamp (radical fix B); 0=off
     [string]$RunId = '',         # review cmd (O-16): target runDir ts; empty -> newest completed run
     [switch]$Overwrite,          # review cmd (O-16): allow re-review overwriting existing review.json
+    [switch]$AllowAfterChain,    # review cmd (O-140 裁【甲】): 显式放行"对已入链 run 的 review"（降级但留痕）
     [switch]$SlotAllowBusy,      # O-25 P1: allow task dispatch even if target engine /slots busy
     [string]$Cli = ''            # task cmd (O-15): executor selector: ''(auto by route/card) | opencode | claude (控制台本地备路)
 )
@@ -5352,6 +5353,42 @@ function Resolve-D6D7Boundary {
     return @{ resolved = $true; layer = 'D6'; branch = 'convention'; reason = ''; facts = $facts }
 }
 
+function Resolve-RunChained {
+    # ── ★★ O-140（2026-10-01 裁【甲·可机判版】）：**该 run 是否已入证据链** ────────────────────
+    # ★ **纯函数**（只吃链件路径 + proj/run_id ⇒ 可离线单测，不必真跑 review）。
+    # 为什么需要它（`O-140` 实测）：`review.json` 是证据链**钉住的 subject**，而 `review` **天生可重跑**
+    #   ⇒ 对**已入链**的 run 做任何 review 都会让该 run `digest 不符` ⇒ 门禁 `evidence` **FAIL（阻断）**；
+    #   而 `cluster.py agent chain`（按 `(proj,run_id)` **幂等去重**）与 `--reanchor`（**只重写锚**）
+    #   **都改不了已有条目的摘要** ⇒ 唯一出路是"**恢复归档件字节**"（ADR-0007 历次负向用例的标准收场）。
+    #   ⇒ 把它从"要靠人记的纪律"变成**可机判的拦**：链件在仓内（`ops/station-bin/agent-chain.json`）⇒ 直接读。
+    # ★★ **三态，不可混**（`chained`）：`$true` = **已在链内** · `$false` = **不在链内** ·
+    #   **`$null` = 判不了**（链件缺 / 不可解析 / 无 entries）—— ★ 调用方对 `$null` **fail-closed**
+    #   （按"已入链"拦），理由 = 与 `Resolve-L1Gate`「记录读不出 ⇒ `unknown` ⇒ **拒**」**同口径**：
+    #   此刻正是最不该埋一个"会让门禁 FAIL 的动作"的时候。
+    # ⚠ 本判据**只回事实**（在不在链内），**不决定**拦还是放行 —— 那是调用方的政策（见 `Invoke-Review`）。
+    param([string]$ChainPath, [string]$Proj, [string]$RunId)
+    if (-not $ChainPath -or -not (Test-Path -LiteralPath $ChainPath)) {
+        return @{ chained = $null; reason = "链件不存在（$ChainPath）⇒ **判不了**" }
+    }
+    try {
+        # ⚠ 用 `ReadAllText` + `ConvertFrom-Json`（不是 `Get-Content | ConvertFrom-Json`）：
+        #   本仓 PS 5.1 UTF-8 纪律（`Get-Content` 走 ANSI 会把中文 proj 名读坏）。
+        $chain = [IO.File]::ReadAllText($ChainPath, [Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+    } catch {
+        return @{ chained = $null; reason = "链件不可解析（$($_.Exception.Message)）⇒ **判不了**" }
+    }
+    # ⚠ `@($chain.entries)` 在 `entries` 缺键时是 `@($null)`（`.Count` = **1**！）⇒ 必须先滤 `$null`
+    #   （否则"空链"会被读成"有内容"，是典型的假绿）。
+    $ent = @($chain.entries | Where-Object { $null -ne $_ })
+    if ($ent.Count -eq 0) { return @{ chained = $null; reason = "链件无 entries ⇒ **判不了**" } }
+    $hit = @($ent | Where-Object { [string]$_.proj -eq $Proj -and [string]$_.run_id -eq $RunId })
+    if ($hit.Count -gt 0) {
+        return @{ chained = $true; reason = "$Proj/$RunId **已在链内**（链 $($ent.Count) 条）" }
+    }
+    return @{ chained = $false
+              reason = "$Proj/$RunId 不在链内（链 $($ent.Count) 条）⇒ 现在 review 是安全时机" }
+}
+
 function Invoke-Review {
     param(
         [string]$proj,
@@ -5361,10 +5398,11 @@ function Invoke-Review {
         [switch]$overwrite,
         [switch]$allowL1Red,
         [switch]$allowSelfReview,
+        [switch]$allowAfterChain,      # O-140 裁【甲】：显式放行"对已入链 run 的 review"（降级但留痕）
         [string]$sensitive
     )
     if (-not $proj) { $proj = $env:AGENT_CLI_PROJ }
-    if (-not $card) { Write-Host 'usage: agent-cli review <proj> --card <task.md> [--run-id <ts>] [--model <judge-alias>] [--overwrite] [--allow-l1-red] [--allow-self-review]'; return 2 }
+    if (-not $card) { Write-Host 'usage: agent-cli review <proj> --card <task.md> [--run-id <ts>] [--model <judge-alias>] [--overwrite] [--allow-l1-red] [--allow-self-review] [--allow-after-chain]'; return 2 }
     if (-not (Test-Path $card)) { Write-Host "card not found: $card"; return 3 }
     $projRoot = $Script:PROJECTS[$proj]
     if (-not $projRoot -or -not (Test-Path $projRoot)) { Write-Host "unknown/missing project: $proj (registered: $($Script:PROJECTS.Keys -join ','))"; return 2 }
@@ -5501,6 +5539,32 @@ function Invoke-Review {
         Get-Content $reviewPath
         return 0
     }
+    # ── ★★ O-140（2026-10-01 裁【甲·可机判版】）：**入链后写 review.json 会撞证据链 ⇒ 默认拦** ──────
+    # 判据本体 = 纯函数 `Resolve-RunChained`（只回"在不在链内"三态，不决定政策）。
+    # ★ **位置 = 幂等守卫【之后】**：上面那个守卫是"无事发生"的早返回（`review.json` 已存在且未
+    #   `--overwrite`）⇒ 它**不写盘、不会撞链**，不该被拦；本拦只对"**真要写 `review.json`**"的那条路生效。
+    # ★ **fail-closed**：`chained -ne $false`（含 `$null` = 判不了）⇒ 拦（同 `Resolve-L1Gate` 口径）。
+    # ★ 显式通道 `--allow-after-chain`：**降级但留痕**（写进 `review.json.after_chain_guard`），
+    #   同 `--allow-l1-red` / `--allow-self-review` 的既有形态。
+    # ⚠ 退出码 **9**（3 = 卡/runDir 缺 · 4 = 档位 · 5 = L1 拦 · 8 = 自审拦 · 9 = 本拦）。
+    $acChk = Resolve-RunChained -ChainPath (Join-Path $Script:REPO_ROOT 'ops/station-bin/agent-chain.json') `
+                                 -Proj $proj -RunId $runName
+    $acSection = $null
+    if ($acChk['chained'] -ne $false) {
+        if (-not $allowAfterChain) {
+            Write-Host ("REJECT REVIEW_AFTER_CHAIN (" + $acChk['reason'] + ") exit 9 - " +
+                        # ⚠ 本仓老坑（`O-136` 记过）：**回退符紧跟双引号**（`` `" ``）= 转义引号 ⇒ 字符串不终止
+                        #   ⇒ 故这里的强调一律用「」，**不在引号前留回退符**（夹具当场抓到过第二次）。
+                        "该 run 已被/将会被钉进证据链 ⇒ 此刻写 review.json 会让门禁 evidence 报「digest 不符」" +
+                        "（O-140 实测）；★ 正确姿势 = **趁它未入链时先 review**；" +
+                        "确要覆盖请显式 --allow-after-chain（会留痕，且事后须按 ADR-0007 恢复该件字节）")
+            return 9
+        }
+        Write-Host ("REVIEW_AFTER_CHAIN_ALLOWED: " + $acChk['reason'] +
+                    " ⇒ 显式 --allow-after-chain 放行；⚠ **该 run 的链摘要将与其归档件不符**" +
+                    "（事实写进 review.json.after_chain_guard）")
+        $acSection = [ordered]@{ chained = $acChk['chained']; reason = $acChk['reason']; allowed = $true }
+    }
 
     $productText = [System.IO.File]::ReadAllText($product, [System.Text.UTF8Encoding]::new($false))
     if ($productText.Length -gt 40000) {
@@ -5598,6 +5662,9 @@ function Invoke-Review {
         $review['l1'] = $l1Section
         $review['contract'] = $ccSection        # D7-P2-2：判官调用失败也留契约校验结果（多半 ok=false）
         $review['self_review_guard'] = $sgSection   # D7-P3-1：不得自审的事实也留档
+        # O-140 裁【甲】：走显式通道（对已入链 run 的 review）⇒ **留痕**（"降级 ≠ 隐藏"）。
+        #   ⚠ 与 `blind` 段同款：**仅在走通道时才加** ⇒ 不走时 `review.json` schema 与本批之前一致。
+        if ($acSection) { $review['after_chain_guard'] = $acSection }
         # ── ★★ 甲（2026-10-01）：**P4a/P4b/P5 在【写盘之前】跑**，Verdict 段随本次写盘落地 ──────
         # ⚠ 顺序是**承重的**（`O-139`）：旧实现把它放在 `Set-Content` **之后** ⇒ 判据校验过的那个
         #   `Verdict` **只活在 stdout**、磁盘上找不到 ⇒ P5 叫「裁决**登记**」而**登记面是空的**。
@@ -5694,6 +5761,8 @@ function Invoke-Review {
     $review['contract'] = $ccSection
     # D7-P3-1（2026-09-26）：**不得自审**的事实随产物留档（判官/产出者各自的模型 + 是否放行）
     $review['self_review_guard'] = $sgSection
+    # O-140 裁【甲】：显式通道留痕（与失败路**同一处置**；不走通道时 schema 不变）
+    if ($acSection) { $review['after_chain_guard'] = $acSection }
     # ── ★★ 甲（2026-10-01）：**P4a/P4b/P5 在【写盘之前】跑**（与上面那条失败路**同一处置**）───────
     # ★ 只**登记事实**：`review` 仍是 advisory ⇒ 本调用**不改**退出码（下面仍 `return 0`）。
     # ★ B3：`-ExecHost` = run 记录的**产出机**（与失败路**同一来源** ⇒ 两侧事实同源）。
@@ -5980,8 +6049,9 @@ try {
         exit (Resolve-ExitCode $code)
     }
     elseif ($Command -eq 'review') {
-        # O-16 review ring (advisory). usage: agent-cli review <proj> --card <task.md> [--run-id <ts>] [--model <judge-alias>] [--overwrite]
-        $code = Invoke-Review -proj $Proj -card $Card -runId $RunId -model $Model -overwrite:$Overwrite -sensitive $Sensitivity
+        # O-16 review ring (advisory). usage: agent-cli review <proj> --card <task.md> [--run-id <ts>] [--model <judge-alias>] [--overwrite] [--allow-l1-red] [--allow-self-review] [--allow-after-chain]
+        $code = Invoke-Review -proj $Proj -card $Card -runId $RunId -model $Model -overwrite:$Overwrite `
+                              -allowAfterChain:$AllowAfterChain -sensitive $Sensitivity
         exit (Resolve-ExitCode $code)
     }
     elseif ($Command -eq 'batch') {
