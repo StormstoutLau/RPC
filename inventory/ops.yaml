@@ -115,7 +115,6 @@ frozen_ops_scripts:
   #   ③ 它被门禁以**子进程**调用（`py ops/derived_view.py --check`，三态退出码 0/1/2）⇒ 与
   #      `_fm_golden_test.ps1` 同类: **受治理的夹具**，而非并列管理入口。
   - ops/derived_view.py
-  - ops/llama-serve-instance
   - ops/lm-download/speedtest_asset.sh
   - ops/lm-download/speedtest_codeload.sh
   - ops/lm-download/speedtest_mirrors.sh

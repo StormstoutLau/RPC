@@ -48,7 +48,14 @@ fi
 NGL_ARGS=""
 [ -n "${N_GPU_LAYERS:-}" ] && NGL_ARGS="-ngl ${N_GPU_LAYERS}"
 # EXTRA_FLAGS 有意不加引号 (word-split 展开)
+# --host 绑定 (2026-10-03): 原为硬编码 `0.0.0.0` —— 那是旧双机/网关时代的默认,
+#   而本仓规范已定目标值: 「`--host 0.0.0.0` → 可跨机访问（**D6 不跨机, 现状保留 `127.0.0.1`**）」
+#   (spec/d6-agent-standard/unsloth-a-station.md §30); 且实测**无任何跨机消费者**
+#   (现役全是 `ssh <站> + curl 127.0.0.1:8080`, 跨机引用全属已退役网关/纯文档),
+#   而本仓亦已把"默认 0.0.0.0 对局域网无认证开放"登记为安全隐患 (docs/分布式推理.md §安全加固)。
+#   ⇒ 收敛回回环, 与 inventory/ports.yaml 的 `expect_bind: 127.0.0.1` 一致。
+#   ⚠ RPC 面**不受影响**: worker 走 :50052 (ports.yaml 已绑 10.10.10.1), 不经 8080。
 exec "${LLAMA_SERVER_BIN:-/opt/llama.cpp/llama-server}" -m "$MODEL_PATH" $RPC_ARGS \
   $NGL_ARGS -c "${CTX:-32768}" -t "${THREADS:-16}" \
   --n-cpu-moe "${N_CPU_MOE:-0}" ${EXTRA_FLAGS:-} \
-  --host 0.0.0.0 --port "${PORT:-8080}"
+  --host 127.0.0.1 --port "${PORT:-8080}"

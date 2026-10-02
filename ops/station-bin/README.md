@@ -20,10 +20,23 @@
 ## 两站一致性
 
 修改后核对：`md5sum /usr/local/bin/<file>`（两站必须一致）。
-**当前（2026-09-29，站上件 9 件 · 三站一致）**：infer-load `a2e8604f...`、infer-unload `a9f8f3f0...`、
-llama-serve-instance `df8f7bbb...`、**rpc-serve-instance `24a3e592...`**、infer-list `74033ef1...`。
+**当前（2026-10-03，站上件 9 件 · 三站一致）**：infer-load `a2e8604f...`、infer-unload `a9f8f3f0...`、
+llama-serve-instance `e8c20ede...`、**rpc-serve-instance `24a3e592...`**、infer-list `74033ef1...`。
+（2026-09-29 的 `llama-serve-instance` 值 = `df8f7bbb...`，见下条。）
 （`gates` 门禁按仓库副本逐站比对 md5 ⇒ 上表值可由 `ops\rpc.ps1 check -Only gates` 复算，
 无需手工核 —— 改了仓库副本就必须部署，否则当场判红。）
+
+**2026-10-03 `llama-serve-instance` 改动（`df8f7bbb...` → `e8c20ede...`）**：把**硬编码的 `--host 0.0.0.0`** 收敛为
+`--host 127.0.0.1`。依据三条：① 本仓规范已定目标值（`spec/d6-agent-standard/unsloth-a-station.md`：
+「`--host 0.0.0.0` → 可跨机访问（**D6 不跨机, 现状保留 `127.0.0.1`**）」）；② 实测**无任何跨机消费者** —— 现役
+全是「`ssh <站>` + `curl 127.0.0.1:8080`」（`ops/cluster.py` 的 e2e/load/unload/健康探测、站上
+`~/.config/opencode/opencode.jsonc` 与 `~/.claude/settings.json` 三站**均为 `127.0.0.1:8080`**），
+跨机引用全属**已退役的 LiteLLM 网关时代或纯文档**；③ 本仓已把「默认 `0.0.0.0` 对局域网无认证开放」登记为
+安全隐患（`docs/分布式推理.md` §安全加固）。⚠ **RPC 面不受影响**（worker 走 `:50052`，`ports.yaml` 已绑 `10.10.10.1`）。
+**部署**：三站「备份 `*.bak-20261003` → `install -m 755` → 核 md5 == 仓库副本 → `bash -n`」；
+A 站引擎**重启一次**生效（journal 实测 `listening on http://127.0.0.1:8080`，推理 **56.6 t/s** 正常）。
+★ 另两处同源 `0.0.0.0` 已一并收敛（均**非站上件**、无运行影响）：顶层遗留副本 `../llama-serve-instance`、
+B 站遗留单元 `../llama-server.service`（**实测 `disabled`/`inactive`**，非活单元）。
 
 ★★ **行尾陷阱（2026-09-29 踩到两次，必读）**：本仓 `core.autocrlf=true` ⇒ **任何**重写工作树的
 git 操作（`checkout` / `stash pop` / `reset --hard`）都会把文本文件落成 **CRLF**。而这些件在 Linux 上
