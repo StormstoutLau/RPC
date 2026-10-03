@@ -5277,6 +5277,37 @@ function Test-ConclusionContract {
     return @{ ok = ($r.Count -eq 0); reasons = $r; count = $arr.Count }
 }
 
+function Get-AnchorKey {
+    # ── D7-CC #7（2026-10-04 落 · 原为 `O-123` 取证登记）：锚点的**唯一定义点** ──────────
+    # 契约 §3 要求以 `path` + `line_range`（**归一化后**、不含 `statement`）对齐成"锚点"；
+    # 而 2026-09-30 取证发现【全仓归一化函数 = 0 个】、`Merge-JudgeFindings` **只做了 `.Trim()`**
+    #   ⇒ 同一处意见（`./x` vs `x`、`a\b` vs `a/b`、大小写不同）**各自成为不同锚点** ⇒
+    #      `consensus` **静默失效**、三分类退化为全 `unique`（★ "静默" = 本仓最防形态）。
+    # ★★ 故把归一化收成**一个纯函数**（同 `O-143` 的教训：判据的两半必须**同一处定义**）。
+    #
+    # 归一化规则（**契约 §3 就地写明 = 本函数的规格**）：
+    #   path : ① `\` → `/` ② 去前导 `./`（可多重）③ 折叠连续 `/` ④ 去尾 `/` ⑤ **转小写**
+    #          ⚠ ⑤ 的取舍（如实登记）：**仅大小写不同的路径会被并成一个锚点** —— 对"**对齐意见**"
+    #            这个用途是对的（契约把"大小写不一致"列为裂锚点的原因）；若将来要判"是不是同一个
+    #            文件"，那不是本函数的职责（**不是**存在性检查）。
+    #   line_range : 去空白 + 大写 `L`；`L6-L6` ⇒ `L6`（**同行集** = 同位置）
+    #   ⚠ **射程（未做，如实）**：**绝对路径**归一化需 `runDir`，而本函数**不吃**该输入
+    #     ⇒ 绝对路径与相对路径**仍会裂**（残留见契约 §未实测登记 7）。
+    param([object]$Path, [object]$LineRange)
+    $p = [string]$Path
+    $p = $p -replace '\\', '/'
+    while ($p.StartsWith('./')) { $p = $p.Substring(2) }
+    $p = $p -replace '/{2,}', '/'
+    $p = $p.TrimEnd('/')
+    $p = $p.ToLowerInvariant()
+    $lr = ([string]$LineRange).Trim().ToUpperInvariant()
+    $mm = [regex]::Match($lr, '^L(\d+)-L(\d+)$')
+    if ($mm.Success -and $mm.Groups[1].Value -eq $mm.Groups[2].Value) {
+        $lr = ('L{0}' -f $mm.Groups[1].Value)
+    }
+    return ("{0}|{1}" -f $p, $lr)
+}
+
 function Merge-JudgeFindings {
     # ── D7-P2-2：**综合阶段**（N 判官 ⇒ consensus / disagreement / unique）────
     # 依据 = Council Mode（合并稿 §406）：**显式分类**而非多数投票。
@@ -5296,7 +5327,9 @@ function Merge-JudgeFindings {
         foreach ($f in @($j.findings)) {
             if ($null -eq $f) { continue }
             $opinions++
-            $key = ("{0}|{1}" -f ([string]$f.path).Trim(), ([string]$f.line_range).Trim())
+            # ⚠ 2026-10-04（D7-CC #7）：键**必须**走 `Get-AnchorKey`（归一化的唯一定义点）——
+            #   旧实现只做 `.Trim()` ⇒ 变体写法裂成多锚点 ⇒ consensus 静默失效。
+            $key = Get-AnchorKey -Path $f.path -LineRange $f.line_range
             if (-not $map.ContainsKey($key)) {
                 $map[$key] = @{ hits = @(); statements = @(); sample = $f }
             }
