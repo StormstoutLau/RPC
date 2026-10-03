@@ -34,7 +34,7 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 'Read-ReviewResource', 'Get-AssertionBlock', 'Build-BlindPrompt', 'Compare-AssertionChains',
 # D7-P2-1 (2026-09-26): **机械门先行** 的判定本体（纯函数：只吃已解析的 run 记录 ⇒ 可离线单测）。
 # D7-P2-2 (2026-09-26): **结论契约** —— 三个纯函数（校验器 + 综合器）。
-'Test-FindingShape', 'Test-ConclusionContract', 'Merge-JudgeFindings', 'Resolve-L1Gate',
+'Test-FindingShape', 'Test-ConclusionContract', 'Get-AnchorKey', 'Merge-JudgeFindings', 'Resolve-L1Gate',
 # D7-P3-1 (2026-09-26): **不得自审**的判定本体（纯函数）。
 'Resolve-SelfReviewGuard',
 # D7-P3-2 (2026-09-26): **编排层 —— 谁审谁** 的选择器（纯函数）。
@@ -1805,6 +1805,26 @@ Assert-True "cc-22 判官数为 0（null 输入）⇒ judges=0（规模显式）
     (Merge-JudgeFindings -Verdicts @($null))['judges'] -eq 0)
 Assert-True "cc-23 综合结果**带规模**（judges 与 opinions 都在）" (
     ($m2.Contains('judges')) -and ($m2.Contains('opinions')))
+# ── D7-CC **#7**（2026-10-04 落）：**锚点归一化** —— `Get-AnchorKey` 是归一化的**唯一定义点** ──
+# ★★ 先验红·**同源对照**：先证"旧键（裸 `.Trim()`）在两个变体写法上**确实不同**"（⇒ 本组断言**有对象**、
+#    不是恒真），再证 `Get-AnchorKey` 把它们归一成**同一个键**。
+Assert-True "ak-1 ★对照：变体写法在【裸 Trim 口径】下**确实是两个不同键**（否则本组无对象）" (
+    (('./Docs/A.MD').Trim() + '|L3') -ne (('docs\a.md').Trim() + '|L3'))
+Assert-True "ak-2 归一化：`./Docs/A.MD` 与 `docs\a.md`（同位置）⇒ **同一个键**" (
+    (Get-AnchorKey -Path './Docs/A.MD' -LineRange 'L3') -eq
+    (Get-AnchorKey -Path 'docs\a.md' -LineRange 'L3'))
+Assert-True "ak-3 归一化：`L6-L6` 与 `L6`（**同行集** = 同位置）⇒ 同一个键" (
+    (Get-AnchorKey -Path 'p' -LineRange 'L6-L6') -eq (Get-AnchorKey -Path 'p' -LineRange 'L6'))
+Assert-True "ak-4 ★**防过度归一化**：**不同位置**（L1 vs L2）仍**不**合并" (
+    (Get-AnchorKey -Path 'p' -LineRange 'L1') -ne (Get-AnchorKey -Path 'p' -LineRange 'L2'))
+$jV = @{ findings = @(@{ statement = 'v'; hit = $true; priority = 1; confidence = 0.5;
+    path = './P/'; line_range = 'L1-L1' }) }   # 归一化后 = `p|L1`，与 $jA **同位置、同 hit**
+$m7 = Merge-JudgeFindings -Verdicts @($jA, $jV)
+Assert-True "ak-5 ★端到端：两判官写**变体写法**（同位置同 hit）⇒ **1 锚点 · consensus · judges=2**" (
+    @($m7['findings']).Count -eq 1 -and $m7['findings'][0]['agreement'] -eq 'consensus' -and
+    $m7['findings'][0]['judges'] -eq 2)
+Assert-True "ak-6 接线：`Merge-JudgeFindings` 的键**走** `Get-AnchorKey`（防'写了但没跑'）" (
+    $content -match '\$key = Get-AnchorKey -Path \$f\.path -LineRange \$f\.line_range')
 # ── 接线（防"写了但没跑"）──
 Assert-True "cc-24 接线：review.json 写契约段（**两处**写点都带）" (
     ([regex]::Matches($content, "\`$review\['contract'\] = \`$ccSection")).Count -ge 2)
