@@ -35,8 +35,13 @@ llama-serve-instance `e8c20ede...`、**rpc-serve-instance `24a3e592...`**、infe
 安全隐患（`docs/分布式推理.md` §安全加固）。⚠ **RPC 面不受影响**（worker 走 `:50052`，`ports.yaml` 已绑 `10.10.10.1`）。
 **部署**：三站「备份 `*.bak-20261003` → `install -m 755` → 核 md5 == 仓库副本 → `bash -n`」；
 A 站引擎**重启一次**生效（journal 实测 `listening on http://127.0.0.1:8080`，推理 **56.6 t/s** 正常）。
-★ 另两处同源 `0.0.0.0` 已一并收敛（均**非站上件**、无运行影响）：顶层遗留副本 `../llama-serve-instance`、
+★ 另两处同源 `0.0.0.0` 已一并收敛（均**非站上件**、无运行影响）：顶层遗留副本 `../llama-serve-instance`（**已删除**）、
 B 站遗留单元 `../llama-server.service`（**实测 `disabled`/`inactive`**，非活单元）。
+★ **第三处同源但【不改】**：本目录的 `_davidau_start.sh`（`--host 0.0.0.0 --port 18081`）——
+**2026-10-03 实测三站 `1808x` 全部无监听**（该服务当前未跑），且它是**下划线私有临时件**
+（个人 build 路径 `~/llama.cpp/build/bin/llama-server` + `nohup` + `/tmp` 日志；**不在 `STATION_BINS`、非 conf 驱动**）
+⇒ 判为「**按需手工启动的实验辅助**，`0.0.0.0` 只在手工启动时生效」⇒ **留在原样并登记在此**（改它无收益，反而改动了别人的实验件）。
+⚠ 若将来该件转为**常驻/纳管**，须按本文件同一条纪律收敛绑定。
 
 ★★ **行尾陷阱（2026-09-29 踩到两次，必读）**：本仓 `core.autocrlf=true` ⇒ **任何**重写工作树的
 git 操作（`checkout` / `stash pop` / `reset --hard`）都会把文本文件落成 **CRLF**。而这些件在 Linux 上
