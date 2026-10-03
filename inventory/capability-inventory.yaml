@@ -2,10 +2,15 @@
 # 能力盘点真值（O-105 · 2026-09-27）
 #
 # 为什么需要:
-#   本仓有 **43 项判据（`rpc check -List`，quick 35 + 全量 8）/ 22 张真值表（`inventory/*.yaml`，含本表）/ 103 行台账**
+#   本仓有 **48 项判据（`rpc check -List`，quick 40 + 全量 8）/ 27 张真值表（`inventory/*.yaml`，含本表）/ 140 行台账**
 #   —— 但**没有一张"能力 → 载体 → 判定"的表** ——
-#   ⚠ 口径与读数日期：三个数都是 **2026-09-27** 实测，口径如上括号内；★ 它们是**增长型**的，
+#   ⚠ 口径与读数日期：三个数都是 **2026-10-03** 实测（口径如上括号内；来源 = 当日全量 `rpc check` 实跑 +
+#     `inventory/` 文件计数 + `ledger-status` 的数据行数）；★ 它们是**增长型**的，
 #     改判据 / 加表 / 加台账行都会动 ⇒ 引用时**带上日期**，别裸引（§86 就栽在这里，见 §89.6）。
+#   ★★ **2026-10-03 刷新的【射程】（如实，别读过头）**：本轮只**实读**了 ① 上面三个口径数
+#     ② **2 项**载体的读数（`gate-machine-runnable` / `pre-red`，见其 `evidence`）。
+#     ⚠ **逐项 `verdict`（present/partial/absent）【未整体重验】** —— 各自 `evidence` 里带的日期才是它的读数日
+#     （多为 2026-09-27/29）⇒ ★ 引用**单项**时看**该条**的日期，**不要**用本表头的 `updated`。
 #   于是"这项能力到底有没有载体"每次都要**靠问一遍**。实测"能力"字样只出现在
 #   4 份调研文档正文里（Ds 工作区扫描 / Agent 生态 / 跨项目调用 / 统一入口）⇒ **散落未成表**。
 #   来源 = 姊妹仓 Spec_Workflow 的 P-050 RESEARCH §3.7「差距矩阵」形态（逐项：能力 → 当前载体 → 判定）。
@@ -30,7 +35,7 @@
 #   · `updated` 是**读数日期** —— 本表是**增长型载体**，没有日期，读者无法判断它是哪一天的树
 # ============================================================================
 version: 1
-updated: 2026-09-29
+updated: 2026-10-03
 self_id: capability-inventory
 
 metric:
@@ -66,7 +71,7 @@ items:
   carriers:
   - {kind: file, ref: ops/rpc_check.py}
   basis: E2
-  evidence: "2026-09-29 实测：`rpc check --quick` **40 项**（全量 **48**）—— 与手册 §2.4 的 `# 48 项断言 (quick 40 + 全量 8)` 一致"
+  evidence: "2026-10-03 实测：全量 `rpc check` **48 项断言**（快速档 40 + 全量档 8）—— 与手册 §2.4 的 `# 48 项断言 (quick 40 + 全量 8)` 一致；当日终态 = **绿灯 45 · 黄灯 3 · 红灯 0**（旧读数：2026-09-29 记 `--quick` 40 项）"
 
 - id: pre-red
   domain: verify
@@ -75,7 +80,7 @@ items:
   carriers:
   - {kind: file, ref: ops/station-bin/_fm_golden_test.ps1}
   basis: E2
-  evidence: "离线黄金夹具实测 pass=423 fail=0（2026-09-29 · A1 加 14 条断言后；读数以 `_fm_golden_test.ps1` 实跑为准）"
+  evidence: "2026-10-03 复核：门禁 `ps1-golden` 实跑 **pass=526 fail=0**（旧读数：2026-09-29 记 pass=423 fail=0 ⇒ 期间夹具增补 103 条断言）；读数以 `_fm_golden_test.ps1` 实跑为准"
 
 - id: judge-selfcheck
   domain: verify
