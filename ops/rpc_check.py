@@ -5309,6 +5309,44 @@ RESIDUAL_RSS_MB = 2048
 #   与"进程刚起"这两种刻意容忍的情形 ⇒ 只覆盖"明显占住了但没在服务"的带。
 RESIDUAL_WARN_MB = 1024
 
+
+def classify_engine_band(has_ports, rss_mb, n_proc=None):
+    """`engine` 断言的**唯一定义点**（O-143 乙，2026-10-03）—— 两分支共用同一份口径。
+
+    返回 `(verdict, reason)`；`verdict ∈ {"FAIL","WARN",None}`（`None` = 无告警）；`reason` 是**不带站名**的短句。
+
+    ★ 为什么必须集中: 修 O-143 之前，"进程刚起"这一情形在**无端口**分支被**刻意容忍**
+    （见 `RESIDUAL_WARN_MB` 的注释），在**有端口**分支却按**裸 RSS** 判异常
+    ⇒ **同一断言的两半对同一情形给出相反判定**。
+
+    ★★ 判据依据的**更正**（2026-10-03 实测，E1）: **RSS 不是"引擎在不在服务"的证据** ——
+    A 站在 **13h**、RSS **208M** 下实测推理 **56.6 t/s**、**GTT 68.75 GiB** 驻留
+    （Vulkan/UMA 引擎的权重驻留**设备侧**）⇒ **"有端口 + RSS 小"不足以判异常**。
+    故**有端口**分支改用**进程数**作判据:
+      · `n_proc >= 1` ⇒ **在服务**（RSS / 进程龄 只作**报数**）
+      · `n_proc == 0` ⇒ **端口在听但不是我们的引擎** ⇒ 疑似端口被占（WARN）
+      · `n_proc` 读不出     ⇒ **退回旧的 RSS 口径**（「判不了 ≠ 通过」，不静默放过）
+
+    ⚠ **射程（诚实登记，见台账 `O-143`）**: `n_proc >= 1` 只证明**站上有 llama 系进程**，
+    **不证明 8080 的持有者就是它**（证到那一层须按端口取 pid —— 需 root，本门禁不具）。
+    """
+    if has_ports:
+        if isinstance(n_proc, int):
+            if n_proc <= 0:
+                return "WARN", "端口在听但站上**无** llama 系进程 ⇒ 疑似端口被占"
+            return None, None
+        # 进程数读不出 ⇒ 退回旧口径（保守: 仍可能报，但不静默通过）
+        if rss_mb < 1024:
+            return "WARN", f"有引擎端口在听但 RSS 仅 {rss_mb}M（进程数读不出）⇒ 疑似异常进程/端口被占"
+        return None, None
+    if rss_mb >= RESIDUAL_RSS_MB:
+        return "FAIL", (f"无任何引擎端口在听, 但 llama/rpc 进程仍占 {rss_mb // 1024}G RSS"
+                        f" —— 内存被占着没干活, 会污染加载预估 (先 infer-unload / 清残留再加载)")
+    if rss_mb >= RESIDUAL_WARN_MB:
+        return "WARN", (f"有 llama 系进程占 {rss_mb}M 但无引擎端口在听 —— 疑似残留/启动中 "
+                        f"(预警带 ≥{RESIDUAL_WARN_MB}M, FAIL 阈值 {RESIDUAL_RSS_MB}M)")
+    return None, None
+
 # ── 站上件"部署一致性"跟踪清单 (2026-09-22 裁定接入 gates) ──────────────────────
 # 背景: 这些件是**站上件** —— 部署在 `/usr/local/bin/`, 仓库副本只是"快照"。
 #   ⇒ **改仓库副本不生效**, 必须重新部署; 而"站上跑的那份是不是仓库这份"此前**没有任何机器判据**
@@ -5775,35 +5813,23 @@ def check_engine(ctx):
     for st in reach:
         rss = live[st]["rss_mb"] or 0
         ports = live[st]["listen"]
+        n_proc = live[st].get("n_proc")
+        age = live[st].get("etimes_min_s")
+        # ★★ O-143 乙（2026-10-03）：**判定集中到 `classify_engine_band`（唯一定义点）** ——
+        #   本循环只负责**取数 + 呈现**：`info`/`note` 是报数，`detail`/`warn` 才来自判定。
+        band, why = classify_engine_band(bool(ports), rss, n_proc)
         if ports:
             running += 1
-            info.append(f"{st} 站引擎在服务: 端口 {','.join(ports)} · 进程 RSS {rss // 1024}G")
-            if rss < 1024:
-                # ★ O-143 第一步（2026-10-03）：**只报数** —— 把"最年轻进程的年龄"附在后面。
-                #   为什么: 本分支的 WARN 分不清"异常残留"与"**刚起**"（后者在【无端口分支】是
-                #   被刻意容忍的，见 RESIDUAL_WARN_MB 的注释）⇒ 先让读者看得见年龄。
-                #   ⚠ **本改动不改判定**（阈值待读数足够后再定档 —— O-126「不许凭空取数」）。
-                _age = live[st].get("etimes_min_s")
-                # ⚠ 只有**确实有 llama 系进程**（n_proc>0）时这个年龄才有意义 ——
-                #   无进程时 awk 的 `%d` 会把空值打成 0（实测踩到：note 出现"最短进程龄 0s"）
-                _n = live[st].get("n_proc") or 0
-                warn.append(f"{st} 站有引擎端口在听但 RSS 仅 {rss}M —— 疑似异常进程/端口被占"
-                            + (f"（该站最短进程龄 {_age}s ⇒ 见 O-143）"
-                               if isinstance(_age, int) and _n > 0 else ""))
-        elif rss >= RESIDUAL_RSS_MB:
-            detail.append(f"{st} 站**残留**: 无任何引擎端口在听, 但 llama/rpc 进程仍占 "
-                          f"{rss // 1024}G RSS —— 内存被占着没干活, 会污染加载预估 "
-                          f"(先 infer-unload / 清残留再加载)")
-        elif rss >= RESIDUAL_WARN_MB:
-            # O-41② (2026-09-24): `rss_mb` 只统计 **llama 系进程**（见 `_health_probe` 的 PROC 段 awk
-            #   `grep -E 'llama-server|ggml-rpc-server|llama-cli'` 再求和）⇒ "无引擎端口 ∧ RSS 在预警带"
-            #   **本身就是残留信号**。旧实现让它落 `else` 判"正常"且**完全无声**
-            #   （O-41② 实测：1.5G 无端口残留被判正常 —— 正是该断言要防的那类）。
-            #   只报 **WARN** 不 FAIL：该带仍可能含"启动中/收尾中"瞬态，且不阻塞加载。
-            warn.append(f"{st} 站有 llama 系进程占 {rss}M 但无引擎端口在听 —— 疑似残留/启动中 "
-                        f"(预警带 ≥{RESIDUAL_WARN_MB}M, FAIL 阈值 {RESIDUAL_RSS_MB}M)")
+            info.append(f"{st} 站引擎在服务: 端口 {','.join(ports)} · 进程 RSS {rss // 1024}G"
+                        + (f" · 进程数 {n_proc}" if isinstance(n_proc, int) else "")
+                        + (f" · 最短进程龄 {age}s"
+                           if isinstance(age, int) and isinstance(n_proc, int) and n_proc > 0 else ""))
         else:
             info.append(f"{st} 站引擎未运行 (RSS {rss}M) —— 零自加载方针下属正常")
+        if band == "FAIL":
+            detail.append(f"{st} 站**残留**: {why}")
+        elif band == "WARN":
+            warn.append(f"{st} 站{why}")
 
     _ages = [live[s].get("etimes_min_s") for s in reach
              if isinstance(live[s].get("etimes_min_s"), int)

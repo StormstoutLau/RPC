@@ -50,14 +50,14 @@ CASES = [
     ("正例 真无进程：0M 无端口", _all(rss_mb=0), "PASS", "属正常"),
     ("★反例 FAIL 带：3000M 无端口", _all(rss_mb=3000), "FAIL", "残留"),
     ("正例 在服务：40G 且 8080 在听", _all(rss_mb=40000, listen=["8080"]), "PASS", "在服务"),
-    ("★反例 端口在听但 RSS 过小：500M + 8080", _all(rss_mb=500, listen=["8080"]), "WARN", "疑似异常进程"),
-    # ★ O-143 第一步（2026-10-03）：**只报数** —— 有 etimes_min_s ⇒ 报数可见；判定**不变**（仍 WARN）
-    ("★报数 O-143：端口在听 + RSS 小 + 刚起（etimes_min_s=289）⇒ 仍 WARN 且带年龄",
-     _all(rss_mb=212, listen=["8080"], etimes_min_s=289, n_proc=1), "WARN", "最短进程龄 289s"),
-    # ★ 回归护栏（同日实测踩到的缺陷）：无进程的站会报 `etimes_min_s=0`（awk `%d` 把空值打成 0）
-    #   ⇒ 若不放行 n_proc 门槛，这个 0 会**污染**全局 min（真值 46632s 被压成 0）⇒ 该站的年龄就不许出现
-    ("★回归 O-143：无进程站（n_proc=0, etimes_min_s=0）⇒ **不得**出现年龄（0 不许污染）",
-     _all(rss_mb=500, listen=["8080"], etimes_min_s=0, n_proc=0), "WARN", "疑似异常进程"),
+    ("★O-143 乙 退回路径：有端口 + RSS 小 + **进程数读不出** ⇒ 退回旧 RSS 口径 ⇒ WARN",
+     _all(rss_mb=500, listen=["8080"]), "WARN", "疑似异常进程"),
+    # ★★ O-143 **第二步**（2026-10-03「按乙统一口径 + 定档」）：有端口分支改按**进程数**判 ——
+    #   判据依据（实测）: A 站 13h / RSS 208M / 推理 56.6 t/s / GTT 68.75G ⇒ "有端口 + RSS 小"**不足以**判异常
+    ("★O-143 乙：有端口 + n_proc=1（RSS 208M 但引擎在服务）⇒ **PASS**（不再假报；报数仍在）",
+     _all(rss_mb=208, listen=["8080"], etimes_min_s=46698, n_proc=1), "PASS", "最短进程龄 46698s"),
+    ("★O-143 乙：有端口 + **无** llama 系进程（n_proc=0）⇒ WARN（真·端口被占）",
+     _all(rss_mb=500, listen=["8080"], etimes_min_s=0, n_proc=0), "WARN", "疑似端口被占"),
     ("★反例 三站全不可达（旧 O-41 称'不阻断'，实测应 FAIL）",
      lambda st: _probe(reachable=False, error="unreachable"), "FAIL", "不可达"),
 ]
@@ -92,10 +92,15 @@ def main() -> int:
         fails.append(f"阈值顺序错：RESIDUAL_WARN_MB={R.RESIDUAL_WARN_MB} 必须 < "
                      f"RESIDUAL_RSS_MB={R.RESIDUAL_RSS_MB}（否则 WARN 带永不触发）")
 
-    # ★ 报数护栏（O-143 第一步，2026-10-03）：**同源对照** —— 两个探针只差 `etimes_min_s` 一个键
-    #   ⇒ ① 有键 ⇒ 报数标记「最短进程龄」必须出现；② 无键 ⇒ **必须缺席**（证明它真由该键驱动，不是恒在）。
-    #   ⚠ 硬不变量：两边的 **verdict 必须相同** —— 本步**只许报数、不许改判定**。
-    def _note_of(probe):
+    # ★★ 口径护栏（O-143 **第二步**「按乙统一口径 + 定档」，2026-10-03）：
+    #   ① 判定必须**集中在一处** ⇒ 断言 `classify_engine_band` 存在（唯一定义点）；
+    #   ② 对**三种 n_proc 情形**各钉一条：>=1 ⇒ 在服务 · ==0 ⇒ 疑似端口被占 · 读不出 ⇒ **退回旧口径**。
+    #   ★ 判据依据（实测，非凭空）: A 站 **13h** / RSS **208M** / 推理 **56.6 t/s** / GTT **68.75 GiB**
+    #     ⇒ "有端口 + RSS 小"**不足以**判异常（RSS 不是"引擎在不在服务"的证据）。
+    if not hasattr(R, "classify_engine_band"):
+        fails.append("缺 classify_engine_band ⇒ 口径未集中，O-143 的两半会再次分叉")
+
+    def _verdict(probe):
         orig = R._health_probe
         R._health_probe = probe
         try:
@@ -104,21 +109,23 @@ def main() -> int:
             R._health_probe = orig
 
     try:
-        v_with, note_with, _d1 = _note_of(_all(rss_mb=212, listen=["8080"], etimes_min_s=289, n_proc=1))
-        v_wo, note_wo, _d2 = _note_of(_all(rss_mb=212, listen=["8080"]))
-        # ⚠ 且 `n_proc=0`（无进程）时**必须**当"没有读数"处理 —— 0 不得污染 min（同日实测踩到的缺陷）
-        _v0, note0, _d0 = _note_of(_all(rss_mb=212, listen=["8080"], etimes_min_s=0, n_proc=0))
-    except Exception as e:  # noqa: BLE001 — 报数不该引入新的崩溃面
-        fails.append(f"O-143 报数引入了异常：{type(e).__name__}: {e}")
+        v1, n1, _ = _verdict(_all(rss_mb=208, listen=["8080"], etimes_min_s=46698, n_proc=1))
+        v2, _, _ = _verdict(_all(rss_mb=208, listen=["8080"], n_proc=2))
+        v0, _, _ = _verdict(_all(rss_mb=208, listen=["8080"], n_proc=0))
+        vx, _, _ = _verdict(_all(rss_mb=208, listen=["8080"]))          # 进程数读不出
+    except Exception as e:  # noqa: BLE001 — 判定集中化不该引入新的崩溃面
+        fails.append(f"O-143 乙 引入异常：{type(e).__name__}: {e}")
     else:
-        if "最短进程龄" not in note_with:
-            fails.append("O-143 报数未生效：给了 etimes_min_s 却看不到「最短进程龄」")
-        if "最短进程龄" in note_wo:
-            fails.append("O-143 报数**恒在**（无 etimes_min_s 也出现）⇒ 同源对照失败、护栏失去意义")
-        if v_with != v_wo:
-            fails.append(f"O-143 报数**改了判定**（有键 {v_with} ≠ 无键 {v_wo}）—— 本步只许报数")
-        if "最短进程龄" in note0:
-            fails.append("O-143 缺陷复发：n_proc=0（无进程）的站把 0 报成了年龄 ⇒ 会**污染全局 min**")
+        if v1 != "PASS":
+            fails.append(f"n_proc=1（在服务）应判 PASS，实得 {v1}")
+        if v2 != "PASS" or v1 != v2:
+            fails.append(f"n_proc>0 的两种取值应同判 PASS（{v1} / {v2}）—— 判定不该随进程数漂")
+        if "最短进程龄 46698s" not in n1:
+            fails.append(f"报数应仍在（最短进程龄），实得 note={n1!r}")
+        if v0 != "WARN":
+            fails.append(f"n_proc=0（无 llama 系进程）应判 WARN「疑似端口被占」，实得 {v0}")
+        if vx != "WARN":
+            fails.append(f"进程数读不出时应**退回**旧 RSS 口径 WARN（判不了不静默通过），实得 {vx}")
 
     print(f"RESULT: {len(CASES) - len(fails)}/{len(CASES)} 通过" if not fails
           else f"RESULT: 失败 {len(fails)} 条")
