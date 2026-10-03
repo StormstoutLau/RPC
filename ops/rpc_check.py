@@ -5337,9 +5337,14 @@ _HEALTH_CMD = (
     "echo \"$dst ${via:-direct} ${met:-0}\";; esac; done; "
     "echo '===PING==='; for t in " + " ".join(NET_ENDS) + "; do "
     "printf '%s ' \"$t\"; ping -c1 -W1 -q \"$t\" >/dev/null 2>&1 && echo OK || echo FAIL; done; "
-    "echo '===PROC==='; ps -eo rss,comm 2>/dev/null "
+    # ⚠ 列序: `ps -eo rss,etimes,comm` ⇒ $1=rss(KB) · $2=etimes(秒) · $3+=comm
+    #   `etimes_min_s` = **最年轻**那个 llama 系进程的年龄 —— O-143 的"刚起"读数。
+    #   ★ 本项**只报数**（判据阈值待读数足够后再定，见 O-126「不许凭空取数」）。
+    "echo '===PROC==='; ps -eo rss,etimes,comm 2>/dev/null "
     "| grep -E 'llama-server|ggml-rpc-server|llama-cli' | grep -v grep "
-    "| awk '{s+=$1} END {printf \"rss_mb=%d\\n\", s/1024}'; "
+    "| awk '{s+=$1; n++; if (n==1 || $2+0<m) m=$2+0} "
+    "END {printf \"rss_mb=%d\\n\", s/1024; printf \"etimes_min_s=%d\\n\", m; "
+    "printf \"n_proc=%d\\n\", n}'; "
     "echo '===LISTEN==='; ss -ltn 2>/dev/null | awk 'NR>1{print $4}' | sed 's/.*://' "
     "| grep -E '^(" + "|".join(ENGINE_PORTS) + ")$' | sort -u | tr '\\n' ','; echo; "
     "echo '===MEM==='; awk '/MemTotal/{printf \"total_mb=%d \", $2/1024} "
@@ -5398,11 +5403,14 @@ def _health_probe(st: str) -> dict:
         if len(p) >= 2:
             d["ping"][p[0]] = p[1]
     for line in sec.get("PROC", []):
-        if line.startswith("rss_mb="):
-            try:
-                d["rss_mb"] = int(line.split("=", 1)[1])
-            except ValueError:
-                pass
+        # rss_mb (合计) + etimes_min_s / n_proc (O-143 的"刚起"读数, 只报数不判 —— 见 _HEALTH_CMD 注)
+        for _k in ("rss_mb", "etimes_min_s", "n_proc"):
+            if line.startswith(_k + "="):
+                try:
+                    d[_k] = int(line.split("=", 1)[1])
+                except ValueError:
+                    pass
+                break
     d["listen"] = [x for x in ",".join(sec.get("LISTEN", [])).split(",") if x]
     mem_line = " ".join(sec.get("MEM", []))
     for tok in mem_line.split():
@@ -5771,7 +5779,17 @@ def check_engine(ctx):
             running += 1
             info.append(f"{st} 站引擎在服务: 端口 {','.join(ports)} · 进程 RSS {rss // 1024}G")
             if rss < 1024:
-                warn.append(f"{st} 站有引擎端口在听但 RSS 仅 {rss}M —— 疑似异常进程/端口被占")
+                # ★ O-143 第一步（2026-10-03）：**只报数** —— 把"最年轻进程的年龄"附在后面。
+                #   为什么: 本分支的 WARN 分不清"异常残留"与"**刚起**"（后者在【无端口分支】是
+                #   被刻意容忍的，见 RESIDUAL_WARN_MB 的注释）⇒ 先让读者看得见年龄。
+                #   ⚠ **本改动不改判定**（阈值待读数足够后再定档 —— O-126「不许凭空取数」）。
+                _age = live[st].get("etimes_min_s")
+                # ⚠ 只有**确实有 llama 系进程**（n_proc>0）时这个年龄才有意义 ——
+                #   无进程时 awk 的 `%d` 会把空值打成 0（实测踩到：note 出现"最短进程龄 0s"）
+                _n = live[st].get("n_proc") or 0
+                warn.append(f"{st} 站有引擎端口在听但 RSS 仅 {rss}M —— 疑似异常进程/端口被占"
+                            + (f"（该站最短进程龄 {_age}s ⇒ 见 O-143）"
+                               if isinstance(_age, int) and _n > 0 else ""))
         elif rss >= RESIDUAL_RSS_MB:
             detail.append(f"{st} 站**残留**: 无任何引擎端口在听, 但 llama/rpc 进程仍占 "
                           f"{rss // 1024}G RSS —— 内存被占着没干活, 会污染加载预估 "
@@ -5787,8 +5805,13 @@ def check_engine(ctx):
         else:
             info.append(f"{st} 站引擎未运行 (RSS {rss}M) —— 零自加载方针下属正常")
 
+    _ages = [live[s].get("etimes_min_s") for s in reach
+             if isinstance(live[s].get("etimes_min_s"), int)
+             and (live[s].get("n_proc") or 0) > 0]   # ⚠ n_proc=0 的站不参与（否则 0 会污染 min）
     note = (f"引擎: 可达 {len(reach)}/3 站 · 在服务 {running} 站 · "
-            f"总占用 {sum((live[s]['rss_mb'] or 0) for s in reach) // 1024}G")
+            f"总占用 {sum((live[s]['rss_mb'] or 0) for s in reach) // 1024}G"
+            # ★ O-143 第一步：**只报数** —— 三站里最年轻的 llama 系进程年龄（判据判不了"刚起"时至少看得见）
+            + (f" · 最短进程龄 {min(_ages)}s" if _ages else ""))
     if detail:
         return "FAIL", note, info + detail + [f"(WARN) {w}" for w in warn]
     if warn:
