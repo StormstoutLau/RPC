@@ -5357,6 +5357,12 @@ function Merge-JudgeFindings {
     return [ordered]@{
         judges = $nj                    # ★ 输入规模**显式报出**（单判官时分类只能是 unique）
         opinions = $opinions
+        # ★★ D7-CC #6（2026-10-04 部分处置）：**锚点数** —— 让"两判官落在**不同锚点**"这件事
+        #   在产物里**直接可见**（旧输出要人从 `findings[]` 反推：两行各 `judges=1`）。
+        #   它**不含任何语义断言**、不设阈值 ⇒ 不是"识别跨锚点冲突"，只是把该盲区变成**可数**：
+        #   `judges=2 / opinions=2 / anchors=2` ⇒ 【共识结构性不可能】，而不是"两个孤例"。
+        #   ⚠ 真识别（判"两条意见是否同一事实"）需**语义**判断 ⇒ 见契约 §未实测登记 6（未做，须先裁路径）。
+        anchors = @($out).Count
         findings = @($out)
     }
 }
