@@ -405,6 +405,13 @@
    ⚠ **残留（如实，故仍记 `partial` 而非已消）**：① **`seq` 仍是固定 1**（占位，进 `gaps`）；
    ② **无流水** —— review.json 是 `not_a_ledger`（一次一份、不追加）⇒ **重评会覆盖**本段
    （它是「最新裁决」不是「裁决流水」）；③ `redispatch?` 仍属 §2 的**射程边界**（不判、不补）。
+   ★★ **真跑读数（2026-10-04 · 首次 `sem_verified`）** —— 判官**真调用已成**：run `202610042342034271`
+   （卡 `dogfood-cards/glob-probe.md`；判官 `m27` = `local/m27-q4ks`，**经 SSH 隧道**到站上引擎 `/v1`）。
+   铁证：`REVIEW score=pass pass=True judge=local/m27-q4ks elapsed_s=89` · `metadata.call_code=0` ·
+   `D7_PHASES: collected -> mech_verified -> **sem_verified** -> accepted` · `review.json.d7_verdict.l2_marks[]`
+   **非缺席**（此前 L2 没跑 ⇒ 缺席）· `contract.ok=true`。⚠ **未真的那半（如实）**：跑通靠**手工 SSH 隧道**
+   （`REVIEW_HTTP_BASE` 是 env）⇒ **不是常规路径**；要可复现须另立「站上 curl」通道（属另一件，先改裁）
+   ⇒ `state` 记 **`partial`**（不是已消）。
 7. **三条红线从未被机制强制过**：完成信号权仅在主控站 · L1 先于 L2 且 L2 不改写 ·
    判据与 golden 哈希 P0 固化 —— 均为**文档约束**，代码层**无拦截/校验实现**。
    ★ **A 段已落（2026-10-01）**：三条已落成**纯函数拦截**（`ops/rpc_check.py` 的 `d7_block`
