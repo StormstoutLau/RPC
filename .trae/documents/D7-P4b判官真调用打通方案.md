@@ -173,3 +173,16 @@ D7-PROTOCOL-CONTRACT **#5（P4b）** · D7-PROTOCOL-CONCLUSION-CONTRACT **#1 / #
 ⇒ ★ **"运行中的引擎来自哪条路径"这一维落在两个门禁的缝里，两边都不判**。
 - ★ 更深一层（A 站静默停在旧路径的机制）：**`BACKEND` 这个 conf 键只被 `infer-load` 消费**；systemd 单元走 `llama-serve-instance`，它**只读 `LLAMA_SERVER_BIN`（缺省 `/opt/llama.cpp/llama-server`）、完全不读 `BACKEND`**。A 的 conf 两者都没有 ⇒ 单元启动即落 `/opt`。⇒ "conf 缺 `BACKEND`" **既不等于"未迁移"，也不被任何门禁读**。
 ⇒ **修正后的建议**：若立项，**落点应是 `engine`（运行面）而非 `backend`（装机面）** —— 它已拥有"在服务"这一事实，加"占用者分类"是**报数扩展**（与 `O-143`「先报数」同构）；`backend` 保持"装机面"职责不变（**不动它的语义**）。
+
+## 十、Auto_Prover 前置与 A 站形态**冲突**（2026-10-05 · **证伪"A 站未迁移"**）
+
+**用户假设成立**（"是不是 Auto_Prover 测试把对齐拉回去了"），硬证据：
+- A 站 journal 逐字：`00:36:23 sudo[58247] COMMAND=/usr/bin/systemctl stop llama-server@*` → `00:36:25 sudo[58268] COMMAND=/usr/bin/systemctl start llama-server@gpt-oss-120b` → `Started llama-server@gpt-oss-120b.service`。**这正是 `infer-load --backend llama-single` 的签名动作**（`BACKEND` 只被 `infer-load` 消费；systemd 单元只认 `LLAMA_SERVER_BIN`，A 的 conf 两者都空 ⇒ 落 `/opt/llama.cpp/llama-server`）。
+- **Auto_Prover 把这条写为运行前置**：`proof_pipeline/config.py:145` · `docs/CONTROL_PACK_CLOSURE.md:91` · `docs/CHECKLIST_T6_B26.md:46` · `docs/DECISIONS.md:728/744` 逐字 —— *"A 站须 `infer-load gpt-oss-120b --backend llama-single`（默认 unsloth 后端仅 127.0.0.1 + 强制 key，**主控不可直连**）"*；其 `llm_base_url=http://192.168.10.33:8080`（主控直连 A 站）⇒ 与 unsloth **结构性不兼容**。
+
+**三条更正（如实）**：
+1. ★★ **"A 站未迁移到 unsloth" 不是缺陷，而是外部消费者的硬前置** ⇒ 本方案 **Step 0（A→unsloth）与既有消费者冲突**，**应视为无效/已自然回滚**（不是故障）。
+2. **`ports.yaml` 把 8080 owner 登记为 `unsloth studio`，与 A 站实况/需求不符** ⇒ 真缺口 = 「**登记口径没把各站消费者的约束写进去**」。
+3. ★ **实现层误判（活体检查抓到）**：`/opt/llama.cpp` 是 **symlink → `/opt/llama.cpp-master-91f6a6cf`** ⇒ 按 `readlink -f` 的 exe 会把**当前基线**误标 `opt-variant`（应为 `opt-vulkan`）；应**以 cmdline 为准**（cmdline 保留未解析的 `/opt/llama.cpp/llama-server`）。另：studio 的监听进程 exe 是 **python 启动器**（身份只在 cmdline 里）—— 同一处修正即可覆盖。
+
+**未做（如实）**：本轮**不改代码口径**（用户 2026-10-05 裁「先落档发现」）⇒ `ops/rpc_check.py` 与夹具的改动**留在工作树、未提交**；A 站维持 **llama-single**（Auto_Prover 形态）；`O-146` 已按此更新为「只落发现、不落代码」。
