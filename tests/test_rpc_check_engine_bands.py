@@ -23,17 +23,25 @@ sys.path.insert(0, str(ROOT / "ops"))
 import rpc_check as R  # noqa: E402
 
 
-def _probe(reachable=True, rss_mb=0, listen=(), error=None, etimes_min_s=None, n_proc=None):
+def _probe(reachable=True, rss_mb=0, listen=(), error=None, etimes_min_s=None, n_proc=None,
+           occupant=None, occupant_cmd=None):
     """构造 `_health_probe` 的返回形状（只含 check_engine 消费的键）。
 
     ★ O-143（2026-10-03）：`etimes_min_s` / `n_proc` 是**只报数**用的键 —— **不传则不落键**，
     以便用"有/无该键"做**同源对照**（证明报数标记真的由它驱动，不是恒在）。
+    ★ O-146（2026-10-05）：`occupant`（`{port: exe路径|none|unknown}`）与 `occupant_cmd`
+    （`{port: cmdline}`）同法 —— ⚠ **cmdline 是必需的**：studio 的监听进程是 python 启动器，
+    只看 exe 会把 studio 误报成 `other`（活体检查实测）。
     """
     d = {"reachable": reachable, "rss_mb": rss_mb, "listen": list(listen), "error": error}
     if etimes_min_s is not None:
         d["etimes_min_s"] = etimes_min_s
     if n_proc is not None:
         d["n_proc"] = n_proc
+    if occupant is not None:
+        d["occupant"] = dict(occupant)
+    if occupant_cmd is not None:
+        d["occupant_cmd"] = dict(occupant_cmd)
     return d
 
 
@@ -60,6 +68,26 @@ CASES = [
      _all(rss_mb=500, listen=["8080"], etimes_min_s=0, n_proc=0), "WARN", "疑似端口被占"),
     ("★反例 三站全不可达（旧 O-41 称'不阻断'，实测应 FAIL）",
      lambda st: _probe(reachable=False, error="unreachable"), "FAIL", "不可达"),
+    # ★★ O-146（2026-10-05）：占用者**取数分类**（**只报数、不进判定**）——
+    #   根因 = `backend` 判装机面 / `engine` 判运行面，而"运行中的引擎来自哪条路径"落在缝里
+    #   （实测：A 站跑 /opt 的 Vulkan 二进制占着 8080，而 `backend` 照样 PASS）。
+    ("★O-146 报数：占用者=studio 自带引擎 ⇒ 仍 PASS 且报出 `占用者 8080:studio`",
+     _all(rss_mb=40000, listen=["8080"], n_proc=1,
+          occupant={"8080": "/home/u/.unsloth/llama.cpp/build/bin/llama-server"}),
+     "PASS", "占用者 8080:studio"),
+    ("★O-146 报数：占用者=/opt/llama.cpp（Vulkan 分布式路径）⇒ 分类 `opt-vulkan`（**判定不变**）",
+     _all(rss_mb=40000, listen=["8080"], n_proc=1,
+          occupant={"8080": "/opt/llama.cpp/llama-server"}), "PASS", "占用者 8080:opt-vulkan"),
+    ("★O-146 fail-closed：占用者读不出 ⇒ `unknown`（**不许**当 `none`）",
+     _all(rss_mb=40000, listen=["8080"], n_proc=1, occupant={"8080": "unknown"}),
+     "PASS", "占用者 8080:unknown"),
+    # ★★ O-146 活体形状（2026-10-05 实测）：studio 的监听进程 exe = **python 启动器**，
+    #   studio 身份只在 **cmdline** 里 ⇒ 只看 exe 会误报 `other`。
+    ("★O-146 活体形状：exe=python + cmdline 含 `unsloth studio run` ⇒ **studio**（不是 other）",
+     _all(rss_mb=40000, listen=["8080"], n_proc=1,
+          occupant={"8080": "/home/u/anaconda3/bin/python3.13"},
+          occupant_cmd={"8080": "/home/u/.local/bin/unsloth studio run --model /data/gguf/x.gguf --port 8080"}),
+     "PASS", "占用者 8080:studio"),
 ]
 
 
@@ -126,6 +154,39 @@ def main() -> int:
             fails.append(f"n_proc=0（无 llama 系进程）应判 WARN「疑似端口被占」，实得 {v0}")
         if vx != "WARN":
             fails.append(f"进程数读不出时应**退回**旧 RSS 口径 WARN（判不了不静默通过），实得 {vx}")
+
+    # ★★ O-146（2026-10-05）：占用者分类的**唯一定义点** + **只报数护栏**（占用者不得改灯）。
+    if not hasattr(R, "classify_engine_occupant"):
+        fails.append("缺 classify_engine_occupant ⇒ O-146 的占用者分类未集中到一处")
+    else:
+        for _desc, _p, _c, _l, _want in (
+            ("studio: exe 在 ~/.unsloth", "/home/u/.unsloth/llama.cpp/build/bin/llama-server", "", False, "studio"),
+            ("★studio 活体形状: exe=python + cmdline 含 unsloth studio run",
+             "/home/u/anaconda3/bin/python3.13", "/home/u/.local/bin/unsloth studio run --port 8080", False, "studio"),
+            ("opt-vulkan: exe /opt/llama.cpp/", "/opt/llama.cpp/llama-server", "", False, "opt-vulkan"),
+            # ★★ 活体回归（2026-10-05）：`/opt/llama.cpp` 是 symlink → `-master-`，exe 会解析成变体目录；
+            #   但 cmdline 保留未解析的 `/opt/llama.cpp/llama-server` ⇒ 必须判 **opt-vulkan**（不是 opt-variant）。
+            ("★当前基线：exe 解析成 /opt/llama.cpp-master-* + cmdline 是 /opt/llama.cpp/llama-server",
+             "/opt/llama.cpp-master-91f6a6cf/llama-server",
+             "/opt/llama.cpp/llama-server -m /data/x.gguf --port 8080", False, "opt-vulkan"),
+            ("opt-variant: exe /opt/llama.cpp-glm5next/", "/opt/llama.cpp-glm5next/llama-server", "", False, "opt-variant"),
+            ("other", "/usr/bin/whatever-server", "", False, "other"),
+            ("未在听 + none", "none", "", False, "none"),
+            ("★在听却说 none ⇒ unknown（取数矛盾不可判）", "none", "", True, "unknown"),
+            ("★空串 ⇒ unknown（fail-closed）", "", "", True, "unknown"),
+        ):
+            _got = R.classify_engine_occupant(_p, _l, _c)
+            if _got != _want:
+                fails.append(f"classify_engine_occupant({_p!r},{_l},{_c!r}) ⇒ {_got}（期望 {_want}）· {_desc}")
+        # ★★ 报数护栏：**占用者不同 ⇒ verdict 必须相同**（只报数不得参与判定 / 改灯）
+        _seen = {}
+        for _tag, _p in (("studio", "/a/.unsloth/x/llama-server"),
+                         ("opt", "/opt/llama.cpp/llama-server"),
+                         ("none", "none")):
+            _seen[_tag] = _verdict(_all(rss_mb=40000, listen=["8080"], n_proc=1,
+                                        occupant={"8080": _p}))[0]
+        if len(set(_seen.values())) != 1:
+            fails.append(f"O-146 报数改了灯：占用者不同却 verdict 不同 {_seen}")
 
     print(f"RESULT: {len(CASES) - len(fails)}/{len(CASES)} 通过" if not fails
           else f"RESULT: 失败 {len(fails)} 条")
