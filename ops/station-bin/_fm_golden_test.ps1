@@ -1825,6 +1825,15 @@ Assert-True "ak-5 ★端到端：两判官写**变体写法**（同位置同 hit
     $m7['findings'][0]['judges'] -eq 2)
 Assert-True "ak-6 接线：`Merge-JudgeFindings` 的键**走** `Get-AnchorKey`（防'写了但没跑'）" (
     $content -match '\$key = Get-AnchorKey -Path \$f\.path -LineRange \$f\.line_range')
+# ── D7-CC **#6**（2026-10-04 部分处置）：**`anchors` 报数**（不含语义断言、不设阈值）──
+# 目的：把"两判官落在**不同锚点**"从'看不见'变成'可数' ⇒ 读者看得出【共识结构性不可能】，
+#   而不是把它误读成"两个孤例"。★ 先验红·同源对照：同一组输入只差"锚点是否相同"。
+Assert-True "ak-7 ★#6 报数：同锚点 ⇒ anchors=1（与 judges=2/opinions=2 并读 ⇒ 共识**有可能**）" (
+    $m2['anchors'] -eq 1 -and $m2['judges'] -eq 2 -and $m2['opinions'] -eq 2)
+Assert-True "ak-8 ★#6 报数：**异锚点** ⇒ anchors=2（两判官各 1 条 ⇒ 共识**结构性不可能**，区别于'两个孤例'）" (
+    $m4['anchors'] -eq 2 -and $m4['judges'] -eq 2 -and $m4['opinions'] -eq 2)
+Assert-True "ak-9 ★#6 报数：空输入 ⇒ anchors=0（**不假装**有锚点；同 cc-21 的 0/0 纪律）" (
+    $m5['anchors'] -eq 0)
 # ── 接线（防"写了但没跑"）──
 Assert-True "cc-24 接线：review.json 写契约段（**两处**写点都带）" (
     ([regex]::Matches($content, "\`$review\['contract'\] = \`$ccSection")).Count -ge 2)
