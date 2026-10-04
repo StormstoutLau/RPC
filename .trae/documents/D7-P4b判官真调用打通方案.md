@@ -131,4 +131,27 @@ D7-PROTOCOL-CONTRACT **#5（P4b）** · D7-PROTOCOL-CONCLUSION-CONTRACT **#1 / #
 **★ 关键口径：`/v1` 鉴权** —— 引擎只认 **`Authorization: Bearer <key>`**（`x-api-key` 实测 401）；key 取 **`~/.config/rpc/unsloth.key`**（= `infer-load` 从 studio 日志 grep 并落盘的那把；与 `~/.unsloth/studio/auth/.cli_api_key_*` 同值）。
 
 ⚠ **未做（如实）**：① **未提交 / 未 push**（工作树有改动）；② **B 站仍载 m27-q4ks**（GTT ≈113 GB，取证后**未卸载**）—— 待定是否 `cluster.py unload m27-q4ks-b`；③ 可复现化（丁）**未立项**；④ 出网判官（ultra/commercial）真调用**仍未跑**；⑤ `PRH` 定档仍缺读数（2 条）。
-⚠ **安全问题（如实报告）**：本轮一次探测命令的 `printf` 把 **studio key 明文**回显进了会话记录（该写法已停用）⇒ 建议**轮换**该 key（`infer-load` 重载即重铸）。
+⚠ **安全问题（如实报告）**：本轮一次探测命令的 `printf` 把 **studio key 明文**回显进了会话记录（该写法已停用）⇒ 建议**轮换**该 key。
+
+---
+
+## 七、补充执行（2026-10-05 · 用户追加 5 项）
+
+1. **提交【已落】**：`194db3a`（7 文件；钩子把 run `202610042342034271` 入链 ⇒ 证据链 295→296）。
+2. **B 站回收【已落】**：⚠ 用户给的 `cluster.py unload m27-q4ks-b` **语法并不存在** —— `cluster.py unload` 是**三站并行卸载**（`cmd_unload()` L989，会连 A/C 一起停），**无 `--station`**。⇒ 按**意图**改跑 `ssh scott-lau-GTR-Pro.local infer-unload`：`models_http=000` · 进程空 · **GTT 113 GB → 566 MB** ✓（顺带停掉两个**空闲** rpc-server worker；A/C 跑单机、不依赖）。
+3. **key 轮换【未成 · 待你裁】**：C 站重载（`py ops/cluster.py load gpt-oss-120b-c --backend unsloth`）后 key **sha8 未变（仍 `56bf7d0b`）** ⇒ **studio 复用持久化的 key，重载不重铸**。取证：`unsloth studio --help` **无 key/auth/rotate 选项**；`auth/.cli_api_key_cli_*` 时间戳仍是 **9月23**；`~/.config/rpc/unsloth.key` == 该文件（同 sha8）。⇒ 唯一可行路 = **删除/替换** `~/.unsloth/studio/auth/.cli_api_key_cli_*` 再重启（**未官方支持、未验证**）—— 属**改 studio 内部件**，**未擅自动手**。
+4. **出网判官真跑【已成】**：run `202610050017146963`（产出者 `local/gpt-oss` ⇒ 判官落 `ultra`）：`judge_model=openrouter/nvidia/nemotron-3-ultra-550b-a55b:free` · `call_code=0` · `elapsed_s=144` · `contract.ok=true`（`verdict=reject` · 1 finding）· `l2_marks` 非缺席 · `score=不合格`。★ 至此 **本机档（m27）与出网档（ultra）两面均有真跑样本**（此路**不需要**隧道/引擎 —— egress 走 ssh 到 B 跑 opencode）。
+   ⚠ 关键：**产出者不得与判官同名** ⇒ 想测出网判官，须用**本机档产出**（否则自审门排除 `ultra` ⇒ 回落到需 `REVIEW_HTTP_BASE` 的 `m27`）。
+5. **`backend` 门禁缺维【调研完 · 待裁是否立项】**：见 §八。
+
+## 八、`backend` 门禁缺"8080 实际占用者"一维（调研 · 待裁）
+
+**缺口为真（读码取证）**：`_BACKEND_CMD`（[rpc_check.py L5859-5888](file:///d:/RPC/ops/rpc_check.py#L5859-L5888)）只收**磁盘上的件** —— `~/.unsloth/.../llama-server` 的 `ldd` · `/opt/llama.cpp/{llama-server,ggml-rpc-server}` 的 `ldd` · `/etc/environment` 的 pin · studio 套件版本；判据（L5921-5944）只问"**这两条路径的二进制在不在、后端类型对不对**"。⇒ **从不问「:8080 上到底是谁在听」**。
+**实证**：对齐前 A 站跑的是 `/opt/llama.cpp/llama-server`（Vulkan 二进制）占着 8080，而 `backend` 判据**PASS**（它只确认该二进制存在且是 Vulkan）⇒ "未迁移"这一状态**在门禁层不可见**（同 `O-144` 形态）。
+
+**修法候选**（纪律：**先报数、不改灯** —— 同 `O-143` 两步走）：
+- **(甲) 只加报数**：`_BACKEND_CMD` 增一段"8080 占用者"（`ss -ltnp` 或按端口取 pid → `readlink /proc/<pid>/exe` + cmdline），分类 `studio` / `opt-vulkan` / `other` / `none`，**只打、不进判定**（零假红、零门槛变更）。
+- **(乙) 加判据**：占用者 ∉ 期望 ⇒ WARN/FAIL。★ 代价：**判据变更须先验红 + 夹具**；且 `ports.yaml` 已登记「`mode: on_demand` · **未监听属正常**」⇒ 必须先定义"没加载时算不算违规"。
+- **(丙) 不立项**：登记为**已知射程边界**（"门禁判的是**装了什么**、不判**在跑什么**"）。
+
+**建议（非裁决）**：**先只做甲**（报数），观察是否真出现"占用者 ≠ 登记 owner"的实例，再谈乙（**先量后定档**）。⚠ 若选乙，须先明确"8080 空闲"这一**合法态**（`ports.yaml` 已写）。
