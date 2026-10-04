@@ -155,3 +155,21 @@ D7-PROTOCOL-CONTRACT **#5（P4b）** · D7-PROTOCOL-CONCLUSION-CONTRACT **#1 / #
 - **(丙) 不立项**：登记为**已知射程边界**（"门禁判的是**装了什么**、不判**在跑什么**"）。
 
 **建议（非裁决）**：**先只做甲**（报数），观察是否真出现"占用者 ≠ 登记 owner"的实例，再谈乙（**先量后定档**）。⚠ 若选乙，须先明确"8080 空闲"这一**合法态**（`ports.yaml` 已写）。
+
+## 九、上游 / 根因调研结论（2026-10-05 · 用户令「先查上游是否有轮换口子」「先调研原因再给方案」）
+
+### 9.1 key 轮换：**上游有受支持口子**（不是野路子）
+站上读码（`unsloth_cli/commands/studio.py` L699-748）：
+- `_cli_api_key_secret_path()` = `STUDIO_HOME/auth/.cli_api_key_<safe>_<digest>`（与实测文件逐字一致）；
+- ★★ `_create_api_key_inprocess(name)` 的 docstring 逐字 = *"Return a raw API key for \*name\*, **minting only when the cached one is dead**"*，逻辑为：
+  `cached = _read_cli_api_key_secret(name)`；`if cached and storage.validate_api_key_with_credential(cached, touch=False): return cached`；**否则** `storage.create_api_key(...)` + `_write_auth_secret(_cli_api_key_secret_path(name), raw_key)`。
+⇒ **"重载不重铸"的根因 = cached 仍有效 ⇒ 走 `return cached`**（是设计，不是 bug）。
+⇒ **受支持的轮换路径 = 让 cached 失效**：① 删 `~/.unsloth/studio/auth/.cli_api_key_*`（下次启动即 mint 并落盘）；或 ② 在 `auth.db` 里撤销该 key。
+⚠ 无 `rotate`/`revoke` 专用子命令，`unsloth studio --help` 也没有 —— **但"删缓存 ⇒ 重新 mint"就在上游设计内**（同函数里那行 `Warning: … the next one will create another key` 逐字为证）。
+
+### 9.2 `backend` 缺维的**根因**（不是"忘了写"，是分工缝隙）
+- `check_backend` 判**装机面**：「studio 二进制在不在 + 后端=HIP · `/opt` 二进制在不在 + 后端=Vulkan + pin + 套件版本」。
+- `check_engine`（[rpc_check.py L5799-5832](file:///d:/RPC/ops/rpc_check.py#L5799-L5832)）判**运行面**，但其职责逐字 = "**就绪 + 残留检测（内存被占着但没有服务）**"，判据是 `classify_engine_band(ports, rss, n_proc)` ⇒ **只问"在不在服务 / 是不是残留"，不问"服务的是哪条路径的引擎"**。
+⇒ ★ **"运行中的引擎来自哪条路径"这一维落在两个门禁的缝里，两边都不判**。
+- ★ 更深一层（A 站静默停在旧路径的机制）：**`BACKEND` 这个 conf 键只被 `infer-load` 消费**；systemd 单元走 `llama-serve-instance`，它**只读 `LLAMA_SERVER_BIN`（缺省 `/opt/llama.cpp/llama-server`）、完全不读 `BACKEND`**。A 的 conf 两者都没有 ⇒ 单元启动即落 `/opt`。⇒ "conf 缺 `BACKEND`" **既不等于"未迁移"，也不被任何门禁读**。
+⇒ **修正后的建议**：若立项，**落点应是 `engine`（运行面）而非 `backend`（装机面）** —— 它已拥有"在服务"这一事实，加"占用者分类"是**报数扩展**（与 `O-143`「先报数」同构）；`backend` 保持"装机面"职责不变（**不动它的语义**）。
