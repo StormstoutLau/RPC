@@ -5299,6 +5299,47 @@ INVENTORY_NET = INVENTORY_DIR / "net.yaml"
 NET_ENDS = ("10.10.10.1", "10.10.10.2", "10.10.11.1",
             "10.10.11.3", "10.10.12.1", "10.10.12.3")
 ENGINE_PORTS = ("8080", "8081", "18080", "18081", "50052")
+
+
+# ★ O-146（2026-10-05）：**8080 的占用者是哪条路径的引擎** —— 取数分类（**只报数、不进判定**）。
+# 为什么需要（根因，读码取证）：`backend` 判**装机面**（两条路径的二进制在不在 + 后端类型），
+#   `engine` 判**运行面**却只问"在不在服务 / 是不是残留" ⇒ **"运行中的引擎来自哪条路径"
+#   落在两个门禁的缝里，两边都不判**（实测：A 站跑 `/opt/llama.cpp/llama-server` 占着 8080，
+#   而 `backend` 照样 PASS ⇒ "未迁移"在门禁层不可见）。更深一层：`BACKEND` 只被 `infer-load`
+#   消费，systemd 单元走 `llama-serve-instance`、只读 `LLAMA_SERVER_BIN`（缺省 `/opt/...`）。
+# ★ 本批**只报数**（同 `O-143` 第一步）：结果进 info/note，**不改 verdict**（收紧扣在 `O-146`）。
+# ⚠ fail-closed：取不到 ⇒ `unknown`（**绝不**把"读不出"当 `none`）；`listening=True` 却说
+#   `none`（LISTEN 段与占用者取数矛盾）⇒ 也记 `unknown`。
+_OCCUPANT_KINDS = (("opt-vulkan", "/opt/llama.cpp/"),  # /opt/llama.cpp/（Vulkan 分布式路径 · ★ 当前基线）
+                   ("opt-variant", "llama.cpp-"),      # /opt/llama.cpp-<变体>/（GLM 等特性分支）
+                   ("studio", "unsloth"))              # studio 启动器（cmdline 含 `unsloth studio run`）
+# ⚠⚠ **顺序承重（2026-10-05 活体检查抓到）**：`/opt/llama.cpp` 是 **symlink → `/opt/llama.cpp-master-<hash>`**
+#   ⇒ 若按 `readlink -f` 的 **exe** 分类，**当前基线**会撞上 `llama.cpp-` 而被误标 `opt-variant`。
+#   故：① **opt-vulkan 必须排在 opt-variant 之前**；② 分类用的 blob **含 cmdline**（cmdline 保留
+#   **未解析**的 `/opt/llama.cpp/llama-server`）⇒ 当前基线稳定落 `opt-vulkan`，真变体（cmdline 里是
+#   `/opt/llama.cpp-<名>/…`，**不含** `/opt/llama.cpp/`）才落 `opt-variant`。同理 studio 的监听进程
+#   exe 是 **python 启动器**，其身份只在 cmdline ⇒ 必须看 cmdline。
+
+
+def classify_engine_occupant(path, listening=False, cmdline=""):
+    """把"占用 8080 的进程"归成一类（**唯一定义点**，纯函数 ⇒ 可离线单测）。
+
+    ⚠⚠ **必须同时看 `cmdline`**（2026-10-05 活体检查抓到）：studio 的监听进程是**python 启动器**
+    （实测 exe = `…/anaconda3/bin/python3.13`），**只看 exe 会把 studio 误报成 `other`** ⇒
+    分类基于 `exe + cmdline` 的合并串（cmdline 里才有 `unsloth studio run --model …`）。
+    """
+    p = str(path or "").strip()
+    c = str(cmdline or "").strip()
+    if p in ("", "unknown") and not c:
+        return "unknown"                 # 取不到 ⇒ 不可判（fail-closed，**绝不**当 none）
+    if p == "none" and not c:
+        # LISTEN 段说在听、占用者却说 none ⇒ 取数自相矛盾 ⇒ **不可判**（不是"没占用"）
+        return "unknown" if listening else "none"
+    blob = p + " " + c
+    for kind, marker in _OCCUPANT_KINDS:
+        if marker in blob:
+            return kind
+    return "other"
 # 残留阈值: 进程 RSS 超过它却没有引擎在服务 → 视为残留(占着内存不干活)。
 # 取 2G: 正常单机 llama-server 的 RSS 是几十 G 量级, 而 ggml-rpc-server 空转也有 ~0.3G,
 # 故 2G 能把"真占住了"和"进程刚起/空跑"分开 (本会话真的踩到过 62.6G 残留污染判定)。
@@ -5385,6 +5426,15 @@ _HEALTH_CMD = (
     "printf \"n_proc=%d\\n\", n}'; "
     "echo '===LISTEN==='; ss -ltn 2>/dev/null | awk 'NR>1{print $4}' | sed 's/.*://' "
     "| grep -E '^(" + "|".join(ENGINE_PORTS) + ")$' | sort -u | tr '\\n' ','; echo; "
+    # ★ O-146（2026-10-05）：**占用者是谁** —— 见 `classify_engine_occupant` 的注释（只报数）。
+    "echo '===OCCUPANT==='; for P in " + " ".join(ENGINE_PORTS) + "; do "
+    "L=$(ss -ltnp 2>/dev/null | awk -v s=\":$P\" '$4 ~ s\"$\"{print $NF}' | head -1); "
+    "if [ -z \"$L\" ]; then printf 'occupant_%s=none\\n' \"$P\"; continue; fi; "
+    "PID=$(printf '%s' \"$L\" | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2); "
+    "E=$(readlink -f \"/proc/${PID:-0}/exe\" 2>/dev/null); "
+    "C=$(tr '\\0' ' ' < \"/proc/${PID:-0}/cmdline\" 2>/dev/null | cut -c1-200); "
+    "printf 'occupant_%s=%s\\n' \"$P\" \"${E:-unknown}\"; "
+    "printf 'occupantcmd_%s=%s\\n' \"$P\" \"$C\"; done; "
     "echo '===MEM==='; awk '/MemTotal/{printf \"total_mb=%d \", $2/1024} "
     "/MemAvailable/{printf \"avail_mb=%d\", $2/1024}' /proc/meminfo; "
     "printf ' load1=%s' \"$(cut -d' ' -f1 /proc/loadavg)\"; "
@@ -5405,7 +5455,7 @@ def _health_probe(st: str) -> dict:
     if st in _HEALTH_CACHE:
         return _HEALTH_CACHE[st]
     d = {"station": st, "reachable": False, "addr": {}, "link": {}, "route": {},
-         "ping": {}, "rss_mb": None, "listen": [], "mem": {}, "binmd5": {}, "raw": ""}
+         "ping": {}, "rss_mb": None, "listen": [], "occupant": {}, "occupant_cmd": {}, "mem": {}, "binmd5": {}, "raw": ""}
     sys.path.insert(0, str(ROOT / "ops"))
     try:
         import cluster
@@ -5450,6 +5500,15 @@ def _health_probe(st: str) -> dict:
                     pass
                 break
     d["listen"] = [x for x in ",".join(sec.get("LISTEN", [])).split(",") if x]
+    # ★ O-146：8080 占用者（**只报数**）—— `occupant_<port>=<exe 路径|none|unknown>`
+    #   + `occupantcmd_<port>=<cmdline>`（⚠ 必须看 cmdline：studio 的监听进程是 python 启动器）
+    for line in sec.get("OCCUPANT", []):
+        if "=" in line:
+            k, _, v = line.strip().partition("=")
+            if k.startswith("occupantcmd_"):
+                d["occupant_cmd"][k[len("occupantcmd_"):]] = v.strip()
+            elif k.startswith("occupant_"):
+                d["occupant"][k[len("occupant_"):]] = v.strip()
     mem_line = " ".join(sec.get("MEM", []))
     for tok in mem_line.split():
         if "=" in tok:
@@ -5820,10 +5879,18 @@ def check_engine(ctx):
         band, why = classify_engine_band(bool(ports), rss, n_proc)
         if ports:
             running += 1
+            # ★ O-146（2026-10-05）：**占用者是哪条路径的引擎** —— 只报数（`classify_engine_occupant`
+            #   是唯一定义点；**不参与 `classify_engine_band` 的判定**）。取不到 ⇒ `unknown`。
+            _occ = live[st].get("occupant") or {}
+            _ocmd = live[st].get("occupant_cmd") or {}
+            _occ_txt = " ".join(
+                f"{_p}:{classify_engine_occupant(_occ.get(_p, 'unknown'), listening=True, cmdline=_ocmd.get(_p, ''))}"
+                for _p in ports)
             info.append(f"{st} 站引擎在服务: 端口 {','.join(ports)} · 进程 RSS {rss // 1024}G"
                         + (f" · 进程数 {n_proc}" if isinstance(n_proc, int) else "")
                         + (f" · 最短进程龄 {age}s"
-                           if isinstance(age, int) and isinstance(n_proc, int) and n_proc > 0 else ""))
+                           if isinstance(age, int) and isinstance(n_proc, int) and n_proc > 0 else "")
+                        + (f" · 占用者 {_occ_txt}" if _occ_txt else ""))
         else:
             info.append(f"{st} 站引擎未运行 (RSS {rss}M) —— 零自加载方针下属正常")
         if band == "FAIL":
