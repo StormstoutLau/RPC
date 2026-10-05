@@ -3729,10 +3729,19 @@ function Invoke-SplitTask {
         Write-Host "SPLIT_WARN: model=$id is egress - 并行性取决于**账户/站粒度**: 跨站（各站独立 key）= 可并行【实测 2 片/2 站、3 片/3 站均成立】; 多片共用同一出网账户或同一站 = 可能排队"
     }
 
-    # round-robin target stations A/B/C (cross-station each 1, O-18 physical upper bound 3)
+    # ★★ O-141 P0 实现面第一件（2026-10-05）：**把"站数"显式化为【站 × 腿】；并去掉"物理上界"这个假边界**。
+    #   旧注释/L3735 报错逐字写 "physical upper bound 3" ⇒ ★ 把【派发策略】当【物理边界】（O-141 已登记为
+    #   同族错误的**代码化残留**）。真实构成 = 【站 × 腿】：
+    #     · **本地腿**受 O-18（跨站各 1）约束；· **出网腿**受**账户速率**（ADR-0003：20 请求/分/账户）约束。
+    #   ⇒ 两条都指向"每站每刻约 1 条在飞" ⇒ **当前 legs/station = 1**。
+    #   ⚠⚠ **为何仍取 1（不是保守，是不许凭空取数 · O-126）**：出网池在**真实多 agent** 下的排队/429 形态
+    #   **未实测**（O-141 P0 ②）⇒ 在没有读数前把 legs 调大 = **凭空取数**，且会**超发各账户配额**。
+    #   ⇒ ★ 本次改动 = **结构显式化 + 假边界措辞清除**；容量数值不变（3 = 3 站 × 1 腿）⇒ **行为零变化**。
+    $legsPerStation = 1   # ★ 本地腿(O-18) / 出网腿(账户速率) 均 = 1；升 2 **须先有 P0② 实测**（并须按片解析后端）
     $stationPool = @('A','B','C')
-    if ($shards.Count -gt $stationPool.Count) {
-        Write-Host "SPLIT_INFEASIBLE: $($shards.Count) shards > $($stationPool.Count) station pool (O-18 cross-station each-1, physical upper bound 3) [exit 18]"
+    $splitCapacity = $stationPool.Count * $legsPerStation
+    if ($shards.Count -gt $splitCapacity) {
+        Write-Host "SPLIT_INFEASIBLE: $($shards.Count) shards > split capacity $splitCapacity (stations $($stationPool.Count) x legs/station $legsPerStation; this is a DISPATCH-POLICY bound, NOT a physical bound; O-18 + ADR-0003) [exit 18]"
         return 18
     }
     $t0 = [DateTime]::UtcNow
@@ -3836,7 +3845,7 @@ function Invoke-SplitTask {
         }
         $ok = ($rc -eq 0)
         if (-not $ok) { $allOk = $false }
-        $results += [pscustomobject]@{ idx = $i+1; station = $stationPool[$i % 3]; rc = $rc; ok = $ok; log = $out }
+        $results += [pscustomobject]@{ idx = $i+1; station = $stationPool[$i % $stationPool.Count]; rc = $rc; ok = $ok; log = $out }
         Write-Host "SPLIT_SHARD_DONE[$($i+1)] rc=$rc ok=$ok"
     }
 
@@ -3844,7 +3853,7 @@ function Invoke-SplitTask {
     $mergedTxt = Join-Path $mergedDir 'merged-output.txt'
     $mergedBuf = [System.Collections.Generic.List[string]]::new()
     for ($i = 0; $i -lt $shards.Count; $i++) {
-        $mergedBuf.Add("===== shard $($i+1) ($($stationPool[$i % 3])) rc=$($results[$i].rc) =====")
+        $mergedBuf.Add("===== shard $($i+1) ($($stationPool[$i % $stationPool.Count])) rc=$($results[$i].rc) =====")
         $rb = $results[$i]
         $mergedBuf.Add($rb.log)
         $mergedBuf.Add('')
