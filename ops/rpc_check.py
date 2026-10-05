@@ -5307,7 +5307,14 @@ ENGINE_PORTS = ("8080", "8081", "18080", "18081", "50052")
 #   落在两个门禁的缝里，两边都不判**（实测：A 站跑 `/opt/llama.cpp/llama-server` 占着 8080，
 #   而 `backend` 照样 PASS ⇒ "未迁移"在门禁层不可见）。更深一层：`BACKEND` 只被 `infer-load`
 #   消费，systemd 单元走 `llama-serve-instance`、只读 `LLAMA_SERVER_BIN`（缺省 `/opt/...`）。
-# ★ 本批**只报数**（同 `O-143` 第一步）：结果进 info/note，**不改 verdict**（收紧扣在 `O-146`）。
+# ★★ **O-146 乙′（2026-10-05 裁定）：占用者【进判定】** —— 作用域 = `ports.yaml` 里 `purpose` 含
+#   "推理引擎" 的端口（**由真值表驱动、不硬编码**；现 = 8080）；`other`（认不出的东西占着）·
+#   `unknown`（取不到 ⇒ 判不了）⇒ **WARN**；`{studio,opt-vulkan,opt-variant}` / `none` ⇒ 通过。
+#   ★ 为什么**不**做"按站期望"（甲案）：A 站形态随**外部消费者**时变（实测 `gpt-oss-120b`↔
+#   `MiniMax-M2.7`、`llama-single`↔`unsloth` 都出现过）⇒ 写死期望必生误报（SRE 共识：**静态阈值
+#   是误报头号成因**；`O-143` 的 A 站 RSS 假阳性即先例）。外部依据：NIST SP 800-167 白名单 =
+#   **有限已知集**（不声明"谁该在"）；path 类识别「单独用弱」⇒ 故本判据**只判"认不出/取不到"**，
+#   **不判"身份是否正确"**。三者对照见 `O-146` 的多维表。
 # ⚠ fail-closed：取不到 ⇒ `unknown`（**绝不**把"读不出"当 `none`）；`listening=True` 却说
 #   `none`（LISTEN 段与占用者取数矛盾）⇒ 也记 `unknown`。
 _OCCUPANT_KINDS = (("opt-vulkan", "/opt/llama.cpp/"),  # /opt/llama.cpp/（Vulkan 分布式路径 · ★ 当前基线）
@@ -5340,6 +5347,39 @@ def classify_engine_occupant(path, listening=False, cmdline=""):
         if marker in blob:
             return kind
     return "other"
+
+
+# ★★ O-146 乙′（2026-10-05）：**允许出现的占用者形态**（有限已知集，NIST SP 800-167 白名单同构）。
+#   ⚠ 刻意**不**含"哪一站该跑哪个" —— 那正是被否的甲案（期望随外部消费者时变）。
+_OCCUPANT_OK = ("studio", "opt-vulkan", "opt-variant")
+
+
+def _engine_api_ports():
+    """从 `inventory/ports.yaml` 取"**推理引擎 API**"端口（★ 真值表驱动，不硬编码）。
+
+    判据 = 该端口条目的 `purpose` 含「推理引擎」（现 = 8080：`本地推理引擎 API (unsloth studio 对外面)`）。
+    读不到/解析失败 ⇒ 退回 `("8080",)`（**fail-safe 到已知端口**，不是"跳过判定"）。
+    """
+    try:
+        doc = yaml.safe_load(INVENTORY_PORTS.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return ("8080",)
+    out = []
+
+    def _walk(o):
+        if isinstance(o, dict):
+            if "port" in o and "推理引擎" in str(o.get("purpose", "")):
+                out.append(str(o["port"]))
+            for _v in o.values():
+                _walk(_v)
+        elif isinstance(o, list):
+            for _v in o:
+                _walk(_v)
+
+    _walk(doc)
+    return tuple(out) or ("8080",)
+
+
 # 残留阈值: 进程 RSS 超过它却没有引擎在服务 → 视为残留(占着内存不干活)。
 # 取 2G: 正常单机 llama-server 的 RSS 是几十 G 量级, 而 ggml-rpc-server 空转也有 ~0.3G,
 # 故 2G 能把"真占住了"和"进程刚起/空跑"分开 (本会话真的踩到过 62.6G 残留污染判定)。
@@ -5891,6 +5931,16 @@ def check_engine(ctx):
                         + (f" · 最短进程龄 {age}s"
                            if isinstance(age, int) and isinstance(n_proc, int) and n_proc > 0 else "")
                         + (f" · 占用者 {_occ_txt}" if _occ_txt else ""))
+            # ★★ O-146 乙′（2026-10-05 裁定）：**占用者进判定** —— 作用域 = `ports.yaml` 驱动的引擎 API 端口。
+            for _p in ports:
+                if _p not in _engine_api_ports():
+                    continue
+                _k = classify_engine_occupant(_occ.get(_p, "unknown"), listening=True,
+                                              cmdline=_ocmd.get(_p, ""))
+                if _k in ("other", "unknown"):
+                    _why = "认不出的形态" if _k == "other" else "取不到（判不了 ≠ 通过）"
+                    warn.append(f"{st} 站引擎端口 {_p} 占用者**未登记/不可判**（{_k} = {_why}）"
+                                f" —— 允许形态 {','.join(_OCCUPANT_OK)}；见 O-146")
         else:
             info.append(f"{st} 站引擎未运行 (RSS {rss}M) —— 零自加载方针下属正常")
         if band == "FAIL":
