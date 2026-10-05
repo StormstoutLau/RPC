@@ -35,6 +35,9 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 # D7-P2-1 (2026-09-26): **机械门先行** 的判定本体（纯函数：只吃已解析的 run 记录 ⇒ 可离线单测）。
 # D7-P2-2 (2026-09-26): **结论契约** —— 三个纯函数（校验器 + 综合器）。
 'Test-FindingShape', 'Test-ConclusionContract', 'Get-AnchorKey', 'Merge-JudgeFindings', 'Resolve-L1Gate',
+# O-141 P0 (2026-10-05): `split` 的**派发计划**（纯函数：容量 = 站 × 腿 + 片→站映射）——
+#   ★ 此前 split **零覆盖**；有了它，"站×腿/映射走 .Count" 才能被**真跑**而不是扫文本。
+'Get-SplitDispatchPlan',
 # D7-P3-1 (2026-09-26): **不得自审**的判定本体（纯函数）。
 'Resolve-SelfReviewGuard',
 # D7-P3-2 (2026-09-26): **编排层 —— 谁审谁** 的选择器（纯函数）。
@@ -2525,6 +2528,48 @@ Assert-True "b3㉜(先验红·同源对照): 恒 open 桩把 constraints 也说�
 Assert-True "b3㉒(先验红·同源对照): **旧顺序**样本上同一条判据为假（b3⑳ 非恒真）" (
     ($oldInj.Count -eq 1) -and ($oldWrt.Count -eq 1) -and
     -not ($oldInj[0].Index -lt $oldWrt[0].Index))
+
+# ══ O-141 P0（2026-10-05）：`split` 派发计划 —— **首个真跑覆盖**（此前 split 零覆盖）══
+#   被测 = `Get-SplitDispatchPlan`（纯函数 · 由文件头「提取全部函数定义」自动载入 ⇒ 本组是**真调用**）。
+#   钉三件：① 容量 = 站 × 腿（**"腿"真的乘进去**，用**同源对照**证非恒真）· ② 片→站映射走 `.Count`
+#   （★ 回归：本次修掉的**静默错位** = 旧代码里字面量 `% 3`）· ③ 边界不崩（空池 / 0 片 / legs<1 归一）。
+$sp2 = Get-SplitDispatchPlan -ShardCount 2 -StationPool @('A','B','C') -LegsPerStation 1
+Assert-True "O141-split①: 2 片/3 站/1 腿 ⇒ ok、容量 3、映射 A,B" (
+    $sp2.ok -and ($sp2.capacity -eq 3) -and (($sp2.assignments -join ',') -eq 'A,B'))
+
+$sp3 = Get-SplitDispatchPlan -ShardCount 3 -StationPool @('A','B','C') -LegsPerStation 1
+Assert-True "O141-split②: 3 片/3 站 ⇒ ok（恰好满 ⇒ 边界含等号）" (
+    $sp3.ok -and (($sp3.assignments -join ',') -eq 'A,B,C'))
+
+# ★ 先验红·同源对照：**同一个 4 片输入**，只改 legs ⇒ ok 必须翻转（证"腿"真进了容量、① 非恒真）
+$sp4a = Get-SplitDispatchPlan -ShardCount 4 -StationPool @('A','B','C') -LegsPerStation 1
+$sp4b = Get-SplitDispatchPlan -ShardCount 4 -StationPool @('A','B','C') -LegsPerStation 2
+Assert-True "O141-split③(先验红·同源对照): 4 片/3 站/legs=1 ⇒ **not ok**（容量 3）" (
+    (-not $sp4a.ok) -and ($sp4a.capacity -eq 3))
+Assert-True "O141-split④: 同 4 片/legs=2 ⇒ ok、容量 6（腿乘进去了 ⇒ ③ 非恒真）" (
+    $sp4b.ok -and ($sp4b.capacity -eq 6))
+
+# ★★ 回归（本次修掉的静默错位）：**池缩到 2 站** ⇒ 4 片映射必须 A,B,A,B（走 .Count，不是字面量 3）
+$sp2b = Get-SplitDispatchPlan -ShardCount 4 -StationPool @('A','B') -LegsPerStation 1
+Assert-True "O141-split⑤(回归): 池=2 站 ⇒ 4 片映射 A,B,A,B（**不得**按字面量 3 错位）" (
+    (($sp2b.assignments -join ',') -eq 'A,B,A,B') -and ($sp2b.capacity -eq 2))
+
+# 边界三例：空池 / 0 片 / legs<1 归一 —— 均不得崩、且语义正确
+$spE = Get-SplitDispatchPlan -ShardCount 2 -StationPool @() -LegsPerStation 1
+Assert-True "O141-split⑥(边界): 空池 ⇒ not ok、容量 0、不崩" (
+    (-not $spE.ok) -and ($spE.capacity -eq 0) -and (@($spE.assignments).Count -eq 0))
+$spZ = Get-SplitDispatchPlan -ShardCount 0 -StationPool @('A','B','C') -LegsPerStation 1
+Assert-True "O141-split⑦(边界): 0 片 ⇒ ok、映射为空" (
+    $spZ.ok -and (@($spZ.assignments).Count -eq 0))
+$spN = Get-SplitDispatchPlan -ShardCount 3 -StationPool @('A','B','C') -LegsPerStation 0
+Assert-True "O141-split⑧(边界): legs=0 ⇒ 归一为 1（容量 3、3 片 ok）" (
+    $spN.ok -and ($spN.capacity -eq 3))
+
+# ★ 结构性护栏（防回退）：`Invoke-SplitTask` 内**不得**再出现字面量取模 `% 3`
+$splitFn = @($ast.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-SplitTask' }, $true))
+Assert-True "O141-split⑨(结构): Invoke-SplitTask 内无字面「% 3」（映射必须经 Get-SplitDispatchPlan）" (
+    ($splitFn.Count -eq 1) -and (-not ($splitFn[0].Extent.Text -match '%\s*3')))
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
