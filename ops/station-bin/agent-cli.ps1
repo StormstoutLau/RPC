@@ -3673,6 +3673,36 @@ exit `$FINAL_RC
 # round-robin 把 N 分片轮询分配到 A/B/C(物理上界 3, O-18 铁律: cross-station each 1).
 # readonly 轻量 Merge: 收集各子卡 terminal product(agent-output.txt/accept-output.txt) 按分片序拼装.
 # 写型/强依赖任务不拆(O-26 判定: 只拆"可切分 readonly 大任务")。
+# ★★ O-141 P0（2026-10-05）：`split` 的**派发计划** —— **唯一定义点**（纯函数 ⇒ 夹具可离线真跑）。
+#   为什么要有它：容量（站 × 腿）与"片→站"映射原先**内联在 `Invoke-SplitTask` 里**，其中站位映射曾写成
+#   **硬编码 `$i % 3`**（两处）⇒ ★ **池大小一变就静默错位**（映射到不存在的下标/重复站）。**收敛到此处**。
+#   口径（写死）：
+#     · 容量 = `StationPool.Count * LegsPerStation` —— ★ **是【派发策略】上界，不是物理上界**：
+#       本地腿受 `O-18`（跨站各 1）约束 · 出网腿受**账户速率**（`ADR-0003`：20 请求/分/账户）约束。
+#     · `LegsPerStation` 缺省 **1**（两种腿均指向"每站每刻约 1 条在飞"）；★ **升 2 须先有 O-141 P0② 实测**，
+#       否则 = **凭空取数**（`O-126`），且会**超发各账户配额**。
+#     · 片→站映射 = `Pool[$i % Pool.Count]`（**必须走 `.Count`**，不得写字面量）。
+function Get-SplitDispatchPlan {
+    param(
+        [int]$ShardCount,
+        [string[]]$StationPool = @('A','B','C'),
+        [int]$LegsPerStation = 1
+    )
+    if ($LegsPerStation -lt 1) { $LegsPerStation = 1 }
+    $pool = @($StationPool | Where-Object { $_ })       # 滤空串 ⇒ 池为空时不崩
+    $cap = $pool.Count * $LegsPerStation
+    $assign = @()
+    if ($pool.Count -gt 0) {
+        for ($i = 0; $i -lt $ShardCount; $i++) { $assign += $pool[$i % $pool.Count] }
+    }
+    return [pscustomobject]@{
+        ok          = (($pool.Count -gt 0) -and ($ShardCount -le $cap))
+        capacity    = $cap
+        assignments = $assign
+    }
+}
+
+
 function Invoke-SplitTask {
     param(
         [string]$proj,
@@ -3737,11 +3767,11 @@ function Invoke-SplitTask {
     #   ⚠⚠ **为何仍取 1（不是保守，是不许凭空取数 · O-126）**：出网池在**真实多 agent** 下的排队/429 形态
     #   **未实测**（O-141 P0 ②）⇒ 在没有读数前把 legs 调大 = **凭空取数**，且会**超发各账户配额**。
     #   ⇒ ★ 本次改动 = **结构显式化 + 假边界措辞清除**；容量数值不变（3 = 3 站 × 1 腿）⇒ **行为零变化**。
-    $legsPerStation = 1   # ★ 本地腿(O-18) / 出网腿(账户速率) 均 = 1；升 2 **须先有 P0② 实测**（并须按片解析后端）
+    $legsPerStation = 1   # ★ 口径见 Get-SplitDispatchPlan（升 2 须先有 P0② 实测）
     $stationPool = @('A','B','C')
-    $splitCapacity = $stationPool.Count * $legsPerStation
-    if ($shards.Count -gt $splitCapacity) {
-        Write-Host "SPLIT_INFEASIBLE: $($shards.Count) shards > split capacity $splitCapacity (stations $($stationPool.Count) x legs/station $legsPerStation; this is a DISPATCH-POLICY bound, NOT a physical bound; O-18 + ADR-0003) [exit 18]"
+    $plan = Get-SplitDispatchPlan -ShardCount $shards.Count -StationPool $stationPool -LegsPerStation $legsPerStation
+    if (-not $plan.ok) {
+        Write-Host "SPLIT_INFEASIBLE: $($shards.Count) shards > split capacity $($plan.capacity) (stations $($stationPool.Count) x legs/station $legsPerStation; this is a DISPATCH-POLICY bound, NOT a physical bound; O-18 + ADR-0003) [exit 18]"
         return 18
     }
     $t0 = [DateTime]::UtcNow
@@ -3769,7 +3799,7 @@ function Invoke-SplitTask {
 
     $procs = @(); $shardFiles = @()
     for ($i = 0; $i -lt $shards.Count; $i++) {
-        $station = $stationPool[$i % $stationPool.Count]
+        $station = $plan.assignments[$i]
         $shardBody = [string]$shards[$i]
         $subCard = Join-Path $subDir ("shard$($i+1).md")
         $lines = @()
@@ -3845,7 +3875,7 @@ function Invoke-SplitTask {
         }
         $ok = ($rc -eq 0)
         if (-not $ok) { $allOk = $false }
-        $results += [pscustomobject]@{ idx = $i+1; station = $stationPool[$i % $stationPool.Count]; rc = $rc; ok = $ok; log = $out }
+        $results += [pscustomobject]@{ idx = $i+1; station = $plan.assignments[$i]; rc = $rc; ok = $ok; log = $out }
         Write-Host "SPLIT_SHARD_DONE[$($i+1)] rc=$rc ok=$ok"
     }
 
@@ -3853,7 +3883,7 @@ function Invoke-SplitTask {
     $mergedTxt = Join-Path $mergedDir 'merged-output.txt'
     $mergedBuf = [System.Collections.Generic.List[string]]::new()
     for ($i = 0; $i -lt $shards.Count; $i++) {
-        $mergedBuf.Add("===== shard $($i+1) ($($stationPool[$i % $stationPool.Count])) rc=$($results[$i].rc) =====")
+        $mergedBuf.Add("===== shard $($i+1) ($($plan.assignments[$i])) rc=$($results[$i].rc) =====")
         $rb = $results[$i]
         $mergedBuf.Add($rb.log)
         $mergedBuf.Add('')
