@@ -2771,6 +2771,19 @@ mkdir -p "`$STAGE/attach/$name"
         # ⚠ O-71 同族: 本函数**返回 rc**(调用方 `$code = Invoke-Task …`) ⇒ 本行**每次 golden 派发都会执行**
         #   ⇒ 少了 `| Out-Null` 就会把 `$null` 混进返回值（实测机理见 `Get-UniqueRunStamp` 尾注）。
         Remove-Item $goldenTgz -ErrorAction SilentlyContinue | Out-Null
+        # ★★ `O-156`（2026-10-07）**落点自证（诊断用 · 定位后应撤）** ───────────────────────────
+        #   为什么加它：body 侧报 `ATTACH_STAGED=0` + `GOLDEN_STAGE_FAIL`（= 中转里应当有的件读不到），
+        #   但**三处 scp 的 rc 都已查**（attach L2681 / golden L2770，失败会 `return 5`）⇒
+        #   ★ 派发**没有** early-return ⇒ **scp 是成功的** ⇒ ★ 分歧只可能在"**件到底在不在中转里**"。
+        #   ⇒ 这里**只报数、不改行为**（diagnostic enhancement）：把中转的真实内容摊开。
+        #   ★ 判读：① 件**在** ⇒ 分歧在 body 侧（`$STAGE` 不匹配 / body 早退）；
+        #           ② 件**不在** ⇒ 分歧在 scp 的"成功"口径（rc=0 但没落盘）。
+        $stageLs = Invoke-RemoteCapture -HostName $hostName -LocalName "agent-cli-stage-ls-$($Script:RUN_TOKEN).sh" -ScriptBody @"
+ls -la "$stage" 2>&1
+echo '--- attach ---'
+ls -la "$stage/attach" 2>&1
+"@
+        Write-Host ("STAGE_LS: " + (([string]$stageLs).Trim() -replace "`r?`n", " ｜ "))
         # ── O-59/T1 (2026-09-25): **注入动作不再在这里做** ───────────────────────────────────────
         # 原来这里是一段独立 remote script: `rm -rf "$W/.golden"` + 解包 —— 与 `.attach` 是**同一族**
         #   (在远端 flock **之外**碰共享面) ⇒ `readonly:true` 的共享锁下两跑会互删/互相覆盖 `.golden`。
