@@ -2257,7 +2257,7 @@ Assert-True "b2⑨: phase/recorded_at/seq 在；`l1_results` = **原文照收**�
 Assert-True "b2⑩: `l2_marks` **可选** —— 传则有键、不传则**键不存在**（不是 null 占位）" (
     $V1.verdict.Contains('l2_marks') -and $V1.verdict.l2_marks[0].verdict -eq 'accept' -and
     -not (New-Verdict -ExitCode 0 -L1Section $l1T).verdict.Contains('l2_marks'))
-Assert-True "b2⑪(如实): gaps 含 `seq`（摘要未给其语义 ⇒ 固定 1 是**占位不是真值**）" (
+Assert-True "b2⑪(如实): gaps 含 `seq`（上游未给其语义 ⇒ 本仓自定**快照语义恒 1**；仍如实标出**非上游真值**）" (
     (@($V1.gaps) -join ',') -eq 'seq')
 Assert-True "b2⑫: 接线 —— P3 在**两处** `.agent-run.json` 写出点（主路 + claude 备路）" (
     ([regex]::Matches($content, [regex]::Escape("Write-D7Report -Kind 'RunReport'"))).Count -eq 2)
@@ -2426,7 +2426,8 @@ Assert-True "b3㉗(先验红·同源对照): 恒 false 桩在「已在链内」�
 #   ★★ 由来（读码 + 契约核对）：契约 §1.6 的收紧条件写的是「对应信封的 `gaps` **清空** ⇒ 转硬拒」，
 #      但 TaskContract 的 `constraints` 与 RunReport 的 `decisions` 属 §1.5 **射程边界（明令不判不补）**
 #      ⇒ **永不消失** ⇒ 「清空」**按构造不可达**。「规则对、门槛错」—— 本刀只把两类**分开报**，
-#      **不动门槛**（改门槛 = 待用户裁）。
+#      **不动门槛**（★ 改门槛 = **2026-10-07 已裁③甲**：改为"只看 `open`"，见契约 §1.6；本夹具**不判门槛**，
+#      只判"两分正确"与"分类只在一处" ⇒ **裁前裁后本刀断言不变**）。
 $gTC = Split-D7Gaps -Gaps @('evidence_budget', 'constraints', 'golden.checksum')
 $gRR = Split-D7Gaps -Gaps @('attempt', 'decisions', 'evidence')
 $gVD = Split-D7Gaps -Gaps @('seq')

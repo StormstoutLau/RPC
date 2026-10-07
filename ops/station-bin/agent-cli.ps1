@@ -1492,7 +1492,8 @@ function Write-D7Report {
         # 为什么加：契约 §1.6 的收紧条件写的是「`gaps` **清空** ⇒ 转硬拒」，但三个信封里各有**一项**
         #   是 §1.5 的**射程边界**（明令不判不补）⇒ **永不消失** ⇒ 「清空」按构造不可达。
         #   ⇒ 把两类**分开报**，读的人（和人裁）才分得清"**缺真值**"与"**边界 ⇒ 永远不补**"。
-        # ⚠ **只多打一行，行为零变化**：判据不动、`gaps` 本体不动、**门槛不动**（改门槛 = 待用户裁）。
+        # ⚠ **只多打一行，行为零变化**：判据不动、`gaps` 本体不动（★ **门槛已裁③甲**（2026-10-07）＝
+        #   改为"只看 `open`"，但**灰度期不变**、仍只报不阻断 ⇒ 本行行为**不随裁变**）。
         $gc = Split-D7Gaps -Gaps $Gaps
         Write-Host ("D7_" + $Tag + "_GAPS_CLASS: open（本仓可控，可清）= [" + (@($gc.open) -join ', ') +
                     "] · boundary（§1.5 射程边界 ⇒ **永久不补**，不计入「转硬拒」门槛）= [" +
@@ -1568,7 +1569,10 @@ function New-Verdict {
     #   （**嵌套**；`review.json` **顶层没有** `verdict` 键）。判据靠**值类型**切分（非整数即拒）。
     # ★ `l1_results` / `l2_marks` = **原文照收**（不新造结构）：分别取 `review.json` 已有的 `l1` 段
     #   与结论契约段 —— §1.5 已登记"内部结构**不判、不补**"。
-    # ⚠ 如实：`seq` 的语义摘要未给（只写 `recorded_at + seq`）⇒ 本仓**固定 1** 并标进 `gaps`（**不是真值**）。
+    # ⚠⚠ **2026-10-07 裁①【乙】就地更正**：旧注「本仓固定 1…（不是真值）」**已不准确** —— 上游摘要只写
+    #   `recorded_at + seq`、未给语义，而本仓的 P5 登记面 `review.json.d7_verdict` 已登记 `not_a_ledger`
+    #   （一次一份·不追加·重评覆盖）⇒ 它是「**最新裁决（快照）**」**不是「裁决流水」** ⇒ `seq` **快照语义下恒 `1`**。
+    #   ★ **仍进 `gaps`**：该语义是**本仓本地裁定**、非上游给定 ⇒ 不谎称有上游真值（**行为零变化**）。
     param([int]$ExitCode, [string]$Phase = 'P5', $L1Section = $null, $L2Marks = $null)
     $v = [ordered]@{
         verdict     = [int]$ExitCode
@@ -1595,8 +1599,9 @@ function New-Verdict {
 # ★ 本表把 `gaps` 的每一项**定级**（**只此一处**，不许在别处再判一次 —— 本仓头号失败形态）：
 #   · `boundary` = **射程边界**（§1.5 明令不判不补）⇒ **永久项**，**不计入**"转硬拒"门槛；
 #   · `open`     = **本仓可控**（缺真值 / 缺接线 / 占位）⇒ **可清**，**应当**计入门槛。
-# ⚠ 本表**只分类、不判决**：门槛要不要改成"只看 `open`"= **待用户裁**（`O-136` 三处待裁之一）；
-#   在裁之前，**行为零变化**（判据与 `gaps` 本体都不动，只**多打印一行**分类）。
+# ★★ **2026-10-07 裁③【甲】**：门槛已改为"**只看 `open`**"（写进契约 §1.6 本节开头那条，
+#   原文「`gaps` **清空**」按构造不可达 ⇒ 已就地更正）—— ⚠ 但**行为零变化**（判据与 `gaps` 本体都不动，
+#   只**多打印一行**分类；「转硬拒」须**另一次用户裁**才落）。
 $Script:D7_GAP_CLASS = [ordered]@{
     # TaskContract
     'constraints'     = 'boundary'   # ★ §1.5：禁止项清单 = 射程边界（不判不补）
@@ -1608,7 +1613,7 @@ $Script:D7_GAP_CLASS = [ordered]@{
     'evidence'        = 'open'       # 锚点在审计报告侧 ⇒ 要接线到 run 产出侧
     'artifact.digest' = 'open'
     # Verdict
-    'seq'             = 'open'       # ★ 唯一"便宜"的：定义语义即可（现为固定 1 占位）
+    'seq'             = 'open'       # ★ 裁①乙（2026-10-07）：语义已定（快照 ⇒ 恒 1），但仍是"本仓本地裁定、非上游给定" ⇒ 留在 open
     'l1_results'      = 'open'
 }
 
@@ -1710,7 +1715,7 @@ function Get-D7Adjudication {
     } else {
         $hsep = Invoke-D7Cli -Argv @('--d7-host-sep', $ExecHost, $arb)
         if ($hsep['code'] -eq 1) {
-            Write-Host ("D7_PRH_SAME: " + $hsep['line'] + " ⇒ **WARN（灰度期不阻断，先量后定档）**")
+            Write-Host ("D7_PRH_SAME: " + $hsep['line'] + " ⇒ **WARN（灰度期不阻断；定档前置 = 至少观测到 1 次同机形态 · 裁②乙 2026-10-07）**")
         }
         elseif ($hsep['code'] -eq 0) { Write-Host ("D7_PRH_SEPARATE: " + $hsep['line']) }
         else { Write-Host ("D7_PRH_UNDECIDABLE: " + $hsep['line'] + " ⇒ 灰度期不阻断") }

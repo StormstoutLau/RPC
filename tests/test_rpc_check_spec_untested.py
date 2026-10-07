@@ -206,19 +206,52 @@ def test_triage_ledger_scope_and_backward_compat():
 
 
 def test_triage_repo_end_to_end():
-    """端到端：真读本仓**索引 + 台账**（O-144 甲）⇒ 条目 ≥1（防空判），
-    且台账里明写「待裁」的那些 `refs` **必须被点名**。
-    ★ **不写死条数**（本仓教训：**标签比事实硬**）—— 条数由门禁 note 报出。
+    """端到端：真读本仓**索引 + 台账**（O-144 甲）⇒ ① 条目 ≥1（防空判）；
+    ② 点名集 == 「`refs` ∩ 台账「待裁」行」的条目数（**关系式** ⇒ **不写死条数**）。
+    ★★ **不假设台账当前有「待裁」** —— 旧版把"台账里应有明写「待裁」的行"当**恒真前提**，
+       而本仓教训是「**标签比事实硬**」：台账的「待裁」**是会被裁掉的**
+       （实测 2026-10-07 `O-136` 三处裁定落 ⇒ 该来源 **9 → 0**）⇒ 旧断言当场假红（**断言陈旧**）。
+    ★ **先验红·同源对照**：把一个**被 `refs` 引用**的台账行**人为写上「待裁」** ⇒ 点名数**必须增加**
+       （否则"读台账"这半没接线 ⇒ **恒 0 的假绿**）。
     ★ **兼容**：不喂台账 ⇒ 退回旧口径（字段口径仍全 false ⇒ 0）。"""
     import yaml
     inv = yaml.safe_load(R.UNTESTED_INDEX.read_text(encoding="utf-8"))
+    items = inv.get("items") or []
     rows = R.parse_ledger_rows(R.LEDGER.read_text(encoding="utf-8"))
-    assert R.ledger_pending_ids(rows), "台账里应有明写「待裁」的行（否则本判据没有对象）"
-    warn, st = R.summarize_untested_triage(inv.get("items"), rows)
+    pending = R.ledger_pending_ids(rows)
+
+    def _via_ledger(_items, _pending):
+        return sum(1 for it in _items
+                   if any(isinstance(r, str) and r in _pending for r in (it.get("refs") or [])))
+
+    warn, st = R.summarize_untested_triage(items, rows)
     assert st["n"] >= 1, "★ 条目为 0 ⇒ 消费没有对象（会退化成空判）"
-    assert st["needs_decision_via_ledger"] >= 1, f"台账有「待裁」却未被点名 ⇒ O-144 缺口复现: {warn}"
+    assert st["needs_decision_via_ledger"] == _via_ledger(items, pending), (
+        f"点名集与台账「待裁」集不符 · warn={warn}")
     assert all(("台账" in w) or ("needs_decision: true" in w) for w in warn), warn
-    warn2, st2 = R.summarize_untested_triage(inv.get("items"))
+
+    # ── 先验红·同源对照：注入「待裁」⇒ 点名数必须增加（防"恒 0"假绿）──────────────
+    ids = {r0.get("id") for r0 in rows}
+    target = next((r for it in items for r in (it.get("refs") or [])
+                   if isinstance(r, str) and r not in pending and r in ids), None)
+    assert target, "★ 索引 `refs` 至少要引用一个**不被**台账标「待裁」的实存行（否则本先验红没有对象）"
+    rows2 = []
+    for r0 in rows:
+        if r0.get("id") == target:
+            r0 = dict(r0)
+            cells = list(r0.get("cells") or [])
+            cells[3] = f"{cells[3]}（{R.LEDGER_PENDING_MARK}）"
+            r0["cells"] = cells
+        rows2.append(r0)
+    pending2 = R.ledger_pending_ids(rows2)
+    assert _via_ledger(items, pending2) > _via_ledger(items, pending), "★ 注入没落上（期望值未增）"
+    _, st3 = R.summarize_untested_triage(items, rows2)
+    assert st3["needs_decision_via_ledger"] == _via_ledger(items, pending2), (
+        "★ 先验红·同源对照失败：注入「待裁」后点名数与期望不符 ⇒ 「读台账」这半没接线")
+    assert st3["needs_decision_via_ledger"] > st["needs_decision_via_ledger"], (
+        "★ 注入「待裁」后点名数**没增加** ⇒ 恒 0 的假绿")
+
+    warn2, st2 = R.summarize_untested_triage(items)
     assert st2["needs_decision"] == 0 and warn2 == [], (st2, warn2)
 
 
