@@ -19,6 +19,26 @@ upstream: \[d6-agent-standard-.* 全量文档]
 
 ## 历史回溯（2026-09-03 起）
 
+### 2026-10-07（续⑫） — **`O-156` 第二刀：`STAGE_PROBE` ⇒ 假说【证伪】，问题压到唯一一处**
+
+**加了两个 probe（都只报数）**：`STAGE_LS(MASTER_STAGE=$stage)`（派发侧）· body 落盘段 `echo "STAGE_PROBE=[$STAGE]"`。
+
+**★ 真读数（run `202610080129013599`）**：
+```
+STAGE_LS(MASTER_STAGE=/tmp/agent-stage-6105c08511324a9d8f6ca668ab05bb5a): … attach/ … golden.tgz 10240 …
+LOCK_ACQUIRED pid=1339967 mode=exclusive
+STAGE_PROBE=[/tmp/agent-stage-6105c08511324a9d8f6ca668ab05bb5a]      ← ★ 逐字节相同
+ATTACH_STAGED=0 · GOLDEN_STAGE_FAIL · ACCEPT_GOLDEN_OK=0 · TASK_RC=9
+```
+⇒ ★★★ **两侧路径逐字节相同** ⇒ **"路径分歧 / `RUN_TOKEN` 改写"假说【证伪】**（★ 这正是取证的价值：我的推断被自己的读数推翻）。
+⇒ ★★★★ **三个读数同时成立**（派发侧 ls 到件 · body 手里路径对 · body 锁内读不到）⇒ **只剩一类解释：同一条 `$STAGE` 路径在「ls 的时刻」与「body 读的时刻」之间内容不可见** —— ★ **最强候选 = 站上 `/tmp` 的 per-session 视图（systemd `PrivateTmp`）** ⇒ **一因导出本条全部症状**（含"附件从来不生效"）；⚠ **未证**，取证 = `findmnt -no OPTIONS /tmp` / `ls -d /tmp/systemd-private-*` / 查 unit 的 `PrivateTmp`。
+
+**★ 另一条腿的新读数**：同一次报 `COLLECT_FAIL: agent-out write failed: Cannot bind argument to parameter 'Path' because it is null.` + `EVIDENCE_LEFT_IN_TEMP=…` ⇒ **收集/归档那一跳也失败**（= 门禁"可重放 gap"11 条/run 的直接来源）⇒ **与暂存链是两条独立缺陷**，登记待另立条目。
+
+**⚠ 自伤（本轮）**：第一版 probe 我多带了 `` `$ts `` —— 但 body 里 **`ts` 是 PS 插值、不是 bash 变量** ⇒ `set -u` ⇒ **`行 129: ts: 未绑定的变量` ⇒ 整脚本 rc=255**（那一跑没读到 attach/golden）。★ 教训：**该 body 里 `$W`/`$STAGE` 是 bash 变量（转义）、`$ts` 是 PS 值（不转义）** —— 加 probe 前必须看清**同一行附近用的是哪种约定**。
+
+**未做（如实）**：未验 `PrivateTmp` · 未核 `O-59/T1` 与 `O-68/D2-D3` 前后差异 · 两个 probe（`STAGE_LS`/`STAGE_PROBE`）**仍在**（定位未闭 ⇒ 留作读数；★ 定位后应撤）。
+
 ### 2026-10-07（续⑪） — **`O-156` 定位第一刀：加 `STAGE_LS` 诊断 ⇒ 中转齐全、分歧收敛到 body 侧**
 
 **授权**：用户批「去静默」⇒ 执行时**先读码**，结果**推翻了"静默"这个前提** ⇒ 改做**更有分叉力的诊断**。
