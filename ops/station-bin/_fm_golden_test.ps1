@@ -2623,6 +2623,28 @@ Assert-True "O151⑩(先验红·同源对照): 旧版（env-only）在 ③④ �
     (-not $oldHl.Contains("`$st = [string]`$judge['station']")) -and
     (-not (($oEnv -ge 0) -and ($oOn -gt $oEnv))))
 
+# --- ★★ O-154 (2026-10-07): `attach-reset` 站上脚本的**转义护栏** -----------------------------
+#   由来（实测）：该 here-string 是**双引号**的，里面写了**未转义**的 `$evGcCmd` ⇒ PS **插值** ⇒ 12 行 GC 块
+#   被注入**注释行中间** ⇒ 逃逸用的成对反引号被拆开、游离反引号落进**真实命令行** ⇒ 站上 bash 报
+#   `行 66: 未预期的 EOF` ⇒ **整脚本零执行**（stage 不建 + 两处按龄 GC 不跑），而调用点原先 `| Out-Null` ⇒ **无声**。
+#   ★ 本刀**只判"转义形态"**（不跑 bash）：`$evGcCmd` 前那串反引号的个数必须是**奇数**（奇 = `$` 已被转义；
+#     偶 = 裸 `$` ⇒ 会被 PS 二次插值）。
+$arFn = @($ast.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-Task' }, $true))
+Assert-True "O154①(结构): `Invoke-Task` 恰一处（下面锚在这一段源文本上）" ($arFn.Count -eq 1)
+$arSrc = if ($arFn.Count -eq 1) { $arFn[0].Extent.Text } else { '' }
+$arBody = ([regex]::Matches($arSrc, '(?s)@\"(.*?)\"@') | Where-Object { $_.Groups[1].Value -match '\$evGcCmd' } | Select-Object -First 1)
+Assert-True "O154②(取段): 能切出含 `$evGcCmd` 的那个 here-string（切不出 ⇒ ③④ 退化成**空判**）" ($null -ne $arBody)
+$arTxt = if ($arBody) { $arBody.Groups[1].Value } else { '' }
+$btRuns = @([regex]::Matches($arTxt, '(`+)\$evGcCmd') | ForEach-Object { $_.Groups[1].Value.Length })
+Assert-True "O154③(★护栏): `$evGcCmd` 出现处**其前反引号个数必须全为奇数**（裸 `$` ⇒ 二次插值 ⇒ 站上脚本零执行）" (
+    ($btRuns.Count -ge 1) -and (@($btRuns | Where-Object { $_ % 2 -eq 0 }).Count -eq 0))
+# ★④ **先验红·同源对照**：把旧写法（两个反引号 + 裸 `$`）喂给**同一条判据** ⇒ 必须被判红
+$oldTxt = '裕度理由见上面 ``$evGcCmd`` 定义处。'
+$oldRuns = @([regex]::Matches($oldTxt, '(`+)\$evGcCmd') | ForEach-Object { $_.Groups[1].Value.Length })
+Assert-True "O154④(先验红·同源对照): 旧写法在该判据下**必被标红** ⇒ ③ 非恒真" (
+    (@($oldRuns | Where-Object { $_ % 2 -eq 0 }).Count -ge 1))
+
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
 exit $(if ($fail -eq 0) { 0 } else { 1 })

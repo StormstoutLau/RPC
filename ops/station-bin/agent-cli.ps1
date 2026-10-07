@@ -2593,7 +2593,11 @@ STAGE="$stage"
 rm -rf "`$STAGE" && mkdir -p "`$STAGE/attach"
 # ★★ O-68/D3 (2026-09-25): 暂存件**按龄 GC**（**新增**，与 O-57-A 的 reset 并存 —— 见下）。
 #   用途: 防"per-run 件"（以及旧的无后缀死件）**永久累积**（"登记无出口⇒腐化"）。
-#   形状: **只按龄**（``-mtime +7``）⇒ **没有**"删除活件"这种可能；裕度理由见上面 ``$evGcCmd`` 定义处。
+#   形状: **只按龄**（``-mtime +7``）⇒ **没有**"删除活件"这种可能；裕度理由见上面 `` `$evGcCmd `` 定义处。
+#   ⚠⚠ **不许去掉那个转义反引号**（`O-154` · 2026-10-07 实测）：本 here-string 是**双引号**的 ⇒ 未转义的
+#     `$evGcCmd` 会被 PowerShell **插值** ⇒ 12 行 GC 块被注入**注释行中间** ⇒ 逃逸用的成对反引号被拆开、
+#     落一个**游离反引号**在真实命令行上 ⇒ 站上 ``bash`` 报 `行 66: 未预期的 EOF`（匹配一个游离反引号）
+#     ⇒ ★ **整脚本零执行**（`mkdir -p $STAGE/attach` 与两处按龄 GC 全不跑；调用点原先 `| Out-Null` ⇒ **无声**）。
 #   ⚠ 本 body 仍是**每次派发最早的远端写入点** ⇒ 放这里可保证"不会删掉本次 run 自己刚写的件"。
 $evGcCmd
 # ★★ O-72 (2026-09-25): **站上脚本副本**的按龄清（与上面那条同族、同位置 = 派发前段）。
@@ -2638,7 +2642,16 @@ find /tmp -maxdepth 1 -type d -name 'agent-stage-*' -mtime +7 -exec rm -rf {} + 
     #   A 执行到的是 B 的版本 ⇒ 建出 **B 的** stage 目录 ⇒ A 自己的 `$STAGE/attach` 从不存在
     #   ⇒ `scp: dest open "/tmp/agent-stage-<A-token>/attach/": No such file or directory`(实测)。
     #   ⇒ **名字必须带 per-invocation 身份**(与本仓 F-1/F-2/F-14/O-31 同一族:"固定远端名 + 并发"必互踩)。
-    Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-attach-reset-$($Script:RUN_TOKEN).sh" | Out-Null
+    $attachResetRc = Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-attach-reset-$($Script:RUN_TOKEN).sh"
+    if ($attachResetRc -ne 0) {
+        # ★★ O-154（2026-10-07）：**不许静默** —— 这段脚本一坏，`rm -rf $STAGE && mkdir -p $STAGE/attach`
+        #   与两处按龄 GC **全部不执行**；而调用点原先 `| Out-Null` ⇒ 失败**无声**（实测：2026-10-07 派发时
+        #   bash 已报 `行 66: 未预期的 EOF`，派发却仍 `TASK_RC=0`）。★ 该失败正是上一条注释记着的那个
+        #   `scp: dest open "…/attach/": No such file or directory` 的**新根因**。
+        #   ⚠ **只报不改行为**：本步是"前置准备"、不是判据 ⇒ 不 fail-closed（否则一次脚本坏就挡掉所有派发）。
+        Write-Host ("ATTACH_RESET_FAIL: 站上中转准备脚本 rc=$attachResetRc（station=$hostName）" +
+                    " ⇒ `$STAGE/attach 未建 + 按龄 GC 未跑（带附件的派发会 scp 失败）")
+    }
     if ($attach.Count -gt 0) {
         foreach ($a in $attach) {
             if (-not (Test-Path $a)) { Write-Host "attach missing (skip): $a"; continue }

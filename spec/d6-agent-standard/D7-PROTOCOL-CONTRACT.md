@@ -140,7 +140,7 @@
 | **P2 执行** | `Invoke-Task` 本体 | ★ **已接（B3）**：任务体写 `executing`；claude 备路也落同一词。★ 该行**同时是 `PRM` 的争点** —— **已裁【甲】**（角色化，见 §1.4 / §1.6）：主控机器上的出网通道以 `worker` 角色登记 ⇒ **不触** `PRM`，**但必须被 `PRH` 看见** |
 | **P3 回收** | runDir + `.agent-run.json` → `New-RunReport` | ★ **已接（B2）**：**两处** `.agent-run.json` 写出点（主路 + claude 备路）各产 `RunReport` ⇒ 判据校验；★ **刻意不含 `verdict`**（产出方不得自评）；`gaps` 3 项如实报出 |
 | **P4a 机械门** | ★ **`Resolve-L1Gate`（已存在）** | ★ **已接（B2）**：`Get-D7Adjudication` 逐跳调 `d7_transition`（`collected→mech_verified`） |
-| **P4b 语义复核** | ★ **`Invoke-Review` + 结论契约校验（已存在）** | ★ **已接（B2）**：L2 跑过 ⇒ 走 `sem_verified`；**没跑（判官调用失败）⇒ 如实跳过**；`l2_marks[]` = 结论契约段**原文照收**。★★ **`O-151`（2026-10-07）· `http-local` 通道已可复现化**：从"**手工 SSH 隧道**"改成**常规路径 = 站上直发** —— 站号取 `JUDGE_TABLE.station`（该字段**此前声明了却无人读** = 假防线，同 W1a 的 `compliance`）· 站上 `curl 127.0.0.1:8080/v1`（`ports.yaml` `managed/8080`，`bind: 127.0.0.1` ⇒ **主控结构上不可达**，**这正是过去必须开隧道的原因**）· 鉴权键**不出站**（站上 `~/.config/rpc/unsloth.key`）· `REVIEW_HTTP_BASE` **仍优先**（隧道派一字不动 ⇒ **纯增量**）· 缺 `station` ⇒ **throw**（不猜站）。★★ **全链真跑（2026-10-07）**：run `202610071724081401` ⇒ `REVIEW_JUDGE_ROUTE: judge=local/m27-q4ks **via=station-local station=C**` · `call_code=0` · `elapsed_s=229` · `sem_verified` · **无 env、无隧道**（⚠ 通道成功 ≠ 结论通过：该 run 语义判 **不合格** + 契约 `reject`） |
+| **P4b 语义复核** | ★ **`Invoke-Review` + 结论契约校验（已存在）** | ★ **已接（B2）**：L2 跑过 ⇒ 走 `sem_verified`；**没跑（判官调用失败）⇒ 如实跳过**；`l2_marks[]` = 结论契约段**原文照收**。★★ **`O-151`（2026-10-07）· `http-local` 通道已可复现化**：从"**手工 SSH 隧道**"改成**常规路径 = 站上直发** —— 站号取 `JUDGE_TABLE.station`（该字段**此前声明了却无人读** = 假防线，同 W1a 的 `compliance`）· 站上 `curl 127.0.0.1:8080/v1`（`ports.yaml` `managed/8080`，`bind: 127.0.0.1` ⇒ **主控结构上不可达**，**这正是过去必须开隧道的原因**）· 鉴权键**不出站**（站上 `~/.config/rpc/unsloth.key`）· `REVIEW_HTTP_BASE` **仍优先**（隧道派一字不动 ⇒ **纯增量**）· 缺 `station` ⇒ **throw**（不猜站）。★★ **全链真跑（2026-10-07）**：run `202610071724081401` ⇒ `REVIEW_JUDGE_ROUTE: judge=local/m27-q4ks **via=station-local station=C**` · `call_code=0` · `elapsed_s=229` · `sem_verified` · **无 env、无隧道**（⚠ 通道成功 ≠ 结论通过：该 run 语义判 **不合格** + 契约 `reject`）。★★ **2026-10-07 · §未实测 5 已判「已消掉」** —— 两类不同路线各 1 次真跑 + 负向 1 类 ⇒ 移到「**已消掉的未实测项**」第 1 条（本行与 §未实测 5 **同进退**，不两处表达） |
 | **P5 裁决登记** | ★ **`review.json.d7_verdict`（嵌套段 · 2026-10-01 裁【甲】）** —— **advisory**；**顶层无 `verdict` 键** | ★ **已接（B2）+ 已落盘（甲）**：**两处** review 写出点各产 `Verdict` 信封（`verdict` = review 的 **exit code**）⇒ 判据校验 + 红线 1/2；★★ **甲**：组装**提到写盘之前**、注入 `$review['d7_verdict']` ⇒ **一次写盘**（旧实现跑在 `Set-Content` 之后 ⇒ Verdict **只活在 stdout**，C 段实测 `O-139`）；★ 仍 **advisory**（**不改退出码**） |
 | **I-1 单写者** | `Add-LedgerLine`（带锁共享 ledger） | ★ **已接（B3 第二半）**：事件流**写点**调 `d7_block('I1', actor=master, target=events)`（放在重试循环**之前** ⇒ 只跑一次） |
 | ★ **`PRH` 同机可见性**（**非相 · 非拦截**） | `.agent-run.json` 的 `exec_host` / `arbiter_host` | ★ **已接（B3 第二半）**：**两处**写出点落两侧事实（`Resolve-D7Hosts` 单一定义点）；P5 处 `--d7-host-sep` **报数**（同机 ⇒ WARN，**不阻断**） |
@@ -329,6 +329,24 @@
 
 ---
 
+## 已消掉的未实测项（2026-10-07 · `O-151` 全链真跑）
+
+> **本节读法**：只记**曾列在下方、现已由实现 / 实测消掉**的条目 —— **保留记录**，免得下一个人
+> 又以为"这件事没做过"（本仓同族教训：**文档比证据旧**）。★ **原节（`## 未实测登记`）里保留编号**
+> （下方别处引用了"第 N 条"，重编号会**悄悄打断**那些引用 —— 同 [U1-ARTIFACT-IDENTITY](./U1-ARTIFACT-IDENTITY.md) 先例）。
+
+1. ~~**P4b 语义复核（可选分支）从未被真实触发**：`sem_verified` 状态、`l2_marks[]` 产出、"L2 无权改写 L1" 的红线约束，**均只存在于文档，代码里无对应实现**。~~ ⇒ ✅ **已消掉（2026-10-07）**。
+   **依据 = 两类不同路线各 1 次真跑 + 1 类负向（全部有 run 可查）**：
+   - **类① 手工隧道（主控侧 HTTP）**：run `202610042342034271` ⇒ 首次 `sem_verified` · `metadata.call_code=0` · `contract.ok=true` · `l2_marks[]` 非缺席；
+   - **类② 站上直发（`O-151` · 无 env / 无隧道）**：run `202610071724081401` ⇒ `D7_PHASES: collected -> mech_verified -> **sem_verified** -> accepted` · `call_code=0` · `elapsed_s=229` · `l2_marks[]` 非缺席；
+   - **负向 1 类（"该跳过时真的跳过"）**：C 段 `2026-10-01` ⇒ `JUDGE_UNREADY: requires REVIEW_HTTP_BASE` ⇒ `$callCode=7` ⇒ **如实** `-L2Ran $false`（**不假装跑了**）· 无 `sem_verified`。
+   ★ **同条的原句「代码里无对应实现」也一并消了**（B2 已接线，`sem_verified` / `l2_marks[]` 均有真实产出）。
+   ⚠ **诚实边界（勿读过头）**：① 本仓闭合档是**自定**的（`O-149`(a)「**类覆盖：正向 ≥2 个不同类 + 负向 ≥1 类**」，依据 ISTQB 等价类 / 变异充分性）—— ★ **不等于** ACM Artifact Badging 的 **Reproducibility**（那要求**异团队 / 异环境**）；本条的"可重复" = **两条不同路线各跑通一次**，**未验"同一类可重复"**。
+   ② 通道已可复现，但类② 那次的**判官结论**是 `score=不合格` + 契约 `reject`（★ **通道成功 ≠ 结论通过**）。
+   ③ 类① 那次真跑的**产物侧**读数（Verdict / `review.json.d7_verdict`）另记于下方**第 6 条**（不同侧面，非重复）。
+
+---
+
 ## 未实测登记
 
 > **本节的读法**：逐条列"本契约里**尚未被任何真实运行验证过**的部分"，并指出**在什么意义上**没被验证。
@@ -399,13 +417,14 @@
    （`status=completed` / `exit_code=0` / `accept_passed=true` / `golden_active=false`），
    且相序列**真走过** `D7_PHASES: collected -> mech_verified -> accepted`。
    ⚠ 射程如实：**只 1 次**、`golden` **未启用**（该卡无 golden）⇒ `state = partial`（**不是**已消）。
-5. **P4b 语义复核（可选分支）从未被真实触发**：`sem_verified` 状态、`l2_marks[]` 产出、
-   "L2 无权改写 L1"的红线约束，**均只存在于文档，代码里无对应实现**。
-   ★ **C 段：仍未触发（但原因变了）** —— 真实 review 走了 **P4b 的"可选跳过"分支**
-   （`collected -> mech_verified -> accepted`，**无 `sem_verified`**）：判官**自动避让**（`ultra` 与产出者
-   同名 ⇒ 改选 `m27`）后，`m27` 是**本地档** ⇒ `JUDGE_UNREADY: requires REVIEW_HTTP_BASE (engine /v1)`
-   ⇒ `$callCode=7` ⇒ 按设计**如实传 `-L2Ran $false`**（**不假装跑了**）。⇒ `state = todo`（真跑未做），
-   ⚠ 就地更正：原句「**代码里无对应实现**」**已过时**（B2 已接线）。
+5. ~~**P4b 语义复核（可选分支）从未被真实触发**：`sem_verified` 状态、`l2_marks[]` 产出、
+   "L2 无权改写 L1"的红线约束，**均只存在于文档，代码里无对应实现**。~~ ⇒ ✅ **已消掉（2026-10-07）**，
+   移入上方「**已消掉的未实测项**」第 1 条（保留编号：下方别处引用了"第 N 条"，重编号会悄悄打断那些引用）。
+   ★ **中间史（保留，免得被误读成"一直都消了"）**：C 段 `2026-10-01` 那次真实 review 走了 **P4b 的"可选跳过"分支**
+   （`collected -> mech_verified -> accepted`，**无 `sem_verified`**）—— 判官**自动避让**（`ultra` 与产出者同名
+   ⇒ 改选 `m27`）后，`m27` 是**本地档** ⇒ `JUDGE_UNREADY: requires REVIEW_HTTP_BASE (engine /v1)` ⇒
+   `$callCode=7` ⇒ 按设计**如实传 `-L2Ran $false`**（**不假装跑了**）⇒ 当时 `state = todo`。
+   ★ 该**负向**读数正是上方「负向 1 类」的依据；⚠ 就地更正：原句「**代码里无对应实现**」**已过时**（B2 已接线）。
 6. **P5 裁决登记 Verdict 从未被真实落盘**：Verdict 信封（含 `verdict`、`phase`、`l1_results[]`、
    `l2_marks[]`、`redispatch?`、`recorded_at + seq`）的生成与持久化，无真实 run 对应。
    ★ **C 段：生成+机判 ✅ 真跑过；"落盘" ❌ 仍未** —— `D7_VERDICT_OK: Verdict 信封字段级合法`
