@@ -140,7 +140,7 @@
 | **P2 执行** | `Invoke-Task` 本体 | ★ **已接（B3）**：任务体写 `executing`；claude 备路也落同一词。★ 该行**同时是 `PRM` 的争点** —— **已裁【甲】**（角色化，见 §1.4 / §1.6）：主控机器上的出网通道以 `worker` 角色登记 ⇒ **不触** `PRM`，**但必须被 `PRH` 看见** |
 | **P3 回收** | runDir + `.agent-run.json` → `New-RunReport` | ★ **已接（B2）**：**两处** `.agent-run.json` 写出点（主路 + claude 备路）各产 `RunReport` ⇒ 判据校验；★ **刻意不含 `verdict`**（产出方不得自评）；`gaps` 3 项如实报出 |
 | **P4a 机械门** | ★ **`Resolve-L1Gate`（已存在）** | ★ **已接（B2）**：`Get-D7Adjudication` 逐跳调 `d7_transition`（`collected→mech_verified`） |
-| **P4b 语义复核** | ★ **`Invoke-Review` + 结论契约校验（已存在）** | ★ **已接（B2）**：L2 跑过 ⇒ 走 `sem_verified`；**没跑（判官调用失败）⇒ 如实跳过**；`l2_marks[]` = 结论契约段**原文照收** |
+| **P4b 语义复核** | ★ **`Invoke-Review` + 结论契约校验（已存在）** | ★ **已接（B2）**：L2 跑过 ⇒ 走 `sem_verified`；**没跑（判官调用失败）⇒ 如实跳过**；`l2_marks[]` = 结论契约段**原文照收**。★★ **`O-151`（2026-10-07）· `http-local` 通道已可复现化**：从"**手工 SSH 隧道**"改成**常规路径 = 站上直发** —— 站号取 `JUDGE_TABLE.station`（该字段**此前声明了却无人读** = 假防线，同 W1a 的 `compliance`）· 站上 `curl 127.0.0.1:8080/v1`（`ports.yaml` `managed/8080`，`bind: 127.0.0.1` ⇒ **主控结构上不可达**，**这正是过去必须开隧道的原因**）· 鉴权键**不出站**（站上 `~/.config/rpc/unsloth.key`）· `REVIEW_HTTP_BASE` **仍优先**（隧道派一字不动 ⇒ **纯增量**）· 缺 `station` ⇒ **throw**（不猜站） |
 | **P5 裁决登记** | ★ **`review.json.d7_verdict`（嵌套段 · 2026-10-01 裁【甲】）** —— **advisory**；**顶层无 `verdict` 键** | ★ **已接（B2）+ 已落盘（甲）**：**两处** review 写出点各产 `Verdict` 信封（`verdict` = review 的 **exit code**）⇒ 判据校验 + 红线 1/2；★★ **甲**：组装**提到写盘之前**、注入 `$review['d7_verdict']` ⇒ **一次写盘**（旧实现跑在 `Set-Content` 之后 ⇒ Verdict **只活在 stdout**，C 段实测 `O-139`）；★ 仍 **advisory**（**不改退出码**） |
 | **I-1 单写者** | `Add-LedgerLine`（带锁共享 ledger） | ★ **已接（B3 第二半）**：事件流**写点**调 `d7_block('I1', actor=master, target=events)`（放在重试循环**之前** ⇒ 只跑一次） |
 | ★ **`PRH` 同机可见性**（**非相 · 非拦截**） | `.agent-run.json` 的 `exec_host` / `arbiter_host` | ★ **已接（B3 第二半）**：**两处**写出点落两侧事实（`Resolve-D7Hosts` 单一定义点）；P5 处 `--d7-host-sep` **报数**（同机 ⇒ WARN，**不阻断**） |
@@ -429,9 +429,17 @@
    （卡 `dogfood-cards/glob-probe.md`；判官 `m27` = `local/m27-q4ks`，**经 SSH 隧道**到站上引擎 `/v1`）。
    铁证：`REVIEW score=pass pass=True judge=local/m27-q4ks elapsed_s=89` · `metadata.call_code=0` ·
    `D7_PHASES: collected -> mech_verified -> **sem_verified** -> accepted` · `review.json.d7_verdict.l2_marks[]`
-   **非缺席**（此前 L2 没跑 ⇒ 缺席）· `contract.ok=true`。⚠ **未真的那半（如实）**：跑通靠**手工 SSH 隧道**
-   （`REVIEW_HTTP_BASE` 是 env）⇒ **不是常规路径**；要可复现须另立「站上 curl」通道（属另一件，先改裁）
-   ⇒ `state` 记 **`partial`**（不是已消）。
+   **非缺席**（此前 L2 没跑 ⇒ 缺席）· `contract.ok=true`。
+   ★★ **`O-151`（2026-10-07）· 上面"未真的那半"已就地更正** —— **手工 SSH 隧道已不再是常规路径**：
+   通道改为**站上直发**（站号取 `JUDGE_TABLE.station` · 站上 `curl 127.0.0.1:8080/v1` · 鉴权键**不出站** ·
+   `REVIEW_HTTP_BASE` **仍优先** ⇒ **纯增量**）⇒ 详见 §1.6「P4b 语义复核」行。
+   ★ **机制已探针实证（2026-10-07）**：站上直发 `http_code=200`（**无隧道**）· 站上键 `keyset=yes` ·
+   返回合法 `chat.completion` ⇒ ★ **"必须手工开隧道"这一结构前提已消**。
+   ⚠⚠ **仍未做（如实，勿读过头）**：① **全链真跑未做** —— 本轮只验了**判官调用这一跳**，
+   没跑一次完整 `review` ⇒ `state` **仍记 `partial`**；② ★ **当班模型 ≠ 声明判官**：该次探针里请求写
+   `local/m27-q4ks`，而引擎实际以 **`gpt-oss-120b-MXFP4`** 作答（**引擎忽略 `model` 字段**，`ports.yaml` 已登记）
+   ⇒ **判官身份由"当班引擎"决定，不由 `id` 字段决定** ⇒ 走通这条路**不构成**"m27 判官样本"，
+   `O-149`(a) 的新档样本**未被本批喂到**。
 7. **三条红线从未被机制强制过**：完成信号权仅在主控站 · L1 先于 L2 且 L2 不改写 ·
    判据与 golden 哈希 P0 固化 —— 均为**文档约束**，代码层**无拦截/校验实现**。
    ★ **A 段已落（2026-10-01）**：三条已落成**纯函数拦截**（`ops/rpc_check.py` 的 `d7_block`
