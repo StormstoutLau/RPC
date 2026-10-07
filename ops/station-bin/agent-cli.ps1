@@ -2808,11 +2808,17 @@ mkdir -p "`$STAGE/attach/$name"
         # mismatched `-xzf` would fail "not in gzip format" (V0 real-run finding, 2026-09-09)
         # M3 golden block (fused into $body below; literal interpolation ONLY for the three
         # console-side values goldenSha/goldenBase/goldenCmdB64 - all remote vars backtick-escaped)
-        $goldenBlock = @"
+        # ★ `O-149` 丙′（2026-10-08）：**受控变异注入点（测试专用）**。门控值在【控制台侧】读 env
+    #   再作为字面量插值进远端脚本 —— ★ 因为远端是 `ssh host bash /tmp/x.sh`，**env 传不过去**，
+    #   若写成 `$RPC_GOLDEN_MUTATE` 由 bash 读，它恒为 0 ⇒ 变异永不生效（这个坑我第一版设计就踩了）。
+    #   默认（env 未设）⇒ 注入 `0` ⇒ 与既有行为**逐字节一致**（纯增量）。
+    $goldenMutate = if ($env:RPC_GOLDEN_MUTATE -eq '1') { '1' } else { '0' }
+    $goldenBlock = @"
 GOLDEN_ACTIVE=1
 GOLDEN_SHA="$goldenSha"
 GOLDEN_BASE="$goldenBase"
 GOLDEN_CMD_B64="$goldenCmdB64"
+[ "$goldenMutate" = "1" ] && rm -f "`$W/.golden/`$GOLDEN_BASE"
 echo "`$GOLDEN_SHA  `$W/.golden/`$GOLDEN_BASE" | sha256sum -c >/dev/null 2>&1
 TAMPER_RC=`$?
 if [ `$TAMPER_RC -ne 0 ]; then
