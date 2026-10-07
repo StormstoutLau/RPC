@@ -5168,6 +5168,65 @@ function Invoke-JudgeHttp {
     }
 }
 
+# ── ★★ O-151（2026-10-07）：`http-local` 判官的**常规路径 = 站上直发** ─────────────────────────
+# 真值源 = `inventory/ports.yaml` 的 `managed/8080`（purpose=本地推理引擎 API(unsloth studio 对外面) ·
+#   `bind: 127.0.0.1` · scope=[A,B,C] · mode=on_demand）。
+#   ⚠ 本文件是 PS 5.1、**不解析 yaml** ⇒ 只能"具名常量 + 真值源指针"表达；★ 本文件另有**既有**散落字面
+#     （站上 claude 的 local-only 段）—— 本轮**不动**（收它们属另一件）。
+$Script:STATION_ENGINE_BASE = 'http://127.0.0.1:8080/v1'
+
+function Invoke-JudgeHttpOnStation {
+    # ★★ O-151：**站上直发** —— 判官的 HTTP 调用在**站上**发起，打**站上 loopback** 的引擎面
+    #   ⇒ ★ **不需要 SSH 隧道、也不需要主控能路由到站上引擎**（引擎 `bind: 127.0.0.1`
+    #   ⇒ **主控结构上不可达** —— 那正是过去必须手工开隧道的原因）。
+    # ★ 复用**既有**站上执行机制 `Invoke-RemoteCapture`（与 `egress` 分支**同源**，不新造通道）。
+    # ★ **鉴权键不出站**：读站上 `~/.config/rpc/unsloth.key`（**与站上 claude local-only 段同一来源**，
+    #   见 `_p3_claude_run.sh` 的 `KEYF="$HOME/.config/rpc/unsloth.key"`）⇒ 键**不经过主控**。
+    #   ⚠ 缺键 ⇒ 不带 `Authorization`（与既有那段同口径：`[ -f ]` 不成立则 `K` 为空）。
+    # ⚠ 与 `Invoke-JudgeHttp` 的**分工**：本函数**不做** RPM/429 处理 —— 那是为**出网**判官
+    #   （ADR-0003：OpenRouter free 档 20 分/分）设的；站上本地引擎**没有配额**，套上去只会白等。
+    #   ★ 但 `temperature=0` 与 `max_tokens` 两个**语义**参数必须与主控侧逐字一致 —— 否则同一判官的
+    #     两条路**结论不可比**（那会让"可复现"变成"看起来可复现"）。
+    # ⚠ **站上失败必须 throw**（`set -eu` + `curl -f`）—— **不回落主控侧发**：那会静默把刚拆掉的
+    #   "手工隧道"又变成隐式前提（= 把常规路径偷偷降级回非常规）。
+    param([string]$Station, [string]$Model, [string]$Prompt, [int]$TimeoutS, [int]$MaxTokens = 8000)
+    $hostName = Get-TargetHost $Station
+    $base = $Script:STATION_ENGINE_BASE
+    $payload = @{
+        model = $Model
+        messages = @(@{ role = 'user'; content = $Prompt })
+        temperature = 0.0
+        max_tokens = $MaxTokens
+    } | ConvertTo-Json -Depth 6
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload))
+    # ★ 为什么用**单引号** here-string + `.Replace()`：`egress` 那段用双引号 here-string，于是每个 bash 的
+    #   `$` 都得写成 `` `$ ``（免被 PS 插值）—— 下面这段有数组 / 子命令 / 多个变量，手写转义极易错
+    #   （本仓 PS 5.1 的坑已吃过多次）。单引号 = **PS 完全不碰**，只替换 3 个占位符。
+    $body = @'
+set -eu
+KEYF="$HOME/.config/rpc/unsloth.key"
+K=""
+if [ -f "$KEYF" ]; then K=$(tr -d '[:space:]' < "$KEYF"); fi
+D=$(mktemp -d)
+printf '%s' "__B64__" | base64 -d > "$D/req.json"
+H=(-H 'Content-Type: application/json')
+if [ -n "$K" ]; then H+=(-H "Authorization: Bearer $K"); fi
+curl -fsS -m __TIMEOUT__ "${H[@]}" --data-binary "@$D/req.json" __BASE__/chat/completions > "$D/out.json"
+echo "REVIEW_B64_START"
+base64 -w0 "$D/out.json" 2>/dev/null || base64 "$D/out.json"
+echo ""
+echo "REVIEW_B64_END"
+'@
+    $body = $body.Replace('__B64__', $b64).Replace('__TIMEOUT__', [string]$TimeoutS).Replace('__BASE__', $base)
+    $cap = Invoke-RemoteCapture -HostName $hostName -ScriptBody $body -LocalName 'agent-cli-judge-http.sh'
+    $b = Get-MarkerValue -text $cap -start 'REVIEW_B64_START' -end 'REVIEW_B64_END'
+    if (-not $b) { throw "JUDGE_HTTP_ON_STATION_FAIL: 站上未回传引擎应答（station=$Station · base=$base）: $cap" }
+    try { $json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b)) }
+    catch { throw "JUDGE_HTTP_ON_STATION_FAIL: 站上应答不是合法 base64（station=$Station）" }
+    $obj = $json | ConvertFrom-Json
+    return [string]$obj.choices[0].message.content
+}
+
 function Invoke-Judge {
     # dispatch judge call by JUDGE_TABLE type -> raw judge reply text.
     param([hashtable]$judge, [string]$prompt, [int]$timeoutS)
@@ -5212,11 +5271,32 @@ echo "REVIEW_B64_END"
             return ($raw.Trim())
         }
         'http-local' {
-            # source ③ rpc / ④ m27: OpenAI-compatible local engine. Guard sync via env.
-            if (-not $env:REVIEW_HTTP_BASE) { throw "JUDGE_UNREADY: local judge '$($judge['id'])' requires REVIEW_HTTP_BASE (engine /v1) - load an engine + set env" }
+            # source ③ rpc / ④ m27: OpenAI-compatible **站上本地引擎**。
+            # ★★ O-151（2026-10-07）：**常规路径 = 站上直发**（见 `Invoke-JudgeHttpOnStation`）——
+            #   把"手工 SSH 隧道 + 手设 REVIEW_HTTP_BASE"这两个**人工步骤**从默认路径里拿掉。
+            # ★ **站号取自 `$judge['station']`** —— 该字段**此前声明了、但 `http-local` 从没读过**
+            #   （只看 env）⇒ 与 W1a「`compliance` 声明了没人读 = **假防线**」**同族**；本刀把它接成**承重值**。
+            #   ⚠ 由此**新增**一条义务：`station` 的值现在**决定**打到哪一站（改表 = 改行为）。
+            # ★ **兼容（纯增量）**：`REVIEW_HTTP_BASE` **仍然优先** —— 给了 env 就走**主控侧 HTTP**
+            #   （既有行为**一字不动**，隧道派仍可用）；只有**未给 env** 时才走站上直发
+            #   （★ 此前这一路是**直接 throw `JUDGE_UNREADY`**）⇒ **既有调用方零影响**。
+            # ⚠ **fail-closed**：`station` 缺 ⇒ **throw**（**不猜站** —— 猜站会把"打错站"变成静默错误）。
             $mt = if ($judge['maxtokens']) { $judge['maxtokens'] } else { 8000 }
-            return (Invoke-JudgeHttp -base $env:REVIEW_HTTP_BASE -key $env:REVIEW_HTTP_KEY `
-                -model $($judge['id']) -prompt $prompt -timeoutS $timeoutS -maxTokens $mt)
+            if ($env:REVIEW_HTTP_BASE) {
+                Write-Host ("REVIEW_JUDGE_ROUTE: judge=" + $judge['id'] + " via=env base=" + $env:REVIEW_HTTP_BASE +
+                            " ⇒ 主控侧 HTTP（隧道派；**不是**站上直发）")
+                return (Invoke-JudgeHttp -base $env:REVIEW_HTTP_BASE -key $env:REVIEW_HTTP_KEY `
+                    -model $($judge['id']) -prompt $prompt -timeoutS $timeoutS -maxTokens $mt)
+            }
+            $st = [string]$judge['station']
+            if (-not $st) {
+                throw ("JUDGE_UNREADY: local judge '" + $judge['id'] + "' 未声明 station ⇒ 不能站上直发（不猜站）；" +
+                       "请补 JUDGE_TABLE.station，或显式给 REVIEW_HTTP_BASE")
+            }
+            Write-Host ("REVIEW_JUDGE_ROUTE: judge=" + $judge['id'] + " via=station-local station=" + $st +
+                        " base=" + $Script:STATION_ENGINE_BASE)
+            return (Invoke-JudgeHttpOnStation -Station $st -Model $($judge['id']) -Prompt $prompt `
+                -TimeoutS $timeoutS -MaxTokens $mt)
         }
         'http' {
             if (-not $env:REVIEW_COMMERCIAL_BASE -or -not $env:REVIEW_COMMERCIAL_MODEL) {

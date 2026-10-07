@@ -2572,6 +2572,57 @@ $splitFn = @($ast.FindAll({ param($n)
 Assert-True "O141-split⑨(结构): Invoke-SplitTask 内无字面「% 3」（映射必须经 Get-SplitDispatchPlan）" (
     ($splitFn.Count -eq 1) -and (-not ($splitFn[0].Extent.Text -match '%\s*3')))
 
+# --- ★★ O-151 (2026-10-07): `http-local` 判官的**常规路径 = 站上直发**（消掉手工 SSH 隧道）-----
+#   由来：首次 `sem_verified` 靠**手工 SSH 隧道 + 手设 REVIEW_HTTP_BASE**（非常规 ⇒ 不可重复）。
+#   ★ 本刀把 `JUDGE_TABLE.station`（**此前声明了、但 `http-local` 从没读** = 假防线，同 W1a 的
+#     `compliance`）接成**承重值**；★ 兼容口径 = **纯增量**（env 仍优先 ⇒ 既有调用方零影响）。
+#   ⚠ 夹具**不执行**它（要 ssh + 站上引擎在位）⇒ 只做**源文本 / 判序**断言 + **先验红·同源对照**。
+$jrFn = @($ast.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-Judge' }, $true))
+Assert-True "O151①(结构): `Invoke-Judge` 恰一处（下面所有断言都锚在这一段源文本上）" ($jrFn.Count -eq 1)
+$jrSrc = if ($jrFn.Count -eq 1) { $jrFn[0].Extent.Text } else { '' }
+$iHL = $jrSrc.IndexOf("'http-local'")
+$iH  = $jrSrc.IndexOf("'http' {")
+Assert-True "O151②(取段): 能切出 `http-local` 分支（切不出 ⇒ 下面断言会退化成**空判**）" (
+    ($iHL -ge 0) -and ($iH -gt $iHL))
+$hlSrc = if (($iHL -ge 0) -and ($iH -gt $iHL)) { $jrSrc.Substring($iHL, $iH - $iHL) } else { '' }
+# ★③ **接线**：读 `$judge['station']` —— 锚在**代码行**上，不锚在注释上（注释里也提到过该字段 ⇒ 会假绿）
+Assert-True "O151③(★接线): `http-local` 分支**读** `judge['station']`（该字段此前声明却无人读 = 假防线）" (
+    $hlSrc.Contains("`$st = [string]`$judge['station']"))
+# ★④ **判序·兼容**：env 覆盖**在**站上直发**之前**（顺序承重 —— 本仓已栽两次）
+$iEnv = $hlSrc.IndexOf("if (`$env:REVIEW_HTTP_BASE) {")
+$iOn  = $hlSrc.IndexOf('Invoke-JudgeHttpOnStation -Station')
+Assert-True "O151④(★判序·兼容): env 覆盖在站上直发**之前**（否则 env 形同虚设）" (
+    ($iEnv -ge 0) -and ($iOn -gt $iEnv))
+Assert-True "O151⑤(兼容): env 那条路**仍然调用**主控侧 `Invoke-JudgeHttp`（隧道派不失效）" (
+    $hlSrc.Contains("Invoke-JudgeHttp -base `$env:REVIEW_HTTP_BASE"))
+# ★⑥ fail-closed：缺 `station` ⇒ **throw**（**不猜站**）
+Assert-True "O151⑥(★fail-closed): `station` 缺 ⇒ **throw**（不猜站；猜站会把'打错站'变静默错）" (
+    $hlSrc.Contains('未声明 station'))
+$stFn = @($ast.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-JudgeHttpOnStation' }, $true))
+Assert-True "O151⑦(结构): `Invoke-JudgeHttpOnStation` 恰一处，且**调用**既有 `Invoke-RemoteCapture`（不新造通道）" (
+    ($stFn.Count -eq 1) -and $stFn[0].Extent.Text.Contains("Invoke-RemoteCapture -HostName `$hostName"))
+Assert-True "O151⑧: 站上基址取自**具名常量**（函数体内不出现第二份 loopback 字面）" (
+    ($stFn.Count -eq 1) -and $stFn[0].Extent.Text.Contains("`$Script:STATION_ENGINE_BASE") -and
+    (-not ($stFn[0].Extent.Text -match 'http://127\.0\.0\.1:8080/v1')))
+Assert-True "O151⑨: 常量 = loopback 引擎面，且注释**指向真值源** `inventory/ports.yaml`（不造第二份真值）" (
+    $content.Contains("`$Script:STATION_ENGINE_BASE = 'http://127.0.0.1:8080/v1'") -and
+    $content.Contains('inventory/ports.yaml'))
+# ★⑩ **先验红·同源对照**：**旧版**（env-only、无 station-local）在同一批判据上**必为假** ⇒ ③④ 非恒真
+$oldHl = @'
+        'http-local' {
+            if (-not $env:REVIEW_HTTP_BASE) { throw "JUDGE_UNREADY: ..." }
+            $mt = 8000
+            return (Invoke-JudgeHttp -base $env:REVIEW_HTTP_BASE -key $env:REVIEW_HTTP_KEY -model 'x' -prompt 'p' -timeoutS 1)
+        }
+'@
+$oEnv = $oldHl.IndexOf("if (`$env:REVIEW_HTTP_BASE) {")
+$oOn  = $oldHl.IndexOf('Invoke-JudgeHttpOnStation -Station')
+Assert-True "O151⑩(先验红·同源对照): 旧版（env-only）在 ③④ 上**必为假**（同源对照 ⇒ 两条断言非恒真）" (
+    (-not $oldHl.Contains("`$st = [string]`$judge['station']")) -and
+    (-not (($oEnv -ge 0) -and ($oOn -gt $oEnv))))
+
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
 exit $(if ($fail -eq 0) { 0 } else { 1 })
