@@ -3837,13 +3837,59 @@ def check_ledger_status(ctx):
     return ("FAIL" if bad else "PASS"), note, detail
 
 
-def summarize_untested_triage(items):
+# ── O-144 甲（2026-10-06）：`needs_decision` 的**第二个来源 = 台账** ──────────────
+# 依据（`O-144` 的根因）：`needs_decision` 原只认**规范文档措辞** ⇒ 台账（`OPEN-ISSUES.md`）里
+#   写的"待裁"**结构性地反映不到索引** ⇒ `needs_decision: 0` 被误读成"本仓没有待裁项"。
+# ★ 口径 = **实测收敛**（2026-10-06 只读探针，见 `O-144` 设计段）：
+#   · **只认「待裁」二字** —— ⚠ **不用「未裁 / 未定」**：宽口径**引爆 34 条**，因为**已闭环**条目
+#     正文常在讲"**当初**未裁 → 后来裁了"（**历史**）⇒ 会被读成"**当前**待裁"（= 假信号）；
+#     窄口径 = **9 条**，恰好 = `D7-PROTOCOL-CONTRACT` #1–#9（经 `refs=O-136`）⇒ 与诊断吻合。
+#   · **只扫该行的【自述面】**（简述格 + 状态格）—— 不扫 ID/类别/严重度/归属。
+LEDGER_PENDING_MARK = "待裁"
+
+
+def ledger_pending_ids(rows):
+    """**纯函数**：从台账行取「**自述面明写「待裁」**」的 id 集合（`O-144` 甲）。
+
+    `rows` = `parse_ledger_rows` 的产物（`[{id, line, status, cells}]`）。
+    ⚠ **射程（如实）**：只扫 `cells[3]`（简述）+ `cells[4]`（状态）；只认「待裁」。
+      ★ **已知误报面**：若某行正文**历史性地**提到"待裁"（如"曾待裁、已裁"），会被读成当前待裁 ——
+        当前实测 0 例，但**该形态存在**（与 `O-153` 同族的"射程被读宽"风险）。
+    """
+    out = set()
+    for r in (rows or []):
+        if not isinstance(r, dict):
+            continue
+        cells = r.get("cells") or []
+        txt = " ".join(str(c) for c in cells[3:5]) if len(cells) >= 5 else str(r.get("line") or "")
+        if LEDGER_PENDING_MARK in txt:
+            out.add(r.get("id"))
+    return out
+
+
+def _ledger_rows_for_triage():
+    """读台账行供 `O-144` 甲用；★ **读不出 ⇒ `None`**（退回旧口径，不阻断）。
+
+    ⚠ 为什么这里可以"静默退回"而不违 fail-closed：**台账自身的可读性另有判据**
+      （`ledger-status`：缺状态格即 FAIL）⇒ **判据只在一处**，此处不回重复判。
+    """
+    try:
+        return parse_ledger_rows(_read_text(LEDGER))
+    except Exception:
+        return None
+
+
+def summarize_untested_triage(items, ledger_rows=None):
     """**纯函数**：消费 `untested-index.yaml` 的**分诊**（O-123 · 2026-09-30）⇒ 返回 `(warn, stats)`。
 
     ★ **这是该索引的【首个消费者】**（此前它是叶子节点：只有它自己和它自己的同步测试引用它）。
-    ★ **唯一的判据**：任一条 `needs_decision: true` ⇒ 点名 —— 口径 = 「**未裁项不许静默**」。
-      `needs_decision` 只在**文档明写**「未裁 / 未定 / 待裁」时为 true（索引表头的定义，不是我推断），
-      而"未裁"意味着**下一步动作是人**⇒ 它必须**有人看见**（本仓 fail-closed 精神；同 `O-119` 的"不可判 ≠ 通过"）。
+    ★ **判据**：某条被认定为「**待裁**」⇒ 点名 —— 口径 = 「**未裁项不许静默**」。
+      而"待裁"有**两个来源**（`O-144` 甲，2026-10-06）：
+        ① `needs_decision: true`（索引里**手写**的 —— 原口径，只在**规范文档明写**时填）；
+        ② ★ **`refs` 指向的台账条目【明写「待裁」】**（新口径，`ledger_rows` 非 None 时才生效）。
+      ⇒ 为什么必须补 ②（`O-144` 的根因）：台账里写的"待裁"原**反映不到索引** ⇒
+        `needs_decision: 0` 会被**误读成"本仓没有待裁项"**（本仓 fail-closed 精神；同 `O-119` 的"不可判 ≠ 通过"）。
+      ⚠ `ledger_rows=None`（缺参 / 台账读不出）⇒ **退回旧口径**（只认 ①），**不阻断**。
     📊 `stats` = 报数（`state` / `blocker` / `needs_decision` 分布）—— **只报不判**（本仓"标签比事实硬"教训）。
     ⚠⚠ **不判什么**（防读过头）：
       · 不判"**该闭环多少条**"（开着不是错误）；
@@ -3852,7 +3898,8 @@ def summarize_untested_triage(items):
     """
     warn = []
     n = 0
-    by_state, by_blocker, n_dec = {}, {}, 0
+    by_state, by_blocker, n_dec, n_via = {}, {}, 0, 0
+    pending = ledger_pending_ids(ledger_rows) if ledger_rows is not None else set()
     for it in (items or []):
         if not isinstance(it, dict):
             continue
@@ -3861,11 +3908,21 @@ def summarize_untested_triage(items):
         bl = str(it.get("blocker") or "?")
         by_state[st] = by_state.get(st, 0) + 1
         by_blocker[bl] = by_blocker.get(bl, 0) + 1
+        whose = f"{it.get('spec')}#{it.get('n')}"
         if it.get("needs_decision") is True:
             n_dec += 1
-            warn.append(f"{it.get('spec')}#{it.get('n')}: `needs_decision: true` ⇒ **未裁项不许静默**"
+            warn.append(f"{whose}: `needs_decision: true` ⇒ **未裁项不许静默**"
                         f"（要么裁掉并落回规范本体，要么在索引里写明为何仍是 true）")
-    stats = {"n": n, "state": by_state, "blocker": by_blocker, "needs_decision": n_dec}
+            continue
+        via = [r for r in (it.get("refs") or []) if isinstance(r, str) and r in pending]
+        if via:
+            n_dec += 1
+            n_via += 1
+            warn.append(f"{whose}: `needs_decision` 字段为 false，但它 `refs` 指向的台账条目"
+                        f"（{', '.join(via)}）**明写「待裁」** ⇒ **未裁项不许静默**"
+                        f"（`O-144` 甲：来源已扩到台账 —— 请裁掉并落回规范本体，或把该行措辞改准）")
+    stats = {"n": n, "state": by_state, "blocker": by_blocker,
+             "needs_decision": n_dec, "needs_decision_via_ledger": n_via}
     return warn, stats
 
 
@@ -3922,11 +3979,12 @@ def check_spec_untested(ctx):
         else:
             try:
                 inv = yaml.safe_load(_read_text(UNTESTED_INDEX)) or {}
-                tri_warn, tri = summarize_untested_triage(inv.get("items"))
+                tri_warn, tri = summarize_untested_triage(inv.get("items"), _ledger_rows_for_triage())
                 _fmt = lambda d: " · ".join(f"{k}={v}" for k, v in sorted(d.items()))
                 tri_note = (f" · **索引分诊** 条目 {tri['n']}"
                             f"（state {_fmt(tri['state'])}；blocker {_fmt(tri['blocker'])}；"
-                            f"needs_decision {tri['needs_decision']}）")
+                            f"needs_decision {tri['needs_decision']}"
+                            f"（其中 **{tri['needs_decision_via_ledger']} 条由台账 `refs` 推出**））")
                 if tri["n"] == 0:
                     tri_warn = ["索引 `items` **为 0 条** ⇒ 分诊消费没有对象（防退化成空判）"]
             except Exception as e:

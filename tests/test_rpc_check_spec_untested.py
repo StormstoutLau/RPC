@@ -164,13 +164,62 @@ def test_triage_not_vacuous_and_empty_safe():
     assert warn == [] and st["needs_decision"] == 0, (warn, st)
 
 
+def _row(oid="O-136", gist="正文", status="🔵 部分收口", tail="归属"):
+    """构造 `parse_ledger_rows` 形状的一行：`cells = [ID, 类别, 严重度, 简述, 状态, 归属]`。"""
+    return {"id": oid, "line": 1, "status": status, "cells": [oid, "类别", "P2", gist, status, tail]}
+
+
+# ── ⑨ ★★★ O-144 甲（2026-10-06）：`needs_decision` 的**第二个来源 = 台账** ───────────────
+#   根因：`needs_decision` 原只认**规范文档措辞** ⇒ 台账里写的"待裁"**结构性地反映不到索引**
+#     ⇒ `needs_decision: 0` 被误读成"本仓没有待裁项"（`O-144`）。
+#   新口径：索引条目的 `refs` 指向的台账行**明写「待裁」** ⇒ 同样点名。
+#   ★ 口径 = **实测收敛**（只读探针）：**只认「待裁」**（宽口径"未裁/未定"引爆 34 条 ——
+#     已闭环条目在讲"当初未裁"= **历史** ⇒ 假信号）；**只扫自述面**（简述 + 状态）。
+def test_triage_ledger_refs_warns_and_is_not_vacuous():
+    """★★ O-144 甲的主判据 + **先验红·同源对照**：
+    同一份输入，只把台账那行的「待裁」去掉 ⇒ **必须不报**（证明判据真在读台账，不恒真）。"""
+    it = dict(_item(), refs=["O-136"])
+    warn, st = R.summarize_untested_triage([it], [_row(gist="三处待裁（灰度门槛 / PRH 定档 / seq 语义）")])
+    assert len(warn) == 1 and "O-136" in warn[0] and "待裁" in warn[0], (st, warn)
+    assert st["needs_decision"] == 1 and st["needs_decision_via_ledger"] == 1, st
+    warn2, st2 = R.summarize_untested_triage([it], [_row(gist="三处已裁（灰度门槛 / PRH 定档 / seq 语义）")])
+    assert warn2 == [] and st2["needs_decision_via_ledger"] == 0, (st2, warn2)
+
+
+def test_triage_ledger_mark_is_narrow_only():
+    """★ 口径护栏（**实测收敛**）：**只认「待裁」** —— 台账只写「未裁 / 未定」⇒ **不报**。
+    ⚠ 放宽此口径会**引爆 34 条**（已闭环条目在讲"当初未裁"= 历史）⇒ 这条钉死它。"""
+    it = dict(_item(), refs=["O-123"])
+    for word in ("未裁", "未定"):
+        warn, st = R.summarize_untested_triage([it], [_row(oid="O-123", gist=f"历史上{word}，后已裁")])
+        assert warn == [] and st["needs_decision_via_ledger"] == 0, (word, warn, st)
+
+
+def test_triage_ledger_scope_and_backward_compat():
+    """★ **射程**：只扫**自述面**（简述 + 状态格）—— 「待裁」只出现在**归属格** ⇒ 不报。
+    ★ **兼容**：`ledger_rows=None`（缺参）⇒ **退回旧口径**（本改动不改既有调用行为）。"""
+    it = dict(_item(), refs=["O-136"])
+    assert R.summarize_untested_triage([it], [_row(gist="无关键词", status="ok", tail="待裁")])[0] == []
+    assert R.summarize_untested_triage([it], None)[0] == []
+    assert R.summarize_untested_triage([it])[0] == []
+    assert R.summarize_untested_triage([it], [])[0] == []
+
+
 def test_triage_repo_end_to_end():
-    """端到端：真读本仓索引 ⇒ 条目 ≥1（防空判）且 `needs_decision` 当前应为 **0**。"""
+    """端到端：真读本仓**索引 + 台账**（O-144 甲）⇒ 条目 ≥1（防空判），
+    且台账里明写「待裁」的那些 `refs` **必须被点名**。
+    ★ **不写死条数**（本仓教训：**标签比事实硬**）—— 条数由门禁 note 报出。
+    ★ **兼容**：不喂台账 ⇒ 退回旧口径（字段口径仍全 false ⇒ 0）。"""
     import yaml
     inv = yaml.safe_load(R.UNTESTED_INDEX.read_text(encoding="utf-8"))
-    warn, st = R.summarize_untested_triage(inv.get("items"))
+    rows = R.parse_ledger_rows(R.LEDGER.read_text(encoding="utf-8"))
+    assert R.ledger_pending_ids(rows), "台账里应有明写「待裁」的行（否则本判据没有对象）"
+    warn, st = R.summarize_untested_triage(inv.get("items"), rows)
     assert st["n"] >= 1, "★ 条目为 0 ⇒ 消费没有对象（会退化成空判）"
-    assert st["needs_decision"] == 0, f"仍有未裁项 ⇒ 必须被看见: {warn}"
+    assert st["needs_decision_via_ledger"] >= 1, f"台账有「待裁」却未被点名 ⇒ O-144 缺口复现: {warn}"
+    assert all(("台账" in w) or ("needs_decision: true" in w) for w in warn), warn
+    warn2, st2 = R.summarize_untested_triage(inv.get("items"))
+    assert st2["needs_decision"] == 0 and warn2 == [], (st2, warn2)
 
 
 def test_triage_wiring_is_visible_in_gate():
