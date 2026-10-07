@@ -2783,7 +2783,7 @@ ls -la "$stage" 2>&1
 echo '--- attach ---'
 ls -la "$stage/attach" 2>&1
 "@
-        Write-Host ("STAGE_LS: " + (([string]$stageLs).Trim() -replace "`r?`n", " ｜ "))
+        Write-Host ("STAGE_LS(MASTER_STAGE=$stage): " + (([string]$stageLs).Trim() -replace "`r?`n", " ｜ "))
         # ── O-59/T1 (2026-09-25): **注入动作不再在这里做** ───────────────────────────────────────
         # 原来这里是一段独立 remote script: `rm -rf "$W/.golden"` + 解包 —— 与 `.attach` 是**同一族**
         #   (在远端 flock **之外**碰共享面) ⇒ `readonly:true` 的共享锁下两跑会互删/互相覆盖 `.golden`。
@@ -2903,6 +2903,7 @@ echo "LOCK_ACQUIRED pid=`$$ mode=`$( [ -n "`$LOCK_FLAGS" ] && echo shared || ech
 #   ② 必须**早于** ``.attach-manifest.txt`` 采样(它在下面) —— 那份 manifest 记的是"**注入的字节**";
 #   ③ ``$STAGE`` 是**本 run 私有**的中转(console 侧写入, 与 ``$W`` 零接触, 故它自己不需要锁)。
 # ⇒ 落地后立即删中转目录(``rm -rf "$STAGE"``), 不留残留。
+echo "STAGE_PROBE=[`$STAGE]"
 rm -rf "`$W/.attach" && mkdir -p "`$W/.attach"
 if [ -d "`$STAGE/attach" ]; then cp -a "`$STAGE/attach/." "`$W/.attach/" 2>/dev/null || true; fi
 echo "ATTACH_STAGED=`$(ls -1 "`$W/.attach" 2>/dev/null | wc -l)"
