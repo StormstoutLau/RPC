@@ -19,6 +19,27 @@ upstream: \[d6-agent-standard-.* 全量文档]
 
 ## 历史回溯（2026-09-03 起）
 
+### 2026-10-07（续⑪） — **`O-156` 定位第一刀：加 `STAGE_LS` 诊断 ⇒ 中转齐全、分歧收敛到 body 侧**
+
+**授权**：用户批「去静默」⇒ 执行时**先读码**，结果**推翻了"静默"这个前提** ⇒ 改做**更有分叉力的诊断**。
+
+**① ★ 前提更正（就地）**：三处 scp 的 **rc 其实都已查**（attach L2681 · golden L2770，失败即 `return 5`），而两次派发**都没报 `NETFAIL`** ⇒ **scp 是成功的** ⇒ ★ **"静默"不成立**（`O-156` 已更正；★ 免掉一次无用的改造）。
+
+**② 加诊断（只报数、不改行为）**：`STAGE_LS`（`Invoke-RemoteCapture` 打 `ls -la $stage` + `$stage/attach`）⇒ 随本批入库，**标注"定位后应撤"**。★ 夹具 **558/0** 未破。
+
+**③ ★★ 真读数（第二次真跑 run `202610072356124000`）**：
+```
+STAGE_LS: 总计 64 | drwxrwxr-x attach | -rw-rw-r-- golden.tgz 10240 | --- attach --- | o154-attach-probe.txt 210
+ATTACH_STAGED=0 · ATTACH_MANIFEST_LINES=0 · GOLDEN_STAGE_FAIL · GOLDEN_STAGED=0 · GOLDEN_TAMPERED · ACCEPT_GOLDEN_OK=0 · TASK_RC=9
+```
+⇒ ★★ **中转【齐全】（两件都在），而同一个 `$STAGE` 在 body 里读不到** ⇒ **整条 scp/staging 链被排除**、分歧**定位在 body 侧**。
+
+**④ ★★ 收敛结论（一条因、三个读数）**：**若 body 手里的 `$STAGE` 不是那条中转路径** ⇒ `[ -d "$STAGE/attach" ]` 假（不复制 ⇒ `ATTACH_STAGED=0`）+ `tar -xf "$STAGE/golden.tgz"` 找不到（⇒ `GOLDEN_STAGE_FAIL`）+ `.attach-manifest` 空（⇒ `ATTACH_MANIFEST_LINES=0`）。★ **已排除两种"为什么"**：不是"未定义"（body L2858 有 `STAGE="$stage"`，注释还明说补过 `set -u` 坑）· 不是"未插值"（L2859 的 `` `$W `` 证明该 here-string 是**双引号**的）。
+
+**★ 决议性下一刀（未做）**：body 落盘段加 `echo "STAGE_PROBE=[$STAGE]"` ⇒ 直接看 body 手里那个值。
+
+**未做（如实）**：未加 `STAGE_PROBE` · 未核 `O-59/T1` 与 `O-68/D2-D3` 前后行为差异 · 未查 body 是否在别的 mount namespace（`/tmp` 不同视图也会给出同样三读数）。
+
 ### 2026-10-07（续⑩） — **第 2 档方案 2：「含 golden 的卡」真跑 —— 【失败】⇒ 立 `O-156`（含一处自伤更正）**
 
 > 靶卡 = **专用探针** `dogfood-cards/v4-attach-golden-probe.md`（设计上同时压"附件清单"与"golden 产物"两条路）· run `202610072318505066`。
