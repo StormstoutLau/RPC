@@ -6104,11 +6104,37 @@
    "recipe": "v2",
    "chained_at": "2026-10-08 04:03:03",
    "prev": "ebce7c8d31e9496718ec8c7c73a94397920e6c75104c28c5585d8cf087ccae37"
+  },
+  {
+   "proj": "dogfood",
+   "run_id": "202610080409054247",
+   "digest": "abf008786fab691a7ac5e97f29e8c600450719714b33be07bdf027f87312e183",
+   "files": {
+    ".agent-run.json": "d0bd76c4ce18d2c043ccad88c8764b097659cd7eb589cc370cbd93c2876250be",
+    "agent-output": "e847f420239d24122a799b777897636511127e60c46328238dec988054766aac",
+    "judgment-record": "b816d6551c7f28babab24fa62d609a3cd3bf9e473d3ad930e3200d7624e0b90d",
+    "prompt": "2c9baf21d902d074e260f15e4fc4d9bcb6ab7f4b4a26ed2b9b1f485d93188750",
+    "progress-trace": "50b6a5b0327a19c447302219230dffd53ac9977f749f448a8a13cc2ffed9b167",
+    "session-meta": "a95c9a081d629db70d50e6ff2cea763f30e4dcb0085e06e9f55f048e3bff8266",
+    "attach-manifest": "90be9b586c3bb1d1194f4185465bf05ab49383aea3bc0583b6ea6cf510c9a5f6",
+    "workspace-diff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "executor-trace": "2be8cce34071425314e4f52edb74188ab17f2353d7bd8f34c401466fb236c20f",
+    "card": "a9589049037b9e5a954cf4092f5f98f8ed386c4716cb2615c3b5d0f164a37b1f",
+    "review": "-",
+    "accept-output": "207b9eecccaa74cd7fe91a525b405b8dd5cae46a917230e70cbb182f7d409c5b",
+    "accept-cmds": "3027cf5f740d6d21e7628b64984c33e5c10b48296b6b0518fde71a6405288aec",
+    "golden-cmd": "7db3fbadc46a9b58757ab0a5055c184dde25c5577375c6f37dc7d9b76813f83b",
+    "accept-golden-output": "a62b947711d753b1ff1d470ef6ea28ef410a90642db0b072cc25fb2de117d19d",
+    "v4-evidence": "399b246c905edeb9936d1f5f86c8fed6dc03d048248af5c177bb972b01298751"
+   },
+   "recipe": "v2",
+   "chained_at": "2026-10-08 04:10:42",
+   "prev": "4189a21aeacd29eb9df60fcdffb530ac9482f2d0e124e2cbea64ab453bcb5183"
   }
  ],
  "head": {
   "proj": "dogfood",
-  "run_id": "202610080400573603",
-  "digest": "4189a21aeacd29eb9df60fcdffb530ac9482f2d0e124e2cbea64ab453bcb5183"
+  "run_id": "202610080409054247",
+  "digest": "abf008786fab691a7ac5e97f29e8c600450719714b33be07bdf027f87312e183"
  }
 }

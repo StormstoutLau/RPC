@@ -2604,18 +2604,14 @@ STAGE="$stage"
 #   ⇒ 改为**派发前清空**(等价于所声明的语义, 且不必依赖"collect 回收"那一步)。
 # O-59/T1 (2026-09-25): **这里不再碰 ``$W/.attach``** —— 共享锁下两跑会互删(先验红见 DEV-LOG §27.11-G)。
 #   改为只备**本 run 私有**的中转目录;``.attach`` 的"重置 + 落件"移到 **run body 的锁内**(见 body 内 O-59/T1 段)。
-# ★★ `O-156` Step1c（诊断 · 定位后应撤）: 在**清之前**列出中转内容 ⇒ 若【第二次】reset 打出
-#   `pre=attach,golden.tgz` ⇒ ★ 确证"它清掉了刚 scp 上来的件"（M1 的判决性证据）。
-echo "RESET_PRE pre=`$(ls -A "`$STAGE" 2>/dev/null | tr '\n' ',')"
+# O-156 甲（2026-10-08）已验绿（run 202610080400573603）；`RESET_PRE` 诊断已撤。
 # ★★ `O-156` 甲（2026-10-08）：**只建不清**。理由与本仓 `O-68/D2` **同源** —— 中转目录名本身
 #   per-run 唯一 ⇒ "上一次 run 的残留"**在名字层不存在**；且实测**同一份脚本体会被执行两次**
 #   （第二次的 `RESET_PRE` 里能看到刚 scp 上去的 attach 与 golden.tgz）⇒ ★ 一旦清，就把
 #   本次暂存件误删 ⇒ body 随即读不到（三症状）。⚠ **不要加回删除那一步**。
 #   残留由既有按龄 GC（`-mtime +7`）兜底 —— 见本段上方注释。
 mkdir -p "$stage/attach"
-# ★★ `O-156` Step1 落痕（诊断 · 定位后应撤）: 与 body 的 `STAGE_PROBE` / 派发侧 `STAGE_LS_AT` **同一站上时钟**
-#   ⇒ 用来判 **M1（本行在 scp 之后落地 ⇒ wipe）** vs **M2（/tmp per-session 视图 ⇒ 两边看不到彼此）**。
-echo "RESET_DONE stage=[`$STAGE] at=`$(date +%T.%N)"
+# O-156: `RESET_DONE` 诊断已撤（甲′ 验绿后再撤，见上）。
 # ★★ O-68/D3 (2026-09-25): 暂存件**按龄 GC**（**新增**，与 O-57-A 的 reset 并存 —— 见下）。
 #   用途: 防"per-run 件"（以及旧的无后缀死件）**永久累积**（"登记无出口⇒腐化"）。
 #   形状: **只按龄**（``-mtime +7``）⇒ **没有**"删除活件"这种可能；裕度理由见上面 `` `$evGcCmd `` 定义处。
@@ -2799,15 +2795,9 @@ mkdir -p "`$STAGE/attach/$name"
         #   ⇒ 这里**只报数、不改行为**（diagnostic enhancement）：把中转的真实内容摊开。
         #   ★ 判读：① 件**在** ⇒ 分歧在 body 侧（`$STAGE` 不匹配 / body 早退）；
         #           ② 件**不在** ⇒ 分歧在 scp 的"成功"口径（rc=0 但没落盘）。
-        $stageLs = Invoke-RemoteCapture -HostName $hostName -LocalName "agent-cli-stage-ls-$($Script:RUN_TOKEN).sh" -ScriptBody @"
-echo "STAGE_LS_AT=`$(date +%T.%N)"
-echo "SIDE=dispatcher host=`$(hostname) inode=`$(stat -c %i /tmp 2>/dev/null || echo NA)"
-echo "SIDE_OPT=`$(findmnt -no OPTIONS /tmp 2>/dev/null || echo NA) w=`$(pwd)"
-ls -la "$stage" 2>&1
-echo '--- attach ---'
-ls -la "$stage/attach" 2>&1
-"@
-        Write-Host ("STAGE_LS(MASTER_STAGE=$stage): " + (([string]$stageLs).Trim() -replace "`r?`n", " ｜ "))
+        # O-156（2026-10-08）：`STAGE_LS` 落点自证**已撤**（甲′ 验绿后，O-156 闭环）。
+        #   上面那段「落点自证」注释保留为**历史依据**（它记录了当时的分叉判读），代码已删。
+        #   ★ 若日后中转链再出问题，可**照上面注释重建**：`Invoke-RemoteCapture` 打 `ls -la $stage` + `$stage/attach`。
         # ── O-59/T1 (2026-09-25): **注入动作不再在这里做** ───────────────────────────────────────
         # 原来这里是一段独立 remote script: `rm -rf "$W/.golden"` + 解包 —— 与 `.attach` 是**同一族**
         #   (在远端 flock **之外**碰共享面) ⇒ `readonly:true` 的共享锁下两跑会互删/互相覆盖 `.golden`。
@@ -2927,10 +2917,7 @@ echo "LOCK_ACQUIRED pid=`$$ mode=`$( [ -n "`$LOCK_FLAGS" ] && echo shared || ech
 #   ② 必须**早于** ``.attach-manifest.txt`` 采样(它在下面) —— 那份 manifest 记的是"**注入的字节**";
 #   ③ ``$STAGE`` 是**本 run 私有**的中转(console 侧写入, 与 ``$W`` 零接触, 故它自己不需要锁)。
 # ⇒ 落地后立即删中转目录(``rm -rf "$STAGE"``), 不留残留。
-echo "STAGE_PROBE=[`$STAGE] at=`$(date +%T.%N)"
-echo "BODY host=`$(hostname) inode=`$(stat -c %i /tmp 2>/dev/null || echo NA)"
-echo "BODY_OPT=`$(findmnt -no OPTIONS /tmp 2>/dev/null || echo NA) w=`$(pwd)"
-echo "INBODY=`$(ls -A "`$STAGE" 2>/dev/null | tr '\n' ',')"
+# O-156（2026-10-08）：`STAGE_PROBE`/`BODY`/`INBODY` 三处探针**已撤**（甲′ 验绿后，O-156 闭环）。
 rm -rf "`$W/.attach" && mkdir -p "`$W/.attach"
 if [ -d "`$STAGE/attach" ]; then cp -a "`$STAGE/attach/." "`$W/.attach/" 2>/dev/null || true; fi
 echo "ATTACH_STAGED=`$(ls -1 "`$W/.attach" 2>/dev/null | wc -l)"
