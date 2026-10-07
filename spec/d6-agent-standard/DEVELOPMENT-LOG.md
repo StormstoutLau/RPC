@@ -19,6 +19,48 @@ upstream: \[d6-agent-standard-.* 全量文档]
 
 ## 历史回溯（2026-09-03 起）
 
+### 2026-10-07（续⑥） — **`O-151` 全链真跑：站上直发跑通整条 D7 链（`sem_verified`）⇒ 本条闭环**
+
+> **定位**：续⑤ 只验到"判官调用这一跳"（机制探针）。本批做**全链**：**派发 → 回收 → L1 → L2(review) → accepted**。
+
+**前置动作（资源位移，已留证）**：C 站原服务 `gpt-oss-120b-MXFP4`（约 2.6 天）⇒
+`py ops/cluster.py load m27-q4ks-c` 换成 **`m27-q4ks`**（`station='C'` 与 `JUDGE_TABLE` 一致）；
+站上把 key 重写到 `~/.config/rpc/unsloth.key` ⇒ 探针实测引擎回 **`MiniMax-M2.7-UD-IQ4_XS`** = **真 m27**。
+（前置态：A/B `STOPPED` · C `READY/gpt-oss-120b-MXFP4` ⇒ **可回滚**；⚠ **未回滚**。）
+
+**★ 途中两处门禁/纪律按设计生效（都是好消息）**
+- 首靶 `202610010409181391` 被 **`REJECT REVIEW_AFTER_CHAIN … exit 9`** 拦下 ⇒ ★ **`O-140` 纪律真的在拦**，
+  且它给出的正确姿势（"趁未入链时先 review"）**可直接执行** ⇒ 改走**新派发**。
+- 派发输出里 `D7_CONTRACT_GAPS_CLASS: open=[evidence_budget, golden.checksum] · boundary=[constraints]`
+  ⇒ ★ **裁③甲（上一批）的分类报数在真派发里也出现了**（不是只在夹具里）。
+
+**★★ 真读数（run `202610071724081401` · 产方 `ultra` ≠ 判官 `m27` ⇒ 非同源）**
+```
+REVIEW_JUDGE_ROUTE: judge=local/m27-q4ks via=station-local station=C base=http://127.0.0.1:8080/v1
+JUDGE_JSON_RETRY: unparseable reply, retrying once            ← 第一次不可解析 ⇒ 重试（两次都走新路，且无 RPM 等待）
+D7_PHASES: collected -> mech_verified -> sem_verified -> accepted
+D7_PRH_SEPARATE: 分离：产出机 scott-lau-GTR-Pro.local ≠ 裁决机 DESKTOP-BR5R8EV
+REVIEW score=不合格 pass=False judge=local/m27-q4ks elapsed_s=229
+```
+产物：`metadata.call_code=0` · `retries=1` · `judge_model=local/m27-q4ks` · `seed=2013979320` ·
+`l1.verdict=green / accept_passed=true` · `contract.ok=false`（`BAD_FINDINGS[#2:BAD_LINE_RANGE[N/A]]`）·
+`d7_verdict.verdict=0 / phase=P5 / l2_marks[] 非缺席`。
+
+**★★ 两条必须分开写的结论**
+1. **通道**：★ **可复现**（**无 env、无隧道**）⇒ `O-151` 的目标达成 ⇒ **本条闭环**。
+2. **语义结论**：判官判 **`不合格`** 且**契约 `reject`**，而 **L1 是绿的** ⇒ ★ **通道成功 ≠ 结论通过**；
+   ⚠ 判官给的理由是"产物在根目录、缺 `out/` 前缀"（与 L1 绿**相左**）—— 这是**判官侧读数**，
+   未在本批判定谁对（★ **不许拿它当"通道有问题"的证据**，也不许当"产物有问题"的铁证）。
+
+**★ 对 `O-149`(a) / 契约 #5 的影响（只报读数，不裁）**：`CONTRACT #5` 现有**两类不同路线**各真跑过
+（① 手工隧道 `202610042342034271` · ② 站上直发 `202610071724081401`）⇒ 按新档「**正向 ≥2 个不同类**」
+★ **可能已达标** ⇒ ★ **本批不改 `state`/判据**，改判**须用户裁**。`CONCLUSION #1` 另得 **1 个负向类样本**。
+
+**⚠ 顺带暴露（与本条无关 · 未立条目）**：派发时站上 `agent-cli-attach-reset-*.sh` 报
+`行 66: 寻找匹配的 … 时遇到了未预期的 EOF`（**bash 未闭合引号**），而派发仍 `TASK_RC=0`/`ACCEPT_OK=1`
+⇒ ★ **该步疑似静默失效**（按龄 GC 未执行）。★ **根因未定**：站上脚本已被 `trap rm -f $0` 自删
+⇒ 取不到第 66 行（**不许凭空取数**）。**待裁**：是否立条目。
+
 ### 2026-10-07（续⑤） — **`O-151` `P4b` 判官可复现化：手工 SSH 隧道 → **站上直发**（候选 ① 并落）**
 
 > **定位**：`O-149`(b) 把"可复现化**属另一件**"立成 `O-151`（其前置是**先读 `O-148`**）。本批走 spec workflow：
