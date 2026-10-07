@@ -1043,8 +1043,9 @@ Assert-True "o68: ★★ **已无**'无条件删固定名'(D2 落地 = O-68 修�
     -not $codeOnlyFull.Contains('$evRmCmd'))
 Assert-True "o68: ★ 源码**写明**'不要把它加回来'的理由(防有人手滑复原 reset)" (
     $content.Contains('不要加回来'))
-Assert-True "o57: 清理段已接进**派发前**那个 body(与附件中转同段)" (
-    $content.Contains('$evGcCmd') -and $content.Contains('rm -rf "`$STAGE" && mkdir -p "`$STAGE/attach"'))
+Assert-True "o57: 清理段已接进**派发前**那个 body(与附件中转同段); ★ O-156 甲′（2026-10-08）: 中转**只建不清**" (
+    $content.Contains('$evGcCmd') -and $content.Contains('mkdir -p "$stage/attach"') -and
+    -not $content.Contains('rm -rf "`$STAGE" && mkdir -p'))
 
 # --- ★★ O-68/D4-D6 (2026-09-25): per-run 命名 —— 站上 10 件 + 主控 3 处 + helper 1 处 ---
 Assert-True "o68: 站上后缀变量与主控**同源**(body 内 `EV_SUF=` + PS 变量 `evSuf)" (
