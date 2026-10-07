@@ -2579,6 +2579,16 @@ function Invoke-Task {
     #   再由 run body **在锁内**落到 `$W`。见 body 里的「O-59/T1 落盘段」。
     # ⚠ 用 `$Script:RUN_TOKEN` 而非 `$ts`: 后者在**本段之后**才赋值(见 `$ts = …` 那行), 且 RUN_TOKEN
     #   本就是 per-invocation 唯一(Guid) ⇒ 并发下必然不撞。
+    # ★★ `O-156` 丙（2026-10-08）：**每次取中转目录都新开一个**（带进程内序号）。
+#   依据（实测 · run `202610080335059288`）：同一次进程里发生了**第二次** dispatch 的 `attach-reset`
+#   （`RESET_PRE pre=attach,golden.tgz,` ⇒ 它把**第一次刚 scp 上去的件**清掉，body 随即读不到）。
+#   ⚠ 旧值只带 `RUN_TOKEN`，而 `RUN_TOKEN` **同进程内不变** ⇒ 两次拿到**同一个目录** ⇒ 必被误清。
+#   ⇒ 改为带序号：第二次只会清**它自己那个空目录**，首次暂存件存活。★ 残留由既有按龄 GC 兜底
+#     （`find /tmp -maxdepth 1 -name 'agent-stage-*' -mtime +7` ⇒ 名字前缀未变 ⇒ 仍被覆盖 ✓）。
+# ★★ 丙（带序号）**已实测【无效】⇒ 本处已回退**（2026-10-08 · run `202610080351069996`）：
+#   加序号后**第二次 `RESET_DONE` 仍打印同一个目录** ⇒ 序号没变 ⇒ **说明 `$stage` 赋值段只跑一次**
+#   ⇒ 真因不是"两次 Invoke-Task"，而是**同一份远端脚本体被【执行了两次】** ⇒ 序号改不了它。
+#   ⇒ 已回退为原值；修法改走**甲（只建不清）**，见下面 attach-reset 段。
     $stage = "/tmp/agent-stage-$($Script:RUN_TOKEN)"
     $body = @"
 set -eu
@@ -2597,7 +2607,12 @@ STAGE="$stage"
 # ★★ `O-156` Step1c（诊断 · 定位后应撤）: 在**清之前**列出中转内容 ⇒ 若【第二次】reset 打出
 #   `pre=attach,golden.tgz` ⇒ ★ 确证"它清掉了刚 scp 上来的件"（M1 的判决性证据）。
 echo "RESET_PRE pre=`$(ls -A "`$STAGE" 2>/dev/null | tr '\n' ',')"
-rm -rf "`$STAGE" && mkdir -p "`$STAGE/attach"
+# ★★ `O-156` 甲（2026-10-08）：**只建不清**。理由与本仓 `O-68/D2` **同源** —— 中转目录名本身
+#   per-run 唯一 ⇒ "上一次 run 的残留"**在名字层不存在**；且实测**同一份脚本体会被执行两次**
+#   （第二次的 `RESET_PRE` 里能看到刚 scp 上去的 attach 与 golden.tgz）⇒ ★ 一旦清，就把
+#   本次暂存件误删 ⇒ body 随即读不到（三症状）。⚠ **不要加回删除那一步**。
+#   残留由既有按龄 GC（`-mtime +7`）兜底 —— 见本段上方注释。
+mkdir -p "$stage/attach"
 # ★★ `O-156` Step1 落痕（诊断 · 定位后应撤）: 与 body 的 `STAGE_PROBE` / 派发侧 `STAGE_LS_AT` **同一站上时钟**
 #   ⇒ 用来判 **M1（本行在 scp 之后落地 ⇒ wipe）** vs **M2（/tmp per-session 视图 ⇒ 两边看不到彼此）**。
 echo "RESET_DONE stage=[`$STAGE] at=`$(date +%T.%N)"
