@@ -213,7 +213,7 @@ def test_triage_repo_end_to_end():
        （实测 2026-10-07 `O-136` 三处裁定落 ⇒ 该来源 **9 → 0**）⇒ 旧断言当场假红（**断言陈旧**）。
     ★ **先验红·同源对照**：把一个**被 `refs` 引用**的台账行**人为写上「待裁」** ⇒ 点名数**必须增加**
        （否则"读台账"这半没接线 ⇒ **恒 0 的假绿**）。
-    ★ **兼容**：不喂台账 ⇒ 退回旧口径（字段口径仍全 false ⇒ 0）。"""
+    ★ **兼容**：不喂台账 ⇒ 只按**字段**口径（= `needs_decision: true` 的条数；**不写死 0**）。"""
     import yaml
     inv = yaml.safe_load(R.UNTESTED_INDEX.read_text(encoding="utf-8"))
     items = inv.get("items") or []
@@ -221,8 +221,13 @@ def test_triage_repo_end_to_end():
     pending = R.ledger_pending_ids(rows)
 
     def _via_ledger(_items, _pending):
+        # ★★ **必须复刻判据的【短路】语义**：`needs_decision is True` 的条目在**前面**就被计数并 `continue`
+        #    ⇒ 它**不再**走"台账 `refs`"这条路（否则期望值会**多算**一条）。
+        #    ★ 实测（2026-10-07）：`D7-PROTOCOL-CONTRACT#5` 同时满足"字段 true"与"refs 命中台账「待裁」"
+        #      ⇒ 不复刻短路 ⇒ 期望 1 / 实得 0 ⇒ **假红**。
         return sum(1 for it in _items
-                   if any(isinstance(r, str) and r in _pending for r in (it.get("refs") or [])))
+                   if it.get("needs_decision") is not True
+                   and any(isinstance(r, str) and r in _pending for r in (it.get("refs") or [])))
 
     warn, st = R.summarize_untested_triage(items, rows)
     assert st["n"] >= 1, "★ 条目为 0 ⇒ 消费没有对象（会退化成空判）"
@@ -251,8 +256,14 @@ def test_triage_repo_end_to_end():
     assert st3["needs_decision_via_ledger"] > st["needs_decision_via_ledger"], (
         "★ 注入「待裁」后点名数**没增加** ⇒ 恒 0 的假绿")
 
+    # ── 字段口径（**非**台账）：条数 == 「`needs_decision: true` 的条目数」──────────────
+    # ★★ **不写死 0**（本仓教训「**标签比事实硬**」：台账会被裁掉，字段也会被点亮 ——
+    #    2026-10-07 `O-151` 全链真跑后 `CONTRACT #5` 就**故意**点了 true ⇒ 写死 0 当场假红）。
+    n_field = sum(1 for it in items if it.get("needs_decision") is True)
     warn2, st2 = R.summarize_untested_triage(items)
-    assert st2["needs_decision"] == 0 and warn2 == [], (st2, warn2)
+    assert st2["needs_decision"] == n_field, (st2, n_field)
+    assert len(warn2) == n_field, (warn2, n_field)
+    assert all("needs_decision: true" in w for w in warn2), warn2
 
 
 def test_triage_wiring_is_visible_in_gate():
