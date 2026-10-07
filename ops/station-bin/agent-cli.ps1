@@ -2595,6 +2595,9 @@ STAGE="$stage"
 # O-59/T1 (2026-09-25): **这里不再碰 ``$W/.attach``** —— 共享锁下两跑会互删(先验红见 DEV-LOG §27.11-G)。
 #   改为只备**本 run 私有**的中转目录;``.attach`` 的"重置 + 落件"移到 **run body 的锁内**(见 body 内 O-59/T1 段)。
 rm -rf "`$STAGE" && mkdir -p "`$STAGE/attach"
+# ★★ `O-156` Step1 落痕（诊断 · 定位后应撤）: 与 body 的 `STAGE_PROBE` / 派发侧 `STAGE_LS_AT` **同一站上时钟**
+#   ⇒ 用来判 **M1（本行在 scp 之后落地 ⇒ wipe）** vs **M2（/tmp per-session 视图 ⇒ 两边看不到彼此）**。
+echo "RESET_DONE stage=[`$STAGE] at=`$(date +%T.%N)"
 # ★★ O-68/D3 (2026-09-25): 暂存件**按龄 GC**（**新增**，与 O-57-A 的 reset 并存 —— 见下）。
 #   用途: 防"per-run 件"（以及旧的无后缀死件）**永久累积**（"登记无出口⇒腐化"）。
 #   形状: **只按龄**（``-mtime +7``）⇒ **没有**"删除活件"这种可能；裕度理由见上面 `` `$evGcCmd `` 定义处。
@@ -2779,6 +2782,7 @@ mkdir -p "`$STAGE/attach/$name"
         #   ★ 判读：① 件**在** ⇒ 分歧在 body 侧（`$STAGE` 不匹配 / body 早退）；
         #           ② 件**不在** ⇒ 分歧在 scp 的"成功"口径（rc=0 但没落盘）。
         $stageLs = Invoke-RemoteCapture -HostName $hostName -LocalName "agent-cli-stage-ls-$($Script:RUN_TOKEN).sh" -ScriptBody @"
+echo "STAGE_LS_AT=`$(date +%T.%N)"
 ls -la "$stage" 2>&1
 echo '--- attach ---'
 ls -la "$stage/attach" 2>&1
@@ -2903,7 +2907,7 @@ echo "LOCK_ACQUIRED pid=`$$ mode=`$( [ -n "`$LOCK_FLAGS" ] && echo shared || ech
 #   ② 必须**早于** ``.attach-manifest.txt`` 采样(它在下面) —— 那份 manifest 记的是"**注入的字节**";
 #   ③ ``$STAGE`` 是**本 run 私有**的中转(console 侧写入, 与 ``$W`` 零接触, 故它自己不需要锁)。
 # ⇒ 落地后立即删中转目录(``rm -rf "$STAGE"``), 不留残留。
-echo "STAGE_PROBE=[`$STAGE]"
+echo "STAGE_PROBE=[`$STAGE] at=`$(date +%T.%N)"
 rm -rf "`$W/.attach" && mkdir -p "`$W/.attach"
 if [ -d "`$STAGE/attach" ]; then cp -a "`$STAGE/attach/." "`$W/.attach/" 2>/dev/null || true; fi
 echo "ATTACH_STAGED=`$(ls -1 "`$W/.attach" 2>/dev/null | wc -l)"
