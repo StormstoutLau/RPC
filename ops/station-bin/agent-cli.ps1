@@ -93,6 +93,10 @@ $Script:ROUTE_TABLE = @{
     #   **md5 全一致**(755975db…) · `~/.config/rpc/openrouter.key` **三站各异**（独立账户 ⇒ 限流互不干扰）。
     'ultra-a'    = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';   station = 'A' }
     'ultra-c'    = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';   station = 'C' }
+    # `O-147` 甲（2026-10-07）：**补 `ultra-b`** —— ★ 三站里原先只有 A / C 有 per-station 句柄 ⇒
+    #   **连"轮询句柄"都不齐**（配额负载均衡 乙/丙 的前置）。⇒ 补齐 = **纯登记**（同 id、`station='B'`，
+    #   与上面的 `ultra` **等价**）· ★ **不改调度 / 零行为变化**（站位仍由本表唯一决定）。
+    'ultra-b'    = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';   station = 'B' }
     # ── 2026-09-24 采样用别名（`harness_priority` 档 1/3/4/5）**已撤除**（Scott 裁定）──────────
     #   采样结论**已入台账 O-49**：5 档在 opencode harness 路径下**全部可用**（档4 `super-120b` 最快 23s）——
     #   且 conf 注记的"harness-only(403) / laguna 限流(429)"**两条在 harness 路径均不适用**。
