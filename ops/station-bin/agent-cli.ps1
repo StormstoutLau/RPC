@@ -2594,6 +2594,9 @@ STAGE="$stage"
 #   ⇒ 改为**派发前清空**(等价于所声明的语义, 且不必依赖"collect 回收"那一步)。
 # O-59/T1 (2026-09-25): **这里不再碰 ``$W/.attach``** —— 共享锁下两跑会互删(先验红见 DEV-LOG §27.11-G)。
 #   改为只备**本 run 私有**的中转目录;``.attach`` 的"重置 + 落件"移到 **run body 的锁内**(见 body 内 O-59/T1 段)。
+# ★★ `O-156` Step1c（诊断 · 定位后应撤）: 在**清之前**列出中转内容 ⇒ 若【第二次】reset 打出
+#   `pre=attach,golden.tgz` ⇒ ★ 确证"它清掉了刚 scp 上来的件"（M1 的判决性证据）。
+echo "RESET_PRE pre=`$(ls -A "`$STAGE" 2>/dev/null | tr '\n' ',')"
 rm -rf "`$STAGE" && mkdir -p "`$STAGE/attach"
 # ★★ `O-156` Step1 落痕（诊断 · 定位后应撤）: 与 body 的 `STAGE_PROBE` / 派发侧 `STAGE_LS_AT` **同一站上时钟**
 #   ⇒ 用来判 **M1（本行在 scp 之后落地 ⇒ wipe）** vs **M2（/tmp per-session 视图 ⇒ 两边看不到彼此）**。
@@ -2783,6 +2786,8 @@ mkdir -p "`$STAGE/attach/$name"
         #           ② 件**不在** ⇒ 分歧在 scp 的"成功"口径（rc=0 但没落盘）。
         $stageLs = Invoke-RemoteCapture -HostName $hostName -LocalName "agent-cli-stage-ls-$($Script:RUN_TOKEN).sh" -ScriptBody @"
 echo "STAGE_LS_AT=`$(date +%T.%N)"
+echo "SIDE=dispatcher host=`$(hostname) inode=`$(stat -c %i /tmp 2>/dev/null || echo NA)"
+echo "SIDE_OPT=`$(findmnt -no OPTIONS /tmp 2>/dev/null || echo NA) w=`$(pwd)"
 ls -la "$stage" 2>&1
 echo '--- attach ---'
 ls -la "$stage/attach" 2>&1
@@ -2908,6 +2913,9 @@ echo "LOCK_ACQUIRED pid=`$$ mode=`$( [ -n "`$LOCK_FLAGS" ] && echo shared || ech
 #   ③ ``$STAGE`` 是**本 run 私有**的中转(console 侧写入, 与 ``$W`` 零接触, 故它自己不需要锁)。
 # ⇒ 落地后立即删中转目录(``rm -rf "$STAGE"``), 不留残留。
 echo "STAGE_PROBE=[`$STAGE] at=`$(date +%T.%N)"
+echo "BODY host=`$(hostname) inode=`$(stat -c %i /tmp 2>/dev/null || echo NA)"
+echo "BODY_OPT=`$(findmnt -no OPTIONS /tmp 2>/dev/null || echo NA) w=`$(pwd)"
+echo "INBODY=`$(ls -A "`$STAGE" 2>/dev/null | tr '\n' ',')"
 rm -rf "`$W/.attach" && mkdir -p "`$W/.attach"
 if [ -d "`$STAGE/attach" ]; then cp -a "`$STAGE/attach/." "`$W/.attach/" 2>/dev/null || true; fi
 echo "ATTACH_STAGED=`$(ls -1 "`$W/.attach" 2>/dev/null | wc -l)"
