@@ -7229,6 +7229,9 @@ ROUND_COUNTER_KINDS = ("file-glob", "shell-var", "state-log")
 #   实测会假红：`"超限 ⇒ 升级（不是继续）"` 里含「继续」就被判红）。
 ON_EXCEED_KINDS = ("escalate", "terminate", "fail-record", "undecided")
 CODE_CAP_RE = re.compile(r"-(?:lt|le)\s+(\d+)")
+# 文档上限写法：`≤N` **或** `<= N` —— ★ `spec/**/*.md` 用 `≤`（且词与运算符间常隔字），
+#   上面 `prose_caps` 的口径只认 `<词> <= N` 紧邻 ⇒ **扫不到**（已登记的逃逸）⇒ 必须单独认。
+DOC_CAP_RE = re.compile(r"(?:≤|<=)\s*(\d+)")
 
 
 def extract_loop_cap(text, marker, op):
@@ -7363,6 +7366,30 @@ def validate_multi_round(doc):
         if not isinstance(p.get("expect"), int) or isinstance(p.get("expect"), bool):
             bad.append(f"{at} 的 `expect` 必须是整数（散文里应当写的那个数）")
 
+    # ── 文档里的上限：**显式登记 + 唯一锚**（★ 覆盖 `≤` 写法 —— 散文口径只认 `<=`）────
+    # 为什么单列一段：`spec/**/*.md` 里的上限句用 `≤`（且**词与运算符之间隔字**）写，
+    #   上面 `prose_caps` 要求 `<词> <= N` **紧邻** ⇒ **扫不到**（已登记的逃逸）。
+    # 口径（写死）：**每一处**都必须显式登记；锚 `line_token` 在该文件里必须**恰一处**命中，
+    #   且该行实测的 `≤N` / `<= N` 必须 == `expect`（核在 `check_multi_round` 里做）。
+    # ⚠ 刻意**不做**"扫所有像上限的句子"：那个口径**不可判**（本仓已因口径含糊连踩三次）。
+    dcs = doc.get("doc_caps")
+    if not isinstance(dcs, list) or not dcs:
+        bad.append("`doc_caps` 为空 ⇒ **文档里的上限句没人管** —— "
+                   "实测 `spec/**` 就用 `≤` 写上限（`prose_caps` 口径**扫不到**）")
+        dcs = []
+    for i, d in enumerate(dcs):
+        at = f"doc_caps[{i}]"
+        if not isinstance(d, dict):
+            bad.append(f"{at} 不是映射")
+            continue
+        f_, tok = _s(d.get("file")), _s(d.get("line_token"))
+        at = f"doc_caps[{f_}:{tok or i}]"
+        for k in ("file", "line_token", "why"):
+            if not _s(d.get(k)):
+                bad.append(f"{at} 缺 `{k}`")
+        if not isinstance(d.get("expect"), int) or isinstance(d.get("expect"), bool):
+            bad.append(f"{at} 的 `expect` 必须是整数（文档里应当写的那个数）")
+
     unv = doc.get("unverified")
     if not isinstance(unv, list) or not unv:
         bad.append("`unverified` 为空 ⇒ 本项自己未实测 / 未定的部分没登记")
@@ -7374,7 +7401,7 @@ def validate_multi_round(doc):
         notes.append(f"闭环 {len(seen)} 条 · kind {kinds} · 有上限 {n_cap} · 无上限(有理由) {n_unb} · "
                      f"**未定 {len(undecided)}**"
                      f"{'（点名: ' + ', '.join(undecided) + '）' if undecided else ''} · "
-                     f"散文上限登记 {len(pcs)} 处（词集 {pw}）")
+                     f"散文上限登记 {len(pcs)} 处（词集 {pw}） · 文档上限登记 {len(dcs)} 处")
     return bad, notes
 
 
@@ -7498,6 +7525,31 @@ def check_multi_round(ctx, doc=None):
             elif caps_all and got not in caps_all:
                 bad.append(f"{rel}:{ln_no} 的 `expect`={got} **不落在该文件的循环上限集合** "
                            f"{sorted(caps_all)} 里 ⇒ 像随手编的数")
+
+    # 3) ★★ 文档上限：显式登记 + **唯一锚** + 行内实测 == `expect`
+    #    ★ 与 `prose_caps` 分开：那份口径只认 `<词> <= N`（紧邻），文档用 `≤` 且隔字 ⇒ 扫不到。
+    #    锚**必须唯一**（本仓已因锚不唯一吃过亏）；找不到锚 ⇒ 口径过期；命中多处 ⇒ 锚不唯一。
+    for i, d in enumerate([x for x in (doc.get("doc_caps") or []) if isinstance(x, dict)]):
+        rel, tok = _s(d.get("file")), _s(d.get("line_token"))
+        at = f"doc_caps[{rel}:{tok or i}]"
+        if not rel or not (ROOT / rel).exists():
+            bad.append(f"{at} 的 file={rel!r} 不存在 ⇒ 对账不可判（**不可判 ≠ 通过**）")
+            continue
+        lines = [(j, l) for j, l in enumerate(_text(rel).splitlines(), 1) if tok and tok in l]
+        if not lines:
+            bad.append(f"{at} 的锚 {tok!r} 在 {rel} 里**找不到** ⇒ 口径过期（文档改了？）")
+            continue
+        if len(lines) > 1:
+            bad.append(f"{at} 的锚 {tok!r} 在 {rel} 里命中 {len(lines)} 行 ⇒ **锚不唯一**")
+            continue
+        ln_no, txt = lines[0]
+        m = DOC_CAP_RE.search(txt)
+        if not m:
+            bad.append(f"{rel}:{ln_no} 锚在但**不再含上限写法**（`≤N` / `<= N`）⇒ 口径过期"
+                       f"（文档改成别的说法了？那该重定口径，而不是留着这条）")
+        elif int(m.group(1)) != d.get("expect"):
+            bad.append(f"★★ 文档上限与登记**不符**: {rel}:{ln_no} 实测 {m.group(1)} ≠ "
+                       f"`expect` {d.get('expect')} ⇒ `{txt[:100]}`")
 
     if bad:
         return "FAIL", " · ".join(notes) if notes else "见明细", bad
