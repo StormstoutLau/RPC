@@ -354,6 +354,24 @@
    ★ **为什么这一条必须换负向样本**：原打算拿 `O-156` 之前那次 `GOLDEN_STAGE_FAIL` 当负向，★ 但那次红在**与机械验证无关**的原因上（`Invoke-RemoteScript` 的网络层 retry 重跑脚本体 ⇒ `rm -rf $STAGE` 清掉暂存 ⇒ 见 `O-156`）⇒ **它不构成"判据有对象"的证据**。受控变异才是与**失效形态同轴**的负向。
    ⚠ **诚实边界（勿读过头）**：① **假绿**才是本项真正危险的失效形态（机械验证漏判 ⇒ 放行未校验件）⇒ ★ **变异覆盖类（造多种"该拦"的卡）与统计口径（rule of three，n≈20）均未做**，已登记为**条件触发升级项**；② 本仓闭合档是**自定**的，**不等于** ACM Reproducibility；③ **通道成功 ≠ 结论通过**（同一批里 `review` 给出过 `score=不合格`）。
 
+3. ~~**P5 裁决登记 Verdict 从未被真实落盘**：Verdict 信封（含 `verdict`、`phase`、`l1_results[]`、
+   `l2_marks[]`、`redispatch?`、`recorded_at + seq`）的生成与持久化，无真实 run 对应。~~ ⇒ ✅ **已消掉（2026-10-08 · 甲落盘后取得真样本）**。
+   **依据（按 `O-149`(a) 甲档「类覆盖：正向 ≥2 个不同类 + 负向 ≥1 类」，全部有 run 可查）**：
+   - **正向类①「L2 没跑 ⇒ `l2_marks` 缺席」**：run `202610010423221614` / `202610010424525515` ⇒
+     `review.json.d7_verdict.verdict = 7`（**逐字等于** `metadata.call_code`，L2 如实跳过、**不假装**）、`l2_marks` 缺席；
+   - **正向类②「L2 跑了 ⇒ `l2_marks` 非缺席」**：run `202610042342034271`（`contract=accept`）·
+     `202610050017146963`（`reject`）· `202610071724081401`（`reject`）⇒ `d7_verdict.verdict = 0`、`l2_marks[]` 非缺席；
+   - **负向 1 类（"该不落盘时确实没有落盘"）**：run `202610010409181391` 被 `REVIEW_AFTER_CHAIN` **拒绝**
+     （`O-140` fail-closed）⇒ **无 `review.json` / 无 `d7_verdict`**（写入面真的拒过）；★ 同源对照 = 甲之前
+     `202610010258295814` 的 `review.json` **实测无 `d7_verdict` 键**（该件后被「逐字还原」）⇒ 落盘面的判据**有对象**。
+   ★ **落盘段与既有的关系**：`verdict`（整数）**逐字等于** `metadata.call_code`；`l1_results[].record_sha256`
+   逐字等于 `l1.record_sha256`（⇒ 确系**派生**、非第二份真值）；**`review.json` 顶层仍无 `verdict` 键**
+   （⇒ A 段"靠载体分离"的裁定**一字不动**）。
+   ⚠ **诚实边界（勿读过头）**：① 本仓闭合档是**自定**的（`O-149`(a)，依据 ISTQB 等价类 / 变异充分性），
+   **不等于** ACM Artifact Badging 的 Reproducibility；② 负向是"**该拒时不落盘**"这类**正确缺席**样本
+   （同上方**第 1 条**"负向 1 类 = 该跳过时真的跳过"的既有做法）—— **无受控变异负向**（与下方**第 2 条** #4 的
+   `RPC_GOLDEN_MUTATE` 不同）；③ 残留（`seq` 恒 `1` / 无流水 / `redispatch?`）**均为设计边界**（见 §未实测 6 的中间史），**不是缺口**。
+
 ---
 
 ## 未实测登记
@@ -437,8 +455,9 @@
    ⇒ 改选 `m27`）后，`m27` 是**本地档** ⇒ `JUDGE_UNREADY: requires REVIEW_HTTP_BASE (engine /v1)` ⇒
    `$callCode=7` ⇒ 按设计**如实传 `-L2Ran $false`**（**不假装跑了**）⇒ 当时 `state = todo`。
    ★ 该**负向**读数正是上方「负向 1 类」的依据；⚠ 就地更正：原句「**代码里无对应实现**」**已过时**（B2 已接线）。
-6. **P5 裁决登记 Verdict 从未被真实落盘**：Verdict 信封（含 `verdict`、`phase`、`l1_results[]`、
-   `l2_marks[]`、`redispatch?`、`recorded_at + seq`）的生成与持久化，无真实 run 对应。
+6. ~~**P5 裁决登记 Verdict 从未被真实落盘**：Verdict 信封（含 `verdict`、`phase`、`l1_results[]`、
+   `l2_marks[]`、`redispatch?`、`recorded_at + seq`）的生成与持久化，无真实 run 对应。~~ ⇒ ✅ **已消掉（2026-10-08）**，
+   移入上方「**已消掉的未实测项**」第 3 条（保留编号：下方别处引用了"第 N 条"，重编号会悄悄打断那些引用）。
    ★ **C 段：生成+机判 ✅ 真跑过；"落盘" ❌ 仍未** —— `D7_VERDICT_OK: Verdict 信封字段级合法`
    （`verdict`=review 的 exit code **7**、`phase=P5`、`l1_results` = **真实** `l1` 段原文照收、
    `seq` **固定 1** ⇒ 进 `gaps`）。⚠⚠ **而它只被 `Write-Host` 打印，【没有任何落盘点】**
