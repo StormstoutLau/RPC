@@ -7,6 +7,10 @@
    （O-46 把 cap 从 2 改成 3 时，注释没跟）。⇒ 故有 `prose_caps` **封闭集**：
    散文里的每一处上限都必须登记，且必须与代码一致；**新冒出一处**也要红。
 
+★ 同一次漂移在**文档**里也有第 4 处：`spec/**/*.md` 用 **`≤`** 写上限（且与词隔字），
+   上面 `prose_caps` 的口径（`<词> <= N` 紧邻）**扫不到** ⇒ 单列 `doc_caps`：
+   **逐处显式登记 + 唯一锚**，锚找不到 ⇒ 红（口径过期）、命中多行 ⇒ 红（锚不唯一）。
+
 ★ 另一条要守住的是「**上限**」与「**正向终止**」**两半都要在**：
    上限只管"最多几轮"，"什么时候**可以停**"（EASE 早停）是另一半。
 """
@@ -45,6 +49,8 @@ def _doc(**over):
         "prose_words": ["retry"],
         "prose_caps": [{"file": "ops/station-bin/agent-cli.ps1", "line_token": "tok",
                         "word": "retry", "expect": 3, "why": "w"}],
+        "doc_caps": [{"file": "spec/d6-agent-standard/G1-continue-spawn-decision.md",
+                      "line_token": "tok", "expect": 3, "why": "w"}],
         "unverified": [{"item": "i", "why": "w"}],
     }
     base.update(over)
@@ -112,6 +118,15 @@ CASES = [
     ("★反例 `prose_caps` 缺 `line_token`",
      _doc(prose_caps=[{"file": "f", "why": "w", "expect": 3}]), False, "缺 `line_token`"),
 
+    # ── 文档上限（★ 覆盖 `≤` 写法：散文口径只认 `<=`）────────────────────
+    ("★★反例 `doc_caps` 为空 ⇒ 文档里的上限句没人管（`≤` 写法扫不到）",
+     _doc(doc_caps=[]), False, "`doc_caps` 为空"),
+    ("★反例 `doc_caps` 的 `expect` 非整数",
+     _doc(doc_caps=[{"file": "f", "line_token": "t", "why": "w", "expect": "3"}]),
+     False, "必须是整数"),
+    ("★反例 `doc_caps` 缺 `line_token`",
+     _doc(doc_caps=[{"file": "f", "why": "w", "expect": 3}]), False, "缺 `line_token`"),
+
     # ── 其它 ──────────────────────────────────────────────────────────
     ("★★反例 `loops` 为空 ⇒ 多轮闭环没有对象（退化空判）",
      _doc(loops=[]), False, "没有对象"),
@@ -166,6 +181,12 @@ def main() -> int:
              "实测到"),
             ("把散文上限的 `expect` 改成 2",
              lambda m: m["prose_caps"][0].update(expect=2), "散文上限与登记**不符**"),
+            ("把文档上限的 `expect` 改成 2（L55 那类 `≤` 漂移的回归护栏）",
+             lambda m: m["doc_caps"][0].update(expect=2), "文档上限与登记**不符**"),
+            ("把文档上限的锚改成**找不到**的串（口径过期）",
+             lambda m: m["doc_caps"][0].update(line_token="NO_SUCH_TOKEN_XYZ"), "找不到"),
+            ("把文档上限的锚改成**命中多行**的串（锚不唯一）",
+             lambda m: m["doc_caps"][0].update(line_token="retry"), "锚不唯一"),
         ]
         for desc, mut, kw in muts:
             m = copy.deepcopy(real)
@@ -193,6 +214,8 @@ def main() -> int:
             "prose_words": ["retry"],
             "prose_caps": [{"file": PROBE, "line_token": "probe prose two",
                             "word": "retry", "expect": 3, "why": "w"}],
+            "doc_caps": [{"file": PROBE, "line_token": "probe prose two",
+                          "expect": 3, "why": "w"}],
             "unverified": [{"item": "i", "why": "w"}],
         }
         st3, _n3, d3 = R.check_multi_round(None, doc=copy.deepcopy(base))
