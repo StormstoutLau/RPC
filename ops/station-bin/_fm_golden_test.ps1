@@ -2646,6 +2646,37 @@ $oldRuns = @([regex]::Matches($oldTxt, '(`+)\$evGcCmd') | ForEach-Object { $_.Gr
 Assert-True "O154④(先验红·同源对照): 旧写法在该判据下**必被标红** ⇒ ③ 非恒真" (
     (@($oldRuns | Where-Object { $_ % 2 -eq 0 }).Count -ge 1))
 
+# --- O-157 甲2 (2026-10-08): usage 里声明的开关必须【真的接线】 ---
+# 为什么要有它：`--allow-l1-red` / `--allow-self-review` **两处 usage 都写着**，而
+#   **顶层 param 无声明、review 调用点也不传** ⇒ 形参绑定即失败、通道【完全不可达】
+#   （实测 `review … --allow-l1-red` ⇒ NamedParameterNotFound；见台账 O-157）。
+#   ★ 本仓已付过代价的同一形态 = `compliance` / `station`「声明了却无人读」= **假防线**。
+#   ⇒ 判据：**外层 usage 里每个 review 开关，都必须同时满足【已声明】与【已传】两件事**。
+$cliSrc2 = [System.IO.File]::ReadAllText('d:\RPC\ops\station-bin\agent-cli.ps1', [System.Text.UTF8Encoding]::new($false))
+# ⚠ 取数注意（本刀实测踩到）：`usage: agent-cli review` 在本文件出现**两次** —— 函数内 L5728 是
+#   **PS 风格** `[-Xxx]`，外层 review 分支注释才是**双横线** `[--xxx]` ⇒ 必须**挑含 `[--` 的那一条**，
+#   否则 `Match` 取到函数内那条 ⇒ 开关数 = 0（判据退化成空判）。
+$usageLine2 = (@([regex]::Matches($cliSrc2, 'usage: agent-cli review [^\r\n]*') | ForEach-Object { $_.Value }) |
+               Where-Object { $_ -match '\[--' } | Select-Object -First 1)
+$flags2 = @([regex]::Matches([string]$usageLine2, '\[--(allow-[a-z0-9\-]+|overwrite)') | ForEach-Object { $_.Groups[1].Value.Replace('-','') })
+$pblock2 = ([regex]::Match($cliSrc2, '(?s)param\((.*?)\r?\n\)')).Groups[1].Value
+$declared2 = @([regex]::Matches($pblock2, '\[switch\]\$([A-Za-z0-9_]+)') | ForEach-Object { $_.Groups[1].Value.ToLower() })
+$iRev2 = $cliSrc2.IndexOf("elseif (`$Command -eq 'review')")
+$iNext2 = $cliSrc2.IndexOf('elseif ($Command -eq', $iRev2 + 10)
+$revBlock2 = if ($iRev2 -ge 0 -and $iNext2 -gt $iRev2) { $cliSrc2.Substring($iRev2, $iNext2 - $iRev2) } else { '' }
+$passed2 = @([regex]::Matches($revBlock2, '-([A-Za-z][A-Za-z0-9]*):') | ForEach-Object { $_.Groups[1].Value.ToLower() })
+$miss2 = @($flags2 | Where-Object { $declared2 -notcontains $_ -or $passed2 -notcontains $_ })
+Assert-True "O157①: usage 的 review 开关**逐个**都【已声明 + 已传】(共 $($flags2.Count) 个; 缺 = $($miss2 -join ','))" (
+    ($flags2.Count -ge 3) -and ($miss2.Count -eq 0))
+# ★② **先验红·同源对照**：把调用点的一处传参**摘掉**，喂给**同一条判据** ⇒ 必须变红
+$mutSrc2 = $cliSrc2.Replace('-allowL1Red:$AllowL1Red ', '')
+$iRevM = $mutSrc2.IndexOf("elseif (`$Command -eq 'review')")
+$iNextM = $mutSrc2.IndexOf('elseif ($Command -eq', $iRevM + 10)
+$revBlockM = if ($iRevM -ge 0 -and $iNextM -gt $iRevM) { $mutSrc2.Substring($iRevM, $iNextM - $iRevM) } else { '' }
+$passedM = @([regex]::Matches($revBlockM, '-([A-Za-z][A-Za-z0-9]*):') | ForEach-Object { $_.Groups[1].Value.ToLower() })
+$missM = @($flags2 | Where-Object { $declared2 -notcontains $_ -or $passedM -notcontains $_ })
+Assert-True "O157②(先验红·同源对照): 摘掉一处传参 ⇒ 同一条判据**必被判红** ⇒ ① 非恒真" ($missM.Count -ge 1)
+
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
 exit $(if ($fail -eq 0) { 0 } else { 1 })

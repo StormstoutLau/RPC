@@ -30,7 +30,7 @@ param(
     [int]$EngineCtxHint = 0,     # route cmd (test): simulate engine n_ctx to exercise clamp (radical fix B); 0=off
     [string]$RunId = '',         # review cmd (O-16): target runDir ts; empty -> newest completed run
     [switch]$Overwrite,          # review cmd (O-16): allow re-review overwriting existing review.json
-    [switch]$AllowAfterChain,    # review cmd (O-140 裁【甲】): 显式放行"对已入链 run 的 review"（降级但留痕）
+    [switch]$AllowAfterChain, [switch]$AllowL1Red, [switch]$AllowSelfReview,    # review cmd: AllowAfterChain(O-140 裁甲) · AllowL1Red+AllowSelfReview(★ O-157 甲2 2026-10-08 **补接线** —— 此前两处 usage 都写了它们，但**顶层无声明、调用点也没传** ⇒ 形参绑定即失败 = 通道完全不可达)
     [switch]$SlotAllowBusy,      # O-25 P1: allow task dispatch even if target engine /slots busy
     [string]$Cli = ''            # task cmd (O-15): executor selector: ''(auto by route/card) | opencode | claude (控制台本地备路)
 )
@@ -6392,7 +6392,7 @@ try {
     elseif ($Command -eq 'review') {
         # O-16 review ring (advisory). usage: agent-cli review <proj> --card <task.md> [--run-id <ts>] [--model <judge-alias>] [--overwrite] [--allow-l1-red] [--allow-self-review] [--allow-after-chain]
         $code = Invoke-Review -proj $Proj -card $Card -runId $RunId -model $Model -overwrite:$Overwrite `
-                              -allowAfterChain:$AllowAfterChain -sensitive $Sensitivity
+                              -allowL1Red:$AllowL1Red -allowSelfReview:$AllowSelfReview -allowAfterChain:$AllowAfterChain -sensitive $Sensitivity
         exit (Resolve-ExitCode $code)
     }
     elseif ($Command -eq 'batch') {
