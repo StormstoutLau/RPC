@@ -90,7 +90,7 @@ $Script:ROUTE_TABLE = @{
     #   用途：**O-20 / O-28 RC① 的正解** —— task 的目标站只能由本表决定（`-HostName` 对 task 无效），
     #   故"要指定站"唯一通道就是 per-station 别名。
     #   前提核查（2026-09-24 实测，已过）：三站 `opencode` 1.18.25 一致 · `~/.config/opencode/opencode.jsonc`
-    #   **md5 全一致**(755975db…) · `~/.config/rpc/openrouter.key` **三站各异**（独立账户 ⇒ 限流互不干扰）。
+    #   **md5 全一致**(755975db…) · `~/.config/rpc/openrouter.key` **三站各异**（独立账户 ⇒ 限流互不干扰）。★ 但见 `O-148`（2026-10-08 就地更正）：账户独立 ✓，而 **A / C 站上 `openrouter.ai` 出网【间歇性】失败**（DNS 错误应答）⇒ ★「限流互不干扰」**不等于**「跨站腿随时可用」。
     'ultra-a'    = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';   station = 'A' }
     'ultra-c'    = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';   station = 'C' }
     # `O-147` 甲（2026-10-07）：**补 `ultra-b`** —— ★ 三站里原先只有 A / C 有 per-station 句柄 ⇒
@@ -3812,7 +3812,7 @@ function Invoke-SplitTask {
         #   ⚠ 别退回旧措辞: 它会让读者以为"出网档拆片无效"从而**放弃一条实测可用的能力**（本仓头号形态的镜像：
         #     "把两件事说成一件" 的反面 —— 把"有条件的并行"说成"不并行"）。
         # ⚠ 括号里的"实测"数字**随取证更新**（2026-09-26 扩到 3 片/3 站 = 站池的物理上界，结论一致）。
-        Write-Host "SPLIT_WARN: model=$id is egress - 并行性取决于**账户/站粒度**: 跨站（各站独立 key）= 可并行【实测 2 片/2 站、3 片/3 站均成立】; 多片共用同一出网账户或同一站 = 可能排队"
+        Write-Host "SPLIT_WARN: model=$id is egress - 并行性取决于**账户/站粒度**: 跨站（各站独立 key）= 可并行【实测 2 片/2 站、3 片/3 站均成立】; 多片共用同一出网账户或同一站 = 可能排队 | ★但见 O-148（2026-10-08 就地更正）: A / C 站上 openrouter.ai 出网【间歇性】失败（DNS 错误应答）⇒ 『跨站 = 可并行』在 A/C 上【发作时不成立】"
     }
 
     # ★★ O-141 P0 实现面第一件（2026-10-05）：**把"站数"显式化为【站 × 腿】；并去掉"物理上界"这个假边界**。
