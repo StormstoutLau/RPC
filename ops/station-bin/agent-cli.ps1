@@ -1719,7 +1719,7 @@ function Get-D7Adjudication {
     } else {
         $hsep = Invoke-D7Cli -Argv @('--d7-host-sep', $ExecHost, $arb)
         if ($hsep['code'] -eq 1) {
-            Write-Host ("D7_PRH_SAME: " + $hsep['line'] + " ⇒ **WARN（灰度期不阻断；定档前置 = 至少观测到 1 次同机形态 · 裁②乙 2026-10-07）**")
+            Write-Host ("D7_PRH_SAME: " + $hsep['line'] + " ⇒ **WARN（不阻断；★ 已定档 2026-10-10 = 维持报数 · O-136 裁② 终点）**")
         }
         elseif ($hsep['code'] -eq 0) { Write-Host ("D7_PRH_SEPARATE: " + $hsep['line']) }
         else { Write-Host ("D7_PRH_UNDECIDABLE: " + $hsep['line'] + " ⇒ 灰度期不阻断") }
