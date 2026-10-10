@@ -5507,7 +5507,7 @@ _HEALTH_CMD = (
     "echo '===ADDR==='; ip -o -4 addr show 2>/dev/null "
     "| awk '$4 ~ /^10\\.10\\./ {print $2, $4}'; "
     "echo '===LINK==='; for i in $(ls /sys/class/net 2>/dev/null | grep '^thunderbolt'); do "
-    "echo \"$i $(cat /sys/class/net/$i/mtu 2>/dev/null) $(cat /sys/class/net/$i/operstate 2>/dev/null)\"; done; "
+    "echo \"$i $(cat /sys/class/net/$i/mtu 2>/dev/null) $(cat /sys/class/net/$i/operstate 2>/dev/null) $(readlink -f /sys/class/net/$i/device 2>/dev/null)\"; done; "
     "echo '===ROUTE==='; ip route show 2>/dev/null | while read -r dst rest; do "
     "case \"$dst\" in 10.10.*) via=$(echo \"$rest\" | sed -n 's/.*via \\([0-9.]*\\).*/\\1/p'); "
     "met=$(echo \"$rest\" | sed -n 's/.*metric \\([0-9]*\\).*/\\1/p'); "
@@ -5576,7 +5576,7 @@ def _health_probe(st: str) -> dict:
     for line in sec.get("LINK", []):
         p = line.split()
         if len(p) >= 3:
-            d["link"][p[0]] = {"mtu": p[1], "state": p[2]}
+            d["link"][p[0]] = {"mtu": p[1], "state": p[2], "dev": p[3] if len(p) >= 4 else ""}
     for line in sec.get("ROUTE", []):
         p = line.split()
         if len(p) >= 3:
@@ -5773,6 +5773,48 @@ def check_evidence(ctx):
     return "PASS", note, details
 
 
+# ── 2026-10-10 · `usb4` 判据的**键**：物理端口（`tb_pci`），**不是**接口名 ─────────────
+# 为什么：TB/USB4 的 netdev 名由**内核枚举顺序**决定 ⇒ 跨重启会翻。实测 B 站 2026-10-10 11:13 重启后
+#   `thunderbolt0/1` **互换**（domain↔对端映射不变 · 地址仍在正确链路 · 8 向连通全绿），而旧判据按名字比对
+#   ⇒ 报出 2 条"地址不符" = **标签层假红**（抓不到真故障，每次重启却被点亮；同型先例 2026-09-29 C 站）。
+# ⇒ 键取 `tb_pci` = `/sys/class/net/<if>/device` realpath 里的 **PCI 函数**（`0000:XX:00.5|.6`）= **物理端口**：
+#   跨重启不变；**换线/换口**才变 —— 那正是**该报红**的情形。真值侧见 `inventory/net.yaml` 头部同名段。
+TB_PCI_RE = re.compile(r"/(\d{4}:[0-9a-f]{2}:\d{2}\.[0-7])/domain\d+/")
+
+
+def tb_pci_of(dev_path):
+    """**纯函数**：从 `/sys/class/net/<if>/device` 的 realpath 里取 **PCI 函数**（= 物理端口标识）。
+
+    实测样例（B 站 2026-10-10）：`/sys/devices/pci0000:00/0000:00:08.3/0000:c8:00.5/domain0/0-0/0-2/0-2.0`
+    ⇒ `0000:c8:00.5`。**取不到 ⇒ `None`**（判不了 —— 绝不回落成"按接口名比"）。
+    """
+    m = TB_PCI_RE.search(str(dev_path or ""))
+    return m.group(1) if m else None
+
+
+def usb4_pick_iface(link_map, end):
+    """**纯函数**：把 `net.yaml` 的一个端点接到**站上实测**的 thunderbolt 接口上。返回 `(iface|None, reason)`。
+
+    键 = `tb_pci`（物理端口）。**fail-closed 三态，都不是通过**：
+      · 登记缺 `tb_pci` ⇒ 键不完整，判不了；· 站上无该 pci ⇒ 端口没枚举 / 换了口；· 命中多个 ⇒ 真值有歧义。
+    """
+    want = str((end or {}).get("tb_pci") or "").strip()
+    if not want:
+        return None, "登记缺 `tb_pci`（键不完整 ⇒ **判不了**；见 net.yaml 头部 2026-10-10 段）"
+    seen, hits = [], []
+    for nm, lk in (link_map or {}).items():
+        pci = tb_pci_of((lk or {}).get("dev"))
+        seen.append(f"{nm}={pci or '非TB/取不到'}")
+        if pci == want:
+            hits.append(nm)
+    if not hits:
+        return None, (f"站上没有 pci={want} 的接口（实测: {', '.join(sorted(seen)) or '无 thunderbolt 接口'}）"
+                      f" —— 端口未枚举 / 该段的接线或端口变了")
+    if len(hits) > 1:
+        return None, f"pci={want} 命中多个接口: {', '.join(sorted(hits))} ⇒ 真值有歧义"
+    return hits[0], ""
+
+
 def check_usb4(ctx):
     """USB4 三角环链路: 地址/MTU/接口状态 + 六向直连 + 主备回程路由 + 跨段生效性。"""
     if not INVENTORY_NET.is_file():
@@ -5789,32 +5831,37 @@ def check_usb4(ctx):
         if not live[st]["reachable"]:
             detail.append(f"{st} 站不可达/采集失败: {live[st].get('error') or live[st].get('raw', '')[:120]}")
 
-    n_addr = n_ping = n_route = 0
+    n_addr = n_ping = n_route = n_keyed = 0
     for seg in doc.get("segments") or []:
         if not isinstance(seg, dict):
             continue
         name, want_mtu = seg.get("name", "?"), str(seg.get("mtu") or "")
         for end in seg.get("ends") or []:
             st = str((end or {}).get("station"))
-            iface, ip = str((end or {}).get("iface") or ""), str((end or {}).get("ip") or "")
-            if not st or not iface or not ip:
+            ip = str((end or {}).get("ip") or "")
+            if not st or not ip:
                 detail.append(f"net.yaml 段 {name} 的端点字段不全: {end}")
                 continue
             if st not in reach:
                 continue
             n_addr += 1
-            got = live[st]["addr"].get(iface)
+            # ★ 2026-10-10：键从 `iface`(名字，跨重启会翻) 换成 `tb_pci`(物理端口) —— 见本文件同名注释段。
+            got_if, why = usb4_pick_iface(live[st]["link"], end)
+            if not got_if:
+                detail.append(f"{st} 站 {name} 段端点接不上（真值 ip={ip} · "
+                              f"键 tb_pci={end.get('tb_pci') or '(缺)'}）—— {why}")
+                continue
+            n_keyed += 1
+            tag = f"pci={end.get('tb_pci')}（今名 {got_if}）"
+            got = live[st]["addr"].get(got_if)
             if got != ip:
-                detail.append(f"{st} 站 {iface} 地址 = {got or '(无)'}, 真值 {ip} —— "
-                              f"{name} 段地址不符(改过 netplan? 或接口错位)")
-            lk = live[st]["link"].get(iface) or {}
-            if not lk:
-                detail.append(f"{st} 站 {iface} 不存在 —— {name} 段链路可能未枚举")
-            else:
-                if want_mtu and lk.get("mtu") != want_mtu:
-                    detail.append(f"{st} 站 {iface} MTU = {lk.get('mtu')}, 真值 {want_mtu}")
-                if lk.get("state") != "up":
-                    detail.append(f"{st} 站 {iface} 状态 = {lk.get('state')} (应为 up)")
+                detail.append(f"{st} 站 {tag} 地址 = {got or '(无)'}, 真值 {ip} —— **地址挂在物理端口上不符**："
+                              f"地址跟错链路(真故障) / 或该段接线换过(旧判据在此按名字比 ⇒ 名字一变就假报)")
+            lk = live[st]["link"].get(got_if) or {}
+            if want_mtu and lk.get("mtu") != want_mtu:
+                detail.append(f"{st} 站 {tag} MTU = {lk.get('mtu')}, 真值 {want_mtu}")
+            if lk.get("state") != "up":
+                detail.append(f"{st} 站 {tag} 状态 = {lk.get('state')} (应为 up)")
 
     # 六向直连: 每站 ping 它两个直连对端 (对端地址从线段两端推导)
     for seg in doc.get("segments") or []:
@@ -5876,7 +5923,8 @@ def check_usb4(ctx):
             detail.append(f"{st} → {tip} 不通 ({cx.get('why')}) —— 跨段主路由未生效")
 
     note = (f"链路: 可达 {len(reach)}/3 站 · 地址 {n_addr} 端 · 连通 {n_ping} 向 · "
-            f"路由 {n_route} 条(主备) · 段 {len(doc.get('segments') or [])}")
+            f"路由 {n_route} 条(主备) · 段 {len(doc.get('segments') or [])} · "
+            f"按物理端口对上 {n_keyed}/{n_addr}")
     if detail:
         return "FAIL", note, info + detail + [f"(WARN) {w}" for w in warn]
     if warn:
