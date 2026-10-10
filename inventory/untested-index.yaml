@@ -138,7 +138,7 @@ items:
   - {spec: U4-INVALIDATION-RULES, n: 10, gist: "执行侧只有框架、没有执行器（EXECUTORS = {} 空 ⇒ 能力仍是 0，只是缺口变机读可见）", state: partial, needs_decision: false, refs: [], blocker: implementation}
 
   # ── U5-TRUST-BASIS（9 条）───────────────────────────────────────────────────
-  - {spec: U5-TRUST-BASIS, n: 1, gist: "四条判据从未被真实对象驱动（无真实输入；与 Textbook / Auto_Prover 从未对接）", state: todo, needs_decision: false, refs: [], blocker: external}
+  - {spec: U5-TRUST-BASIS, n: 1, gist: "四条判据从未被真实对象驱动（无真实输入；与 Textbook / Auto_Prover 的对接面 = **仅引擎调用**，未走 D6 链 —— ★ 2026-10-10 双向实测口径更正：对方 D060/`f5b21ab` + 本仓复算（chain 315 条无该仓 proj · runs.log 0 命中 · 其 agent-out 不存在）；⚠ 不得读成「它侧无真实负载」）", state: todo, needs_decision: false, refs: [O-141], blocker: external}
   - {spec: U5-TRUST-BASIS, n: 2, gist: "v1 的「对应得对不对」判不了 —— **已知能力边界，不是待办**（语义正确性仍是人的活）", state: boundary, needs_decision: false, refs: [], blocker: none}
   - {spec: U5-TRUST-BASIS, n: 3, gist: "v2 是新造形式（V-2 实测真空 ⇒「什么算一跳」无第二方实现可对照）", state: todo, needs_decision: false, refs: [], blocker: implementation}
   - {spec: U5-TRUST-BASIS, n: 4, gist: "★ 已裁 2026-09-30（O-123）：裁掉「默认名单」形态 ⇒ 必须显式声明（缺失即判不通过）+ 支持显式空声明以区分「无需」与「未声明」；★ 2026-09-30 已落（批 3）：v3_axiom_whitelist 删除缺省回落（None ⇒ 判不通过；[] ⇒ 合法且仍会因 extra 红）；V-3 表行同步改（propext 等 = 原文举例、非裁定值）；⚠ 仍未实测 = 真实形式化证明输入（该层从未被真实对象驱动）⇒ state=partial；再触发 = 出现第一个真实形式化证明输入", state: partial, needs_decision: false, refs: [O-123], blocker: implementation}
