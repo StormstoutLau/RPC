@@ -114,6 +114,28 @@ chk("plan: up 组合 -d/--name/--group-add/-p/image 齐全",
     _up == ["docker run -d --name halogen-flash --group-add video --group-add render "
             "-p 127.0.0.1:8731:8731 ghcr.io/x/y:v1"],
     str(_up))
+chk("plan: 不传 device/ipc/ulimit/env/volume 时**不产生多余空格**（默认形态与旧版逐字一致）",
+    C.containers_plan("up", station="A", image="i", name="n") == ["docker run -d --name n i"],
+    str(C.containers_plan("up", station="A", image="i", name="n")))
+# ADR-0014 D4 + 上游部署配方（docker-compose.yml / AGENTS.md）: halogen 起容器**必须**
+#   带 --device /dev/kfd /dev/dri、--group-add video render、--ipc=host（load-bearing：
+#   官方逐字"no shm_size substitutes"）、--ulimit memlock=-1:-1、-v <models>:/models:ro、
+#   -e HALOGEN_CHECKPOINT=... ⇒ 这些 flag 是本仓"真部署"的最小充分集，须与配方同源。
+_up_full = C.containers_plan(
+    "up", station="A", image="ghcr.io/peonist-ai/halogen-flash-server:0.17.4",
+    name="halogen-flash", publish=["127.0.0.1:8731:8731"],
+    group_add=["video", "render"], device=["/dev/kfd", "/dev/dri"],
+    volume=["/m:/models:ro"], env=["HALOGEN_CHECKPOINT=/models/x.gguf"],
+    ipc="host", ulimit=["memlock=-1:-1"])
+chk("plan: up 承载 halogen 配方（--device/--ipc/--ulimit/-v/-e 齐全且保序）",
+    _up_full == ["docker run -d --name halogen-flash "
+                 "--device /dev/kfd --device /dev/dri "
+                 "--group-add video --group-add render --ipc=host --ulimit memlock=-1:-1 "
+                 "-e HALOGEN_CHECKPOINT=/models/x.gguf -v /m:/models:ro "
+                 "-p 127.0.0.1:8731:8731 ghcr.io/peonist-ai/halogen-flash-server:0.17.4"],
+    str(_up_full))
+chk("plan: pull/up 之外的动作**不**吃 device/volume（避免把 run 专属 flag 泄漏到 rm/down）",
+    C.containers_plan("down", station="A", name="x") == ["docker rm -f x"])
 for _bad, _kw in (
     (dict(act="pull", station="A"), "pull"),
     (dict(act="up", station="A", name="x"), "up"),

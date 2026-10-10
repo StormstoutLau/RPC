@@ -23,7 +23,7 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
     python ops/cluster.py agent {runs|live|tail|chain|verify|audit|audit-judge} [--limit N] [--station X] [--json]  # 进度/吞吐 + 证据链 + 可复现性审计 + judge 校准
     python ops/cluster.py inbox                                             # 受理区跨项目进度 (每笔 <proj>-<date> 的 state/时间, 一行一条)
     python ops/cluster.py inbox seal <proj-dir> [--run <ts>|--all-runs] [--grade Reproduced|Replicated] [--go|--check]  # 交付证据束钉死/重算比对 (默认只出计划)
-    python ops/cluster.py containers {status|pull|up|down} [--station A|B|C] [--image <ref>] [--name <名>] [--publish host:cont]... [--group-add g]... [--plan|--go]  # 容器栈纳管 (默认只读 status; 写动作 --go 才动手)
+    python ops/cluster.py containers {status|pull|up|down} [--station A|B|C] [--image <ref>] [--name <名>] [--publish host:cont]... [--group-add g]... [--device dev]... [--volume host:cont[:ro]]... [--env K=V]... [--ipc host] [--ulimit k=soft:hard]... [--timeout 秒] [--plan|--go]  # 容器栈纳管 (默认只读 status; 写动作 --go 才动手)
 
 子命令:
     status   三站 llama /health + 当前加载实例 + 引擎清单一屏聚合
@@ -93,7 +93,10 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
     containers 容器栈纳管 (ADR-0012 D2 / ADR-0014 D2): status=三站 docker ps -a / images / compose ls
              + 端口对账(容器声明面 vs inventory/ports.yaml), **只读, 恒 exit 0**, 空集**显式报「无容器」**;
              pull/up/down=写动作 (**默认只出计划, --go 才动手**), 走唯一建连层 ssh_run(strict=True)
-             —— 不新增并列脚本 (ADR-0004 D2)。⚠ 站上监听占用对账权威仍是 `rpc_check --only ports`。
+             —— 不新增并列脚本 (ADR-0004 D2)。`up` 的 flag 集照抄上游部署配方:
+             `--device /dev/kfd /dev/dri` · `--group-add video render` · `--ipc=host`(★ load-bearing,
+             上游明文"no `shm_size` substitutes" ⇒ 本仓**不提供** `--shm-size`) · `--ulimit memlock=-1:-1`
+             · `-v <models>:/models:ro` · `-e HALOGEN_CHECKPOINT=...`。⚠ 站上监听占用对账权威仍是 `rpc_check --only ports`。
 
 退出码:
     0 成功 / 1 失败 / 2 RPC 类需手动
@@ -5222,11 +5225,21 @@ def format_containers_station(st: str, info: dict) -> list:
 
 
 def containers_plan(act: str, *, station: str, image=None, name=None,
-                    publish=(), group_add=()) -> list:
+                    publish=(), group_add=(), device=(), volume=(), env=(),
+                    ipc=None, ulimit=()) -> list:
     """动作 → **将下发到站上的命令列表**(纯函数, 不连站)。★ 计划与执行**同源**。
 
     act ∈ {pull, up, down}; 缺参抛 ValueError。`up` 的 `-p` 绑定由调用方给出的 `publish` 决定
-    (loopback 约束见 `cmd_containers` / ADR-0014 D4)。"""
+    (loopback 约束见 `cmd_containers` / ADR-0014 D4)。
+
+    ★ `up` 的 flag 集**照抄上游部署配方**(`docker-compose.yml` / `AGENTS.md`), 不自由发挥:
+      · `device`   `--device /dev/kfd --device /dev/dri` —— GPU(KFD/DRI) 准入;
+      · `group_add` `--group-add video --group-add render` —— Docker 路径(Podman 的 `keep-groups` 是扩展);
+      · `ipc`      `--ipc=host` —— ★ **load-bearing**: 上游逐字"no `shm_size` substitutes"
+                   ⇒ 本仓**不提供** `--shm-size`, 需要共享命名空间就用 `--ipc=host`;
+      · `ulimit`   `--ulimit memlock=-1:-1` —— 大页锁定;
+      · `env`/`volume` —— BYO GGUF 的 `HALOGEN_CHECKPOINT` + `-v <models>:/models:ro`。
+    保序: name → device → group-add → ipc → ulimit → env → volume → publish → image。"""
     act = (act or "").lower()
     if act == "pull":
         if not image:
@@ -5242,8 +5255,18 @@ def containers_plan(act: str, *, station: str, image=None, name=None,
         if not name:
             raise ValueError("up 需要 --name <容器名>")
         cmd = f"docker run -d --name {name}"
+        for d in device:
+            cmd += f" --device {d}"
         for g in group_add:
             cmd += f" --group-add {g}"
+        if ipc:
+            cmd += f" --ipc={ipc}"
+        for u in ulimit:
+            cmd += f" --ulimit {u}"
+        for e in env:
+            cmd += f" -e {e}"
+        for v in volume:
+            cmd += f" -v {v}"
         for p in publish:
             cmd += f" -p {p}"
         return [cmd + f" {image}"]
@@ -5293,14 +5316,21 @@ def cmd_containers(argv) -> int:
     act = (argv[0].lower() if argv and not argv[0].startswith("-") else "status")
     if act not in ("status", "pull", "up", "down"):
         print("用法: cluster.py containers {status|pull|up|down} [--station A|B|C] [--image <ref>] "
-              "[--name <名>] [--publish host:cont]... [--group-add g]... [--plan|--go]")
+              "[--name <名>] [--publish host:cont]... [--group-add g]... [--device dev]... "
+              "[--volume host:cont[:ro]]... [--env K=V]... [--ipc host] [--ulimit k=soft:hard]... "
+              "[--timeout 秒] [--plan|--go]")
         return 1
     tail = argv[1:] if argv and not argv[0].startswith("-") else argv
-    station = image = name = None
-    publish, group_add, go, i = [], [], False, 0
+    station = image = name = ipc = None
+    timeout = None
+    publish, group_add, device, volume, env, ulimit, go, i = [], [], [], [], [], [], False, 0
+    # 多值 flag（各自可重复）与单值 flag 的**唯一**归属表 —— 与 containers_plan 的形参同名，
+    #   避免"解析漏一个、计划少一段"（计划=执行的同源前提）。
+    _multi = {"--publish": publish, "--group-add": group_add, "--device": device,
+              "--volume": volume, "--env": env, "--ulimit": ulimit}
     while i < len(tail):
         a = tail[i]
-        if a in ("--station", "--image", "--name", "--publish", "--group-add") and i + 1 < len(tail):
+        if (a in _multi or a in ("--station", "--image", "--name", "--ipc", "--timeout")) and i + 1 < len(tail):
             v = tail[i + 1]
             if a == "--station":
                 station = v.upper()
@@ -5308,10 +5338,15 @@ def cmd_containers(argv) -> int:
                 image = v
             elif a == "--name":
                 name = v
-            elif a == "--publish":
-                publish.append(v)
+            elif a == "--ipc":
+                ipc = v
+            elif a == "--timeout":
+                if not v.isdigit():
+                    print(f"[containers] --timeout 需为整数秒: {v}")
+                    return 1
+                timeout = int(v)
             else:
-                group_add.append(v)
+                _multi[a].append(v)
             i += 2
             continue
         if a in ("--go", "--plan"):
@@ -5323,7 +5358,8 @@ def cmd_containers(argv) -> int:
         return _containers_status(stations)
     try:
         plan = containers_plan(act, station=(station or "A"), image=image, name=name,
-                               publish=publish, group_add=group_add)
+                               publish=publish, group_add=group_add, device=device,
+                               volume=volume, env=env, ipc=ipc, ulimit=ulimit)
     except ValueError as e:
         print(f"[containers] {e}")
         return 1
@@ -5340,7 +5376,9 @@ def cmd_containers(argv) -> int:
         return 0
     ok_all = True
     for c in plan:
-        ok, out = ssh_run(where, c, strict=True)
+        # pull 可能是多 GB 镜像(耗时远超 SSH_TIMEOUT=8s 的 exec 上界) ⇒ 允许 --timeout 放宽;
+        #   缺省仍走 SSH_TIMEOUT, 不改变既有短动作的行为。
+        ok, out = ssh_run(where, c, timeout=(timeout or SSH_TIMEOUT), strict=True)
         print(f"  {'✓' if ok else '✗'} {c}")
         for ln in (out or "").strip().splitlines():
             print(f"      {ln}")
