@@ -70,6 +70,10 @@ B 站 GTR-Pro（唯一构建源）              A/B 两站（运行端）
                                         （三脚本路径不变）
 ```
 
+> ★ **2026-10-11 校正（原文保留）**：上框图是 v0.2.0 设计时点形态。实测**源树按目标命名**
+> `~/src/llama.cpp-<id>`（先例 `llama.cpp-master-91f6a6cf`），**版本目录标识 `<ver>` = `master-<短commit>`**
+> （现役 symlink 实证指向 `llama.cpp-master-91f6a6cf`）。执行以 [UPGRADE_SOP](./UPGRADE_SOP.md) §2 为准。
+
 ### 3.2 模块划分
 
 | 模块 | 职责 | 输入 | 输出 | 依赖 |
