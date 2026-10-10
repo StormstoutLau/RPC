@@ -29,9 +29,19 @@
 #   · 物理接线变动(换口/换线/换机) => 先按归档 §6.3 的方法反查"接口→物理对端", 再改本表
 #     (`readlink /sys/class/net/thunderboltX/device` 看 domain + device_name 反查)
 # ============================================================================
-version: 1
-updated: 2026-09-15
-measured_by: "三站实测 2026-09-15 (ip -br addr / ip -o link / ip route / ping), 与归档文档 §6.3 + §6.6 逐条一致"
+version: 2
+updated: 2026-10-10
+measured_by: "三站实测 2026-09-15 (ip -br addr / ip -o link / ip route / ping), 与归档文档 §6.3 + §6.6 逐条一致；★ 2026-10-10 复核 (B 站重启后)"
+# ★★ 2026-10-10 · **判据的键改了**（`ends[]` 新增 `tb_pci`）—— 为什么：
+#   Thunderbolt/USB4 的 **netdev 名字由内核枚举顺序决定** ⇒ **跨重启会翻**。实测（B 站 2026-10-10 11:13 重启）：
+#   `thunderbolt0`/`thunderbolt1` **互换**，而 **domain↔对端映射不变**（0↔`scott-lau-NEX`(A) · 1↔`seaviv`(C)，
+#   与上一引导 9-28 的内核日志**逐字相同**）；地址由 NM profile 按稳定标识下发 ⇒ **仍在正确的物理链路上**
+#   （MTU 9000 · 8 向连通 · 4 条路由全绿）。
+#   ⇒ 旧判据按 `iface`(名字) 比对 ⇒ 报出"地址不符"（本次实测 2 条）= **标签层假红**：抓不到真故障，
+#     却会被每次重启点亮（同型先例：2026-09-29 C 站，当时以"改仓真值"了事 ⇒ 今天由 B 再犯）。
+#   ⇒ **新键 = `tb_pci`** = `readlink -f /sys/class/net/<if>/device` 里的 **PCI 函数路径**（`0000:XX:00.5|.6`）
+#     = **物理端口**：跨重启不变；**换线/换口**才会变 —— 那正是**该报红**的情形。
+#   ⚠ `iface` 字段**降级为信息性**（= 最近一次观测到的名字，会随重启变，**判据不再用它**）。
 
 # ── 三段 (每段 = 一条物理直连, 两端同网段) ────────────────────────
 segments:
@@ -40,27 +50,30 @@ segments:
     mtu: 9000
     note: "段位沿用历史约定: 10.10.10.x = A-B 段。RPC/nodes.env/netconsole/Beszel 均以此为前提"
     ends:
-      - {station: A, iface: thunderbolt0, ip: 10.10.10.1, peer: B}
-      - {station: B, iface: thunderbolt0, ip: 10.10.10.2, peer: A}
+      - {station: A, tb_pci: "0000:c7:00.6", iface: thunderbolt0, ip: 10.10.10.1, peer: B}
+      - {station: B, tb_pci: "0000:c8:00.5", iface: thunderbolt1, ip: 10.10.10.2, peer: A}
+      # ★ 2026-10-10 就地更正：B 端 `iface` 由 `thunderbolt0` 改为 `thunderbolt1`（重启后枚举翻转，
+      #   地址与 domain↔对端映射都没变）—— 判据已改用 `tb_pci`，此字段仅供阅读。
 
   - name: B-C
     cidr: 10.10.11.0/24
     mtu: 9000
     ends:
-      - {station: B, iface: thunderbolt1, ip: 10.10.11.1, peer: C}
+      - {station: B, tb_pci: "0000:c8:00.6", iface: thunderbolt0, ip: 10.10.11.1, peer: C}
+      # ★ 2026-10-10 就地更正：B 端 `iface` 由 `thunderbolt1` 改为 `thunderbolt0`（同上，枚举翻转）。
       # ★ 2026-09-29 更正（以站上实况为准）：C 端在 **thunderbolt0**，不是原先记的 thunderbolt1。
       #   证据：usb4 断言实测 C 站 `thunderbolt0 = 10.10.11.3`；同刻连通性正常(8 向全通) ⇒
       #   是**标签/登记错**（接口枚举或接线在 09-15 之后换过），**不是**功能故障。
       #   ⚠ 另见本段下方 A-C 的 note —— 那条 note 当年**记反了**，一并更正。
-      - {station: C, iface: thunderbolt0, ip: 10.10.11.3, peer: B}
+      - {station: C, tb_pci: "0000:c8:00.6", iface: thunderbolt0, ip: 10.10.11.3, peer: B}
 
   - name: A-C
     cidr: 10.10.12.0/24
     mtu: 9000
     note: "★ 2026-09-29 更正: 原注写『C 的 A-C 段落在 thunderbolt0』——**记反了**；实测 C 的 A-C 段在 **thunderbolt1**（B-C 段才在 thunderbolt0）"
     ends:
-      - {station: A, iface: thunderbolt1, ip: 10.10.12.1, peer: C}
-      - {station: C, iface: thunderbolt1, ip: 10.10.12.3, peer: A}
+      - {station: A, tb_pci: "0000:c7:00.5", iface: thunderbolt1, ip: 10.10.12.1, peer: C}
+      - {station: C, tb_pci: "0000:c8:00.5", iface: thunderbolt1, ip: 10.10.12.3, peer: A}
 
 # ── 跨段主备回程路由 (D-5) ────────────────────────────────────────
 # 只登记**非直连段**的路由; B 无此项(它直连 A 与 C)。
