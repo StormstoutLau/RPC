@@ -45,7 +45,7 @@
 # ============================================================================
 version: 1
 updated: 2026-10-10
-measured_by: "sudo ss -ltnup + 服务配置核对 + 进程归属反查, 三站实测 2026-09-15; 2026-09-30 补登 A 站 8888 (searxng, `O-122`); 2026-10-10 rpc.statd 条改段位形态 (`O-158` 甲) + 三站 `sudo -n ss -lXnp` 取占用者名实测"
+measured_by: "sudo ss -ltnup + 服务配置核对 + 进程归属反查, 三站实测 2026-09-15; 2026-09-30 补登 A 站 8888 (searxng, `O-122`); 2026-10-10 rpc.statd 条改段位形态 (`O-158` 甲) + 三站 `sudo -n ss -lXnp` 取占用者名实测 + 补登 A 站 8730/8731 (halogen 容器, `ADR-0014`)"
 
 # ── 本项目自管的服务端口 ────────────────────────────────────────────
 managed:
@@ -146,6 +146,37 @@ managed:
       ⚠ `SEARXNG_URL` 站上**未设置**（无 shell profile / environment.d 绑定）⇒ 本项**同步的是文档口径**，非改绑定。
       证据：`docker compose config` 实测 `published: "8888"`；备份件 `docker-compose.yml.bak_20260930`。
       mode/status 双标 ⇒ **未监听不算故障**（豁免本表"声明在用却没监听"的反向对账）。
+
+  - port: 8731
+    proto: http
+    purpose: halogen 引擎 API (第三方 OCI 推理引擎, A 站**测试性**)
+    scope: [A]
+    bind: 127.0.0.1
+    owner: "docker (halogen-flash-server)"
+    mode: on_demand
+    status: configured_but_stopped
+    consumers: [ops/cluster.py containers]
+    note: |
+      2026-10-10 登记（ADR-0014 立项）：halogen-flash-server 容器的**对外发布**端口
+      （`docker run ... -p 127.0.0.1:8731:8731`，经 `ops/cluster.py containers up` 下发）。
+      ★ 引擎协议**无鉴权**（上游逐字 "The engine protocol has no authentication; keep it unpublished."）
+      ⇒ 宿主绑定**必须** loopback（ADR-0014 D4），**不得** `0.0.0.0`。
+      mode/status 双标 ⇒ 未监听不算故障（豁免本表"声明在用却没监听"的反向对账）。
+      ⚠ 容器**未起时**本端口不监听属正常；引擎镜像/部署未实测（ADR-0014 未实测登记 U1/U2）。
+
+  - port: 8730
+    proto: http
+    purpose: halogen 引擎**容器内**服务端口 (非宿主监听面)
+    scope: [A]
+    bind: 127.0.0.1
+    owner: "docker (halogen-flash-server)"
+    mode: on_demand
+    status: configured_but_stopped
+    note: |
+      2026-10-10 登记（ADR-0014 D3）：**容器内**默认端口 —— 宿主**不经**此口直接暴露
+      （对外走 8731 的 loopback 发布）。登记在此 = **占位防误用**（防止宿主别处再拿 8730）。
+      ⇒ 站上 `ss` **看不到**它（在容器网络命名空间内），故豁免本表反向对账（mode/status 双标）。
+      ⚠ 容器内端口与发布端口的**具体映射**以实际 `docker run` 为准（上游文档口径未完全一致，见 ADR-0014 U2）。
 
 # ── 非我方开发, 但我方依赖 (实测登记) ───────────────────────────────
 third_party:

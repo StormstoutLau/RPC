@@ -18,24 +18,32 @@ gethost_facts() {
     used=$(( total - avail ))
     rssm=$(ps -eo rss,comm | grep -E 'llama-server|ggml-rpc-server|llama-cli' | awk '{s+=$1} END{printf "%d", s/1024}')
     load1=$(cut -d' ' -f1 /proc/loadavg)
+    # docker 容器占用 (ADR-0014 V4): 容器内存**已**计入上面的 used/avail, 但 rssm 的进程名
+    #   白名单看不见它们 ⇒ 这里显式取数, 让"看不见"变成"看得见"(容器内存取不到则记 0)。
+    dockm=$(cat /sys/fs/cgroup/system.slice/docker-*.scope/memory.current 2>/dev/null | awk '{s+=$1} END{printf "%d", s/1048576}')
+    dockn=$(docker ps -q 2>/dev/null | wc -l | tr -d ' ')
   else
     total=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$h" "awk '/MemTotal/{printf \"%d\", \$2/1024}' /proc/meminfo" 2>/dev/null)
     avail=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$h" "awk '/MemAvailable/{printf \"%d\", \$2/1024}' /proc/meminfo" 2>/dev/null)
     rssm=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$h" "ps -eo rss,comm | grep -E 'llama-server|ggml-rpc-server|llama-cli' | awk '{s+=\$1} END{printf \"%d\", s/1024}'" 2>/dev/null)
     load1=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$h" "cut -d' ' -f1 /proc/loadavg" 2>/dev/null)
+    dockm=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$h" "cat /sys/fs/cgroup/system.slice/docker-*.scope/memory.current 2>/dev/null | awk '{s+=\$1} END{printf \"%d\", s/1048576}'" 2>/dev/null)
+    dockn=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$h" "docker ps -q 2>/dev/null | wc -l" 2>/dev/null)
     used=$(( total - avail ))
   fi
   [ -z "$rssm" ] && rssm=0
+  [ -z "$dockm" ] && dockm=0
+  [ -z "$dockn" ] && dockn=0
   [ -z "$total" ] && { echo "  [ABORT] host $h 不可达" >&2; exit 1; }
-  echo "$total $avail $used $rssm $load1"
+  echo "$total $avail $used $rssm $load1 $dockm $dockn"
 }
 
 need_mb=$(( NEED * 1024 ))
 saf_mb=$(( 12 * 1024 ))
 for h in "${HOSTS[@]}"; do
   facts=$(gethost_facts "$h") || exit 1
-  read -r total avail used rssm load1 <<< "$facts"
-  echo "--- [$h] need=${NEED}G avail=$((avail/1024))G used=$((used/1024))G existing_rss=$((rssm/1024))G load1=$load1 total=$((total/1024))G"
+  read -r total avail used rssm load1 dockm dockn <<< "$facts"
+  echo "--- [$h] need=${NEED}G avail=$((avail/1024))G used=$((used/1024))G existing_rss=$((rssm/1024))G docker=${dockn}容器/$((dockm/1024))G load1=$load1 total=$((total/1024))G"
   if [ $(( used + need_mb + saf_mb )) -gt "$total" ]; then
     echo "  [ABORT] 加法超限: used($((used/1024))G)+need(${NEED}G)+12G > total($((total/1024))G)" >&2
     exit 1
@@ -50,6 +58,13 @@ for h in "${HOSTS[@]}"; do
   fi
   if [ -n "$load1" ] && awk -v l="$load1" 'BEGIN{exit !(l>8)}'; then
     echo "  [WARN] loadavg1=$load1 > 8"
+  fi
+  # 容器占用是"**看得见**"而非静默: 三闸的算术用的是 meminfo(容器内存已计入 used/avail),
+  #   但下面 rssm 那条"已有实例"判据按**进程名**取数 ⇒ 看不见容器 ⇒ 这里显式提示(不改三闸算术)。
+  if [ "$dockn" -gt 0 ] && [ "$dockm" -eq 0 ]; then
+    echo "  [WARN] 有 $dockn 个运行中容器, 但未取到容器内存 (cgroup 路径可能不同) —— '已有实例'判据看不见它们" >&2
+  elif [ "$dockn" -gt 0 ]; then
+    echo "  [WARN] 有 $dockn 个运行中容器占 $((dockm/1024))G —— 已计入 used/avail(三闸有效); '已有实例'判据按进程名取数看不见它们" >&2
   fi
   echo "  [OK]"
 done

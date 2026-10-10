@@ -23,6 +23,7 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
     python ops/cluster.py agent {runs|live|tail|chain|verify|audit|audit-judge} [--limit N] [--station X] [--json]  # 进度/吞吐 + 证据链 + 可复现性审计 + judge 校准
     python ops/cluster.py inbox                                             # 受理区跨项目进度 (每笔 <proj>-<date> 的 state/时间, 一行一条)
     python ops/cluster.py inbox seal <proj-dir> [--run <ts>|--all-runs] [--grade Reproduced|Replicated] [--go|--check]  # 交付证据束钉死/重算比对 (默认只出计划)
+    python ops/cluster.py containers {status|pull|up|down} [--station A|B|C] [--image <ref>] [--name <名>] [--publish host:cont]... [--group-add g]... [--plan|--go]  # 容器栈纳管 (默认只读 status; 写动作 --go 才动手)
 
 子命令:
     status   三站 llama /health + 当前加载实例 + 引擎清单一屏聚合
@@ -89,6 +90,10 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
              管理页含「受理区」卡片: 跨项目进度 + 待办聚合, 15s 自动刷新)
     inbox    受理区跨项目进度 (只读, ADR-0008): 读 inbox/<proj>-<date>/40_state/STATE.json,
              列出每笔的 state + updated_at。合法状态白名单/自洽性由门禁 `rpc_check.py --only inbox` 判定。
+    containers 容器栈纳管 (ADR-0012 D2 / ADR-0014 D2): status=三站 docker ps -a / images / compose ls
+             + 端口对账(容器声明面 vs inventory/ports.yaml), **只读, 恒 exit 0**, 空集**显式报「无容器」**;
+             pull/up/down=写动作 (**默认只出计划, --go 才动手**), 走唯一建连层 ssh_run(strict=True)
+             —— 不新增并列脚本 (ADR-0004 D2)。⚠ 站上监听占用对账权威仍是 `rpc_check --only ports`。
 
 退出码:
     0 成功 / 1 失败 / 2 RPC 类需手动
@@ -5052,6 +5057,297 @@ def cmd_inbox(argv) -> int:
     return 0
 
 
+# ── containers: A 站容器栈纳管 (ADR-0012 D2 / ADR-0014 D2) ──────────────
+# 唯一经统一管理面执行 docker 的入口 (ADR-0004 D2: 新能力加子命令, **不**新增并列脚本)。
+# 纪律:
+#   · status = 只读, **恒 exit 0**, 且空集必须**显式报「无容器」**(ADR-0012 D2 —— 本仓头号形态:
+#     空集被读成"没问题" ⇒ 不许打印空);
+#   · pull/up/down = 写动作, **默认 --plan**(只打印将下发的命令, **不连站**), --go 才动手;
+#     计划与执行**同源**(都走 containers_plan) ⇒ 不出现"计划一套、执行另一套";
+#   · 写动作 ssh_run(..., strict=True) —— 要**远端 rc==0** 才算成功(默认 ok 只表示"没抛异常")。
+PORTS_YAML = REPO_ROOT / "inventory" / "ports.yaml"
+
+# 站上探测块: 一次连接取三段。docker 缺席也要**可判**(DOCKER=absent), 不靠"空输出"反推。
+_PROBE_CMD = (
+    "if command -v docker >/dev/null 2>&1; then echo DOCKER=active; "
+    "echo '===PS==='; docker ps -a --format '{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null; "
+    "echo '===IMG==='; docker images --format '{{.Repository}}:{{.Tag}}\t{{.Size}}' 2>/dev/null; "
+    "echo '===CMP==='; docker compose ls --format table 2>/dev/null; "
+    "else echo DOCKER=absent; fi"
+)
+
+
+def docker_published_ports(ports_field: str) -> list:
+    """`docker ps` 的 PORTS 列 → 已发布**宿主**端口列表(保序, 可重复)。
+
+    docker 形态: `127.0.0.1:8731->8731/tcp, 0.0.0.0:8888->8080/tcp, :::8888->8080/tcp`。
+    未发布(只有容器内口, 无 `->`)不计 —— 那些端口只在容器网络内, 不在宿主监听面。
+    """
+    out = []
+    for tok in (ports_field or "").split(","):
+        tok = tok.strip()
+        if "->" not in tok:
+            continue
+        hp = tok.split("->", 1)[0].rsplit(":", 1)[-1].strip()
+        if hp.isdigit():
+            out.append(int(hp))
+    return out
+
+
+def parse_docker_ps(text: str) -> list:
+    """`docker ps -a` 四列文本(names\\timage\\tstatus\\tports) → 行字典。空行/短行跳过。"""
+    rows = []
+    for ln in (text or "").splitlines():
+        if not ln.strip():
+            continue
+        parts = ln.split("\t")
+        if len(parts) < 4 or not parts[0].strip():
+            continue
+        rows.append({"name": parts[0].strip(), "image": parts[1].strip(),
+                     "status": parts[2].strip(), "ports_raw": parts[3].strip(),
+                     "host_ports": docker_published_ports(parts[3])})
+    return rows
+
+
+def parse_docker_images(text: str) -> list:
+    """`docker images` 两列文本(ref\\tsize) → [{ref, size}]。空行/短行跳过。"""
+    rows = []
+    for ln in (text or "").splitlines():
+        if not ln.strip():
+            continue
+        parts = ln.split("\t")
+        if len(parts) < 2 or not parts[0].strip():
+            continue
+        rows.append({"ref": parts[0].strip(), "size": parts[1].strip()})
+    return rows
+
+
+def parse_containers_probe(text: str) -> dict:
+    """站上探测块 → `{docker, ps, images, compose}`。`docker` ∈ active/absent/unknown。
+
+    ★ unknown 与 absent **不同**: 前者 = 探测没给出结论(不假装"没装"), 后者 = 明确无 dockerd。
+    """
+    out = {"docker": "unknown", "ps": [], "images": [], "compose": []}
+    section, buf = None, {"ps": [], "img": [], "cmp": []}
+    for ln in (text or "").splitlines():
+        s = ln.strip()
+        if s == "DOCKER=active":
+            out["docker"] = "active"; continue
+        if s == "DOCKER=absent":
+            out["docker"] = "absent"; continue
+        if s == "===PS===":
+            section = "ps"; continue
+        if s == "===IMG===":
+            section = "img"; continue
+        if s == "===CMP===":
+            section = "cmp"; continue
+        if not s:
+            continue
+        if section:
+            buf[section].append(ln)
+    out["ps"] = parse_docker_ps("\n".join(buf["ps"]))
+    out["images"] = parse_docker_images("\n".join(buf["img"]))
+    # `docker compose ls --format table` **恒**先打一行表头（`NAME STATUS CONFIG FILES`）——
+    #   项目集为空时**只**有表头 ⇒ 不过滤会把 0 个栈误报成 1 个（"看不见空集"的反向假阳；
+    #   与 ADR-0012 D2"空集不许打印空"同一条纪律：既不许静默空，也不许**凭空有**）。
+    #   过滤判据 = 该行空白分词恰为表头四列（比扫列宽稳，且真项目名不会恰叫 NAME+STATUS+CONFIG+FILES）。
+    _CMP_HEADER = ["NAME", "STATUS", "CONFIG", "FILES"]
+    out["compose"] = [x.strip() for x in buf["cmp"]
+                      if x.strip() and x.split() != _CMP_HEADER]
+    return out
+
+
+def registered_host_ports(table: dict) -> dict:
+    """`ports.yaml` 解析结果 `{group:[entry]}` → `{port_int: "group/port"}`。
+
+    只收**具体端口**条目(`port:` 为 int); **段位形态**(`owner`+`range`, 见 `O-158` 甲)
+    **不**进集合 —— 它的覆盖靠 `rpc_check._reg_covers`, 不是"某个具体端口"。"""
+    out = {}
+    for group, entries in (table or {}).items():
+        if not isinstance(entries, list):
+            continue
+        for e in entries:
+            if isinstance(e, dict) and isinstance(e.get("port"), int):
+                out.setdefault(e["port"], f"{group}/{e['port']}")
+    return out
+
+
+def _ports_yaml() -> dict:
+    """读 `inventory/ports.yaml` → `{group:[entry]}`(缺文件回 `{}`; 与 `rpc_check` 同源, 不抄一份)。"""
+    import yaml
+    if not PORTS_YAML.is_file():
+        return {}
+    doc = yaml.safe_load(PORTS_YAML.read_text(encoding="utf-8")) or {}
+    return {g: v for g, v in doc.items() if isinstance(v, list)}
+
+
+def containers_port_audit(published_by_station: dict, registered: dict) -> list:
+    """容器**已发布宿主端口** vs 真值表 → 未登记的问题行(ADR-0012 D3 的口径)。
+
+    ⚠ 只做"**容器声明面 ↔ 真值表**"; 站上**监听占用**对账的权威仍是 `rpc_check` 的 `ports` 断言
+    ⇒ 本条**不复刻**其站上扫描(不造第二份真值)。"""
+    issues = []
+    for st in sorted(published_by_station):
+        for p in sorted(set(published_by_station[st])):
+            if p not in registered:
+                issues.append(f"{st} 站容器已发布宿主端口 {p} **未**在 inventory/ports.yaml 登记")
+    return issues
+
+
+def format_containers_station(st: str, info: dict) -> list:
+    """单站容器信息 → 文本行。**空集必须显式报「无容器」**(ADR-0012 D2)。"""
+    lines = [f"=== {st} 站 ==="]
+    docker = info.get("docker", "unknown")
+    if docker == "absent":
+        lines.append("  docker: 未安装（无 dockerd）—— 容器路径不适用")
+        return lines
+    lines.append(f"  docker: {docker}")
+    ps = info.get("ps", [])
+    if not ps:
+        lines.append("  容器: 0 个 —— **无容器**（`docker ps -a` 空集, 非\"打印空\"）")
+    else:
+        lines.append(f"  容器: {len(ps)} 个")
+        for r in ps:
+            tail = f"  [{r['ports_raw']}]" if r.get("ports_raw") else ""
+            lines.append(f"    - {r['name']}  {r['image']}  {r['status']}{tail}")
+    imgs = info.get("images", [])
+    lines.append("  镜像: 0 个" if not imgs else f"  镜像: {len(imgs)} 个")
+    for r in imgs:
+        lines.append(f"    - {r['ref']}  {r['size']}")
+    cmp_ = info.get("compose", [])
+    lines.append("  compose 栈: 无" if not cmp_ else f"  compose 栈: {len(cmp_)} 个")
+    for c in cmp_:
+        lines.append(f"    - {c}")
+    return lines
+
+
+def containers_plan(act: str, *, station: str, image=None, name=None,
+                    publish=(), group_add=()) -> list:
+    """动作 → **将下发到站上的命令列表**(纯函数, 不连站)。★ 计划与执行**同源**。
+
+    act ∈ {pull, up, down}; 缺参抛 ValueError。`up` 的 `-p` 绑定由调用方给出的 `publish` 决定
+    (loopback 约束见 `cmd_containers` / ADR-0014 D4)。"""
+    act = (act or "").lower()
+    if act == "pull":
+        if not image:
+            raise ValueError("pull 需要 --image <ref>")
+        return [f"docker pull {image}"]
+    if act == "down":
+        if not name:
+            raise ValueError("down 需要 --name <容器名>")
+        return [f"docker rm -f {name}"]
+    if act == "up":
+        if not image:
+            raise ValueError("up 需要 --image <ref>")
+        if not name:
+            raise ValueError("up 需要 --name <容器名>")
+        cmd = f"docker run -d --name {name}"
+        for g in group_add:
+            cmd += f" --group-add {g}"
+        for p in publish:
+            cmd += f" -p {p}"
+        return [cmd + f" {image}"]
+    raise ValueError(f"未知容器动作: {act}（可选 pull|up|down）")
+
+
+def _containers_status(stations) -> int:
+    """只读一屏: 三站 docker ps -a / images / compose ls + 端口对账。**恒 exit 0**(只读观测)。"""
+    pub = {}
+    for st in stations:
+        ok, out = ssh_run(st, _PROBE_CMD)
+        if not ok:
+            print(f"=== {st} 站 ===")
+            print(f"  [不可达] {out}")
+            continue
+        info = parse_containers_probe(out)
+        for ln in format_containers_station(st, info):
+            print(ln)
+        pts = [p for r in info["ps"] for p in r["host_ports"]]
+        if pts:
+            pub[st] = pts
+    try:
+        reg = registered_host_ports(_ports_yaml())
+    except Exception as e:
+        print(f"\n[containers] ⚠ inventory/ports.yaml 解析失败({type(e).__name__}): {str(e)[:120]} —— 对账跳过")
+        return 0
+    issues = containers_port_audit(pub, reg)
+    print()
+    if not pub:
+        print("[containers] 三站均无已发布端口 ⇒ 无须对账")
+    elif issues:
+        print("[containers] 端口对账（容器声明面 vs 真值表）:")
+        for x in issues:
+            print(f"  ⚠ {x}")
+    else:
+        print("[containers] 端口对账（容器声明面 vs 真值表）: 已发布宿主端口**全部**已登记 ✓")
+    print("[containers] 注: 站上**监听占用**对账的权威 = `ops/rpc_check.py --only ports`（本条不替代）")
+    return 0
+
+
+def cmd_containers(argv) -> int:
+    """cluster.py containers {status|pull|up|down} ...  —— 容器栈纳管 (ADR-0012 D2 / ADR-0014 D2)
+
+    status          只读一屏 (三站 docker ps -a / images / compose ls + 端口对账), 恒 exit 0
+    pull/up/down    写动作 —— **默认只出计划, --go 才动手**; 走 ssh_run(strict=True)
+    """
+    act = (argv[0].lower() if argv and not argv[0].startswith("-") else "status")
+    if act not in ("status", "pull", "up", "down"):
+        print("用法: cluster.py containers {status|pull|up|down} [--station A|B|C] [--image <ref>] "
+              "[--name <名>] [--publish host:cont]... [--group-add g]... [--plan|--go]")
+        return 1
+    tail = argv[1:] if argv and not argv[0].startswith("-") else argv
+    station = image = name = None
+    publish, group_add, go, i = [], [], False, 0
+    while i < len(tail):
+        a = tail[i]
+        if a in ("--station", "--image", "--name", "--publish", "--group-add") and i + 1 < len(tail):
+            v = tail[i + 1]
+            if a == "--station":
+                station = v.upper()
+            elif a == "--image":
+                image = v
+            elif a == "--name":
+                name = v
+            elif a == "--publish":
+                publish.append(v)
+            else:
+                group_add.append(v)
+            i += 2
+            continue
+        if a in ("--go", "--plan"):
+            go = (a == "--go"); i += 1; continue
+        print(f"[containers] 未知参数: {a}")
+        return 1
+    stations = [station] if station else ["A", "B", "C"]
+    if act == "status":
+        return _containers_status(stations)
+    try:
+        plan = containers_plan(act, station=(station or "A"), image=image, name=name,
+                               publish=publish, group_add=group_add)
+    except ValueError as e:
+        print(f"[containers] {e}")
+        return 1
+    where = station or "A"
+    for p in publish:                      # ADR-0014 D4: 引擎协议无鉴权 ⇒ 只准 loopback
+        if p.split(":", 1)[0] not in ("127.0.0.1", "localhost"):
+            print(f"[containers] ⚠ publish `{p}` 宿主绑定非 loopback —— 引擎协议**无鉴权**"
+                  f"（ADR-0014 D4），建议 127.0.0.1")
+    print(f"[containers] {act} @ {where} 站" + ("" if go else "   （计划 · --go 才下发）"))
+    for c in plan:
+        print(f"  $ {c}")
+    if not go:
+        print("  提示: 加 --go 执行（写动作默认只出计划）")
+        return 0
+    ok_all = True
+    for c in plan:
+        ok, out = ssh_run(where, c, strict=True)
+        print(f"  {'✓' if ok else '✗'} {c}")
+        for ln in (out or "").strip().splitlines():
+            print(f"      {ln}")
+        ok_all = ok_all and ok
+    return 0 if ok_all else 1
+
+
 # ── main ───────────────────────────────────────────────
 def main() -> int:
     args = sys.argv[1:]
@@ -5101,6 +5397,8 @@ def main() -> int:
         return cmd_agent(args[1:])
     if sub == "inbox":
         return cmd_inbox(args[1:])
+    if sub == "containers":
+        return cmd_containers(args[1:])
     if sub == "e2e":
         return cmd_e2e()
     if sub == "secrets":

@@ -947,7 +947,7 @@ try {
     $shRes = (@(@($shScan | python - @shScanFiles 2>&1) | Where-Object { "$_" -match 'bare=' }) -join ' | ')
 } catch { $shRes = "PYERR: $($_.Exception.Message)" }
 # ⚠ 逐文件登记值是**防恒真**的下界（0 命中必须红）：⚠ 增删调用须同步改本数（故意的摩擦）
-Assert-True "ssh: .sh 侧无裸调用（文本扫描兜底，实测 $shRes）" ($shRes -eq 'agent-cli-smoke.sh bare=0 total=12 | load-gate bare=0 total=4')
+Assert-True "ssh: .sh 侧无裸调用（文本扫描兜底，实测 $shRes）" ($shRes -eq 'agent-cli-smoke.sh bare=0 total=12 | load-gate bare=0 total=6')
 # `Test-StationEngineReady` 的 scp 走 `Start-Process -FilePath 'scp' -ArgumentList $scpArgs`
 # ⇒ 没有 scp 的 CommandAst 节点，**真实选项在 `$scpArgs` 那个赋值里**。
 # ⚠ 第一版我把断言打在 Start-Process 的 `Extent.Text` 上 ⇒ 那串文本里只有 `$scpArgs`（变量名），
