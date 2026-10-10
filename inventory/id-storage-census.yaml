@@ -40,11 +40,11 @@ stores:
   declared_role: primary_key
   reachable: true
   ok: true
-  rows: 38
-  distinct: 38
+  rows: 40
+  distinct: 40
   is_primary_key: true
   shape:
-    sha256[:32] 无前缀: 38
+    sha256[:32] 无前缀: 40
   shape_sampled: false
 - project: Open_Data
   kind: duckdb
