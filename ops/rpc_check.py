@@ -4234,6 +4234,30 @@ def check_ports(ctx):
                           f"应只在其中一处 (在用的进 managed/third_party/unmanaged, "
                           f"退役的只留 deprecated)")
 
+    # (3b) ★ 段位形态 (O-158 甲, 2026-10-10): `unmanaged` 里**无 `port` 有 `range`** 的条目 ——
+    #     形态必须合法, 否则站上对账时它**静默变成"不覆盖"**(坏 range 匹配不上任何口),
+    #     真因要到 stations 那一步才表现成"某口未登记"。故三件套在**门口**先判:
+    #       range = [lo, hi] 两个整数且 lo ≤ hi · owner 非空 · bind 是 loopback
+    #       (护栏「只覆盖 loopback + 已知 owner」的字面落点)。
+    #     ⚠ 这类条目**不**参与 (2)(3) 的重复/重叠检查 —— 覆盖由"占用者是谁"决定, 与数字区间无关。
+    for e in entries.get("unmanaged") or []:
+        if not isinstance(e, dict) or isinstance(e.get("port"), int):
+            continue
+        rng = e.get("range")
+        if rng is None:
+            continue                    # 既无 port 又无 range 的注释性散条不判 (旧式, 无关覆盖)
+        if not (isinstance(rng, (list, tuple)) and len(rng) == 2
+                and all(isinstance(x, int) for x in rng) and rng[0] <= rng[1]):
+            detail.append(f"unmanaged 段位条目 range={rng!r} 非法 —— "
+                          f"须为 [lo, hi] 两个整数且 lo ≤ hi (见 O-158)")
+            continue
+        if not e.get("owner"):
+            detail.append(f"unmanaged 段位条目 {rng!r} 缺 owner —— 段位形态的覆盖**必须有** "
+                          f"owner 闸 (只覆盖 loopback + 已知 owner, 见 O-158)")
+        if str(e.get("bind") or "") not in ("127.0.0.1", "::1"):
+            detail.append(f"unmanaged 段位条目 {rng!r} 的 bind={e.get('bind')!r} 不是 loopback "
+                          f"—— 护栏只允许覆盖 loopback (见 O-158)")
+
     # (4) 枚举合法性 —— 拼错 scope/proto/mode 会让对账**静默失效**
     #     (如 scope 写成 "a" 则不匹配任何站; mode 写成 "ondemand" 则豁免规则不生效)
     for g in ("managed", "third_party", "unmanaged"):
@@ -4637,6 +4661,15 @@ STATION_CMD = (
     # UDP 侧单独一段 (P1-4): 系统里长期监听的 UDP 端口并不少 (nmbd/avahi/NetworkManager/
     # wsdd/netconsole/rpc.statd), 只查 TCP 会让它们对账时"看不见"。
     "printf '\\n[ubind]\\n'; ss -lun 2>/dev/null | awk 'NR>1{print $4}' | tr '\\n' ' '; echo; "
+    # ★ 占用者身份面 (O-158 甲, 2026-10-10): 段位形态条目 (`unmanaged` 里无 `port`、有 `owner`+`range`)
+    #   的第三道闸要判"这个口是不是登记的 owner 占的" ⇒ 必须取"监听口 → 占用者名"。
+    #   为什么必须 sudo: 非 root 的 `ss -p` 只显示**本用户**的进程, 而 rpc.statd 这类系统服务
+    #   跑在 root 下 (实测三站 `sudo -n` 均可非交互用, 2026-10-10)。⚠ 取不到 (sudo 失败等) ⇒
+    #   门禁侧 **fail-closed**: 段位条不覆盖 ⇒ 该口照常报"未登记"并点名"占用者取数缺失"
+    #   (判不了 ≠ 通过)。⚠ 原始行**不裁剪** (门禁侧只解析一次; 第 4 列 = addr:port, 行尾含
+    #   users:(("名",pid=..,fd=..)))。
+    "printf '\\n[towner]\\n'; sudo -n ss -ltnp 2>/dev/null; "
+    "printf '\\n[uowner]\\n'; sudo -n ss -lunp 2>/dev/null; "
     # 插件面事实 (P1-5): 由站上工具一次性汇报 `id=value` 行, 判定留在门禁侧。
     # 不把采集逻辑内联在这里 —— JSONC 解析 + 目录遍历 + 软链可达性判断用 shell
     # 单行串写会变成转义地狱, 且三站口径无法保证一致。
@@ -4947,6 +4980,13 @@ def _lanip_via_usb4(target, segs, live, ssh_run):
     return [], f"降级通道全失败 ({'; '.join(errs)})"
 
 
+def _is_loopback_addr(a):
+    """`ss` 输出里的 Local 地址是不是 loopback —— **段位形态的护栏** (O-158 甲, 2026-10-10:
+    "只覆盖 loopback + 已知 owner")。纯函数 ⇒ 可离线单测。"""
+    s = str(a or "").strip()
+    return s.startswith("127.") or s in ("::1", "[::1]", "localhost")
+
+
 def check_stations(ctx):
     sys.path.insert(0, str(ROOT / "ops"))
     try:
@@ -5106,29 +5146,77 @@ def check_stations(ctx):
                       f"{type(e).__name__}: {str(e)[:160]}")
     ignored_eph, checked_ports = 0, 0
     if port_entries is not None:
-        by_port = {}
+        by_port, by_range = {}, []
         for g in ("managed", "third_party", "unmanaged"):
             for e in port_entries.get(g) or []:
-                if isinstance(e, dict) and isinstance(e.get("port"), int):
+                if not isinstance(e, dict):
+                    continue
+                if isinstance(e.get("port"), int):
                     by_port.setdefault(e["port"], []).append((g, e))
+                elif e.get("range"):
+                    by_range.append((g, e))       # ★ 段位形态 (O-158 甲, 2026-10-10)
 
-        def _reg_covers(port, side, st):
-            """分配表是否已登记该 (端口, 协议侧, 站)。
-
-            proto 语义: tcp/http/https → TCP 侧; udp → UDP 侧;
+        def _proto_ok(e, side):
+            """proto 语义: tcp/http/https → TCP 侧; udp → UDP 侧;
                         tcp+udp → 两侧 (mihomo 的 mixed / DNS 端口即双栈);
-                        缺省 → 两侧都算 (unmanaged 里的系统端口多不关心协议侧)。
+                        缺省 → 两侧都算 (unmanaged 里的系统端口多不关心协议侧)。"""
+            p = str(e.get("proto") or "").lower()
+            if p == "udp" and side != "udp":
+                return False
+            if p in ("tcp", "http", "https") and side != "tcp":
+                return False
+            return True
+
+        def _range_hits(st, side, port):
+            """段位形态里「站 + 协议侧 + 端口落在 range 内」三项都命中的条目。"""
+            out = []
+            for g, e in by_range:
+                rng = e.get("range")
+                if not (isinstance(rng, (list, tuple)) and len(rng) == 2
+                        and all(isinstance(x, int) for x in rng)
+                        and rng[0] <= port <= rng[1]):
+                    continue
+                if st not in _scopes(e) or not _proto_ok(e, side):
+                    continue
+                out.append((g, e))
+            return out
+
+        def _reg_covers(port, side, st, addr=None, names=None):
+            """分配表是否已登记该 (端口, 协议侧, 站) —— 两种形态:
+
+            ① **整数 `port` 条目** (旧口径, 一字未改): 命中 (端口, 侧, 站) 即覆盖。
+            ② ★ **段位形态** (O-158 甲, 2026-10-10): 无 `port`、有 `owner` + `range` ⇒
+               **三闸齐**才覆盖 —— 端口落在 range 内 · 站上实况**绑在 loopback** ·
+               占用者名**命中登记 owner**。⚠ 占用者名取不到 (sudo -n 失败等) ⇒ **不覆盖**
+               (**判不了 ≠ 通过**)。护栏 = 「只覆盖 loopback + 已知 owner」: 段位写得再宽
+               也**吞不掉**别的形态的口 (非 loopback / 别的 owner / 无名可取 ⇒ 照常报未登记)。
             """
-            for g, e in by_port.get(port, []):
-                if st not in _scopes(e):
-                    continue
-                p = str(e.get("proto") or "").lower()
-                if p == "udp" and side != "udp":
-                    continue
-                if p in ("tcp", "http", "https") and side != "tcp":
+            for _g, e in by_port.get(port, []):
+                if st not in _scopes(e) or not _proto_ok(e, side):
                     continue
                 return True                  # tcp+udp 与缺省都覆盖两侧
+            for _g, e in _range_hits(st, side, port):
+                if not _is_loopback_addr(addr):
+                    continue
+                if names and e.get("owner") in names:
+                    return True
             return False
+
+        def _range_miss(port, side, st, addr, names):
+            """段位命中了「站+侧+段位」却没接住 ⇒ 点名是**哪一道闸**没过 (只作 FAIL 文案后缀;
+            防"段位写得含糊 ⇒ 真因不可见")。"""
+            for _g, e in _range_hits(st, side, port):
+                own = e.get("owner", "?")
+                if not _is_loopback_addr(addr):
+                    return (f"；⚠ 段位条目 (owner={own}) 只覆盖 loopback, 站上实况绑的是 {addr} "
+                            f"—— 见 O-158")
+                if not names:
+                    return (f"；⚠ 段位条目 (owner={own}) 覆盖此段位但**占用者取数缺失** "
+                            f"(站上 sudo -n ss 无该口?) —— 判不了 ≠ 通过 (O-158)")
+                if own not in names:
+                    return (f"；⚠ 段位条目 (owner={own}) 覆盖此段位但**占用者名未命中** —— "
+                            f"站上取到 {'/'.join(sorted(names))} —— 见 O-158")
+            return ""
 
         def _listening(st, sec):
             out = set()
@@ -5139,18 +5227,58 @@ def check_stations(ctx):
                         out.add(int(p))
             return out
 
+        def _listen_rows(st, sec):
+            """`(addr, port)` 明细 (同口不同绑址各一条) —— 段位形态判 loopback 用;
+            `_listening` 只留端口 (旧口径, 方向二仍在用)。"""
+            out = set()
+            for tok in (live[st].get(sec) or "").split():
+                if ":" not in tok:
+                    continue
+                a, _, p = tok.rpartition(":")
+                if p.isdigit():
+                    out.add((a, int(p)))
+            return out
+
+        def _owners_by_socket(st, sec):
+            """{(addr, port): {占用者名}} —— 由 `[towner]/[uowner]` (sudo `ss -lXnp`) 解析。
+
+            行格式: 第 4 列 = Local `addr:port`, 行尾 `users:(("名",pid=..,fd=..))`。
+            ⚠ 无该 socket / 无 users 字段 ⇒ 查不到 ⇒ 段位条**不覆盖** (fail-closed)。
+            """
+            out = {}
+            for line in (live[st].get(sec) or "").splitlines():
+                f = line.split()
+                if len(f) < 4 or ":" not in f[3]:
+                    continue
+                a, _, p = f[3].rpartition(":")
+                if not p.isdigit():
+                    continue
+                m = re.search(r"users:\((.*)\)", line)
+                out[(a, int(p))] = set(re.findall(r'"([^"]+)"', m.group(1))) if m else set()
+            return out
+
         for st in reach:
+            owners = {"tcp": _owners_by_socket(st, "towner"),
+                      "udp": _owners_by_socket(st, "uowner")}
             for side, sec in (("tcp", "bind"), ("udp", "ubind")):
-                for port in sorted(_listening(st, sec)):
+                rows_by_port = {}
+                for addr, port in _listen_rows(st, sec):
+                    rows_by_port.setdefault(port, []).append(addr)
+                for port, addrs in sorted(rows_by_port.items()):
                     checked_ports += 1
-                    if _reg_covers(port, side, st):
+                    miss = [a for a in sorted(addrs)
+                            if not _reg_covers(port, side, st, a, owners[side].get((a, port)))]
+                    if not miss:
                         continue
                     if port >= EPHEMERAL_MIN:
                         ignored_eph += 1
                         continue
-                    detail.append(f"{st} 站 {side.upper()} :{port} 有监听但分配表未登记 —— "
-                                  f"是常驻服务就登记到 inventory/ports.yaml "
-                                  f"(我方 = managed, 他方 = third_party/unmanaged)")
+                    for a in miss:
+                        detail.append(
+                            f"{st} 站 {side.upper()} :{port} 有监听但分配表未登记 —— "
+                            f"是常驻服务就登记到 inventory/ports.yaml "
+                            f"(我方 = managed, 他方 = third_party/unmanaged)"
+                            f"{_range_miss(port, side, st, a, owners[side].get((a, port)))}")
             # 方向二
             for g in ("managed", "third_party"):
                 for e in port_entries.get(g) or []:

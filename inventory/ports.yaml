@@ -30,18 +30,22 @@
 #   - **≥ 32768 的未登记端口一律豁免** (ip_local_port_range 下界 = 32768, 三站实测一致)。
 #     理由: 该段是内核临时端口, 服务每次启动换号 (NFS 的 mountd/statd 即典型),
 #     写死端口号必然过期 —— 见 dynamic 段。
+#     ⚠ **< 32768 又会换号**的 (如 rpc.statd 的 loopback 口 724→729→657): 用 unmanaged 的
+#     **段位形态** (`owner` + `range` + `bind: 127.0.0.1`) 覆盖 —— 口径见 `O-158` 甲 (2026-10-10)。
 #   - 反向 (声明在用却没监听): 有 status 或 mode: on_demand 的条目豁免;
 #     其余未监听 => WARN (不阻断, 因为可能只是服务刚好挂了)
 #
 # 维护约定:
 #   - 本表只登记**实测过**的端口 (ss -ltnp + 服务配置核对); 不确定的宁可不登记
 #   - 退役端口不要删, 移到 deprecated (保留登记以识别历史引用)
-#   - **端口号随启动变化的服务**不要写死, 登记到 dynamic 段 (记 owner + 段位)
+#   - **端口号随启动变化的服务**不要写死: 落点看段位 —— **≥32768** 的登记到 dynamic 段
+#     (豁免靠『≥32768 段位规则』); **<32768** 的 (如 rpc.statd 的 loopback 口) 登记为 unmanaged 的
+#     **段位形态** (`owner` + `range` + `bind: 127.0.0.1`, 门禁**强制**覆盖口径, 见 `O-158` 甲)
 #   - 新增服务 => 改本表
 # ============================================================================
 version: 1
-updated: 2026-09-30
-measured_by: "sudo ss -ltnup + 服务配置核对 + 进程归属反查, 三站实测 2026-09-15; 2026-09-30 补登 A 站 8888 (searxng, `O-122`)"
+updated: 2026-10-10
+measured_by: "sudo ss -ltnup + 服务配置核对 + 进程归属反查, 三站实测 2026-09-15; 2026-09-30 补登 A 站 8888 (searxng, `O-122`); 2026-10-10 rpc.statd 条改段位形态 (`O-158` 甲) + 三站 `sudo -n ss -lXnp` 取占用者名实测"
 
 # ── 本项目自管的服务端口 ────────────────────────────────────────────
 managed:
@@ -235,8 +239,18 @@ unmanaged:
    note: "由 gvfsd 会话拉起 (user-1000), 未登录时不存在; 故仅会话期监听"}
   - {port: 6665, proto: udp, purpose: "netconsole-listen (A 站 printk 镜像接收)", scope: [B],
    note: "netconsole 默认端口; B 站 netconsole-listen.service → /usr/local/bin/netconsole-listen.py"}
-  - {port: 657, proto: udp, purpose: "rpc.statd 的**本地特权套接字** (NFS NSM / 状态监控)", scope: [B], bind: 127.0.0.1,
-     note: "★★ 2026-10-10 就地更正: 原登记 `729`（2026-09-29 的实测值）—— 本日实测 **`729` 已不在听**，`rpc.statd`(pid 2177, fd=5) 持 `127.0.0.1:657`。⚠⚠ **该端口号不是真值**：三次实测三次不同（`724` 原登记 → `729` 09-29 → `657` 10-10），**都落在特权段 512–1023** ⇒ 它是 rpc.statd 每次启动**自选**的。⇒ 登记它只是**让对账能解释它**；⚠ **不得**把本条读成「rpc.statd 固定用 657」（下次重启可能又变）。★ 根治办法（**未裁**）= 把本条改成 **owner/段位形态**（如 `{owner: rpc.statd, bind: 127.0.0.1, range: 512-1023}`）—— 那要动 `check_stations` 的覆盖口径（`_reg_covers` 只认整数 `port`，`dynamic:` 段根本不参与覆盖）⇒ 属**判据变更**，须先验红 + 独立裁定。⚠ 它**不是** rpcbind 注册的那个 status 服务：`rpcinfo -p` 显示 100024 注册在**动态**端口（`10-10` 实测 udp `43981` / tcp `33391` 等，**均 ≥32768** ⇒ 由『≥32768 段位规则』豁免），本条只登记这个**落在豁免线以下**的 loopback 口"}
+  # ── 段位形态 (O-158【甲】· 2026-10-10 裁定并落): 端口号不是真值, owner + 段位才是 ──
+  # 覆盖口径 (`ops/rpc_check.py` 的 `_reg_covers` ②): **三闸齐**才覆盖 —— 端口落在 range 内 ·
+  # 站上实况**绑在 loopback** · 占用者名**命中 owner**。⚠ 占用者名取不到 (sudo -n 失败等) ⇒
+  # **不覆盖** (判不了 ≠ 通过)。站上取数 = `STATION_CMD` 的 `[towner]/[uowner]` (sudo -n ss -lXnp;
+  # 2026-10-10 三站实测可用)。表内自洽校验 = `check_ports` 的 (3b)。
+  - owner: rpc.statd
+    proto: udp
+    purpose: "rpc.statd 的**本地特权套接字** (NFS NSM / 状态监控)"
+    scope: [B]
+    bind: 127.0.0.1
+    range: [512, 1023]
+    note: "★★ 2026-10-10 按 `O-158`【甲】裁定: 原为整数形态（`724` 原登记 → `729` 09-29 实测 → `657` 10-10 实测 —— **三次实测三次不同**，都落在特权段 512–1023 ⇒ rpc.statd 每次启动**自选**）⇒ 改为 **owner/段位形态**：一次覆盖、**不再随重启失效**。判据 = `ops/rpc_check.py` 的 `_reg_covers` ② + 夹具 `tests/test_rpc_check_ports_range.py`（含同源对照：旧整数形态对轮换后的口必红）。⚠ **不得**把本条读成「rpc.statd 固定用某口」—— 它没有固定口。⚠ 它**不是** rpcbind 注册的那个 status 服务：`rpcinfo -p` 显示 100024 注册在**动态**端口（实测 udp `43981` / tcp `33391` 等，**均 ≥32768** ⇒ 由『≥32768 段位规则』豁免），本条只登记这个**落在豁免线以下**的 loopback 口"
 
 # ── 动态端口服务 (端口随启动变化 → 按 owner + 段位豁免, 不写死端口号) ──
 # 为什么单开一段: 2026-09-14 曾把 mountd/statd 的**当次**端口
@@ -253,7 +267,7 @@ dynamic:
     purpose: NFS 状态监控 (NSM)
     scope: [B]
     proto: tcp+udp
-    note: "2026-09-15 实测 TCP 33925/49957, UDP 36339/58847; 固定 NSM 端口 729（★ 2026-09-29 更正, 原写 724）登记在 unmanaged"
+    note: "2026-09-15 实测 TCP 33925/49957, UDP 36339/58847; 落在 <32768 的那个 loopback 口 (724→729→657, 每次启动自选) 由 unmanaged 的 rpc.statd **段位条目**解释 (O-158 甲, 2026-10-10)"
   - owner: nfsd (内核线程)
     purpose: NFS 服务端内核套接字
     scope: [B]
