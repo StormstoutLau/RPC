@@ -105,6 +105,22 @@ chk("plan: pull 只含 docker pull <image>",
     C.containers_plan("pull", station="A", image="ghcr.io/x/y:v1")
     == ["docker pull ghcr.io/x/y:v1"],
     str(C.containers_plan("pull", station="A", image="ghcr.io/x/y:v1")))
+# ★ 实测教训(2026-10-10): `docker pull` 多 GB 镜像**远超** ssh exec 上界(timeout+30s),
+#   两次实拉(900s/1800s)均 `TimeoutError`、镜像未落地 ⇒ 需要与 ssh 会话**解耦**的后台拉取。
+#   `setsid ... </dev/null >/dev/null 2>&1 &` = 脱离会话、不占 stdout; 末尾 `echo DETACHED`
+#   让 ssh_run(strict=True) 拿到 rc=0(否则 `&` 无输出会让调用方误判)。
+chk("plan: pull --detach 产出自托管后台拉取(与 ssh 超时解耦, 可续传)",
+    C.containers_plan("pull", station="A", image="img:v1", detach=True)
+    == ["setsid sh -c 'docker pull img:v1 >>/tmp/cluster-docker-pull.log 2>&1' "
+        "</dev/null >/dev/null 2>&1 & echo DETACHED"],
+    str(C.containers_plan("pull", station="A", image="img:v1", detach=True)))
+chk("plan: pull --detach --log <path> 可改日志落点",
+    C.containers_plan("pull", station="A", image="img:v1", detach=True, log="/tmp/x.log")
+    == ["setsid sh -c 'docker pull img:v1 >>/tmp/x.log 2>&1' "
+        "</dev/null >/dev/null 2>&1 & echo DETACHED"],
+    str(C.containers_plan("pull", station="A", image="img:v1", detach=True, log="/tmp/x.log")))
+chk("plan: down 吃 detach 但不改命令（detach 只对 pull 有意义）",
+    C.containers_plan("down", station="A", name="x", detach=True) == ["docker rm -f x"])
 chk("plan: down 只含 docker rm -f <name>",
     C.containers_plan("down", station="A", name="halogen-flash")
     == ["docker rm -f halogen-flash"])

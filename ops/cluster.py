@@ -23,7 +23,7 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
     python ops/cluster.py agent {runs|live|tail|chain|verify|audit|audit-judge} [--limit N] [--station X] [--json]  # 进度/吞吐 + 证据链 + 可复现性审计 + judge 校准
     python ops/cluster.py inbox                                             # 受理区跨项目进度 (每笔 <proj>-<date> 的 state/时间, 一行一条)
     python ops/cluster.py inbox seal <proj-dir> [--run <ts>|--all-runs] [--grade Reproduced|Replicated] [--go|--check]  # 交付证据束钉死/重算比对 (默认只出计划)
-    python ops/cluster.py containers {status|pull|up|down} [--station A|B|C] [--image <ref>] [--name <名>] [--publish host:cont]... [--group-add g]... [--device dev]... [--volume host:cont[:ro]]... [--env K=V]... [--ipc host] [--ulimit k=soft:hard]... [--timeout 秒] [--plan|--go]  # 容器栈纳管 (默认只读 status; 写动作 --go 才动手)
+    python ops/cluster.py containers {status|pull|up|down} [--station A|B|C] [--image <ref>] [--name <名>] [--publish host:cont]... [--group-add g]... [--device dev]... [--volume host:cont[:ro]]... [--env K=V]... [--ipc host] [--ulimit k=soft:hard]... [--timeout 秒] [--detach] [--log <path>] [--plan|--go]  # 容器栈纳管 (默认只读 status; 写动作 --go 才动手)
 
 子命令:
     status   三站 llama /health + 当前加载实例 + 引擎清单一屏聚合
@@ -5226,7 +5226,7 @@ def format_containers_station(st: str, info: dict) -> list:
 
 def containers_plan(act: str, *, station: str, image=None, name=None,
                     publish=(), group_add=(), device=(), volume=(), env=(),
-                    ipc=None, ulimit=()) -> list:
+                    ipc=None, ulimit=(), detach=False, log=None) -> list:
     """动作 → **将下发到站上的命令列表**(纯函数, 不连站)。★ 计划与执行**同源**。
 
     act ∈ {pull, up, down}; 缺参抛 ValueError。`up` 的 `-p` 绑定由调用方给出的 `publish` 决定
@@ -5244,6 +5244,13 @@ def containers_plan(act: str, *, station: str, image=None, name=None,
     if act == "pull":
         if not image:
             raise ValueError("pull 需要 --image <ref>")
+        if detach:
+            # ★ 实测(2026-10-10): 多 GB 镜像 `docker pull` 远超 ssh exec 上界(timeout+30s)
+            #   ⇒ 两次实拉(900s/1800s)均 TimeoutError、镜像未落地。解耦 ssh 会话:
+            #   setsid 脱离控制终端, fd 全部重定向, `&` 后立即返回; docker 端缓存可续传。
+            lf = log or "/tmp/cluster-docker-pull.log"
+            return [f"setsid sh -c 'docker pull {image} >>{lf} 2>&1' "
+                    f"</dev/null >/dev/null 2>&1 & echo DETACHED"]
         return [f"docker pull {image}"]
     if act == "down":
         if not name:
@@ -5318,11 +5325,12 @@ def cmd_containers(argv) -> int:
         print("用法: cluster.py containers {status|pull|up|down} [--station A|B|C] [--image <ref>] "
               "[--name <名>] [--publish host:cont]... [--group-add g]... [--device dev]... "
               "[--volume host:cont[:ro]]... [--env K=V]... [--ipc host] [--ulimit k=soft:hard]... "
-              "[--timeout 秒] [--plan|--go]")
+              "[--timeout 秒] [--detach] [--log <path>] [--plan|--go]")
         return 1
     tail = argv[1:] if argv and not argv[0].startswith("-") else argv
     station = image = name = ipc = None
-    timeout = None
+    timeout = log = None
+    detach = False
     publish, group_add, device, volume, env, ulimit, go, i = [], [], [], [], [], [], False, 0
     # 多值 flag（各自可重复）与单值 flag 的**唯一**归属表 —— 与 containers_plan 的形参同名，
     #   避免"解析漏一个、计划少一段"（计划=执行的同源前提）。
@@ -5330,7 +5338,8 @@ def cmd_containers(argv) -> int:
               "--volume": volume, "--env": env, "--ulimit": ulimit}
     while i < len(tail):
         a = tail[i]
-        if (a in _multi or a in ("--station", "--image", "--name", "--ipc", "--timeout")) and i + 1 < len(tail):
+        if (a in _multi or a in ("--station", "--image", "--name", "--ipc",
+                                 "--timeout", "--log")) and i + 1 < len(tail):
             v = tail[i + 1]
             if a == "--station":
                 station = v.upper()
@@ -5340,6 +5349,8 @@ def cmd_containers(argv) -> int:
                 name = v
             elif a == "--ipc":
                 ipc = v
+            elif a == "--log":
+                log = v
             elif a == "--timeout":
                 if not v.isdigit():
                     print(f"[containers] --timeout 需为整数秒: {v}")
@@ -5349,8 +5360,12 @@ def cmd_containers(argv) -> int:
                 _multi[a].append(v)
             i += 2
             continue
-        if a in ("--go", "--plan"):
-            go = (a == "--go"); i += 1; continue
+        if a in ("--go", "--plan", "--detach"):
+            if a == "--go":
+                go = True
+            elif a == "--detach":
+                detach = True
+            i += 1; continue
         print(f"[containers] 未知参数: {a}")
         return 1
     stations = [station] if station else ["A", "B", "C"]
@@ -5359,7 +5374,8 @@ def cmd_containers(argv) -> int:
     try:
         plan = containers_plan(act, station=(station or "A"), image=image, name=name,
                                publish=publish, group_add=group_add, device=device,
-                               volume=volume, env=env, ipc=ipc, ulimit=ulimit)
+                               volume=volume, env=env, ipc=ipc, ulimit=ulimit,
+                               detach=detach, log=log)
     except ValueError as e:
         print(f"[containers] {e}")
         return 1
