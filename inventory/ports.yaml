@@ -235,8 +235,8 @@ unmanaged:
    note: "由 gvfsd 会话拉起 (user-1000), 未登录时不存在; 故仅会话期监听"}
   - {port: 6665, proto: udp, purpose: "netconsole-listen (A 站 printk 镜像接收)", scope: [B],
    note: "netconsole 默认端口; B 站 netconsole-listen.service → /usr/local/bin/netconsole-listen.py"}
-  - {port: 729, proto: udp, purpose: "rpc.statd 本地特权套接字 (NFS 状态监控 / NSM)", scope: [B], bind: 127.0.0.1,
-     note: "★ 2026-09-29 更正: 原登记 `724`（NSM 标准端口）—— 实测 `724` **无监听**, rpc.statd 实际持有 127.0.0.1:729。⚠ 它**不是** rpcbind 注册的那个 status 服务: `rpcinfo -p` 显示 100024 注册在**动态**端口 (udp 59332 / tcp 43467) ⇒ 那部分由『≥32768 段位规则』豁免, 本条只登记这个 loopback 固定口"}
+  - {port: 657, proto: udp, purpose: "rpc.statd 的**本地特权套接字** (NFS NSM / 状态监控)", scope: [B], bind: 127.0.0.1,
+     note: "★★ 2026-10-10 就地更正: 原登记 `729`（2026-09-29 的实测值）—— 本日实测 **`729` 已不在听**，`rpc.statd`(pid 2177, fd=5) 持 `127.0.0.1:657`。⚠⚠ **该端口号不是真值**：三次实测三次不同（`724` 原登记 → `729` 09-29 → `657` 10-10），**都落在特权段 512–1023** ⇒ 它是 rpc.statd 每次启动**自选**的。⇒ 登记它只是**让对账能解释它**；⚠ **不得**把本条读成「rpc.statd 固定用 657」（下次重启可能又变）。★ 根治办法（**未裁**）= 把本条改成 **owner/段位形态**（如 `{owner: rpc.statd, bind: 127.0.0.1, range: 512-1023}`）—— 那要动 `check_stations` 的覆盖口径（`_reg_covers` 只认整数 `port`，`dynamic:` 段根本不参与覆盖）⇒ 属**判据变更**，须先验红 + 独立裁定。⚠ 它**不是** rpcbind 注册的那个 status 服务：`rpcinfo -p` 显示 100024 注册在**动态**端口（`10-10` 实测 udp `43981` / tcp `33391` 等，**均 ≥32768** ⇒ 由『≥32768 段位规则』豁免），本条只登记这个**落在豁免线以下**的 loopback 口"}
 
 # ── 动态端口服务 (端口随启动变化 → 按 owner + 段位豁免, 不写死端口号) ──
 # 为什么单开一段: 2026-09-14 曾把 mountd/statd 的**当次**端口
