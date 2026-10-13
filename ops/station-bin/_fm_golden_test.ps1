@@ -2833,6 +2833,19 @@ $passedM = @([regex]::Matches($revBlockM, '-([A-Za-z][A-Za-z0-9]*):') | ForEach-
 $missM = @($flags2 | Where-Object { $declared2 -notcontains $_ -or $passedM -notcontains $_ })
 Assert-True "O157②(先验红·同源对照): 摘掉一处传参 ⇒ 同一条判据**必被判红** ⇒ ① 非恒真" ($missM.Count -ge 1)
 
+# --- 项目注册表接线（2026-10-13 · `$PROJECTS` 数据化）-----------------------------------------
+#   ★ 判据面：① 硬编码字面量**已收干净**（防"两处真值"）；② 载入块在（唯一读路 = `--list-projects`）；
+#     ③ 载入块**必须晚于** `$Script:REPO_ROOT`（否则 Join-Path 取不到根）。
+Assert-True "PROJ①: 硬编码 `$PROJECTS` 字面量**已收干净**（`@{ paper = ` 不再出现）⇒ 单一真值" (
+    (-not $content.Contains('@{ paper =')) -and
+    (-not $content.Contains("Auto_Prover = 'F:\Auto_Prover'")))
+Assert-True "PROJ②: 载入块在（唯一读路 = 判据侧 `--list-projects`，外壳不自己解析 YAML）" (
+    ($content.Contains('rpc_check.py')) -and ($content.Contains('--list-projects')))
+Assert-True "PROJ③: 载入块**晚于** `$Script:REPO_ROOT`（否则 Join-Path 无根）· 且 fail-closed（不回退硬编码）" (
+    ($content.IndexOf('$Script:PROJECTS = @{}') -ge 0) -and
+    ($content.IndexOf('--list-projects') -gt $content.IndexOf('$Script:REPO_ROOT')) -and
+    $content.Contains('$Script:PROJECTS_ERR'))
+
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
 exit $(if ($fail -eq 0) { 0 } else { 1 })

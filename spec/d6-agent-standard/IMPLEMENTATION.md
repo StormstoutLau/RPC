@@ -191,3 +191,17 @@ agent-cli.ps1
 ***
 
 **实施签字**: _________ 日期: _________
+
+***
+
+## 10. D7 实施回填（2026-10-13）
+
+> 本册 = MVP 期（T0–T5）实施方案；**D7 全程未回填**（历史注明见 [DEVELOPMENT-LOG.md](./DEVELOPMENT-LOG.md) 的「D7-P1~P4 实施回填」条）。
+> 本节做**指针式回填**（不复制正文 —— 防"同一事实两处、一处过期"）；D7 当前实施形态**以**：
+> **架构边界（现行）** = [ARCHITECTURE.md §1a](./ARCHITECTURE.md)（**7 个命令面 + 21 个 D7 函数 + 5 个卡面字段**，2026-10-13 有验收回填）；
+> **字段级落点与本地映射** = [D7-PROTOCOL-CONTRACT.md §1.6](./D7-PROTOCOL-CONTRACT.md)；
+> **未实测台账** = [untested-index.yaml](../../inventory/untested-index.yaml) + [UNTESTED-TRIAGE-PLAN.md](./UNTESTED-TRIAGE-PLAN.md)；
+> **执行记录** = [DEV-LOG-014](../../docs/DEV-LOG-014-decision-refinement.md) §96–§104。
+
+**D7 实施面一句话（2026-10-13 实况）**：六相判据已**全部接线**（唯一开关点 `Resolve-D7HardReject`，
+**三信封 VD/TC/RR 全转硬拒**）；夹具 `_fm_golden_test.ps1` **584/0**；全量门禁 **PASS（45 绿/3 黄/0 红）**；证据链 **330**。

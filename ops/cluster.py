@@ -2521,7 +2521,6 @@ def cmd_flow(argv) -> int:
 # 字段命名对齐社区标准 (只为将来接 trace 后端不返工, 不引入依赖):
 #   run ≈ OTel GenAI `invoke_agent` span · 状态 ≈ A2A TaskState (我们原本缺 `working`, 由 live 补上)
 AGENT_LEDGER = Path(__file__).resolve().parent / "station-bin" / "agent-runs.log"
-AGENT_CLI_PS1 = Path(__file__).resolve().parent / "station-bin" / "agent-cli.ps1"
 AGENT_WS = "$HOME/agent-workspaces"
 AGENT_BEAT_STALE_S = 60          # 节拍 5s 一次; 超 60s 未更新 ⇒ 疑似卡死 (O-25 的"黑盒"信号)
 AGENT_STATUS_BY_CODE = {0: "completed", 6: "timeout", 24: "slot-rejected"}
@@ -2586,25 +2585,33 @@ def _human_age(sec) -> str:
 
 
 def _agent_proj_roots() -> tuple:
-    """解析 agent-cli.ps1 的 PROJECTS 表 → (proj→root, note)。
+    """读项目注册表 → (proj→root, note)。
 
-    **为什么不在这里再抄一份映射**: proj→root 的真值在 `agent-cli.ps1` 的 `$Script:PROJECTS`
-    (paper=D:\\Paper / Cpp_Hub=F:\\Cpp_Hub / Auto_Prover=F:\\Auto_Prover)。抄一份就是第二个定义点,
-    项目增删时必然漂移 (P1-6"取 conf 而非抄台账"同一条理由)。解析失败**显式降级**, 不猜。
+    **为什么不在这里再抄一份映射**: proj→root 的真值在 `inventory/projects.yaml`
+    （判据侧 `rpc_check.projects_index`, 只收 active）。抄一份就是第二个定义点, 项目增删时必然漂移
+    (P1-6"取 conf 而非抄台账"同一条理由)。解析失败**显式降级**, 不猜。
+    ⚠ 2026-10-13 `$PROJECTS` 数据化: 旧实现是正则解析 `agent-cli.ps1` 的 `$Script:PROJECTS`
+      字面量 —— 该表已改为**注册表载入**（字面量收干净）⇒ 静态解析只会读到空表。
+      ⇒ 改走**同一真值源**（复用 `rpc_check` 的纯函数, 不第二次解析 YAML 语义）。
     """
-    roots, note = {}, ""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
     try:
-        text = AGENT_CLI_PS1.read_text(encoding="utf-8-sig", errors="replace")
+        import rpc_check
+    except Exception as e:
+        return {}, f"无法导入 rpc_check ({type(e).__name__}) — 详情列将不可用"
+    try:
+        import yaml
+        reg = yaml.safe_load(rpc_check.PROJECTS_REG.read_text(encoding="utf-8")) or {}
     except OSError as e:
-        return {}, f"读不到 {AGENT_CLI_PS1.name} ({e.__class__.__name__})"
-    m = re.search(r"\$Script:PROJECTS\s*=\s*@\{(.*?)\}", text, re.S)
-    if not m:
-        return {}, "未在 agent-cli.ps1 找到 $Script:PROJECTS (详情列将不可用)"
-    for name, root in re.findall(r"(\w+)\s*=\s*'([^']+)'", m.group(1)):
-        roots[name] = Path(root)
+        return {}, f"读不到 inventory/projects.yaml ({e.__class__.__name__})"
+    except Exception as e:
+        return {}, f"projects.yaml 解析失败 ({type(e).__name__}): {e}"
+    roots = {}
+    for pid, root in rpc_check.projects_index(reg).items():
+        roots[pid] = Path(root)
     if not roots:
-        note = "$Script:PROJECTS 解析为空 (详情列将不可用)"
-    return roots, note
+        return {}, "项目注册表无 active 项 (详情列将不可用)"
+    return roots, ""
 
 
 def _agent_ledger_rows(limit: int) -> list:

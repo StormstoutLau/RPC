@@ -41,7 +41,15 @@ $Script:GNU_TAR = 'C:\Program Files\Git\usr\bin\tar.exe'   # S1: not Win10 bsdta
 $Script:REMOTE_USER = 'scott-lau'
 $Script:WORKSPACE_ROOT = '/home/scott-lau/agent-workspaces'
 $Script:WORKSPACE_ARCHIVE_ROOT = '/home/scott-lau/agent-workspaces-archive'   # O-02 (2026-09-14): archive snapshot root
-$Script:PROJECTS = @{ paper = 'D:\Paper'; Cpp_Hub = 'F:\Cpp_Hub'; Auto_Prover = 'F:\Auto_Prover'; dogfood = 'd:\RPC\tmp\dogfood-ws' }    # console project root mapping (2026-09-14 Cpp_Hub -> real root F:); 2026-09-23 add dogfood standalone carrier (ruling-38 alternative: do NOT register D:\RPC; carrier holds only cards + artifacts, so this repo's sync surface stays untouched)
+# ★★ 2026-10-13（`$PROJECTS` 数据化）：真值 = `inventory/projects.yaml`（**项目注册表**）；本处只**声明空表**，
+#   实际载入见下方 INIT 块（须排在 `$Script:REPO_ROOT` 之后 —— 它定义在 L48）。
+#   ★ 外壳**不自己解析 YAML**（PS 5.1 无 YAML 解析器 ⇒ 自解析会造**第二个解析器**，与门禁
+#     `yaml.safe_load` 漂移即 fail-open，本仓头号形态）⇒ 走判据侧 `py ops/rpc_check.py --list-projects`（JSON）。
+#   ⚠ 载入失败 ⇒ **fail-closed**：留空表 + 记因（**绝不回退硬编码** —— 回退 = 第二份真值）。
+#     失败断面由命令侧既有的 `(registered: $($Script:PROJECTS.Keys -join ','))` 如实暴露（显空）。
+#   为何改造：此前是硬编码 ⇒ **接入一仓 = 改内核关键路径**（ADR-0013 §「两个前置」①）。
+$Script:PROJECTS = @{}
+$Script:PROJECTS_ERR = ''   # 诊断用（载入失败原因）；命令侧以 (registered: ) 断面暴露
 $Script:TMP_ROOT = Join-Path $env:TEMP 'agent-cli'
 # O-12 REPO_ROOT: repo root for golden source resolution (this file is d:\RPC\ops\station-bin\ ->
 # two parents up = d:\RPC). NEW script var (IMPLEMENTATION §3.2 P1-1: not inherited/现役).
@@ -50,6 +58,22 @@ $Script:REPO_ROOT = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 #   避免固定名临时脚本 (agent-cli-attach-mkdir.sh 等) 被并发进程互撞 (shared-temp race)。
 $Script:RUN_TOKEN = [Guid]::NewGuid().ToString('N')
 $Script:TMP_ROOT = Join-Path $env:TEMP ("agent-cli-" + $Script:RUN_TOKEN)
+
+# ── 项目注册表载入（2026-10-13 `$PROJECTS` 数据化）───────────────────────────────
+#   ★ **唯一读路** = 判据侧吐 JSON（见 L44 注记；外壳不自己解析 YAML）。
+#   ★ 载入后 `$Script:PROJECTS` 与旧硬编码**逐字等价** ⇒ 下方各处读取点**一字不动**（改动面最小）。
+#   ⚠ **必须 try/catch**：本脚本顶部 `$ErrorActionPreference='Stop'`，而 `& py` 在缺 `py` 时**抛**
+#     ⇒ 不兜就会**崩断每一条 agent-cli 命令**（不只 project 相关）。兜住后置空表（fail-closed）。
+try {
+    $projJson = (& py (Join-Path $Script:REPO_ROOT 'ops\rpc_check.py') --list-projects 2>$null | Out-String)
+    if ($LASTEXITCODE -ne 0) { throw "判据侧退出码 $LASTEXITCODE（注册表缺失/不自洽）" }
+    if (-not $projJson.Trim()) { throw '判据侧输出为空' }
+    foreach ($p in ($projJson | ConvertFrom-Json).PSObject.Properties) {
+        $Script:PROJECTS[$p.Name] = [string]$p.Value
+    }
+} catch {
+    $Script:PROJECTS_ERR = "项目注册表载入失败: $($_.Exception.Message)"
+}
 
 # ---------------- ROUTE_TABLE (BP-2 alias->full-id, T3 task uses; fixed here) ----------------
 # NOTE (2026-09-16): provider 名已统一为 `local`（三站 opencode.jsonc 实况: 仅 local + openrouter）。
