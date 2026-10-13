@@ -1,5 +1,7 @@
 # C 站测试 MiniMax-M2.7 / Qwen3.8-Flash-Next（UD-IQ4_XS 档）
 
+> ★ **2026-10-12 校正（原文保留 · 历史留档）**：本文以下涉及 C 站引擎 `/opt/llama.cpp` v0.4.0-dev (`91f6a6cf`, 三站同构) 的表述均为**当时实况**，已失效 —— 三站 `/opt/llama.cpp` 现为 **`llama.cpp-master-23b0202a`**（升级前 `master-91f6a6cf`）；`~/llama.cpp`（0d18aaa / Vulkan 单站轴）**已三站退役删除**（2 个消费别名 conf 归位 `/opt`）；`-sm tensor` = **No-Go**（生产维持 `-sm layer`）。**现行真值见 [TRACKER §2.4/§2.5](../../spec/upstream-tracker/TRACKER.md) 与 [2026-10-12 引擎升级落档](../../docs/2026-10-12_引擎升级可行性梳理与升级过程落档.md)**。
+
 ## Context
 
 按框架规范（MODEL-SOURCING §附录/QUANTS 走查 + load-gate 硬规则）在 **C 站（seaviv, 192.168.1.37）** 单机测试两个模型：

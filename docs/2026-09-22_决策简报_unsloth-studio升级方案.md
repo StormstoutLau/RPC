@@ -5,6 +5,8 @@
 - **触发**: 用户问「opencode 遗留问题是否必须注册」⇒ 定位 compaction 失败根因 ⇒ 用户令「评估升级方案」「先取证 A 的未知项」⇒ 本简报
 - **关联**: [OPEN-ISSUES §O-23](../spec/d6-agent-standard/OPEN-ISSUES.md)（根因全文落档）· [DEVELOPMENT-LOG 2026-09-22 线二](../spec/d6-agent-standard/DEVELOPMENT-LOG.md)（第 ⑧ 条）
 
+> ★ **2026-10-12 校正（原文保留 · 历史留档）**：本文以下涉及 `/opt/llama.cpp → llama.cpp-master-91f6a6cf` 的表述均为**当时实况**，已失效 —— 三站 `/opt/llama.cpp` 现为 **`llama.cpp-master-23b0202a`**（升级前 `master-91f6a6cf`）；`~/llama.cpp`（0d18aaa / Vulkan 单站轴）**已三站退役删除**（2 个消费别名 conf 归位 `/opt`）；`-sm tensor` = **No-Go**（生产维持 `-sm layer`）。**现行真值见 [TRACKER §2.4/§2.5](../spec/upstream-tracker/TRACKER.md) 与 [2026-10-12 引擎升级落档](./2026-10-12_引擎升级可行性梳理与升级过程落档.md)**。
+
 ---
 
 ## 一、问题与根因（已定位，非推测）

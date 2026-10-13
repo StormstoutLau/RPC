@@ -23,7 +23,7 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
     python ops/cluster.py agent {runs|live|tail|chain|verify|audit|audit-judge} [--limit N] [--station X] [--json]  # 进度/吞吐 + 证据链 + 可复现性审计 + judge 校准
     python ops/cluster.py inbox                                             # 受理区跨项目进度 (每笔 <proj>-<date> 的 state/时间, 一行一条)
     python ops/cluster.py inbox seal <proj-dir> [--run <ts>|--all-runs] [--grade Reproduced|Replicated] [--go|--check]  # 交付证据束钉死/重算比对 (默认只出计划)
-    python ops/cluster.py containers {status|pull|up|down} [--station A|B|C] [--image <ref>] [--name <名>] [--publish host:cont]... [--group-add g]... [--device dev]... [--volume host:cont[:ro]]... [--env K=V]... [--ipc host] [--ulimit k=soft:hard]... [--timeout 秒] [--detach] [--log <path>] [--plan|--go]  # 容器栈纳管 (默认只读 status; 写动作 --go 才动手)
+    python ops/cluster.py containers {status|install|pull|up|down} [--station A|B|C] [--image <ref>] [--name <名>] [--publish host:cont]... [--group-add g]... [--device dev]... [--volume host:cont[:ro]]... [--env K=V]... [--ipc host] [--ulimit k=soft:hard]... [--timeout 秒] [--detach] [--log <path>] [--plan|--go]  # 容器栈纳管 (默认只读 status; 写动作 --go 才动手)
 
 子命令:
     status   三站 llama /health + 当前加载实例 + 引擎清单一屏聚合
@@ -92,6 +92,10 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
              列出每笔的 state + updated_at。合法状态白名单/自洽性由门禁 `rpc_check.py --only inbox` 判定。
     containers 容器栈纳管 (ADR-0012 D2 / ADR-0014 D2): status=三站 docker ps -a / images / compose ls
              + 端口对账(容器声明面 vs inventory/ports.yaml), **只读, 恒 exit 0**, 空集**显式报「无容器」**;
+             install=容器栈供应 (**默认只出计划, --go 才动手**; ADR-0014 D8(a)) —— 给站上补 **dockerd**
+             (B/C 实测**有 CLI、无 daemon**): 启用 docker apt 源(修 dist-upgrade 改名) + 装
+             docker-ce/containerd + `systemctl enable --now docker` + 把 ssh 用户加进 docker 组;
+             **幂等**(已有 dockerd ⇒ 跳过), 与 A 站配置对齐。默认跑三站(A 站自跳过);
              pull/up/down=写动作 (**默认只出计划, --go 才动手**), 走唯一建连层 ssh_run(strict=True)
              —— 不新增并列脚本 (ADR-0004 D2)。`up` 的 flag 集照抄上游部署配方:
              `--device /dev/kfd /dev/dri` · `--group-add video render` · `--ipc=host`(★ load-bearing,
@@ -750,10 +754,15 @@ def resolve_alias(alias: str) -> tuple:
     return DEFAULT_STATION, alias, alias in RPC_MODELS, "default"
 
 
-def _cmd_load_c(alias: str, backend: str = None) -> int:
-    """C 站 load：与 A/B 同路径 (infer-load 已补装, 含 pkill 兜底管理手动引擎)。"""
+def _cmd_load_c(alias: str, backend: str = None, engine: str = None) -> int:
+    """C 站 load：与 A/B 同路径 (infer-load 已补装, 含 pkill 兜底管理手动引擎)。
+
+    ⚠ 2026-10-12 修 Bug A：原签名只收 (alias, backend) ⇒ **`--engine` 在 C 站被静默丢弃**
+    (C 站分支在 cmd_load 里**先于**通用路径 return)。表现：`load <C别名> --engine <变体>`
+    仍用 conf 旧引擎，日志**无**「引擎变体已落 conf」行 —— 对 GLM（C 站 + `--engine glm5next-*`）
+    是潜在同族风险面。改走 `_build_infer_load_cmd` 统一拼装（与 A/B 同一构造器，避免再分叉）。"""
     print(f"[cluster] C 站 (seaviv) 加载 {alias} ...")
-    cmd = f"infer-load '{alias}'" + (f" --backend {backend}" if backend else "")
+    cmd = _build_infer_load_cmd(alias, backend, engine)
     rc = ssh_stream("C", cmd)
     if rc != 0:
         print(f"[cluster] C 站加载失败 (rc={rc})。")
@@ -805,7 +814,7 @@ def cmd_load(alias: str, backend: str = None, engine: str = None) -> int:
         # 自己是靠按站路由名进来的 (A/B 路径的标注在下面 tag 处)。
         if how == "station":
             print(f"[cluster] 按站路由: {alias} -> C 站, 站上别名 {matched}")
-        return _cmd_load_c(matched, backend)
+        return _cmd_load_c(matched, backend, engine)
     # llama-rpc 双机类: 显式 --backend 单机后端(非 llama-rpc) 视为强制单机加载, 走正常路径;
     # 否则走 RPC 编排 (见 _load_rpc) —— 2026-09-15 落地方案 v2 P0-3, 原为"打印手动步骤 exit 2"。
     if is_rpc:
@@ -1186,6 +1195,7 @@ from cluster_model import (  # noqa: E402
 # 术语: 站上有**两个 llama.cpp 构建**, 用途不同, 不可混为一谈 ——
 #   RPC 引擎   /opt/llama.cpp           受控路径, 只放 ggml-rpc-server + 库 (MANIFEST 管版本)
 #   单机引擎   ~/llama.cpp/build/bin    单机 llama-server (--version 直读 commit)
+#   ⚠ 2026-10-12: 单机引擎轴**已退役** (唯一消费方 conf 已归位 /opt; 三站目录已删) —— 见 _VER_SCAN 注。
 _VER_SCAN = (
     "echo '===RPC==='; grep -E '^(commit|version|build_date|toolchain|rpc_protocol)[[:space:]]*=' "
     "/opt/llama.cpp/MANIFEST* 2>/dev/null | head -8; "
@@ -1202,8 +1212,16 @@ _VER_SCAN = (
     "(cd \"$R\" && tail -n +$((SKIP+1)) \"$F\" | LC_ALL=C md5sum -c 2>&1 | grep -c ': OK$'); "
     "(cd \"$R\" && tail -n +$((SKIP+1)) \"$F\" | LC_ALL=C md5sum -c 2>&1 | grep 'FAILED' | head -3); "
     "else echo 'MISSING'; fi; "
-    "echo '===SINGLE==='; ~/llama.cpp/build/bin/llama-server --version 2>&1 | head -2; "
-    "git -C ~/llama.cpp rev-parse --short HEAD 2>/dev/null; echo; "
+    # ★ 2026-10-12: 单站引擎轴 (~/llama.cpp, Vulkan) **已退役** —— 该轴逐站本地构建、
+    #   无 MANIFEST/门禁/回滚, 三站实测不可复现 (llama-server 同但 libggml-base/vulkan 各异);
+    #   唯一消费方 2 个别名的 conf 已归位 /opt/llama.cpp, 三站目录已删 (tar 备份见
+    #   /data/backup/single-engine-retire-20261012/) ⇒ 见 docs/2026-10-12_单站引擎轴不一致调研与统一方案.md。
+    #   探针保留"存在则读"分支: 万一目录被重新建出 (旧脚本回光), 仍能显示其指纹而非静默空白。
+    "echo '===SINGLE==='; "
+    "if [ -x ~/llama.cpp/build/bin/llama-server ]; then "
+    "  ~/llama.cpp/build/bin/llama-server --version 2>&1 | head -2; "
+    "  git -C ~/llama.cpp rev-parse --short HEAD 2>/dev/null; "
+    "else echo 'RETIRED'; fi; echo; "
     "echo '===LMS==='; grep -m1 -oE '\"version\": \"[^\"]+\"' "
     "/opt/LM-Studio/resources/app/package.json 2>/dev/null; "
     "echo '===OC==='; opencode --version 2>/dev/null | head -1; "
@@ -1254,7 +1272,11 @@ def probe_versions(st: str) -> dict:
 
     sl = [x.strip() for x in _seg("SINGLE", "LMS").splitlines() if x.strip()]
     for x in sl:
-        if x.startswith("version:"):
+        if x == "RETIRED":            # 2026-10-12 单站引擎轴已退役 (见 _VER_SCAN 注)
+            d["single"]["retired"] = True
+            d["single"]["version"] = "已退役"
+            d["single"]["commit"] = "已退役"
+        elif x.startswith("version:"):
             d["single"]["version"] = x.split(":", 1)[1].strip()
         elif x.startswith("built with"):
             d["single"]["toolchain"] = x
@@ -1290,8 +1312,11 @@ def cmd_versions(argv) -> int:
               f"{r.get('version','?')} · built {r.get('built','?')}"
               + (f" · rpc_protocol {r['rpc_protocol']}" if r.get("rpc_protocol") else ""))
         print(f"    完整性  md5sum -c (MANIFEST) {d.get('md5','?')}")
-        print(f"  单机引擎  (~/llama.cpp)       commit {s.get('commit','?')} · "
-              f"{s.get('version','?')}")
+        if s.get("retired"):
+            print("  单机引擎  (~/llama.cpp)       ★ 已退役 (2026-10-12 收敛到 /opt/llama.cpp)")
+        else:
+            print(f"  单机引擎  (~/llama.cpp)       commit {s.get('commit','?')} · "
+                  f"{s.get('version','?')}")
         print(f"  LM Studio                     {d.get('lmstudio','?')}")
         print(f"  opencode                      {d.get('opencode','?')}")
         print(f"  内核                          {d.get('kernel','?')}")
@@ -5280,6 +5305,52 @@ def containers_plan(act: str, *, station: str, image=None, name=None,
     raise ValueError(f"未知容器动作: {act}（可选 pull|up|down）")
 
 
+# ── dockerd 供应 (ADR-0014 D8(a))：B/C 复用 A 站容器栈 ──────────────
+# B/C 站上 docker **CLI** 已在（随 docker-desktop / docker-ce-cli 而来），缺的是
+# **daemon + systemd unit**。供应 = 启用 docker apt 源（修 dist-upgrade 改名）+ 装
+# docker-ce/containerd + 起 unit + 把 ssh 用户加进 docker 组（A 站 scott-lau 即在 docker 组）。
+# ⚠ 幂等：已有 dockerd 且 docker active ⇒ 跳过。**默认 --plan**，--go 才动手（同 pull/up/down）。
+_DOCKER_DAEMON_JSON = (
+    "{\n"
+    '  "registry-mirrors": [\n'
+    '    "https://docker.1ms.run",\n'
+    '    "https://docker.m.daocloud.io",\n'
+    '    "https://mirror.ccs.tencentyun.com",\n'
+    '    "https://docker.xuanyuan.me"\n'
+    "  ]\n"
+    "}"
+)
+
+
+def containers_install_cmd() -> str:
+    """单站容器栈供应脚本（与 A 站配置对齐）。幂等；用 `docker info`（含 context 解析）自判。"""
+    return (
+        "set -e; U=$(id -un); "
+        # ★ 对齐 A 站: context=default。B 站实测 CLI 的 currentContext=desktop-linux
+        #   指向未启的 ~/.docker/desktop/docker.sock ⇒ docker 全废（A/C 均是 default）。
+        "docker context use default >/dev/null 2>&1 || true; "
+        "if command -v dockerd >/dev/null 2>&1 && systemctl is-active docker >/dev/null 2>&1 "
+        "&& docker info >/dev/null 2>&1; "
+        "then echo 'ALREADY: dockerd + docker active(ctx=default) — 跳过'; exit 0; fi; "
+        # ★ 站上实测形态：docker apt 源被 dist-upgrade 改名成 .distUpgrade ⇒ 恢复
+        "if [ ! -e /etc/apt/sources.list.d/docker.sources ] && "
+        "[ ! -e /etc/apt/sources.list.d/docker.list ] && "
+        "[ -e /etc/apt/sources.list.d/docker.list.distUpgrade ]; then "
+        "sudo mv /etc/apt/sources.list.d/docker.list.distUpgrade "
+        "/etc/apt/sources.list.d/docker.list; echo 'REPO: restored docker.list (from .distUpgrade)'; fi; "
+        "sudo apt-get update -qq || echo 'WARN: apt-get update 有报错(容忍, 继续)'; "
+        "sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "
+        "docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; "
+        "sudo systemctl enable --now docker; "
+        'sudo usermod -aG docker "$U"; '
+        f"printf '%s\\n' '{_DOCKER_DAEMON_JSON}' | sudo tee /etc/docker/daemon.json >/dev/null; "
+        "sudo systemctl restart docker; "
+        "docker context use default >/dev/null 2>&1 || true; "
+        "echo \"OK: $(command -v dockerd) | $(docker --version) | $(docker info 2>&1 "
+        "| grep -m1 -i 'Server Version' || echo 'info: FAIL')\""
+    )
+
+
 def _containers_status(stations) -> int:
     """只读一屏: 三站 docker ps -a / images / compose ls + 端口对账。**恒 exit 0**(只读观测)。"""
     pub = {}
@@ -5321,8 +5392,8 @@ def cmd_containers(argv) -> int:
     pull/up/down    写动作 —— **默认只出计划, --go 才动手**; 走 ssh_run(strict=True)
     """
     act = (argv[0].lower() if argv and not argv[0].startswith("-") else "status")
-    if act not in ("status", "pull", "up", "down"):
-        print("用法: cluster.py containers {status|pull|up|down} [--station A|B|C] [--image <ref>] "
+    if act not in ("status", "install", "pull", "up", "down"):
+        print("用法: cluster.py containers {status|install|pull|up|down} [--station A|B|C] [--image <ref>] "
               "[--name <名>] [--publish host:cont]... [--group-add g]... [--device dev]... "
               "[--volume host:cont[:ro]]... [--env K=V]... [--ipc host] [--ulimit k=soft:hard]... "
               "[--timeout 秒] [--detach] [--log <path>] [--plan|--go]")
@@ -5371,6 +5442,22 @@ def cmd_containers(argv) -> int:
     stations = [station] if station else ["A", "B", "C"]
     if act == "status":
         return _containers_status(stations)
+    if act == "install":                       # ADR-0014 D8(a): B/C 复用 A 站容器栈(装 dockerd)
+        cmd = containers_install_cmd()
+        for st in stations:
+            print(f"[containers] install @ {st} 站" + ("" if go else "   （计划 · --go 才下发）"))
+            print(f"  $ {cmd}")
+        if not go:
+            print("  提示: 加 --go 执行（写动作默认只出计划）")
+            return 0
+        ok_all = True
+        for st in stations:                    # 默认 600s: apt 拉 docker-ce/containerd 远超 SSH_TIMEOUT
+            ok, out = ssh_run(st, cmd, timeout=(timeout or 600), strict=True)
+            print(f"  {'✓' if ok else '✗'} install @ {st}")
+            for ln in (out or "").strip().splitlines():
+                print(f"      {ln}")
+            ok_all = ok_all and ok
+        return 0 if ok_all else 1
     try:
         plan = containers_plan(act, station=(station or "A"), image=image, name=name,
                                publish=publish, group_add=group_add, device=device,

@@ -20,8 +20,15 @@
 ## 两站一致性
 
 修改后核对：`md5sum /usr/local/bin/<file>`（两站必须一致）。
-**当前（2026-10-03，站上件 9 件 · 三站一致）**：infer-load `a2e8604f...`、infer-unload `a9f8f3f0...`、
+**当前（2026-10-12，站上件 · 三站一致）**：infer-load **`2dd2f6cf...`**、infer-unload `a9f8f3f0...`、
 llama-serve-instance `e8c20ede...`、**rpc-serve-instance `24a3e592...`**、infer-list `74033ef1...`。
+（2026-10-12 `infer-load` 改动 `a2e8604f…` → `2dd2f6cf…`：**Bug B** = `ALL_ALIASES` 改为按 gguf **文件**
+分组（覆盖"仓库级直放"depth-1，与 `infer-list` 同规则）；**Bug C** = `_set_conf_key` 追加前补换行（防末行粘连）。
+详见 [单站引擎轴不一致调研与统一方案 §5.2](../../docs/2026-10-12_单站引擎轴不一致调研与统一方案.md)。
+⚠ 同批（2026-10-12）：**`load-gate` 三站落后仓库一份（ADR-0014，2026-10-10；站上 56 行 vs 仓库 71 行）**
+⇒ `gates` 曾判红；**已按纪律部署对齐**（备份 `…bak-adr0014-20261012` → `install -m 755` → 核 md5 == 仓库
+`f082f8c689…` → `bash -n` → 冒烟 `load-gate 1` rc=0）⇒ `gates` **PASS**（站上件一致 **27/27**）。
+见同文档 §5.3。）
 （2026-09-29 的 `llama-serve-instance` 值 = `df8f7bbb...`，见下条。）
 （`gates` 门禁按仓库副本逐站比对 md5 ⇒ 上表值可由 `ops\rpc.ps1 check -Only gates` 复算，
 无需手工核 —— 改了仓库副本就必须部署，否则当场判红。）

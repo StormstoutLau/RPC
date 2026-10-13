@@ -7,7 +7,7 @@
 >
 > ★ **命名约定（2026-10-11 校正）**：本文 `<ver>` = `/opt/llama.cpp-<ver>` 的**标识**，
 > **实测形态 = `master-<短commit>`**（如 `master-91f6a6cf`），**不是** `v0.2.0` 式版本号
-> —— 现役 symlink 实证指向 `/opt/llama.cpp-master-91f6a6cf`（三站一致，2026-10-11 E1）。
+> —— ★ **现役 symlink = `/opt/llama.cpp-master-23b0202a`**（三站一致，**2026-10-12 升级**；升级前为 `master-91f6a6cf`）。
 > 下称"标识"为 `<id>`，`<ver>` 与 `<id>` 本文同义。
 
 ---
@@ -30,7 +30,7 @@ ssh scott-lau@scott-lau-GTR-Pro.local "pkill -x llama-server"
 > |---|---|---|
 > | 源树 | `~/src/llama.cpp` | **按目标命名**：`~/src/llama.cpp-<id>`（先例 `llama.cpp-master-91f6a6cf` · `llama.cpp-glm5next-upstream`） |
 > | 构建目录 | `~/build/llama-<ver>` | `~/build/llama-<id>`（先例 `~/build/llama-master-91f6a6cf`） |
-> | 版本目录 | `/opt/llama.cpp-<ver>` | `/opt/llama.cpp-<id>`（现役 symlink 实证指向 `llama.cpp-master-91f6a6cf`） |
+> | 版本目录 | `/opt/llama.cpp-<ver>` | `/opt/llama.cpp-<id>`（★ 现役 symlink = `llama.cpp-master-23b0202a`，2026-10-12） |
 > | MANIFEST 工具 | `bash /tmp/gen_manifest.sh` | 站上**无部署**（`/tmp` 重启即清）；仓库正本 = [gen_manifest.sh](../../archive/scripts-history/gen_manifest.sh)，**每次升级须先投放** |
 > | 定位方式 | `git checkout <tag>` | 站上源树 **`git tag` 为空**（未拉 tag）⇒ 用 commit sha（fetch 后 `checkout <sha>`），或先 `git fetch --tags` |
 > | 上游 org | （未提） | 上游已迁 **`ggml-org/llama.cpp`**；站上现存树 origin 仍是旧 org `ggerganov/llama.cpp`（GitHub 重定向仍可 fetch，**建议对齐**） |
@@ -120,9 +120,10 @@ python ops/rpc_check.py --only backend     # 或 ops\rpc.ps1 check -Only backend
 > 同批清减：三站 `/opt/llama.cpp-master-d2e206c4`（v0.3.0，非回滚目标、零活引用）已删除
 > 并 tar 备份到 `/data/backup/llama-cleanup-20260917/` ⇒ **当时**三站 `/opt` 恰为**规则要求的 2 个目录**
 > （现役 symlink + 9859）。
-> ⚠ **2026-10-11 校正（"恰为 2 个"已过期）**：实测三站 `/opt` 为 **4 项** ——
-> `llama.cpp`(symlink → `llama.cpp-master-91f6a6cf`) · `llama.cpp-9859` ·
-> `llama.cpp-glm5next-20260928`（**特性分支变体轴**，走 `--engine` 并存）· `llama.cpp-master-91f6a6cf`（**现役实体**）。
+> ⚠ **2026-10-12 校正（"恰为 2 个"→"4 项"均已过期）**：实测三站 `/opt` 为 **5 项** ——
+> `llama.cpp`(symlink → **`llama.cpp-master-23b0202a`**) · `llama.cpp-9859`（回滚基线）·
+> `llama.cpp-glm5next-20260928`（**特性分支变体轴**，走 `--engine` 并存）· **`llama.cpp-master-23b0202a`（现役实体）** ·
+> `llama.cpp-master-91f6a6cf`（**上一生产版** —— SOP「保留最近 2 个」本应删它，**2026-10-12 刻意保留**为"退回上一生产版"的退路，**待裁**）。
 > ⇒ "保留最近 2 个"仅指**稳定版本轴**（新版本 + `9859`）；**变体目录（`glm5next-*` 等）另计、不占该 2 个名额**。
 
 **回滚**（分钟级，I5 不变式保障旧目录仍在）：

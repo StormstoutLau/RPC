@@ -388,6 +388,9 @@
 - **锚点已建**: A2 的 before 基线 (38.7 命令/token, 903KB/token, tg 19.51) + 升级 SOP (DEV-LOG-009: RUNPATH patchelf 坑 + 两站 MD5 一致 + 原子切换)
 - **风险**: master 无发布 tag 时需从 commit 构建; hang bug 若未修, tensor split 首测用小模型 (Qwen 0.6B) 验证
 
+> **2026-10-11 追记（E1 实测，原表保留不回滚）**：本表原预测"合并后协议 5.1.0 → 6.0.0"；**实际 `master-23b0202a` 的 RPC 协议 = `v8.0.0`**（A 站 worker 启动打印 `Starting RPC server v8.0.0`）。
+> 且 **`-sm tensor` 首测即失败**（worker `ggml_vk_build_graph` SIGSEGV，**加载期**）⇒ 本表"合并后本集群升级评估"整体**按 No-Go 重判**。详见本文件文末「PR #26610 形态验证执行结论」节。
+
 ---
 
 ## Phase 4: llama.cpp v0.2.0 → master 滚升锚点 (2026-08-31 执行完毕)
@@ -617,3 +620,123 @@
 | 2026-09-23 01:04 | studio-upgrade | C | rpc_check --only backend,engine 无 FAIL | PASS | - |
 | 2026-09-29 14:27 | bench | B | API timings 口径 · max_tokens=128 · prompt 实测 413 tok | PASS | pp 413 tok 85.7 t/s · tg 128 tok 11.4 t/s |
 | 2026-09-29 16:24 | bench | B | API timings 口径 · max_tokens=128 · prompt 实测 413 tok | PASS | pp 413 tok 86.3 t/s · tg 128 tok 11.4 t/s |
+
+---
+
+## PR #26610 形态验证执行结论 (2026-10-11, E1 本会话实测) —— No-Go
+
+> **依据**: [2026-10-11_26610形态验证执行方案.md](../../docs/2026-10-11_26610形态验证执行方案.md)（S1–S7 · T1–T8 全条制）。
+> **目标引擎**: `master-23b0202a`（= `23b0202a189c44a54625aadcb37a946dd1d6278d`，master HEAD 2026-10-10T19:25:38Z，**含 #26610**；
+> GitHub API `compare/a46709b683...23b0202a18` 核 = `ahead_by=102 / behind_by=0`）。
+> **执行方式**: 影子目录 `/opt/llama.cpp-master-23b0202a`（三站）+ 同别名 conf 快照，**不切 symlink**；生产 `/opt/llama.cpp` 自始未动。
+
+### S1 基线（现役 `-sm layer`，生产形态，E1）
+
+- decode（`/v1/chat/completions` max_tokens=512 三次取中值）= **13.89 t/s**（13.81 / 13.89 / 13.89）；对照 E2（9/10）**14.02**，属噪声内。
+- 固定 prompt ×5 输出 `S1_PONG_1..5` **逐次互异、连贯、无重复乱码**。
+- 证据: `%TEMP%\rpc-26610\s1-decode-3x.jsonl` · `s1-pong-5x.jsonl`。
+
+### S4 影子运行（`-sm tensor`，`--tensor-split 3,1`，N=2）—— **加载即崩**
+
+- `cluster.py load deepseek-v4-flash-0731 --backend llama-rpc --engine master-23b0202a` **exit 1**（健康检查 15min 超时）。
+- journal 每轮 `load_model` 后即 **core-dump**（`status=6/ABRT`，systemd restart 循环）：
+
+```
+0.00.041.298 W common_fit_params: failed to fit params to free device memory: llama_params_fit is not implemented for SPLIT_MODE_TENSOR, abort
+5.35.602.428 E recv failed (bytes_recv=0, size_to_recv=8)
+.../ggml/src/ggml-rpc/ggml-rpc.cpp:651: Remote RPC server crashed or returned malformed response
+```
+
+- 崩溃调用栈（head 侧，warmup decode 路径）：
+
+```
+#2  rpc_dispatcher::send(...)                          libggml-rpc.so.0
+#3  ggml_backend_rpc_buffer_get_tensor(...)            libggml-rpc.so.0
+#4  ggml_backend_tensor_copy()                         libggml-base.so.0
+#5  ggml_backend_meta_graph_compute(...)               libggml-base.so.0
+#6  ggml_backend_sched_graph_compute_async()           libggml-base.so.0
+#7  llama_context::graph_compute(...)                  libllama.so.0
+#8  llama_context::process_ubatch(...)                 libllama.so.0
+#9  llama_context::decode(...)                         libllama.so.0
+#10 common_init_from_params(...)                       libllama-common.so.0
+#11 server_context_impl::load_model(...)               libllama-server-impl.so
+```
+
+- **根因（主因 = worker 侧 SEGV）**: A 站（worker `10.10.10.1`）`ggml-rpc-server` **SIGSEGV**（`Signal: 11`）。apport `/var/crash/…ggml-rpc-server.1000.crash` 核心栈：
+
+```
+ggml_vk_build_graph(ggml_backend_vk_context*, ggml_cgraph*, int, ggml_tensor*, int, bool, bool, bool)  libggml-vulkan.so.0   ← 崩点
+ggml_backend_vk_graph_compute(ggml_backend*, ggml_cgraph*)                                            libggml-vulkan.so.0
+rpc_server::graph_compute(std::vector<unsigned char> const&)                                          libggml-rpc.so.0
+rpc_serve_client(std::vector<ggml_backend*> const&, char const*, std::shared_ptr<socket_t>)           libggml-rpc.so.0
+ggml_backend_rpc_start_server()                                                                       libggml-rpc.so.0
+```
+故障指令 `mov 0x60(%rax),%rax`（坏指针解引用）@ `ggml_vk_build_graph+2684`。worker SEGV 记 **16:12:57** / **16:19:47**（两轮）。
+
+- **因果链（时序对齐: head 起 16:07:29，+5:25.9=16:12:54.9 进崩点；worker SEGV 16:12:57.3）**：
+  ① **worker 先崩**（`rpc_server::graph_compute` → Vulkan 构图 SEGV）→ ② head 读张量收 EOF（`recv failed bytes_recv=0`）→
+  ③ `ggml-rpc.cpp:651` 抛 `std::runtime_error`（warmup decode 无 handler）→ `std::terminate` → **head SIGABRT（status=6）** → ④ systemd 重启环 → 15min 健康超时。
+- **判读**: **致命点是 worker 的 Vulkan 图构建（`ggml_vk_build_graph`）**，属 `-sm tensor` 在 RPC/Vulkan worker 侧的缺陷，**非** RPC 协议本身（`v8.0.0` 正常握手）。
+  **不是 fit 告警**（`common_fit_params` 仅 `W` 级、异常被 catch，非致命；其含义 = tensor 模式下自动内存 fit 被跳过）。
+  次因/放大 = head 对 worker 断连**未优雅退出**（未捕获异常 ⇒ core-dump），与仍在跟踪的上游 **#26724（"rpc 崩溃不 abort"）** 同族。
+
+### S5/S6 测试矩阵判定（全条制）—— No-Go
+
+| # | 用例 | 判定 | 依据 |
+|---|---|---|---|
+| T1 | 连续 ≥5 次不退化 | **不可执行** | 服务无法启动（加载即崩） |
+| T2 | 第二次不崩 | **不可执行** | 同上 |
+| T3 | 不等分 `--tensor-split`（3,1） | **FAIL** | 加载即 abort（#29501 同族形态） |
+| T4 | 长 ctx prefill | **不可执行** | 同上 |
+| T5 | MTP + tensor | **N/A** | 本档未启 `--spec-type draft-mtp` |
+| T6 | 三站参与切分 | **不可执行** | 同上 |
+| T7 | 吞吐对照 | **不可执行** | 同上 |
+| T8 | 全程零 GGML_ASSERT | **FAIL** | core-dump + `Remote RPC server crashed` |
+
+⇒ **任一条 FAIL ⇒ No-Go**（#26610 记 **"合并但不能用"**）。
+★ **归因纪律（不臆断）**：我们命中的是**【加载期】崩溃**（worker Vulkan 构图 SEGV → head 收 EOF → ABRT），**比 #30075（2–3 次请求后输出退化；P100/CUDA/meta）更早**，**两者是否同根未知**。
+★ **上游状态（2026-10-11 查证；详见 [执行方案 §9.7](../../docs/2026-10-11_26610形态验证执行方案.md)）**：① 选点以来 master 仅 `ahead_by=4`、**无一涉及 RPC/tensor-split**（无 revert、无修复）；
+② **同类症状 = #30052**（open、0 修复；同报错原句 + 同 warmup 阶段，但 CUDA/GB10、非 `-sm tensor`）；③ **次因**（head 被 `RPC_STATUS_ASSERT` 陪葬）曾由 **#25938** 报告，**2026-10-08 以 stale 关闭未修**；④ **主因无直接对应 issue**；
+⑤ **候选修复 PR #25670**（`rpc: reject invalid top-level graph nodes`，open）最值得盯。⇒ 掷判：**等上游修**。
+
+### S7b 回退（生产零影响）
+
+- 停崩溃循环 → `cluster.py unload`（三站 OK）→ 恢复 conf 快照（撤 `-sm tensor` 与引擎钉死）→ 删三站 `/opt/llama.cpp-master-23b0202a`。
+- 核验: symlink `/opt/llama.cpp` 三站 = `master-91f6a6cf`（**自始未动**）· 影子目录已清 · `llama-server@*`/`rpc-server@*` 均 inactive · `/opt` 4 项（含 `9859`）。
+- 收尾门禁 `rpc_check --only backend` = **PASS**（3/3 站 · 单站=HIP / 分布式=Vulkan · pin ✓）。
+
+---
+
+## Phase 8: #26610 引擎在 `-sm layer` 档的同会话 A/B (2026-10-12, E1)
+
+> **起因**: 「新引擎 + `-sm layer`」形态在此前验证中**从未测过**（S4 只测 tensor 形态；S1 基线跑的是**旧**引擎）⇒ 本轮补测消歧。
+
+**方法**: 三站影子目录重建（tar md5 `be1cf2a91e5de367529522c1a34a98b3`，MANIFEST **79 OK ×3**）→ conf 快照 → `cluster.py load … --engine master-23b0202a`（conf **不含** `--split-mode`；运行中 cmdline 实测无 tensor 参数）→ 测量 → **复位旧引擎**（不带 `--engine`）→ **重复完全相同的测量**。
+
+| 指标 | 旧 `91f6a6cf`（9/10） | 新 `23b0202a` | Δ |
+|---|---|---|---|
+| 加载 | ✅ 390 s | ✅ 360 s | **−7.7%** |
+| **decode**（max_tokens=512 ×3 中值） | **14.00** (14.01/14.00/14.00) | **13.80** (13.80/13.80/13.84) | **−1.4%** |
+| **prefill**（**同一条 412-tok prompt**） | **135.74** t/s | **182.42** t/s | ★ **+34.4%** |
+| 固定 prompt ×5（max_tokens=256） | 5/5 `S1_PONG_1..5` · finish=stop | 5/5 `S1_PONG_1..5` · finish=stop | 一致 |
+| `GGML_ASSERT` / 崩溃 / 乱码 | 0 | 0 | 一致 |
+
+**判读**:
+1. ★ **#26610 的收益在 layer 档同样兑现，且兑现在 prefill 侧**（+34.4%）—— 与 A2 机理一致（prefill 每 batch 的 RPC 命令远多于 decode）。
+2. **decode −1.4% 为真实小幅回退**（各自 run-to-run 离散仅 ±0.01\~0.04 t/s，0.20 t/s 的差**超出噪声**）⇒ 典型「批处理收益 / 单步代价」权衡。
+3. ⚠ **口径纠错**：本文件此前记录的 prefill「**24.7–31.2 t/s**」是**小 prompt 口径**（被每请求固定开销主导），**不可**与 412-tok 口径直接比 ⇒ 同口径真实增益 = **+34.4%**，**不是 ×6**。
+4. ⚠ **测试口径坑（可复用）**：该模型是**推理模型**，`max_tokens=32` 时 `content` 会**全空**（预算被 `reasoning_content` 吃光，`finish_reason≠stop`）⇒ 固定 prompt 类测试须 **≥256**。
+
+**结论**: 「新引擎 + `-sm layer`」= **PASS**（技术门已开）。是否升级（= 接受 decode **−1.4%** 换 prefill **+34.4%**）= **Scott 决策**。
+**生产影响 = 零**（symlink 自始未切 · conf 已复位与 `.bak-26610` IDENTICAL · `/run` 覆盖层已清 · 三站服务 inactive · 门禁 PASS）；**影子目录三站保留**（升级无需重新分发）。
+细案与全景见 [2026-10-12_引擎升级可行性梳理与升级过程落档](../../docs/2026-10-12_引擎升级可行性梳理与升级过程落档.md) §3.5。
+
+### Phase 8b: 升级执行（2026-10-12，UPGRADE_SOP 第 4–6 步）—— 完成
+
+- **步骤 4 原子切换**（worker 先、master 后，**实为三站**）：`sudo ln -sfn llama.cpp-master-23b0202a /opt/llama.cpp` → A / C / B 三站 symlink 均 = `master-23b0202a`，`llama-cli --version` = `0.6.0-dev`。
+- **步骤 5 冒烟**：`cluster.py load deepseek-v4-flash-0731 --backend llama-rpc`（**无 `--engine`** ⇒ 走新 symlink）→ **HEALTH OK @ 390 s**；
+  `UPGRADE_PONG` → `content='UPGRADE_PONG'` · `finish=stop`；**`/proc/<pid>/exe` 三站同版实体**（B head `.../llama-server`，A/C worker `.../ggml-rpc-server`）；
+  worker 协议 **`Starting RPC server v8.0.0`**；**零 `GGML_ASSERT`/SEGV**；`cluster.py versions` 三站 **79 OK** 一致。
+- **步骤 6 收尾**：门禁 `rpc_check --only backend` = **PASS**；`docs/提速调研报告.md` 版本记录已更新；**冒烟后 unload**（回空载）。
+  ⚠ 未执行：SOP「保留最近 2 个版本目录」应删 `master-91f6a6cf` —— **保留**（作为"退回上一生产版"的退路），待 Scott 定。
+- **现役**：三站 `/opt/llama.cpp` = **`master-23b0202a`**（含 #26610 / #29928 等）；生产形态 = **`-sm layer`**。

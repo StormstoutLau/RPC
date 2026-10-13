@@ -3,6 +3,8 @@
 > 状态：纵深部署完成（2026-09-07）+ HIP llama 引擎实测落地（gpt-oss，2026-09-12）｜后续：A-C 直连恢复 / 环网 failover 硬化 /
 > 落档人：Scott｜基于工程 memory 与实测记录整理
 
+> ★ **2026-10-12 校正（原文保留 · 历史留档）**：本文以下涉及 C 站 llama.cpp 源码树 `0d18aaa` 的表述均为**当时实况**，已失效 —— 三站 `/opt/llama.cpp` 现为 **`llama.cpp-master-23b0202a`**（升级前 `master-91f6a6cf`）；`~/llama.cpp`（0d18aaa / Vulkan 单站轴）**已三站退役删除**（2 个消费别名 conf 归位 `/opt`）；`-sm tensor` = **No-Go**（生产维持 `-sm layer`）。**现行真值见 [TRACKER §2.4/§2.5](../upstream-tracker/TRACKER.md) 与 [2026-10-12 引擎升级落档](../../docs/2026-10-12_引擎升级可行性梳理与升级过程落档.md)**。
+
 ---
 
 ## 1. 概览
