@@ -56,8 +56,17 @@ fi
 #      gpt-oss-120b 与 gpt-oss-120b-fable-5-distilled => `load gpt-oss-120b-b` 直接 exit 1。
 #   ② PREFIX 未转义 => `.` 是正则通配, `qwen3.8` 会命中 `qwen3x8` (误配)。
 #   修法: 候选集全列出 -> 精确相等者直接胜出 -> 否则才走唯一前缀; 前缀比较用 shell `case` 按**字面**串。
-ALL_ALIASES=$(find -L /data/models/gguf -mindepth 2 -maxdepth 2 -type d 2>/dev/null | \
-  sed 's|/data/models/gguf/[^/]*/||; s|-GGUF$||' | tr 'A-Z' 'a-z' | sed 's/^minimax-m2.7.*/m27-q4ks/' | sort -u)
+# ★ 2026-10-12 修 Bug B: 原实现按 `find -mindepth 2 -maxdepth 2 -type d` 找**模型目录**
+#   ⇒ `gguf/<repo>/<file>.gguf` 这种"仓库级直放"(depth-1) **完全看不到** —— 实测 B 站
+#   `davidau-q38-27b-q4k` 有 conf(:18081)、能加载, 却在这里被判"无匹配 '$PREFIX'"。
+#   ⚠ 同一缺陷 **infer-list 已于 2026-09-15 修掉**(其头部注释①逐字记的就是本例), 改按
+#   gguf **文件**分组; 但**本文件未同步** ⇒ 两个同源脚本的别名规则脱钩 (infer-list 头部
+#   本就要求"别名规则须与 ... 站上 infer-load 一致")。现改为**与 infer-list scan() 同规则**:
+#     gguf/<repo>/<file>.gguf            → 模型 = <repo>                    (NF == 2)
+#     gguf/<repo>/<Model>-GGUF/…/<file>  → 模型 = <Model>                  (NF >= 3)
+ALL_ALIASES=$(find -L /data/models/gguf -mindepth 2 -name '*.gguf' ! -name 'mmproj*' -printf '%P\n' 2>/dev/null | \
+  awk -F/ '{ print (NF == 2) ? $1 : $1"/"$2 }' | \
+  sed 's|.*/||; s|-GGUF$||' | tr 'A-Z' 'a-z' | sed 's/^minimax-m2.7.*/m27-q4ks/' | sort -u)
 # ★ ds4 后端: 别名来自另一个命名空间 (2026-09-28, ADR-0010 / spec/ds4-backend/DESIGN.md §2/§4.2)。
 #   为什么必须分家: ds4 是**项目专属 GGUF、非通用加载器**, 其模型刻意**不并入** /data/models/gguf ——
 #   否则 infer-list/models 会扫出一个 llama.cpp 根本加载不了的模型 (DESIGN §2 三条隔离原则之②)。
@@ -158,6 +167,15 @@ _set_conf_key() {  # _set_conf_key <KEY> <VALUE> — 幂等写/改实例 conf �
   if grep -q "^$1=" "$CONF" 2>/dev/null; then
     sudo sed -i "s|^$1=.*|$1=$2|" "$CONF"
   else
+    # ★ 2026-10-12 修 Bug C: 原实现直接 `tee -a` —— 若 conf **末行无换行**, 追加会**拼到末行尾部**:
+    #   实测 qwen3.8-27b-mtp.env 末行 `EXTRA_FLAGS="…--metrics"` **无换行**, 于是 `--engine` 追加
+    #   `LLAMA_RPC_SERVER_BIN=…` 后变成 `…--metrics"LLAMA_RPC_SERVER_BIN=…` ⇒ llama-server 启动
+    #   报 `error: invalid argument: --metricsLLAMA-RPC-SERVER-BIN=…` 直接 status=1 失败。
+    #   ⚠ 该缺陷**只在"目标键不存在 + conf 末行无换行"时触发** ⇒ 有 conf 一直没暴露;
+    #   修法 = 追加前先确保文件以换行结尾 (POSIX 文本文件, 空文件不补)。
+    if [ -s "$CONF" ] && [ -n "$(tail -c1 "$CONF")" ]; then
+      echo "" | sudo tee -a "$CONF" >/dev/null
+    fi
     echo "$1=$2" | sudo tee -a "$CONF" >/dev/null
   fi
 }

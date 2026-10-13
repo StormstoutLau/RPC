@@ -5,6 +5,8 @@
 > **现状基线**: 双机 RPC, MiniMax-M2.7 Q4_K_S 121.10 GiB, pp512 = 141.12±0.08, tg128 = 20.05±0.04 t/s
 > **范围**: 算子层与算子-放置协同; 模型层 (DSpark 投机解码) / 协议层 (RPC) / 链路层 (40G 换线) 见各自专档
 
+> ★ **2026-10-12 校正（原文保留 · 历史留档）**：本文以下涉及 B 站现役 `~/llama.cpp/build`（源码 HEAD `0d18aaa`）/ `/opt/llama.cpp`（`v0.3.0`）引擎基线 的表述均为**当时实况**，已失效 —— 三站 `/opt/llama.cpp` 现为 **`llama.cpp-master-23b0202a`**（升级前 `master-91f6a6cf`）；`~/llama.cpp`（0d18aaa / Vulkan 单站轴）**已三站退役删除**（2 个消费别名 conf 归位 `/opt`）；`-sm tensor` = **No-Go**（生产维持 `-sm layer`）。**现行真值见 [TRACKER §2.4/§2.5](../upstream-tracker/TRACKER.md) 与 [2026-10-12 引擎升级落档](../../docs/2026-10-12_引擎升级可行性梳理与升级过程落档.md)**。
+
 ---
 
 ## 0. 结论摘要

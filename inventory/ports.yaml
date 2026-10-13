@@ -149,32 +149,36 @@ managed:
 
   - port: 8731
     proto: http
-    purpose: halogen 引擎 API (第三方 OCI 推理引擎, A 站**测试性**)
-    scope: [A]
+    purpose: halogen 引擎 API (第三方 OCI 推理引擎, 三站**测试性**)
+    scope: [A, B, C]
     bind: 127.0.0.1
     owner: "docker (halogen-flash-server)"
     mode: on_demand
     status: configured_but_stopped
     consumers: [ops/cluster.py containers]
     note: |
-      2026-10-10 登记（ADR-0014 立项）：halogen-flash-server 容器的**对外发布**端口
+      2026-10-10 登记（ADR-0014 立项）；**2026-10-11 scope A→[A, B, C]**（E1：B/C 复用 A 站配方，
+      见 ADR-0014 D8(a) + D7）：halogen-flash-server 容器的**对外发布**端口
       （`docker run ... -p 127.0.0.1:8731:8731`，经 `ops/cluster.py containers up` 下发）。
       ★ 引擎协议**无鉴权**（上游逐字 "The engine protocol has no authentication; keep it unpublished."）
       ⇒ 宿主绑定**必须** loopback（ADR-0014 D4），**不得** `0.0.0.0`。
+      ★ scope 含 B/C 是 `rpc_check --only ports` 反向对账的**硬要求**（`_reg_covers` 要求站 ∈ scope，
+      且反向「有监听未登记」**无** status/mode 豁免）⇒ B/C 监听 8731 时 scope 必须覆盖其站。
       mode/status 双标 ⇒ 未监听不算故障（豁免本表"声明在用却没监听"的反向对账）。
-      ⚠ 容器**未起时**本端口不监听属正常；引擎镜像/部署未实测（ADR-0014 未实测登记 U1/U2）。
+      ⚠ 容器**未起时**本端口不监听属正常。
 
   - port: 8730
     proto: http
     purpose: halogen 引擎**容器内**服务端口 (非宿主监听面)
-    scope: [A]
+    scope: [A, B, C]
     bind: 127.0.0.1
     owner: "docker (halogen-flash-server)"
     mode: on_demand
     status: configured_but_stopped
     note: |
-      2026-10-10 登记（ADR-0014 D3）：**容器内**默认端口 —— 宿主**不经**此口直接暴露
-      （对外走 8731 的 loopback 发布）。登记在此 = **占位防误用**（防止宿主别处再拿 8730）。
+      2026-10-10 登记（ADR-0014 D3）；**2026-10-11 scope A→[A, B, C]**（同 8731，B/C 复用）：
+      **容器内**默认端口 —— 宿主**不经**此口直接暴露（对外走 8731 的 loopback 发布）。
+      登记在此 = **占位防误用**（防止宿主别处再拿 8730）。
       ⇒ 站上 `ss` **看不到**它（在容器网络命名空间内），故豁免本表反向对账（mode/status 双标）。
       ⚠ 容器内端口与发布端口的**具体映射**以实际 `docker run` 为准（上游文档口径未完全一致，见 ADR-0014 U2）。
 

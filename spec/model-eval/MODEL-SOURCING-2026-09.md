@@ -7,6 +7,8 @@
 > **方法**: 公开榜单（SWE-bench、AA Intelligence Index、AIME/GPQA）+ llama.cpp issue 实测 + 本站资产盘点
 > **⚠️ 上游 PR/Issue 状态与引擎基线 = 活数据，权威以 [upstream-tracker/TRACKER.md](../upstream-tracker/TRACKER.md) 为准**——本文档 §6a 中的状态表仅为调研时点快照，勿据此做版本决策
 
+> ★ **2026-10-12 校正（原文保留 · 历史留档）**：本文以下涉及 现役 `/opt` = `master-91f6a6cf` / 旧 `0d18aaa` 引擎 的表述均为**当时实况**，已失效 —— 三站 `/opt/llama.cpp` 现为 **`llama.cpp-master-23b0202a`**（升级前 `master-91f6a6cf`）；`~/llama.cpp`（0d18aaa / Vulkan 单站轴）**已三站退役删除**（2 个消费别名 conf 归位 `/opt`）；`-sm tensor` = **No-Go**（生产维持 `-sm layer`）。**现行真值见 [TRACKER §2.4/§2.5](../upstream-tracker/TRACKER.md) 与 [2026-10-12 引擎升级落档](../../docs/2026-10-12_引擎升级可行性梳理与升级过程落档.md)**。
+
 ---
 
 ## 1. 结论速览（TL;DR）

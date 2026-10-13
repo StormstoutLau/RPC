@@ -2,6 +2,8 @@
 
 > 状态：**已执行（2026-10-04）** —— Step 0 / 1 / 2 / 3 / 4 全部落地；判官真调用**已打通**（首次 `sem_verified`）。执行结果见文末 §六。
 
+> ★ **2026-10-12 校正（原文保留 · 历史留档）**：本文以下涉及 `/opt/llama.cpp` symlink → `llama.cpp-master-91f6a6cf`（当时视为「当前基线」）的表述均为**当时实况**，已失效 —— 三站 `/opt/llama.cpp` 现为 **`llama.cpp-master-23b0202a`**（升级前 `master-91f6a6cf`）；`~/llama.cpp`（0d18aaa / Vulkan 单站轴）**已三站退役删除**（2 个消费别名 conf 归位 `/opt`）；`-sm tensor` = **No-Go**（生产维持 `-sm layer`）。**现行真值见 [TRACKER §2.4/§2.5](../../spec/upstream-tracker/TRACKER.md) 与 [2026-10-12 引擎升级落档](../../docs/2026-10-12_引擎升级可行性梳理与升级过程落档.md)**。
+
 ---
 
 ## Context（为什么做这件）

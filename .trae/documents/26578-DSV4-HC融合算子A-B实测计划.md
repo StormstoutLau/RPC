@@ -1,5 +1,7 @@
 # #26578 DSV4_HC 融合算子 A/B 实测（含三站引擎升级）
 
+> ★ **2026-10-12 校正（原文保留 · 历史留档）**：本文以下涉及「现役 `/opt/llama.cpp` = `master-d2e206c4`（8/31）」及「保留 `/opt/llama.cpp-master-d2e206c4` 旧目录作回滚」的表述均为**当时实况**，已失效 —— `d2e206c4` 目录**已于 2026-09-17 删除**；此后引擎经 9/10 升 `master-91f6a6cf`，**2026-10-12 再升至 `master-23b0202a`**（`0.6.0-dev`，含 #26610 / #29928）；`~/llama.cpp`（0d18aaa）轴**已三站退役删除**。**现行真值见 [TRACKER §2.4](../../spec/upstream-tracker/TRACKER.md) 与 [2026-10-12 引擎升级落档](../../docs/2026-10-12_引擎升级可行性梳理与升级过程落档.md)**。
+
 ## Context
 
 TRACKER 复核（2026-09-10）确认：**#26578（Vulkan DSV4_HC_COMB/PRE/POST 融合算子）已 9/7 merged**，decode 收益 1.50× / prefill 1.12× —— 是本集群 V4-Flash 提速的最大单点。现役三站引擎 `/opt/llama.cpp` = master-d2e206c4（8/31 构建），含 indexer/transpose/#26500，但**缺 sparse-fa 与 DSV4_HC(9/7)**。8 月 8 日三站 V4-Flash 实测日志警告 `resolve_fused_ops: layer 28 ... HC pre/comb/post assigned to RPC`（HC 未融合慢路径）即为未升级特征。
