@@ -844,6 +844,11 @@ def check_sensitivity(ctx):
 NAMESPACE_REG = ROOT / "inventory" / "namespaces.yaml"
 NS_STATUS = ("active", "reserved", "retired")
 
+# ★ 2026-10-13（`$PROJECTS` 数据化）：**项目注册表** —— `$PROJECTS` 的**唯一真值**
+#   （同 `namespaces.yaml` 范式；设计见 docs/2026-10-13_项目注册表_PROJECTS数据化_设计与实施方案.md）。
+PROJECTS_REG = ROOT / "inventory" / "projects.yaml"
+PROJ_STATUS = ("active", "retired")
+
 
 def namespace_index(reg):
     """注册表 → `(by_id, alias2id)`。**唯一**解析点（消费者不许各自再建一份表）。"""
@@ -923,6 +928,86 @@ def namespace_for_project(project, reg):
     if project in by_id:
         return project
     return a2i.get(project, project)
+
+
+def validate_projects(reg):
+    """**纯函数** → `(bad, notes)`：项目注册表自洽（治理三规则的**机判本体**，2026-10-13）。
+
+    ① `id` 非空；② `status` ∈ `PROJ_STATUS`；③ `since` 形如 `YYYY-MM-DD`；
+    ④ `root` **非空字符串**（★ **只判形态，不判存在性** —— `F:`/`E:` 等外盘可能离线，
+       判存在性会让门禁**常红（假红）**）；
+    ⑤ ★ **同一个字符串不许同时属于两条**（`id` 或 `alias`）—— 唯一会判红的**冲突**；
+    ⑥ ★★ **`id` 不许重复**（2026-10-13 · 本仓测试当场抓到）：两条同 `id` 时，
+       `seen[token] != pid` 恒为 False ⇒ **静默通过** ⇒ `projects_index` 会**静默取后一条**
+       （一条 = 一个项目 ⇒ 重复必须红）。⚠ 与 `namespaces` 的 ⑤ 同族（那边也有此漏，本批**未动**它）。
+    """
+    bad, notes = [], []
+    if not isinstance(reg, dict):
+        return ["projects.yaml 顶层不是映射（结构改了？）"], notes
+    items = reg.get("projects") or []
+    if not items:
+        bad.append("`projects` 为空 ⇒ `$PROJECTS` 没有内容（判据会退化成空判）")
+    seen, ids = {}, set()
+    for i, n in enumerate(items, 1):
+        if not isinstance(n, dict):
+            bad.append(f"`projects[{i}]` 不是映射: {n!r}")
+            continue
+        pid = n.get("id")
+        if not pid:
+            bad.append(f"`projects[{i}]` 缺 `id`")
+            continue
+        if pid in ids:
+            bad.append(f"★ **项目名冲突**：{pid!r} 出现了两条（同一串不许属两条 · 治理规则②；"
+                       f"重复会让 `projects_index` 静默取后一条）")
+        ids.add(pid)
+        if n.get("status") not in PROJ_STATUS:
+            bad.append(f"`projects[{i}]`({pid}) status={n.get('status')!r} 不在闭集 {list(PROJ_STATUS)}")
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", str(n.get("since") or "")):
+            bad.append(f"`projects[{i}]`({pid}) `since` 必须是 `YYYY-MM-DD`: {n.get('since')!r}")
+        if not (isinstance(n.get("root"), str) and n.get("root").strip()):
+            bad.append(f"`projects[{i}]`({pid}) `root` 必须是非空字符串: {n.get('root')!r}")
+        for token in [pid] + list(n.get("aliases") or []):
+            if token in seen and seen[token] != pid:
+                bad.append(f"★ **项目名冲突**：{token!r} 同时属于 {seen[token]!r} 与 {pid!r} "
+                           f"⇒ 同一个串不许出现在两条里（治理规则②）")
+            seen.setdefault(token, pid)
+    notes.append(f"项目 {len(items)} 条 · active "
+                 f"{sum(1 for n in items if isinstance(n, dict) and n.get('status') == 'active')} · 字符串位点 {len(seen)}")
+    return bad, notes
+
+
+def projects_index(reg):
+    """**消费面**：`{id: root}` —— 只收 `status: active`（外壳载入 / `--list-projects` 用）。
+
+    ⚠ 只收 `active`：`retired` 仍留登记（历史可解释），但**不再派发**（治理规则③）。
+    """
+    out = {}
+    for n in (reg.get("projects") or []):
+        if isinstance(n, dict) and n.get("id") and n.get("status") == "active":
+            out[str(n["id"])] = str(n.get("root") or "")
+    return out
+
+
+def check_projects(ctx):
+    """**项目注册表**（`$PROJECTS` 的真值）自洽 —— 2026-10-13 `$PROJECTS` 数据化。
+
+    判什么：① 注册表可解析且 `projects` 非空（防空判）；② 自洽（`validate_projects`）。
+    ★ **不判** `root` 存在性（外盘可能离线 ⇒ 判存在性会**假红**；同 `namespaces` 只判形态）。
+    """
+    try:
+        import yaml
+    except Exception:
+        return "WARN", "缺 pyyaml, 跳过 projects 断言", []
+    if not PROJECTS_REG.is_file():
+        return "FAIL", "inventory/projects.yaml 缺失（`$PROJECTS` 起 2026-10-13 它是唯一真值）", []
+    try:
+        reg = yaml.safe_load(PROJECTS_REG.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        return "FAIL", f"projects.yaml 解析失败: {type(e).__name__}: {e}", []
+    bad, notes = validate_projects(reg)
+    if bad:
+        return "FAIL", "项目注册表自身不自洽（见明细）", bad
+    return "PASS", " · ".join(notes), []
 
 
 DIALECT_INV = ROOT / "inventory" / "dialect.yaml"
@@ -9537,6 +9622,13 @@ CHECKS = [
      "fix": "孤儿 `cluster.py models link --go`; 断链 `cluster.py models prune --go`"},
     {"id": "stations", "title": "三站实况对账", "fn": check_stations, "quick": False,
      "fix": "conf/权重/凭据/端口/插件任一项不符 —— 见明细, 一律以站上实况为准改仓库侧"},
+    # ★ 2026-10-13: `$PROJECTS` 数据化 —— 项目注册表**自洽**（`$PROJECTS` 的唯一真值）。
+    #   ⚠ 它**不判** root 存在性（外盘可能离线 ⇒ 会假红）；存在性由 `workspace create` 在使用时判。
+    {"id": "projects", "title": "项目注册表($PROJECTS 真值)", "fn": check_projects, "quick": True,
+     "fix": "改 `inventory/projects.yaml`（`$PROJECTS` 的唯一真值）：① id 非空且**逐字**= 调用方使用的键；"
+            "② status ∈ {active, retired}；③ since 形如 YYYY-MM-DD；④ root 非空字符串（**单引号**括起 Windows 路径）；"
+            "⑤ **同一串不许属两条**。★ 新增项目 = 追加一条 `active`（**门禁不看人只看登记**）；"
+            "退役 = 改 `retired` 而**不删**。⚠ 报『projects 为空』= 判据退化（无对象）"},
 ]
 MARKS = {"PASS": "✓", "WARN": "▲", "FAIL": "✕", "SKIP_FAILED": "⊘"}
 # D6-P0-1 (2026-09-23): **"非执行"必须三分, 不许含混** —— 这是本仓"假绿"的头号来源。
@@ -9615,6 +9707,9 @@ def main():
     ap.add_argument("--quick", action="store_true", help="仅本地快检 (pre-commit)")
     ap.add_argument("--only", default="", help="逗号分隔的断言 id")
     ap.add_argument("--list", action="store_true", help="只列断言清单")
+    # ★ 2026-10-13（`$PROJECTS` 数据化）：外壳载入用 —— 打 `{id: root}` 的 **JSON**（不自洽 ⇒ 退出码 2）。
+    ap.add_argument("--list-projects", action="store_true",
+                    help="打项目注册表(inventory/projects.yaml)的 {id: root} JSON（`$PROJECTS` 载入用）；不自洽 ⇒ 2")
     # ★ B 段（2026-10-01）：D7 协议判据的**消费面**（外壳调它 ⇒ 判据只在一处；见 `d7_cli`）。
     ap.add_argument("--d7-envelope", nargs=2, metavar=("KIND", "PATH"),
                     help="D7 信封校验：KIND ∈ TaskContract|RunReport|Verdict；PATH = JSON 文件或 - (stdin)")
@@ -9632,6 +9727,25 @@ def main():
     rc = d7_cli(args)                      # 命中 D7 消费面 ⇒ 直接返回（不跑门禁）
     if rc is not None:
         return rc
+
+    # ★ 2026-10-13（`$PROJECTS` 数据化）：**外壳载入的唯一读路** —— 吐 JSON（判据只在一处，
+    #   外壳**不自己解析 YAML** —— PS 5.1 无 YAML 解析器，自解析会造第二个解析器 ⇒ 漂移即 fail-open）。
+    if args.list_projects:
+        if not PROJECTS_REG.is_file():
+            print("LIST_PROJECTS_ERR: inventory/projects.yaml 缺失（`$PROJECTS` 的唯一真值）", file=sys.stderr)
+            return 2
+        try:
+            import yaml
+            reg = yaml.safe_load(PROJECTS_REG.read_text(encoding="utf-8")) or {}
+        except Exception as e:
+            print(f"LIST_PROJECTS_ERR: {type(e).__name__}: {e}", file=sys.stderr)
+            return 2
+        bad, _ = validate_projects(reg)
+        if bad:
+            print("LIST_PROJECTS_ERR: " + " | ".join(bad), file=sys.stderr)
+            return 2
+        print(json.dumps(projects_index(reg), ensure_ascii=False))
+        return 0
 
     if args.list:
         for c in CHECKS:

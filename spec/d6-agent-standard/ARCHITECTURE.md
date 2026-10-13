@@ -17,19 +17,49 @@ upstream: \[d6-agent-standard-DESIGN, ADR-0002]
 > **本文件定位**: 单一入口描述系统「是什么」「怎么动」「边界在哪」，供维护者/后续 D7 开发者快速建立心智模型，不复述 DESIGN 的论证过程
 > **跨项目标准引用**: D6 为多任务项目统一 agent-cli 调用标准（DESIGN 顶层目标），跨项目工作规范（立项→设计→派发→跨站执行→验收→入档五层）见 [CROSS-PROJECT-WORK-STANDARD.md](./CROSS-PROJECT-WORK-STANDARD.md)；三站执行规范调研输入见 [RESEARCH_2026-09-12_Cpp_Hub_3station.md](./RESEARCH_2026-09-12_Cpp_Hub_3station.md)。
 
-> ⚠⚠ **2026-09-26 复核（`D7` 收口时回写）—— 本文件的"实况对齐"停在 2026-09-07**：
-> 此后 `agent-cli.ps1` 又落了**五个命令面**（`route` / `lock` / `split` / `review` / `batch`，
-> 合计 **7 个**；见 `agent-cli.ps1:5231-5275` 的派发链），以及 **`D7-P1~P4` 的判据族**
-> （`Resolve-L1Gate` · `Test-ConclusionContract` · `Merge-JudgeFindings` · `Resolve-SelfReviewGuard` ·
-> `Select-Reviewer` · `review-blind` 盲判 · `require-gate` 流程前置）。
-> ⇒ **§1 的系统边界图与"两命令面"等表述是 MVP 期快照，未回写**。
-> **以什么为准**：**代码** + [IMPLEMENTATION.md](./IMPLEMENTATION.md) + `docs/三机推理集群使用手册.md`（§2.4 由门禁 `mirror` 对账）。
-> **为什么不就地改图**：§1 是**逐字符对齐的 ASCII 框图**，改字会让框线错位；而真正该做的是
-> **一次有验收的架构回填**（不在本次"回写分析"的射程内）⇒ 此处**只标注过期**，
-> 不留一个读起来像真的**假事实**（本仓最防"过期但看起来像真值"）。
+> ✅ **2026-10-13 架构回填【已做】**（承 2026-09-26 的"标注过期 ⇒ 待一次有验收的回填"）。
+> **回填方式**：§1 的 ASCII 框图**保留为 MVP 期快照**（逐字符框线，改字会让框线错位）——
+> 现行边界以 **§1a 系统边界（现行）** 为准；§1a 末列"与 §1 快照的差异"。
+> **验收（E1，2026-10-13 当场实读）**：§1a 中每个函数名/命令面**逐字 grep 命中** `ops/station-bin/agent-cli.ps1`
+> （**21 个 D7 函数 · 7 个命令面**，行号见 DEV-LOG-014 §104）· 全量门禁 PASS（45 绿/3 黄/0 红）。
 > ★ **另一件要说清的事**：`D7` **没有**独立的架构文档 —— 这是 **`D7-P0` 的裁定**，不是缺口：
 > 「**D7 叠在 ADR-0005/0007 之上，不另造第二套**」⇒ D7 的落体是**判据族 + 真值表**，
-> 它们分布在 `inventory/*.yaml` 与 `ops/rpc_check.py`，**不以架构文档为载体**。
+> 它们分布在 `inventory/*.yaml`、`ops/rpc_check.py` 与 `ops/station-bin/agent-cli.ps1`，
+> **不以架构文档为载体**。
+
+### 1a. 系统边界（现行 · 2026-10-13 回填）
+
+**命令面（7 个，逐字对 `agent-cli.ps1` 派发链）**：`workspace` · `task` · `route` · `lock` · `split` · `review` · `batch`
+（MVP 的 `workspace/task` 两命令面已扩为 7 个；`split` = O-26 主卡分发，`review` = O-16 判定环，`batch` = O-80 批量派发）。
+
+**D7 判据族（21 个函数，全部在 `agent-cli.ps1`；行号为 2026-10-13 实读）**：
+
+| 相 / 层 | 函数（`agent-cli.ps1` 行号） | 职责 |
+|---|---|---|
+| P0 立契 | `New-TaskContract`(1371) · `Test-D7Envelope`(1480) | 卡 → `TaskContract`；`criteria_hash` / `golden.checksum` 在 P0 **固化**；审计调判据本体（唯一消费点） |
+| 判据壳 / 汇报 | `Invoke-D7Cli`(1426) · `Write-D7Report`(1488) · `Split-D7Gaps`(1666) | 判据调用**唯一实现**（三态 0/1/2 不混）；汇报 + `open/boundary/unknown` 两分 |
+| 硬拒开关 | `Resolve-D7HardReject`(1682) | **唯一开关点**；**三信封全转**（VD / TC / RR，2026-10-13） |
+| P1 / P2 站上 | 站上 body 的 `$Script:STATE_*` 词表 · 相流水 `out/.d7-phases.txt` | `claimed` / `executing` 写点与读侧同源；相流水归档（2026-10-12 落） |
+| P3 回收 | `New-RunReport`(1550) · `Resolve-D7Hosts`(240) | `.agent-run.json` → `RunReport`（**刻意不含 `verdict`**）；`exec_host` / `arbiter_host` 两侧事实 |
+| P4 / P5 | `Resolve-D7PhaseChain`(1593) · `New-Verdict`(1606) · `Get-D7Adjudication`(1701) | 相序列 + 终态；`verdict` = review exit code；裁决段注入 `review.json.d7_verdict` |
+| L1 / L2 既有族 | `Resolve-L1Gate`(5547) · `Test-ConclusionContract`(5619) · `Merge-JudgeFindings`(5668) · `Resolve-SelfReviewGuard`(5727) · `Select-Reviewer`(5769) | L1 先行 fail-closed；结论契约校验；findings 归并；自评护栏；判官选取（避让同名模型） |
+| 分片 / join | `Expand-DecomposeSubject`(3862) · `Resolve-SplitJoin`(3878) | 主卡 `decompose:` 展开 + 片声明主体归并（2026-10-13 落） |
+| 产物身份 | `Resolve-ReviewProduct`(5140) | 被评产物解析（卡声明优先 + 强制回退 + `tried` 逐项报出） |
+| 事件流 | `Add-LedgerLine`(892) | `I-1` 事件流写点（重试循环**之前** ⇒ 只跑一次） |
+| 备路 | `Invoke-Task-Claude`(4138) | claude 本地备路（与主路互斥；P0 / P3 / RR 拒收同处置） |
+
+**卡面字段（D7 相关，附加式 —— 改动只加不改）**：
+
+| 卡面字段 | 进什么 | 备注 |
+|---|---|---|
+| `accept` | `TaskContract.accept[]`（含 `criteria_hash`） | 红线 3：P0 固化 |
+| `accept-golden` | `TaskContract.golden{ref,checksum}` | 有 golden 才固化；**无 ⇒ 不适用**（2026-10-13 口径） |
+| `evidence-budget` | `TaskContract.evidence_budget{anchors,tool_calls}` | 2026-10-13 新增；**缺省仍如实进 `gaps`** |
+| `evidence-manifest.subjects` | 产物显式拉回 + `Resolve-ReviewProduct` 身份解析 | `ephemeral` 声明者**不回链** |
+| `decompose` | `split` 分片展开（`Expand-DecomposeSubject`） | O-26 有序清单 |
+
+**与 §1 快照的差异（一句话）**：命令面 2 → **7**；wrapper 内多出**上表 D7 判据族**；后端面按 §1 框图内
+2026-09-15 的既有就地更正（`--RemoteHost` + 站内自发现，无需隧道）；站集由 A/B 扩至现行 **A/B/C 三站**。
 
 ***
 
