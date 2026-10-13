@@ -19,6 +19,13 @@ upstream: \[d6-agent-standard-.* 全量文档]
 
 ## 历史回溯（2026-09-03 起）
 
+### 2026-10-12 — **引擎升级落地 + 框架工具面三缺陷修复**（⚠ **非 D6 本体** —— 登记为「框架工具面维护」，供 D6/D7 消费方知悉 `cluster.py` / `station-bin` 变动）
+
+- **事件**: ① 分布式引擎 `/opt/llama.cpp` 三站原子升级 `91f6a6cf → master-23b0202a`（含 #26610；`-sm tensor` 形态验证 = **No-Go**，生产维持 `-sm layer`）；② 退役单站引擎轴 `~/llama.cpp`；③ **修 3 个框架工具缺陷**（**直接动 D6/D7 的工具面**）：**Bug A** `ops/cluster.py` `_cmd_load_c` 丢 `engine`（**C 站 `--engine` 静默失效**）· **Bug B** `ops/station-bin/infer-load` 别名扫描只覆盖 depth-2（"仓库级直放"别名无法解析）· **Bug C** `_set_conf_key` 追加不补末行换行（**conf 拼行 ⇒ 引擎启动失败**）；④ `load-gate` 推三站对齐 ADR-0014。
+- **涉及文件**: `ops/cluster.py` · `ops/station-bin/infer-load`（**已推三站** md5 `2dd2f6cf…`）· `ops/station-bin/load-gate`（`f082f8c689…`）· `ops/station-bin/README.md` · `spec/upstream-tracker/TRACKER.md`（v3.25）· `spec/vulkan-version-control/{UPGRADE_SOP,DESIGN}.md` · `docs/{三机推理集群使用手册,分布式推理,FRAMEWORK-INDEX}.md` · 新建 `docs/2026-10-12_*` ×2。
+- **验收证据**: 冒烟 `UPGRADE_PONG` / `BUGFIX_OK` / `BUGC_OK` 全 PASS · `cluster.py versions` 三站 79 OK · **全量门禁 绿灯 45 / 黄灯 3 / 红灯 0** · 详证 [2026-10-12_引擎升级可行性梳理与升级过程落档](../..//docs/2026-10-12_引擎升级可行性梳理与升级过程落档.md) · [2026-10-12_单站引擎轴不一致调研与统一方案](../..//docs/2026-10-12_单站引擎轴不一致调研与统一方案.md)。
+- **关联**: `TRACKER §2.4/§2.5` · `ADR-0014` · `DEV-LOG-009`（追加「第 4 次 UPGRADE_SOP 实战」）· **无新增 `O-xx`**（缺陷就地修复并验证，非遗留）。
+
 ### 2026-10-10（续③） — **先验红 + 裁 `O-158`【甲】并落**：段位形态（owner + range）进判据 · 取数新增占用者名 · 台账 `✅ 148 · 仍开着 6`
 
 > ⏱ **时注**：本节事件**晚于 `续②`**（用户令「**先验红并裁 `O-158` 甲方案**」⇒ 本轮落地）—— 按本文件"最新写入置顶"排在 `续②` 之上。

@@ -38,6 +38,8 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 # O-141 P0 (2026-10-05): `split` 的**派发计划**（纯函数：容量 = 站 × 腿 + 片→站映射）——
 #   ★ 此前 split **零覆盖**；有了它，"站×腿/映射走 .Count" 才能被**真跑**而不是扫文本。
 'Get-SplitDispatchPlan',
+# 2026-10-13 (P1 · `CONCLUSION #6` 兑现): join 的两个**纯函数** = 声明解析（唯一解析点）+ 汇聚判定核。
+'Expand-DecomposeSubject', 'Resolve-SplitJoin',
 # D7-P3-1 (2026-09-26): **不得自审**的判定本体（纯函数）。
 'Resolve-SelfReviewGuard',
 # D7-P3-2 (2026-09-26): **编排层 —— 谁审谁** 的选择器（纯函数）。
@@ -57,6 +59,8 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 #   ⚠ 它依赖 `$Script:D7_GAP_CLASS` 表 ⇒ 必须**一并提取那张表**（同 ROUTE_TABLE/JUDGE_TABLE 的处置）——
 #     否则在夹具里表为 `$null` ⇒ 每一项都落 `unknown` ⇒ **断言会假绿**（"看起来分了类"）。
 'Split-D7Gaps',
+# 2026-10-13（裁 A-甲）："转硬拒"的**按信封开关**（纯函数：只吃 Tag）—— 唯一开关点。
+'Resolve-D7HardReject',
 # O-140 (2026-10-01 裁【甲·可机判版】): **该 run 是否已入证据链**（纯函数：吃链件路径 + proj/run_id）；
 #   ⚠ 它只吃**路径**、不碰 `$Script:REPO_ROOT` ⇒ 夹具喂**临时链件**即可**真跑**三态（不是形态断言）。
 'Resolve-RunChained',
@@ -285,7 +289,7 @@ Assert-True "evm-state: 反例 path 为空 → 拒" ((Test-EvmStatePull -state '
 #   有 accept+golden = 14。**判据**：有代码注释为证 ⇒ 改期望值, 不改代码。
 $b0 = @(Get-FrameworkSubjects @() $false)
 $n0 = @($b0 | ForEach-Object { $_.name })
-Assert-True "baseline: 无 accept 无 golden => 10 件" ($b0.Count -eq 10)
+Assert-True "baseline: 无 accept 无 golden => 10 件" ($b0.Count -eq 11)   # ★ 2026-10-12: 10→11（+`d7-phases`·O-136 ① 相流水·ephemeral）
 Assert-True "baseline: 含 judgment-record/prompt/workspace-diff/executor-trace/card" (
     ($n0 -contains 'judgment-record') -and ($n0 -contains 'prompt') -and
     ($n0 -contains 'workspace-diff') -and ($n0 -contains 'executor-trace') -and ($n0 -contains 'card'))
@@ -306,7 +310,7 @@ Assert-True "baseline: review 件带 ephemeral=true(否则未 review 的 run 假
 
 $b1 = @(Get-FrameworkSubjects @('echo ok') $true)
 $n1 = @($b1 | ForEach-Object { $_.name })
-Assert-True "baseline: 有 accept+golden => 14 件" ($b1.Count -eq 14)
+Assert-True "baseline: 有 accept+golden => 14 件" ($b1.Count -eq 15)   # ★ 2026-10-12: 14→15（同 +`d7-phases`）
 Assert-True "baseline: 有 accept+golden => 含 accept-output/accept-golden-output" (
     ($n1 -contains 'accept-output') -and ($n1 -contains 'accept-golden-output'))
 
@@ -320,7 +324,7 @@ $mg = @(Merge-EvidenceSubjects $cardSubs @() $false)
 # O-56 (2026-09-25): 10 -> 9 —— `accept-cmds` 已改**条件列**（无 accept 的卡站上**永不产出**该件）。
 #   与 §218 那条同性质: **合法演进**（判据缺陷修复），故改期望值而非改代码。
 # ★ A2 (2026-09-29): 9 -> 10(基线) ⇒ 合并结果 11 —— 基线新增一件（`executor-trace`）。
-Assert-True "merge: 基线10 + 卡声明2 - 重复1 = 11" ($mg.Count -eq 11)
+Assert-True "merge: 基线11 + 卡声明2 - 重复1 = 12" ($mg.Count -eq 12)   # ★ 2026-10-12: 基线 10→11（同 +`d7-phases`）
 Assert-True "merge: 卡声明与基线同 path 只出现一次" ((@($mg | Where-Object { $_.path -eq 'prompt.txt' })).Count -eq 1)
 $tmp = @($mg | Where-Object { $_.name -eq 'station-tmp-log' })
 Assert-True "merge: 卡特有 subject 保留(collect/ephemeral 未丢)" (
@@ -345,7 +349,7 @@ Assert-True "merge: 未声明 state 的件缺省空串(保六键纯净, 不插 n
 
 # 路B 的核心目的: **无 manifest 的卡**(= 71 个真实 run 的来源)也能拿到非空声明 ⇒ 不再是 recipe v1
 $m0 = @(Merge-EvidenceSubjects @() @() $false)
-Assert-True "merge: 空卡仍得 10 件(=> 不再退化为 recipe v1)" ($m0.Count -eq 10)
+Assert-True "merge: 空卡仍得 11 件(=> 不再退化为 recipe v1)" ($m0.Count -eq 11)   # ★ 2026-10-12: 10→11（同 +`d7-phases`）
 
 # --- O-15/AUDIT (2026-09-21): claude 备路按路基线(证据面到齐 => recipe v2) ---
 # 该路归档件集 = opencode 子集 + stderr, 无 judgment-record 等远端合成批件
@@ -385,7 +389,7 @@ Assert-True "claude merge: prompt.txt 只出现一次" ((@($cmg2 | Where-Object 
 Assert-True "claude merge: 卡特有件保留" ((@($cmg2 | Where-Object { $_.name -eq 'station-tmp-log' })).Count -eq 1)
 # baselineFn 缺省(主路调用点)不传时行为不变 => 既有的合并仍成立(防退化; O-56: 10 -> 9; A2: 9 -> 10)
 $defmg = @(Merge-EvidenceSubjects @() @() $false)
-Assert-True "claude merge: 缺省 baselineFn 仍得主路 10 件(未破坏主路调用)" ($defmg.Count -eq 10)
+Assert-True "claude merge: 缺省 baselineFn 仍得主路 11 件(未破坏主路调用)" ($defmg.Count -eq 11)   # ★ 2026-10-12: 10→11（同 +`d7-phases`）
 
 # --- O-15/AUDIT (2026-09-21): auto-fallback 触发判定(纯函数, rc 表) ---
 # 正向: 只认 rc=6(引擎死锁/超时)才切 claude 备路
@@ -2196,7 +2200,8 @@ Assert-True "b1⑦: 空白判据串被跳过（不产生 criteria_hash 空哈希
     (New-TaskContract -Fm @{ accept = @('  ', 'a'); 'accept-golden' = @{ source = '' }; task = 't'
                              timeout_s = 900; sensitivity = ''; readonly = $false } -CardId $cidT).contract.accept.Count -eq 1)
 Assert-True "b1⑧: 接线 —— P0 立契在 `Invoke-Task` 内，且**调判据本体**（外壳不重写判据）" (
-    $content.Contains('$d7tc = New-TaskContract -Fm $fm -CardId $cardId') -and
+    # ★ 2026-10-13（P0 尾款）：调用形态 +`-GoldenChecksum`（D1 的 P0 固化）
+    $content.Contains('$d7tc = New-TaskContract -Fm $fm -CardId $cardId -GoldenChecksum $d7GoldenSha') -and
     $content.Contains("Write-D7Report -Kind 'TaskContract'") -and
     $content.Contains('Invoke-D7Cli -Argv') -and
     ([regex]::Matches($content, [regex]::Escape('--d7-envelope'))).Count -ge 1)
@@ -2204,8 +2209,13 @@ $d7blk = ''
 $bi0 = $content.IndexOf('$d7tc = New-TaskContract')
 $bi1 = $content.IndexOf('# A1 / ADR-0009', $bi0)
 if ($bi0 -ge 0 -and $bi1 -gt $bi0) { $d7blk = $content.Substring($bi0, $bi1 - $bi0) }
-Assert-True "b1⑨: 接线 —— **灰度期不阻断**（P0 块内**无** return/die；收紧时机 = gaps 清空）" (
-    $d7blk.Length -gt 0 -and -not ($d7blk -match '\breturn\b') -and
+Assert-True "b1⑨: 接线 —— P0 块内**唯一的 return 是硬拒守卫**（★ 2026-10-13 晚 TC 已转；不再是'整块不阻断'）" (
+    $d7blk.Length -gt 0 -and
+    # 旧断言（"无 return"）已过时：TC 清空后已转硬拒 ⇒ 只钉"该 return **受开关守卫** 且 **恰一处**"。
+    # ⚠ 按**代码行形**匹配（注释里提到该语句会给"按子串计数"造成假计数 —— o117 同族教训）。
+    ([regex]::Matches($d7blk, '(?m)^\s+return 3\s*$').Count -eq 1) -and
+    $d7blk.Contains("Resolve-D7HardReject -Tag 'CONTRACT'") -and
+    $d7blk.Contains("`$d7t['CONTRACT.envelope'] -eq 1") -and
     $content.Contains('-Gaps $d7tc'))
 
 # --- b2 (2026-10-01, `O-136` **B2**): **P3 回收 + P4a/P4b/P5**（产信封 / 相序列 / 判据接线）-------
@@ -2226,8 +2236,9 @@ Assert-True "b2①: RunReport 取到**真值**的五项（run_id/artifact{digest
     $RRT.report.usage.total_tokens -eq 7)
 Assert-True "b2②(★红线): RunReport **不含 verdict**（产出方不得自评 —— 契约 §1.1 的 ★）" (
     -not $RRT.report.Contains('verdict'))
-Assert-True "b2③: gaps 如实报出本仓无读数的三项（attempt/decisions/evidence）" (
-    (@($RRT.gaps) -join ',') -eq 'attempt,decisions,evidence')
+Assert-True "b2③: gaps 如实报出**无读数项**（★ 2026-10-13 D3/D4 后 = attempt/decisions；`evidence` 已接线）" (
+    # ★ 口径变更（P0 尾款）：`evidence` 自 D3 起有真值（content_digest 非空时）⇒ 不再入 gaps；`attempt` 仍缺读数（未传 -Attempt）⇒ 仍报
+    (@($RRT.gaps) -join ',') -eq 'attempt,decisions')
 Assert-True "b2④: RunReport 顶层**恰**八键（摘要逐字；多一个少一个都算漂）" (
     (@($RRT.report.Keys) -join ',') -eq 'run_id,attempt,artifact,inputs_digest,exit_code,decisions,evidence,usage')
 
@@ -2362,11 +2373,40 @@ try { $null = ([string]('' -split "`r?`n" | Where-Object { $_ -match '^D7_' } | 
 catch { $oldThrew = $true }
 Assert-True "b3⑱(先验红·同源对照): 旧写法在空管道上**当场抛**（b3⑰ 非恒真；恒真的断言在这里会红）" (
     $oldThrew -and $content.Contains('$line = ([string]$hit).Trim()'))
-Assert-True "b3⑲(★真缺陷③): 无读数的两个**列表**字段填空 = **空数组**（`null` 会被判据当场拒 ⇒ P3 信封每次真跑都红）" (
+Assert-True "b3⑲(★真缺陷③): 无读数列表填空 = **空数组**（`null` 会被判据当场拒）；★ D3 后 `evidence` 有真值、归 `d7w` 管" (
     ($RRT.report.decisions -is [array]) -and @($RRT.report.decisions).Count -eq 0 -and
-    ($RRT.report.evidence -is [array]) -and @($RRT.report.evidence).Count -eq 0 -and
-    # ★ 同源对照：**仍是** gaps 里的三项（"类型合规" 不冒充 "有真值"）
-    (@($RRT.gaps) -join ',') -eq 'attempt,decisions,evidence')
+    # ★ 同源对照：**空表仍进 gaps**（"类型合规" 不冒充 "有真值"）—— `evidence` 自 D3 起出列（映射见 §1.6）
+    (@($RRT.gaps) -join ',') -eq 'attempt,decisions')
+
+# --- d7w 刀（2026-10-13 · **P0 尾款**）：TC/RR 四项清空 —— D1/D2/D3/D4 的本地映射与新口径 -------
+#   ★ 先验红：旧口径（无条件报 `golden.checksum`）在"无 golden"样本上**必为真** ⇒ 本刀②当场红。
+$tcNoG = New-TaskContract -Fm @{ accept = @(); 'accept-golden' = @{ source = ''; cmd = '' }; task = 't'
+    timeout_s = 900; sensitivity = ''; readonly = $false; 'evidence-budget' = @{ anchors = $null; tool_calls = $null } } -CardId $cidT
+Assert-True "d7w①(D1 口径): 无 golden ⇒ `golden.checksum` **不进 gaps**（不适用 ≠ 缺口）；`evidence_budget` 未声明 ⇒ 仍报" (
+    (@($tcNoG.gaps) -join ',') -eq 'evidence_budget,constraints')
+Assert-True "d7w②(先验红·同源对照): **旧口径**（无条件按空 checksum 报）在①样本上必为真、而新口径不入列 ⇒ 判据有对象" (
+    (-not $tcNoG.contract.golden.checksum) -and
+    (-not ($tcNoG.gaps -contains 'golden.checksum')))
+$tcGOk = New-TaskContract -Fm $fmT -CardId $cidT -GoldenChecksum 'sha256:feed'
+Assert-True "d7w③(D1): 有 golden 且 checksum 已固化 ⇒ 不进 gaps，且值**逐字=传入值**" (
+    (-not ($tcGOk.gaps -contains 'golden.checksum')) -and $tcGOk.contract.golden.checksum -eq 'sha256:feed')
+$tcEB = New-TaskContract -Fm @{ accept = @(); 'accept-golden' = @{ source = ''; cmd = '' }; task = 't'
+    timeout_s = 900; sensitivity = ''; readonly = $false; 'evidence-budget' = @{ anchors = 3; tool_calls = 10 } } -CardId $cidT
+Assert-True "d7w④(D2): 卡声明 `evidence-budget` ⇒ 不进 gaps（原样透传，值可复读）" (
+    (-not ($tcEB.gaps -contains 'evidence_budget')) -and $tcEB.contract.evidence_budget.anchors -eq 3 -and
+    $tcEB.contract.evidence_budget.tool_calls -eq 10)
+Assert-True "d7w⑤(D4): `attempt` —— 传 ≥1 ⇒ 真值且不进 gaps；缺/0 ⇒ `$null` 且仍报" (
+    ((New-RunReport -Run $runT -RunDir 'C:\runs\1' -Attempt 2).report.attempt -eq 2) -and
+    ((New-RunReport -Run $runT -RunDir 'C:\runs\1' -Attempt 2).gaps -notcontains 'attempt') -and
+    ($null -eq (New-RunReport -Run $runT -RunDir 'C:\runs\1').report.attempt) -and
+    ((New-RunReport -Run $runT -RunDir 'C:\runs\1').gaps -contains 'attempt'))
+$rrE = New-RunReport -Run $runT -RunDir 'C:\runs\1'
+Assert-True "d7w⑥(D3): `evidence[]` —— content_digest 非空 ⇒ 恰一件 `{anchor,digest}`（**是数组**，不摊平）；空 ⇒ 空表 + gap" (
+    ($rrE.report.evidence -is [array]) -and (@($rrE.report.evidence).Count -eq 1) -and
+    (@($rrE.report.evidence)[0].anchor -eq 'agent-output.txt') -and
+    (@($rrE.report.evidence)[0].digest -eq 'sha256:aaaa') -and
+    ((New-RunReport -Run @{ task_id = 't'; exit_code = 0; content_digest = ''; output_bytes = 0
+                            usage = $null; card = @{ sha256 = 'sha256:c' } } -RunDir '').gaps -contains 'evidence'))
 
 # --- b3 第四刀 (2026-10-01, `O-139` **甲**): P5 登记面落地 —— Verdict 段随 review.json 落盘 ----
 #   ★★ 判据的由来：C 段真跑查出旧实现把 P5 跑在 `Set-Content` **之后** ⇒ 判据校验过的 `Verdict`
@@ -2437,8 +2477,9 @@ Assert-True "b3㉘(★主判据): 两分正确 —— TC 的 `constraints` 与 R
     (@($gRR.boundary) -join ',') -eq 'decisions' -and
     (@($gTC.open) -join ',') -eq 'evidence_budget,golden.checksum' -and
     (@($gRR.open) -join ',') -eq 'attempt,evidence' -and
-    # ★ Verdict 无 boundary ⇒ 「唯一便宜的那条路」=（定义 seq 语义即可清）
-    (@($gVD.boundary).Count -eq 0) -and (@($gVD.open) -join ',') -eq 'seq')
+    # ★★ 2026-10-13 裁【甲】：`seq` 改判 `boundary` ⇒ VD 的 `open` 桶**可为空**（"转硬拒"门槛解封）——
+    #   本行期望值随裁定更新（**口径变更，非回归**）；裁前对照见主仓 docs/...O-136 方案 §7.2。
+    (@($gVD.boundary) -join ',') -eq 'seq' -and (@($gVD.open).Count -eq 0))
 Assert-True "b3㉙(★fail-closed): **未登记的 gap 名 ⇒ unknown**，不许静默当成 open（那会高估「可清」）" (
     (@((Split-D7Gaps -Gaps @('brand.new.gap')).unknown) -join ',') -eq 'brand.new.gap' -and
     (@((Split-D7Gaps -Gaps @('brand.new.gap')).open).Count -eq 0))
@@ -2531,6 +2572,81 @@ Assert-True "b3㉒(先验红·同源对照): **旧顺序**样本上同一条判�
     ($oldInj.Count -eq 1) -and ($oldWrt.Count -eq 1) -and
     -not ($oldInj[0].Index -lt $oldWrt[0].Index))
 
+# --- b3 第八刀 (2026-10-12, `O-136` ①): `CONTRACT #2` 归档形态 —— 站上相流水 --------------------
+#   ★ 由来：契约 §未实测 2 —— `claimed`/`executing` 两契约相**无归档证据**（状态件单槽、后写覆盖）。
+#   ★ 形态：站上追加式 `.d7-phases.txt` 搭**既有 `EV_FILES` 通道**（写点×3 → 合批拉回 → 归档
+#     `d7-phases.txt` → subjects 声明 ephemeral）；**不是判据、不是信封、不入链**（设计案 §2.4 reconcile）。
+#   ⚠ 本刀只判**接线形态**（字符串计数）；运行时行为由真跑归档件覆盖（设计案 §4.3）。
+# ★★ 判据是**活性行**（行首 `printf …`），不是"子串在不"—— 先验红实测：注释掉整行后
+#   "子串计数"仍为 3（假绿）；改成按行匹配后，注释行**不计数**（同 o117 的教训：查"串在不"，查不出"跑不跑得起来"）。
+#   ★ 先验红已实跑：抽掉 claimed 写点 ⇒ b3㊺/㊽ 当场红（563/2），恢复后回绿（565/0）。
+$isPhLine = { param($l) $l -match '^\s*printf ''\{"phase":"%s"' }
+$phAct = @($content.Split("`n") | Where-Object { & $isPhLine $_ })
+Assert-True "b3㊹(★唯一真值表): `EV_FILES` 恰一条 `.d7-phases.txt` / `pull='batch'`（两处枚举漂移会当场红）" (
+    ([regex]::Matches($content, "name = '\.d7-phases\.txt';\s+pull = 'batch'").Count -eq 1) -and
+    $content.Contains("EV_FILES | Where-Object { `$_.pull -eq 'batch' }"))
+Assert-True "b3㊺(★主判据): 三个**活性**写点齐（claimed/executing/终态）· 同一文件名表达式 · 全部 best-effort" (
+    ($phAct.Count -eq 3) -and
+    (@($phAct | Where-Object { $_ -match 'd7-phases\.txt' }).Count -eq 3) -and
+    (@($phAct | Where-Object { $_.TrimEnd().EndsWith('2>/dev/null || true') }).Count -eq 3) -and
+    $content.Contains('"$stClaimed"') -and $content.Contains('"$stExecuting"') -and
+    $content.Contains('"`$ST"'))
+Assert-True "b3㊻: 归档搬移**恰一行**（`.d7-phases.txt` → `d7-phases.txt`；漏搬 = 文件烂在 TEMP）" (
+    ([regex]::Matches($content, [regex]::Escape("Move-Item `$phSrc (Join-Path `$runDir 'd7-phases.txt')")).Count -eq 1) -and
+    $content.Contains("Join-Path `$evDir '.d7-phases.txt'"))
+Assert-True "b3㊼(★防噪声): subjects 声明 **ephemeral**（早失败路径可缺席 ⇒ 不假报 missing-artifact）" (
+    ([regex]::Matches($content, "name = 'd7-phases'; [^\r\n]*ephemeral = \`$true").Count -eq 1) -and
+    # ⚠ `review` 在主路/备路两条基线**各一处**（同一第三态先例）⇒ `-ge 1`，不作为唯一性判据
+    ([regex]::Matches($content, "name = 'review'; [^\r\n]*ephemeral = \`$true").Count -ge 1))
+Assert-True "b3㊽(★红线 1 + 先验红·同源对照): 流水**从不**写 D7 终态（accepted/rejected）；活性判据**非恒真**" (
+    (-not $content.Contains('{"phase":"accepted"')) -and (-not $content.Contains('{"phase":"rejected"')) -and
+    ((& $isPhLine '# printf ''{"phase":"%s" x') -eq $false) -and
+    ((& $isPhLine 'printf ''{"phase":"%s" x') -eq $true) -and
+    ($phAct.Count -eq 3))
+
+# --- b3 第九刀 (2026-10-13, 裁 A-甲): "转硬拒" —— VD 已转 / TC·RR 维持灰度 ----------------------
+#   ★ 由来：B 裁（`seq`→`boundary`）后 VD 的 `open` 桶清空 ⇒ 按裁 A-甲（总授权）**VD 已转硬拒**；
+#     ★ 2026-10-13 晚（P0 尾款）：四清空达成 ⇒ **TC 已转**（动作面 = P0 块内"拒派发"）；
+#     **RR 同晚「另起一件」已转**（动作面 = 契约 §1.6 写死的 `return 3`，落点 = 主/备两路 `.agent-run.json` 写盘之前）。
+#   ⚠ 判据面：① 开关是**纯函数**（唯一开关点）；② 两处 review 写出点**各恰一处**接线；③ 拒收 = **不写盘**（`return 3` 在 `Set-Content` 之前）。
+Assert-True "b3㊾(★开关·主判据): **VD/TC/RR 三信封全转** · 未登记 ⇒ false（fail-closed）" (
+    (Resolve-D7HardReject -Tag 'VERDICT') -eq $true -and
+    (Resolve-D7HardReject -Tag 'CONTRACT') -eq $true -and
+    (Resolve-D7HardReject -Tag 'RUNREPORT') -eq $true -and  # ★ 2026-10-13 晚「另起一件」：已转
+    (Resolve-D7HardReject -Tag 'NOPE') -eq $false)
+Assert-True "b3㊿(★接线): 两处 review 写出点**各恰一处**硬拒检查（VD）· TC 拒派发 call-site 恰一处 · 且恒 return 3" (
+    ([regex]::Matches($content, [regex]::Escape("Resolve-D7HardReject -Tag 'VERDICT'")).Count -eq 2) -and
+    ([regex]::Matches($content, [regex]::Escape('Write-Host "D7_VERDICT_REJECT_HARD:')).Count -eq 2) -and
+    ([regex]::Matches($content, [regex]::Escape("`$d7g['VERDICT.envelope'] -eq 1")).Count -eq 2) -and
+    # ★ 2026-10-13 晚（P0 尾款）：TC 的"拒派发" call-site（恰一处，P0 块内）
+    ([regex]::Matches($content, [regex]::Escape("Resolve-D7HardReject -Tag 'CONTRACT'")).Count -eq 1) -and
+    ([regex]::Matches($content, [regex]::Escape('D7_CONTRACT_REJECT_HARD:')).Count -eq 1) -and
+    ([regex]::Matches($content, [regex]::Escape("`$d7t['CONTRACT.envelope'] -eq 1")).Count -eq 1) -and
+    # ★ 2026-10-13 晚：RR 的"拒收"call-site（**主/备两路**各一处 ⇒ 共 2；落点均在 `.agent-run.json` 写盘之前）
+    ([regex]::Matches($content, [regex]::Escape("Resolve-D7HardReject -Tag 'RUNREPORT'")).Count -eq 2) -and
+    ([regex]::Matches($content, [regex]::Escape('D7_RUNREPORT_REJECT_HARD:')).Count -eq 2) -and
+    ([regex]::Matches($content, [regex]::Escape("`$d7t['RUNREPORT.envelope'] -eq 1")).Count -eq 2) -and
+    # 顺序承重：RR 检查必在写盘之前（两路各一；用 RR 报数落点作锚）
+    (@([regex]::Matches($content, [regex]::Escape("if (`$d7t.Count -gt 0) { `$run['d7_guard'] = `$d7t }"))).Count -eq 2) -and
+    ([regex]::Matches($content, [regex]::Escape("Resolve-D7HardReject -Tag 'RUNREPORT'")).Count -le
+     [regex]::Matches($content, [regex]::Escape("Set-Content (Join-Path `$runDir '.agent-run.json')")).Count))
+$gd = [regex]::Matches($content, [regex]::Escape('Get-D7Adjudication -L1Section'))
+$hr = [regex]::Matches($content, [regex]::Escape("Resolve-D7HardReject -Tag 'VERDICT'"))
+$sc = [regex]::Matches($content, [regex]::Escape('Set-Content $reviewPath'))
+Assert-True "b3-51(★顺序承重: 拒收=不写盘): 两处检查都在各自 Get-D7Adjudication **之后**、写盘 **之前**" (
+    ($gd.Count -eq 2) -and ($hr.Count -eq 2) -and ($sc.Count -eq 2) -and
+    ($hr[0].Index -gt $gd[0].Index) -and ($hr[1].Index -gt $gd[1].Index) -and
+    ($sc[0].Index -gt $hr[0].Index) -and ($sc[1].Index -gt $hr[1].Index))
+# ★ 先验红·同源对照：① 恒 false 桩在 VD 上必须**当场为假**（证 ㊾ 非恒真）；
+#   ② 把"检查放到写盘之后"的样本上，51 的顺序判据必须为假（证 51 真的在看顺序）。
+$stubNoHard = { param($t) $false }
+$badOrder = "Set-Content `$reviewPath`nif ((Resolve-D7HardReject -Tag 'VERDICT')) { return 3 }"
+$bSc = [regex]::Matches($badOrder, [regex]::Escape('Set-Content $reviewPath'))[0].Index
+$bHr = [regex]::Matches($badOrder, [regex]::Escape("Resolve-D7HardReject -Tag 'VERDICT'"))[0].Index
+Assert-True "b3-52(先验红·同源对照): 恒 false 桩 ⇒ 非真；且**写盘在前**样本上 51 的顺序判据为假" (
+    ((& $stubNoHard 'VERDICT') -eq $false) -and ((Resolve-D7HardReject -Tag 'VERDICT') -eq $true) -and
+    (-not ($bSc -gt $bHr)))
+
 # ══ O-141 P0（2026-10-05）：`split` 派发计划 —— **首个真跑覆盖**（此前 split 零覆盖）══
 #   被测 = `Get-SplitDispatchPlan`（纯函数 · 由文件头「提取全部函数定义」自动载入 ⇒ 本组是**真调用**）。
 #   钉三件：① 容量 = 站 × 腿（**"腿"真的乘进去**，用**同源对照**证非恒真）· ② 片→站映射走 `.Count`
@@ -2572,6 +2688,46 @@ $splitFn = @($ast.FindAll({ param($n)
     $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-SplitTask' }, $true))
 Assert-True "O141-split⑨(结构): Invoke-SplitTask 内无字面「% 3」（映射必须经 Get-SplitDispatchPlan）" (
     ($splitFn.Count -eq 1) -and (-not ($splitFn[0].Extent.Text -match '%\s*3')))
+
+# ══ O-141 P1（2026-10-13 · `CONCLUSION #6` 兑现）：跨片 join —— 声明式主体 + fail-closed ══════════
+#   语义真值 = 结论契约 §6.2（五条定案）；载体 = 【选项①】（卡面声明，非产物自述）—— 映射见契约 §6.3。
+#   ⚠ 本组 = **真调用**（两个纯函数由文件头"提取全部函数定义"自动载入）；接线面另以源文本形态钉住。
+$e1 = Expand-DecomposeSubject 'subject=路由层 | 分析 router 数据流'
+Assert-True "O141-join①(解析): subject=<X> | <task> ⇒ 两段正确切开" (
+    ($e1.subject -eq '路由层') -and ($e1.task -eq '分析 router 数据流'))
+$e2 = Expand-DecomposeSubject '分析日志格式'
+Assert-True "O141-join②(附加式): 无前缀 ⇒ subject 为空、task 保留原文（**不推断**）" (
+    ($e2.subject -eq '') -and ($e2.task -eq '分析日志格式'))
+Assert-True "O141-join③(先验红·同源对照): 两条输入产出不同 ⇒ ① 非恒真（恒量桩会两值同）" (
+    ($e1.subject -ne $e2.subject) -and ($e1.task -ne $e2.task))
+$j1 = Resolve-SplitJoin -Shards @(
+    @{ idx = 1; station = 'A'; rc = 0; subject = '路由层' },
+    @{ idx = 2; station = 'B'; rc = 0; subject = '缓存层' })
+Assert-True "O141-join④: 主体各异 ⇒ 无同主体组 · status=ok · declared=2（**不发明"冲突"**）" (
+    ($j1.status -eq 'ok') -and ($j1.declared -eq 2) -and (@($j1.same_subject_groups).Count -eq 0))
+$j2 = Resolve-SplitJoin -Shards @(
+    @{ idx = 1; station = 'A'; rc = 0; subject = '路由层' },
+    @{ idx = 2; station = 'B'; rc = 0; subject = '路由层' })
+Assert-True "O141-join⑤(★主判据): 同主体 ×2 ⇒ **同主体组报出**（潜在冲突，只报不裁）" (
+    (@($j2.same_subject_groups).Count -eq 1) -and ($j2.same_subject_groups[0].subject -eq '路由层') -and
+    ((@($j2.same_subject_groups[0].shards) -join ',') -eq '1,2'))
+$j3 = Resolve-SplitJoin -Shards @(
+    @{ idx = 1; station = 'A'; rc = 0; subject = '路由层' },
+    @{ idx = 2; station = 'B'; rc = 0; subject = '' })
+Assert-True "O141-join⑥(★fail-closed 不变量): 有未声明 ⇒ status='undeclared'（**绝不许当作「无冲突」**）" (
+    ($j3.status -eq 'undeclared') -and ($j3.undeclared_count -eq 1) -and
+    ((@($j3.undeclared) | Select-Object -First 1) -eq '#2@B'))
+$stubJoinOk = { param($x) 'ok' }
+Assert-True "O141-join⑦(先验红·同源对照): 恒 ok 桩在 ⑥ 的输入上**必为假** ⇒ fail-closed 判据有对象" (
+    ((& $stubJoinOk $j3) -eq 'ok') -and ($j3.status -eq 'undeclared'))
+Assert-True "O141-join⑧(接线·主控侧): SPLIT_JOIN 恰一处打印 + join.json 恰一处写盘 + Resolve-SplitJoin 恰一处真调用" (
+    ([regex]::Matches($content, [regex]::Escape('Write-Host $jline')).Count -eq 1) -and
+    ([regex]::Matches($content, [regex]::Escape("Join-Path `$mergedDir 'join.json'")).Count -eq 1) -and
+    ([regex]::Matches($content, [regex]::Escape('$join = Resolve-SplitJoin -Shards $joinRows')).Count -eq 1) -and
+    $content.Contains('SPLIT_JOIN: n='))
+Assert-True "O141-join⑨(接线·片卡声明): 分片卡生成处用了 Expand-DecomposeSubject（恰一处）且 subject 落进片卡文本" (
+    ([regex]::Matches($content, [regex]::Escape('$shardSpec = Expand-DecomposeSubject $shardBody')).Count -eq 1) -and
+    $content.Contains('声明主体（subject）=「'))
 
 # --- ★★ O-151 (2026-10-07): `http-local` 判官的**常规路径 = 站上直发**（消掉手工 SSH 隧道）-----
 #   由来：首次 `sem_verified` 靠**手工 SSH 隧道 + 手设 REVIEW_HTTP_BASE**（非常规 ⇒ 不可重复）。

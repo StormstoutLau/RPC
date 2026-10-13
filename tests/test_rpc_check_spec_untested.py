@@ -237,8 +237,23 @@ def test_triage_repo_end_to_end():
 
     # ── 先验红·同源对照：注入「待裁」⇒ 点名数必须增加（防"恒 0"假绿）──────────────
     ids = {r0.get("id") for r0 in rows}
-    target = next((r for it in items for r in (it.get("refs") or [])
-                   if isinstance(r, str) and r not in pending and r in ids), None)
+    # ★ 2026-10-13 修（**断言假设收窄**，非实现回归）：旧版取"第一个不在 pending 的 ref"，
+    #   隐含前提 = 该 ref 所属条目**尚未**被点名；实测 2026-10-13 `O-136` 行落入「待裁」
+    #   ⇒ `CONTRACT #1` 已被 `O-136` 点名，而其 `refs` 里第一个"干净"ref 是 `O-145`
+    #   ⇒ 注入 `O-145` 不会新增点名（该条**已**计数）⇒ 旧断言当场假红。
+    #   ⇒ 目标选择改为**按条目**：挑一个「`refs` 与 pending 无交 且 含实存 id」的条目，
+    #     注入其某个 ref ⇒ 该条目**必从 0 变 1** ⇒ "必须增加"仍成立（先验红有对象）。
+    target = None
+    for it in items:
+        if it.get("needs_decision") is True:
+            continue
+        refs = [r for r in (it.get("refs") or []) if isinstance(r, str)]
+        if any(r in pending for r in refs):
+            continue                      # 已点名 ⇒ 注入它不会增加（旧版的坑）
+        cand = next((r for r in refs if r in ids), None)
+        if cand:
+            target = cand
+            break
     assert target, "★ 索引 `refs` 至少要引用一个**不被**台账标「待裁」的实存行（否则本先验红没有对象）"
     rows2 = []
     for r0 in rows:
