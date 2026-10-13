@@ -191,6 +191,12 @@ $Script:EV_FILES = @(
     @{ name = '.executor-trace.txt';       pull = 'batch' },
     @{ name = '.attach-manifest.txt';      pull = 'batch' },
     @{ name = '.session-meta.txt';         pull = 'batch' },
+    # ★★ O-136 ① (2026-10-12): D7 站上**相流水**（追加式）—— `claimed`/`executing` 两契约相的**归档证据**
+    #   （消契约 §未实测 2「跑过这两个词不可证」那半；设计与取证见 docs/2026-10-12_D7未闭环P0_O-136闭合链_设计与实施方案.md）。
+    #   ⚠ **它是什么 / 不是什么**（防误读）：① 它是**站上自述史**（遥测/证据件，同 `.progress` 族）；
+    #     **不是**相序列真值源（真值仍在主控 `Resolve-D7PhaseChain`）；② **不是判据**（不进 `d7_block`、不阻断）；
+    #     ③ **不是信封**（无三信封语义 ⇒ 不触「不新增信封件」裁【甲】）。
+    @{ name = '.d7-phases.txt';            pull = 'batch' },
     @{ name = '.agent-output.txt';         pull = 'scp' },
     @{ name = '.accept-output.txt';        pull = 'scp' },
     @{ name = '.accept-golden-output.txt'; pull = 'scp' }
@@ -1226,6 +1232,9 @@ function Get-FrontMatter {
     #   本阶段只做"声明 + 落 run.json"(原文照收, 不规范化 —— ADR-0005 D2 纪律); 复验侧
     #   由复验器按 run.json 声明的 subjects 走 recipe v2 (recipe 已按条目分派, 无需重建链)。
     $h['evidence-manifest'] = @{ version = ''; subjects = @() }
+    # ★★ 2026-10-13（P0 尾款 · D2）：`evidence-budget` —— 卡的**事前预算**声明（附加式、可缺省）。
+    #   缺省 ⇒ `anchors=$null` ⇒ `New-TaskContract` 如实进 `gaps`（未声明卡照报，不静默）。
+    $h['evidence-budget'] = @{ anchors = $null; tool_calls = $null }
     # O-90 (2026-09-26): require-gate —— **流程前置**：卡声明"派发前哪道门禁必须过"。
     #   默认空 = 不要求（向后兼容：存量卡一个都不带它 ⇒ 行为不变）。
     #   ⚠ 必须登记进本白名单 —— 本函数是**白名单解析**（未知键被静默丢弃），
@@ -1259,6 +1268,11 @@ function Get-FrontMatter {
         elseif ($inFreq -and $curKey -eq 'accept-golden' -and $l -match '^\s{2,}(source|cmd)\s*:\s*(.+)$') {
             $h['accept-golden'][$matches[1].ToLower()] = $matches[2].Trim()
         }
+        # ★★ 2026-10-13（P0 尾款 · D2）：`evidence-budget` 二级嵌套 —— 同 accept-golden 先例
+        #   （必须排在通用键正则**之前**；只收 `\d+`，非法值保持 $null ⇒ **如实进 gaps**，不猜数）
+        elseif ($inFreq -and $curKey -eq 'evidence-budget' -and $l -match '^\s{2,}(anchors|tool_calls)\s*:\s*(\d+)\s*$') {
+            $h['evidence-budget'][$matches[1].ToLower()] = [int]$matches[2]
+        }
         # ADR-0007 阶段 1: evidence-manifest 三级嵌套。**必须整体排在通用键正则之前** ——
         #   通用分支 `^\s*([A-Za-z_\-]+)\s*:` 允许前导空白, 且 `evidence-manifest` 含 `-` 亦在其
         #   字符类内 ⇒ 若落到通用分支, 会因 ContainsKey 命中而 `$h[$k] = $v`(**空串覆盖**整个
@@ -1286,6 +1300,7 @@ function Get-FrontMatter {
                 if ($k -eq 'accept') { $curKey = 'accept' }
                 elseif ($k -eq 'accept-golden') { $curKey = 'accept-golden' }   # O-12: enter nested object mode
                 elseif ($k -eq 'decompose') { $curKey = 'decompose' }          # O-26: ordered shard list mode
+                elseif ($k -eq 'evidence-budget') { $curKey = 'evidence-budget' }  # P0 尾款(D2): nested budget
                 else { $h[$k] = $v }
             }
         }
@@ -1363,28 +1378,38 @@ function New-TaskContract {
     #   而红线 3「判据与 golden 哈希在 **P0 固化**」正需要它 ⇒ **P0 就是固化点**：
     #   判据文本 → 哈希，随契约定格（此后改判据 ⇒ 哈希变 ⇒ 可判"判据被事后改过"）。
     # ⚠⚠ **如实（不冒充当已具备）**：下列字段本仓**当前不提供真值** ⇒ 填空并登记进 `gaps`：
-    #   · `evidence_budget{anchors,tool_calls}` —— 摘要自己承认"无既有经验值可依"，本仓无此读数；
+    #   · `evidence_budget{anchors,tool_calls}` —— ★★ 2026-10-13（P0 尾款 · D2）：**卡面 `evidence-budget:` 声明**
+    #     （附加式；缺省 ⇒ 仍如实进 gaps —— 未声明卡照报，不静默）；
     #   · `constraints`（统一禁止项清单）—— 本仓**没有**统一清单，由 `sensitivity`/`readonly`/
     #     `attach-egress` 三字段**分散承载**（调研 §3.3）；⚠ **不把三字段塞进 `constraints`** ——
     #     那是**发明结构**（把"分散声明"说成"统一禁止项清单"）；
-    #   · `golden.checksum` —— 本仓不预存金标哈希（运行期由 `accept-golden.cmd` 现算）。
+    #   · `golden.checksum` —— ★★ 2026-10-13（P0 尾款 · D1）：**P0 即固化**（call-site 算 source 文件哈希，
+    #     经 `-GoldenChecksum` 传入）；gap 条件 = **有 golden 而未解析出**（无 golden ⇒ 不适用，不再永报）。
     #   ★ 判据只判"**键在不在**"（A 段 §1.5 的射程）⇒ 它们会**通过**；`gaps` 是给**读的人**看的
     #     "这些值不是真值" ⇒ **不制造假绿**（没有假装有值）。
-    param($Fm, $CardId)
+    param($Fm, $CardId, [string]$GoldenChecksum = '')
     $acc = @()
     foreach ($c in @($Fm['accept'])) {
         $t = ([string]$c).Trim()
         if (-not $t) { continue }
         $acc += [ordered]@{ criteria = $t; criteria_hash = ("sha256:" + (Get-Sha256Text $t)) }
     }
-    $goldenRef = [string]$Fm['accept-golden']['source']
+    # ⚠ PS 5.1：`$Fm['k']['sub']` 链式索引在**缺键**的 `$Fm` 上会抛（`$null['sub']` = "Cannot index into a null array"）
+    #   ⇒ 二级键一律**先取一级、判空再取**（夹具/第三方调用方的 `$Fm` 不保证带齐种子键）。
+    $gFm = $Fm['accept-golden']
+    $goldenRef = ''; $goldenCmd = ''
+    if ($gFm) { $goldenRef = [string]$gFm['source']; $goldenCmd = [string]$gFm['cmd'] }
+    $goldenActive = [bool]($goldenRef -and $goldenCmd)
+    $ebFm = $Fm['evidence-budget']
+    $ebAnchors = $null; $ebToolCalls = $null
+    if ($ebFm) { $ebAnchors = $ebFm['anchors']; $ebToolCalls = $ebFm['tool_calls'] }
     $tc = [ordered]@{
         task_id         = [string]$CardId['sha256']
         task_desc       = [string]$Fm['task']
         accept          = $acc
-        golden          = [ordered]@{ ref = $goldenRef; checksum = '' }
+        golden          = [ordered]@{ ref = $goldenRef; checksum = [string]$GoldenChecksum }
         inputs          = [ordered]@{ ref = 'card.md'; digest = [string]$CardId['sha256'] }
-        evidence_budget = [ordered]@{ anchors = $null; tool_calls = $null }
+        evidence_budget = [ordered]@{ anchors = $ebAnchors; tool_calls = $ebToolCalls }
         constraints     = $null
         timeout_s       = [int]$Fm['timeout_s']
         sensitivity     = [string]$Fm['sensitivity']
@@ -1394,7 +1419,7 @@ function New-TaskContract {
     $gaps = @()
     if ($null -eq $tc['evidence_budget']['anchors']) { $gaps += 'evidence_budget' }
     if ($null -eq $tc['constraints'])                { $gaps += 'constraints' }
-    if (-not $tc['golden']['checksum'])              { $gaps += 'golden.checksum' }
+    if ($goldenActive -and (-not $tc['golden']['checksum'])) { $gaps += 'golden.checksum' }
     return @{ contract = $tc; gaps = $gaps }
 }
 
@@ -1483,7 +1508,11 @@ function Write-D7Report {
         Write-Host ("D7_" + $Tag + "_OK: " + $Kind + " 信封字段级合法")
     }
     elseif ($r['code'] -eq 1) {
-        Write-Host ("D7_" + $Tag + "_REJECT: " + $r['line'] + " ⇒ **灰度期：不阻断**（判据已接线）")
+        # ★★ 2026-10-13 裁 A-甲：**打印须与"是否已转硬拒"同源**（否则对已转的信封仍印"灰度期：不阻断" = 文本在说谎）。
+        $hard = Resolve-D7HardReject -Tag $Tag
+        Write-Host ("D7_" + $Tag + "_REJECT: " + $r['line'] + $(if ($hard) {
+            " ⇒ **转硬拒**（裁 A-甲 2026-10-13）：调用方将**拒派发 / 拒收**"
+        } else { " ⇒ **灰度期：不阻断**（判据已接线；★ 是否转由 `Resolve-D7HardReject` 定 —— 若该信封 `open` **已清空而此处仍未阻断**，= 其**动作面待定**，见契约 §1.6）" }))
     }
     else {
         Write-Host ("D7_" + $Tag + "_UNDECIDABLE: 判据**跑不起来**（exit=" + $r['code'] +
@@ -1524,8 +1553,13 @@ function New-RunReport {
     # ★★ **本函数【刻意不含】`verdict`** —— 契约 §1.1 的 ★：「`RunReport` 刻意不含 verdict 字段
     #   ⇒ **产出方不得自评**」：这份信封由**产出方**（工作站）写，而完成信号权在主控站（红线 1）。
     # ⚠ 如实（不冒充当已具备）：下列字段本仓**当前无对应读数** ⇒ 填空并进 `gaps`：
-    #   · `attempt`（本仓无 attempt 计数）· `decisions[]`（摘要只说"八字段"，本仓无此产出）
-    #   · `evidence[]`（协议指**锚点** E1–E4；本仓锚点在**审计报告**里，不在 run 产出侧）。
+    #   · `decisions[]`（摘要只说"八字段"，本仓无此产出 —— 空表 + 仍进 gaps，见下方"填空形态"段）。
+    # ★★ 2026-10-13（P0 尾款 · D4/D3）：`attempt` / `evidence[]` **已接线**（本地映射写进契约 §1.6）：
+    #   · `attempt` ← 站上 `.meta` 的 `RESUME_ATTEMPTS`（**续跑次数**）**+1** = 该 run 的**执行尝试数**
+    #     （★ 首跑成功 ⇒ `RESUME_ATTEMPTS=0` ⇒ 尝试数 = **1**；⚠ 本仓的 `CONT_ATTEMPT` 计的是**续跑**不是尝试
+    #      —— 首确认真跑曾按"直接用 0"误报，见 2026-10-13 记）；**缺读数 ⇒ `$null` ⇒ 仍报**；
+    #   · `evidence[]` ← 首批只放**已有真值**的一件：`{anchor:'agent-output.txt', digest: content_digest}`
+    #     （泛化留白——更多件/更多锚类型 = 新批；**不发明结构**）。
     # ★★ **"填空"的形态 = 空列表，不是 `null`** —— C 段首次真跑实测（2026-10-01）：`decisions=$null`
     #   被判据**当场拒**（`RunReport.decisions 必须是列表`，值类型在射程内）⇒ P3 信封**每次真跑都红**。
     #   ⇒ 与 `New-Verdict` 的既有先例**同一处置**：**空数组 + 仍进 `gaps`**（"类型合规"与"不是真值"
@@ -1533,16 +1567,20 @@ function New-RunReport {
     # ⚠ **映射是本地选择**（摘要没给"哪个字段对哪个"）⇒ 已写进契约 §1.6，免得下次另发明一套：
     #   `run_id` ← `task_id`（本仓 run 的既有标识）· `artifact.digest` ← `content_digest` ·
     #   `artifact.size` ← `output_bytes` · `inputs_digest` ← `card.sha256`（卡 = 最大的注入物）。
-    param($Run, [string]$RunDir = '')
+    param($Run, [string]$RunDir = '', [int]$Attempt = 0)
     $rr = [ordered]@{
         run_id        = [string]$Run['task_id']
-        attempt       = $null
+        attempt       = $(if ($Attempt -ge 1) { $Attempt } else { $null })
         artifact      = [ordered]@{ digest = [string]$Run['content_digest']; size = [int]$Run['output_bytes'] }
         inputs_digest = [string]$Run['card']['sha256']
         exit_code     = [int]$Run['exit_code']
         decisions     = @()
         evidence      = @()
         usage         = $Run['usage']
+    }
+    # ★★ D3（P0 尾款）：`evidence[]` —— 只放**已有真值**的件（post-assign 避开 [ordered] 单元素摊平坑）
+    if ([string]$Run['content_digest']) {
+        $rr['evidence'] = @(@{ anchor = 'agent-output.txt'; digest = [string]$Run['content_digest'] })
     }
     $gaps = @()
     if ($null -eq $rr['attempt'])       { $gaps += 'attempt' }
@@ -1617,7 +1655,11 @@ $Script:D7_GAP_CLASS = [ordered]@{
     'evidence'        = 'open'       # 锚点在审计报告侧 ⇒ 要接线到 run 产出侧
     'artifact.digest' = 'open'
     # Verdict
-    'seq'             = 'open'       # ★ 裁①乙（2026-10-07）：语义已定（快照 ⇒ 恒 1），但仍是"本仓本地裁定、非上游给定" ⇒ 留在 open
+    'seq'             = 'boundary'   # ★★ 2026-10-13 裁【甲】（A/B 二裁之 B，配套 A-甲）：由 'open' 改判 'boundary' ——
+                                     #   理由：裁①乙已定"仍进 gaps"（不谎称上游真值）⇒ 无上游真值可补、且"不补"是刻意的
+                                     #   ⇒ 属"设计上不补"，与 boundary 定义逐字同性质（此前归 open = **标签与事实冲突**，
+                                     #   曾使 VD 的"转硬拒"门槛**按构造不可达**）。行为零变化（gaps/报数不变，仅分类串变）。
+                                     #   裁前对照（二方案 × 多维 + 反证条件）见 docs/2026-10-12_D7未闭环P0_O-136闭合链_设计与实施方案.md §7.2。
     'l1_results'      = 'open'
 }
 
@@ -1635,6 +1677,25 @@ function Split-D7Gaps {
         else                         { $unk += $k }
     }
     return @{ open = @($open); boundary = @($bd); unknown = @($unk) }
+}
+
+function Resolve-D7HardReject {
+    # ── ★★ 2026-10-13（裁 A-甲 · 用户「按照建议执行」）：**"转硬拒"的按信封开关 —— 唯一开关点** ──
+    # 依据 = 契约 §1.6「各相从'灰度'转'硬拒'的条件 = 对应信封 `gaps` 的 **`open` 桶清空**」
+    #   + 方案 §7.1（甲：按信封分批，`open` 清空即转；本裁即总授权，不再逐次裁）。
+    # 现状（写死在此，免得下次各判一次）：
+    #   · `VERDICT`   = **$true**（已转，2026-10-13 上午）—— `seq` 归类改判 `boundary`（B 裁）后其 `open` 桶
+    #       在常规 review 下为空（`l1_results` 恒在场）；判据拒 ⇒ **拒收**（调用方 `return 3`，不写 review.json）。
+    #   · `CONTRACT`  = **$true**（已转，2026-10-13 晚 · P0 尾款）—— 四清空后 `open=[]`（确认真跑见 §1.6/O-136）；
+    #       判据拒 ⇒ **拒派发**（调用方 `return 3`，P0 块内、派发动作之前）。
+    #   · `RUNREPORT` = **$true**（已转，2026-10-13 晚 · P0 尾款「另起一件」）—— 清空达成后按契约
+    #       §1.6 写死的动作面 `return 3`；落点 = **主/备两路**各自的 `.agent-run.json` **写盘之前**
+    #       （⇒ "拒收" = 该 run 记录**不落盘**，与 VD 同形）；★ 正向实弹见 §1.6/O-136。
+    # ⚠ **本函数 = 唯一开关点**：调用方只问它，**不许**各自判码表/各自持一份名单（防"同一事实两处表达"）。
+    # ⚠ 纯函数（只吃 Tag）⇒ 可离线单测（夹具 `b3㊾`）。
+    param([string]$Tag)
+    $hard = @{ 'CONTRACT' = $true; 'RUNREPORT' = $true; 'VERDICT' = $true }
+    return [bool]$hard[$Tag]
 }
 
 function Get-D7Adjudication {
@@ -1804,6 +1865,11 @@ function Get-FrameworkSubjects($accept, [bool]$goldenActive) {
         @{ name = 'executor-trace';  path = 'executor-trace.txt' }
         @{ name = 'card';            path = 'card.md' }
         @{ name = 'review';          path = 'review.json'; ephemeral = $true }
+        # ★ O-136 ① (2026-10-12): D7 站上**相流水** —— **ephemeral**（同 `review` 的第三态"可合法缺席"）：
+        #   早失败路径（锁未取到 / body 前中断）可能不产出该件 ⇒ 裸列会让这些 run 假报 `missing-artifact`
+        #   （同 `accept-cmds`/`golden-cmd` 的教训）；正常路径**无条件产出**（三写点均 best-effort）。
+        #   ⚠ 它**不是判据**、**不入链**（见 `EV_FILES` 表注释）；此处只做"归档件 ↔ subjects"的对账声明。
+        @{ name = 'd7-phases';       path = 'd7-phases.txt'; ephemeral = $true }
     )
     $hasAccept = $false
     foreach ($a in @($accept)) { if ("$a".Trim()) { $hasAccept = $true } }
@@ -2315,9 +2381,23 @@ function Invoke-Task {
     #   ★ 落 `.agent-run.json` **不破** `l1.record_sha256`：键是在 run **写盘时一并落**的
     #     ⇒ 它本来就是 run 的**原始字节**（⚠ 与 `O-139` 排除的"**事后**再写"**不是一回事**）。
     $d7t = [ordered]@{}
-    $d7tc = New-TaskContract -Fm $fm -CardId $cardId
+    # ★★ 2026-10-13（P0 尾款 · D1）：golden 哈希**在 P0 固化**（红线 3）—— `source` 当文件路径解析，
+    #   可及 ⇒ `Get-FileHash`；无 golden / 不可及 ⇒ 空串（有 golden 而不可及 ⇒ 如实仍进 gaps）。
+    $d7GoldenSha = ''
+    $d7Gsrc = [string]$fm['accept-golden']['source']
+    if ($d7Gsrc -and $fm['accept-golden']['cmd'] -and (Test-Path -LiteralPath $d7Gsrc)) {
+        $d7GoldenSha = "sha256:" + (Get-FileHash -LiteralPath $d7Gsrc -Algorithm SHA256).Hash.ToLower()
+    }
+    $d7tc = New-TaskContract -Fm $fm -CardId $cardId -GoldenChecksum $d7GoldenSha
     Write-D7Report -Kind 'TaskContract' -Obj $d7tc['contract'] -Gaps $d7tc['gaps'] -Tag 'CONTRACT' -Card $card `
                    -GuardSink $d7t
+    # ★★ 2026-10-13（P0 尾款 · 裁 A-甲 转硬拒·首例）：`CONTRACT` 的 `open` 桶已清空 ⇒ **已转** ——
+    #   信封判据拒（`CONTRACT.envelope`=1）⇒ **拒派发**（`return 3`；本块在**派发动作之前**）。
+    #   条件 = 唯一开关点 `Resolve-D7HardReject` ∧ sink 实读（必须在 `Write-D7Report` 之后 —— 同 d7_guard"跑过才可读"）。
+    if ((Resolve-D7HardReject -Tag 'CONTRACT') -and ([int]$d7t['CONTRACT.envelope'] -eq 1)) {
+        Write-Host "D7_CONTRACT_REJECT_HARD: TaskContract 信封判据拒 ⇒ **拒派发**（裁 A-甲 2026-10-13）[exit 3]"
+        return 3
+    }
     # A1 / ADR-0009 §2 (2026-09-29): **派发前**对三条判据求值（纯函数，无副作用）⇒ 层级归属落 run.json。
     #   为什么求值点选这里：与 `require-gate` 同处"流程前置" —— 三键**全部来自卡**（派发方在派发前、
     #   受理方在受理阶段写入）⇒ 此刻即可算出，**不依赖任何运行结果**（这正是 ADR-0009 §机制原理 的要害：
@@ -2850,6 +2930,9 @@ echo "ACCEPT_GOLDEN_OK=`$ACCEPT_GOLDEN_OK"
     #   不引入新的远端变量 —— 少一个"两边名字必须对齐"的耦合点。
     $goldenHint = if ($goldenActive) { '1' } else { '0' }
     # B3: P2 状态名 + 活跃态谓词（唯一真值 = 上面的 `$Script:STATE_*`；同样走朴素局部名）
+    # ★ O-136 ① (2026-10-12): P1 状态名同款捕获 —— 供**相流水**三写点之一（claimed）用；
+    #   唯一真值仍是 `$Script:STATE_CLAIMED`（不在 body 里另抄词）。
+    $stClaimed   = $Script:STATE_CLAIMED
     $stExecuting = $Script:STATE_EXECUTING
     $activeEre   = $Script:STATE_ACTIVE_ERE
     $body = @"
@@ -2917,6 +3000,8 @@ if ! flock `$LOCK_FLAGS -n 9; then
   exit 3
 fi
 echo "LOCK_ACQUIRED pid=`$$ mode=`$( [ -n "`$LOCK_FLAGS" ] && echo shared || echo exclusive )"
+# ★ O-136 ① (2026-10-12): P1 领取（契约相）落**相流水**（追加式；best-effort —— 遥测/证据件不参与成败判定）。
+printf '{"phase":"%s","pid":%d,"ts":"%s","task_id":"%s","host":"agent-cli"}\n' "$stClaimed" "`$$" "`$(date -Is)" "$ts" >> "`$W/out/.d7-phases.txt`$EV_SUF" 2>/dev/null || true
 # ── O-59/T1 (2026-09-25): **落盘段 —— 必须在锁内** ──────────────────────────────────────────
 # 为什么放这里(三个理由, 缺一即错):
 #   ① 本段要**重置** ``.attach``/``.golden``(共享面) ⇒ 必须**已持锁**(见上面 ``$flockShared`` 的危险面判据);
@@ -2935,6 +3020,8 @@ fi
 rm -rf "`$STAGE"
 Q0=`$(date +%s%N)
 printf '{"state":"$stExecuting","pid":%d,"ts_start":"%s","task_id":"%s","host":"agent-cli"}' "`$$" "`$(date -Is)" "$ts" > "`$S"
+# ★ O-136 ① (2026-10-12): P2 执行（契约相）落**相流水**（同款 best-effort）。
+printf '{"phase":"%s","pid":%d,"ts":"%s","task_id":"%s","host":"agent-cli"}\n' "$stExecuting" "`$$" "`$(date -Is)" "$ts" >> "`$W/out/.d7-phases.txt`$EV_SUF" 2>/dev/null || true
 sleep 2   # artificial intake gap (BP-4: makes queue_s measurable on contention holder)
 printf '%s' "$promptB64" | base64 -d > "`$W/out/.prompt.txt`$EV_SUF"
 echo "PIPE_STDIN_OK"
@@ -3125,6 +3212,8 @@ fi
 ST=done; RN=0
 [ "`$RC" -ne 0 ] && { ST=failed; RN=1; }
 printf '{"state":"%s","pid":%d,"ts_start":"%s","task_id":"%s","host":"agent-cli"}' "`$ST" "`$$" "`$(date -Is)" "$ts" > "`$S"
+# ★ O-136 ① (2026-10-12): 终态落**相流水** —— ⚠ ``done``/``failed`` 是**生命周期词**（非契约相、**非** D7 终态 ⇒ 红线 1 不触）。
+printf '{"phase":"%s","pid":%d,"ts":"%s","task_id":"%s","host":"agent-cli"}\n' "`$ST" "`$$" "`$(date -Is)" "$ts" >> "`$W/out/.d7-phases.txt`$EV_SUF" 2>/dev/null || true
 QUEUE=`$(( (R0-Q0)/1000000000 ))    # P2-1: queue = lock wait + intake (sleep 2 => ~2s)
 RUNS=`$(( (R1-R0)/1000000000 ))      # P2-1: run = agent generation wall time
 echo "QUEUE_S=`$QUEUE"
@@ -3141,7 +3230,7 @@ if { [ "`$GOLDEN_ACTIVE" -eq 1 ] && [ "`$ACCEPT_GOLDEN_OK" -ne 1 ]; } \
 echo "TASK_RC=`$FINAL_RC"
 echo "ACCEPT_OK=`$ACCEPT_OK"
 echo "OUT_BYTES=`$(wc -c < "`$W/out/.agent-output.txt`$EV_SUF" 2>/dev/null)"
-printf 'TASK_ID=%s\nQUEUE_S=%s\nRUN_S=%s\nTASK_RC=%s\nRC_DOMAIN=v2\nACCEPT_OK=%s\nACCEPT_GOLDEN_OK=%s\nREVIEW_NEEDED=%s\nLOOP_DETECTED=%s\n' "$ts" "`$QUEUE" "`$RUNS" "`$FINAL_RC" "`$ACCEPT_OK" "`$ACCEPT_GOLDEN_OK" "`$RN" "`$LOOP_DETECTED" > "`$W/out/.meta`$EV_SUF"
+printf 'TASK_ID=%s\nQUEUE_S=%s\nRUN_S=%s\nTASK_RC=%s\nRC_DOMAIN=v2\nACCEPT_OK=%s\nACCEPT_GOLDEN_OK=%s\nREVIEW_NEEDED=%s\nLOOP_DETECTED=%s\nRESUME_ATTEMPTS=%s\n' "$ts" "`$QUEUE" "`$RUNS" "`$FINAL_RC" "`$ACCEPT_OK" "`$ACCEPT_GOLDEN_OK" "`$RN" "`$LOOP_DETECTED" "`$CONT_ATTEMPT" > "`$W/out/.meta`$EV_SUF"
 # task succeeds only if agent ok AND (golden active -> golden ok) AND (no accept criteria OR accept all pass)
 # O-12 P3-1: exit 9 reused for BOTH golden-fail and self-accept-fail (deliberate; run.json
 # accept_golden.passed / accept.passed disambiguate at contract layer - IMPLEMENTATION §6.2)
@@ -3243,7 +3332,7 @@ exit `$FINAL_RC
         try { scp -q -o BatchMode=yes -o ConnectTimeout=10 "${hostName}:$W/out/.accept-golden-output.txt$evSuf" "$accGoldTxt" 2>$null }
         catch { $accGoldTxt = $null; Write-Host "(golden output absent - expected when TAMPERED/FAIL pre-write)" }
     }
-    $queue_s = 0; $run_s = 0; $accept_ok = $null; $accept_golden_ok = $null
+    $queue_s = 0; $run_s = 0; $accept_ok = $null; $accept_golden_ok = $null; $resumeAttempts = $null
     $metaTaskId = ''
     if (Test-Path $metaTxt) {
         $m = Get-Content $metaTxt | Out-String
@@ -3252,6 +3341,7 @@ exit `$FINAL_RC
         if ($m -match 'RUN_S=(\d+)')   { $run_s = [int]$matches[1] }      # P2-1: run_s now measured (R1-R0)
         if ($m -match 'ACCEPT_OK=(\d+)') { $accept_ok = [int]$matches[1] }
         if ($m -match 'ACCEPT_GOLDEN_OK=(\d+)') { $accept_golden_ok = [int]$matches[1] }   # O-12 M4
+        if ($m -match 'RESUME_ATTEMPTS=(\d+)') { $resumeAttempts = [int]$matches[1] }      # ★ P0 尾款(D4)
     }
     # meta stale guard (O-22): .meta is run-end snapshot; if meta TASK_ID != this run's ts
     # it is a previous run leftover -> annotate (queue/run numbers untrusted), never claimed as live.
@@ -3266,6 +3356,7 @@ exit `$FINAL_RC
         $evStale = $true
         $queue_s = 0; $run_s = 0
         $accept_ok = $null; $accept_golden_ok = $null
+        $resumeAttempts = $null   # ★ P0 尾款(D4): 陈旧 meta 的 RESUME_ATTEMPTS 同属"上一轮残留" ⇒ 一并置空
     }
     $contentSha = ''
     $agentOutText = ''
@@ -3520,11 +3611,18 @@ exit `$FINAL_RC
             #   ⚠ 本块在**归零纪律**内 ⇒ 调用一律 `| Out-Null`（不许有对象混进返回值）。
             # ★★ 2026-10-01 **顺序承重**（同 `O-139`）：P3 报数**必须挪到写盘之前** ——
             #   否则 `RUNREPORT.*` 那两码**赶不上这次写盘**（review 侧首版就是这么错的）。
-            $d7rr = New-RunReport -Run $run -RunDir $runDir
+            $d7rr = New-RunReport -Run $run -RunDir $runDir -Attempt $(if ($null -ne $resumeAttempts) { $resumeAttempts + 1 } else { 0 })
             Write-D7Report -Kind 'RunReport' -Obj $d7rr['report'] -Gaps $d7rr['gaps'] -Tag 'RUNREPORT' -Card $card `
                            -GuardSink $d7t | Out-Null
             # ★ task 侧报数落点（与 review 侧同款"跑过才加"；此处 sink 至少含 P0 与 `I1` ⇒ 必非空）
             if ($d7t.Count -gt 0) { $run['d7_guard'] = $d7t }
+            # ★★ 2026-10-13 晚（P0 尾款「另起一件」）：`RUNREPORT` 已转硬拒 —— 信封判据拒 ⇒ **拒收**
+            #   （`return 3` = 该 run 记录**不落盘**；落点在下一行写盘**之前** ⇒ 与 VD 同形）。
+            #   条件 = 唯一开关点 `Resolve-D7HardReject` ∧ sink 实读（必须在 `Write-D7Report` 之后）。
+            if ((Resolve-D7HardReject -Tag 'RUNREPORT') -and ([int]$d7t['RUNREPORT.envelope'] -eq 1)) {
+                Write-Host "D7_RUNREPORT_REJECT_HARD: RunReport 信封判据拒 ⇒ **拒收**（裁 A-甲 · P0 尾款 2026-10-13）[exit 3]"
+                return 3
+            }
             $run | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $runDir '.agent-run.json') -Encoding utf8
             # move pulled output into runDir
             if (Test-Path $outTxt) { Move-Item $outTxt (Join-Path $runDir 'agent-output.txt') -Force | Out-Null }
@@ -3556,6 +3654,9 @@ exit `$FINAL_RC
             #   (解析若被误改, 可直接比对原件; 摘要未被链钉住 ⇒ 该上限同 attach-manifest, 见 ADR-0007)
             $smSrc = Join-Path $evDir '.session-meta.txt'
             if (Test-Path $smSrc) { Move-Item $smSrc (Join-Path $runDir 'session-meta.txt') -Force | Out-Null }
+            # ★ O-136 ① (2026-10-12): D7 站上**相流水**原件（追加式）—— **原文照收**（本件不入链、无 digest 需求）。
+            $phSrc = Join-Path $evDir '.d7-phases.txt'
+            if (Test-Path $phSrc) { Move-Item $phSrc (Join-Path $runDir 'd7-phases.txt') -Force | Out-Null }
             # O-40/A-1 (2026-09-24): **产物拉回** —— 卡声明的 `state`(站上相对工作区路径) 白名单 scp 到 runDir。
             #   path = runDir 落盘名(A-① 语义); state = 站上源位置; 有 state 的 subject 才触发远端拉取。
             #   ★ 安全(ADR-0007 红线, 记录见 OPEN-ISSUES O-45): **不执行** collect 命令, 只做受限 scp;
@@ -3758,6 +3859,50 @@ function Get-SplitDispatchPlan {
     }
 }
 
+function Expand-DecomposeSubject {
+    # ── ★★ 2026-10-13（P1 · `CONCLUSION #6` 兑现 · 载体【选项①】）─────────────────────────────
+    # 语义真值 = 结论契约 §6.2（五条定案）；本函数 = **唯一解析点**（同 `Get-SplitDispatchPlan` 同族：纯函数 ⇒ 可离线单测）。
+    # 形态：`subject=<X> | <task>`（前缀**可缺省** —— 附加式，存量卡零影响）。
+    #   · 有前缀 ⇒ @{ subject=<X>;  task=<task> }
+    #   · 无前缀（或没写 `|`）⇒ @{ subject=''; task=<原文> } ⇒ join 侧计「**未声明**」（fail-closed，见 Resolve-SplitJoin）
+    # ⚠ **不做任何归一/推断**（"这俩是不是同一件事"是**语义**判断 ⇒ 归声明面；`O-126` 禁阈值/相似度）。
+    param([string]$Item)
+    $s = [string]$Item
+    if (-not $s) { return @{ subject = ''; task = '' } }
+    $s2 = $s.Trim()
+    $m = [regex]::Match($s2, '^\s*subject\s*=\s*([^|]*?)\s*\|\s*(.+)$')
+    if ($m.Success) { return @{ subject = $m.Groups[1].Value.Trim(); task = $m.Groups[2].Value.Trim() } }
+    return @{ subject = ''; task = $s2 }
+}
+
+function Resolve-SplitJoin {
+    # ── ★★ 2026-10-13（P1 · `CONCLUSION #6` 兑现）：**跨片汇聚（join）判定核**（纯函数）──────
+    # 语义 = 结论契约 §6.2：**归并者 = 主控站**（本函数只在 `Invoke-SplitTask` 内被调 ⇒ 角色天然正确）·
+    #   片间**不共享锚点** ⇒ **不得借用 `Merge-JudgeFindings` 的锚点对齐**（§6.2-2 逐字）—— 本函数**只用声明式 `subject`**。
+    # ★★ **fail-closed 不变量（§6.2-4）**：`subject` 缺/未声明 ⇒ 报「未声明」，**绝不许**当作「无冲突」。
+    # ⚠ **禁任何阈值 / 相似度**（`O-126`）：只做**字符串全等**分组 + 计数，**不判"像不像"**。
+    # 输入：@( @{ idx; station; rc; subject } … )；`subject` 来自各片声明面（`decompose:` 条目经 `Expand-DecomposeSubject`）。
+    # 输出：@{ n; declared; undeclared[]; undeclared_count; same_subject_groups[]; status = 'undeclared'|'ok' }
+    #   · `same_subject_groups` = 同一 subject 下 **≥2 片** 的分组（= **潜在冲突，只报出**；谁对谁错属**领域语义**，契约 §6.2-3）。
+    param([object[]]$Shards)
+    $rows = @($Shards)
+    $und = @(); $bySub = [ordered]@{}
+    foreach ($r in $rows) {
+        $sub = [string]$r['subject']
+        if ([string]::IsNullOrWhiteSpace($sub)) { $und += ('#' + [string]$r['idx'] + '@' + [string]$r['station']); continue }
+        if (-not $bySub.Contains($sub)) { $bySub[$sub] = @() }
+        $bySub[$sub] += [int]$r['idx']
+    }
+    $groups = @()
+    foreach ($k in @($bySub.Keys)) {
+        if (@($bySub[$k]).Count -ge 2) { $groups += @{ subject = [string]$k; shards = @($bySub[$k]) } }
+    }
+    return @{
+        n = $rows.Count; declared = ($rows.Count - $und.Count); undeclared = @($und); undeclared_count = $und.Count
+        same_subject_groups = @($groups); status = $(if ($und.Count -gt 0) { 'undeclared' } else { 'ok' })
+    }
+}
+
 
 function Invoke-SplitTask {
     param(
@@ -3857,6 +4002,10 @@ function Invoke-SplitTask {
     for ($i = 0; $i -lt $shards.Count; $i++) {
         $station = $plan.assignments[$i]
         $shardBody = [string]$shards[$i]
+        # ★★ 2026-10-13（P1 · `#6` 载体①）：解析本片**声明**（`subject=<X> | <task>`）—— join 的唯一抓手；
+        #   ⚠ 声明面 = **卡（作者）**（机器可控面），**不是**产物自述 —— 该"理想形态 vs 本仓映射"已**明写**（契约 §6.3，`O-145` 同款）。
+        $shardSpec = Expand-DecomposeSubject $shardBody
+        $shardTask = if ($shardSpec.task) { $shardSpec.task } else { $shardBody }
         $subCard = Join-Path $subDir ("shard$($i+1).md")
         $lines = @()
         $lines += '---'
@@ -3880,13 +4029,18 @@ function Invoke-SplitTask {
         }
         $lines += '---'
         $lines += ''
-        $lines += "任务描述: (shard $($i+1)/$($shards.Count) of $cid) $shardBody"
+        $lines += "任务描述: (shard $($i+1)/$($shards.Count) of $cid) $shardTask"
         if ($fm['body']) {
             $lines += ''
             $lines += $fm['body']
         }
         $lines += ''
         $lines += "【分片约束】你是本大任务的第 $($i+1) 个分片（共 $($shards.Count) 个，并行在其他站执行）。只处理本分片描述的部分，不要越界处理其它分片内容；输出写到 out/ 下以你的分片标识命名的文件，避免与并行分片产物冲突。"
+        # ★★ 2026-10-13（P1 · `#6` 载体①）：**声明主体**随片卡下达（join 用**卡面声明**，不赌产物自述格式；
+        #   产物首行提示为**人/工具核对**用，**不进 accept** —— 不因 LLM 自由发挥而假红）。
+        if ($shardSpec.subject) {
+            $lines += "本片**声明主体（subject）=「$($shardSpec.subject)」**：你的结论只覆盖这个主体；与其他分片方向不同的面，请另行说明。产物首行请输出「SUBJECT: $($shardSpec.subject)」一行。"
+        }
         [System.IO.File]::WriteAllLines($subCard, $lines, (New-Object System.Text.UTF8Encoding $true))
         $shardFiles += $subCard
 
@@ -3946,7 +4100,28 @@ function Invoke-SplitTask {
     }
     [System.IO.File]::WriteAllLines($mergedTxt, $mergedBuf, (New-Object System.Text.UTF8Encoding $true))
 
-    Write-Host "SPLIT_DONE shards=$($shards.Count) all_ok=$allOk wall_ms=$([int]$wallMS) merged=$mergedTxt"
+    # ★★ 2026-10-13（P1 · `CONCLUSION #6` 兑现 · 载体①）：**主控侧 join —— 声明式汇聚**（契约 §6.2 五条）──────
+    #   归并者 = **主控站**（本段就跑在主控）· 只用**声明式 `subject`**（片间不共享锚点 ⇒ **不得**借锚点对齐）·
+    #   `subject` 缺 ⇒ 报「未声明」且**禁**读成"无冲突" · **禁阈值/相似度**（`O-126`）—— 判定核 = `Resolve-SplitJoin`（纯函数）。
+    $joinRows = @()
+    for ($i = 0; $i -lt $shards.Count; $i++) {
+        $joinRows += @{ idx = $i + 1; station = $plan.assignments[$i]; rc = [int]$results[$i].rc
+                        subject = (Expand-DecomposeSubject ([string]$shards[$i])).subject }
+    }
+    $join = Resolve-SplitJoin -Shards $joinRows
+    $joinFile = Join-Path $mergedDir 'join.json'
+    $join | ConvertTo-Json -Depth 6 | Set-Content $joinFile -Encoding utf8
+    $jline = "SPLIT_JOIN: n=$($join.n) declared=$($join.declared) undeclared=$($join.undeclared_count) status=$($join.status)"
+    if ($join.undeclared_count -gt 0) {
+        $jline += " · ⚠未声明 = [" + (@($join.undeclared) -join ', ') + "] ⇒ **不得读成「无冲突」**（契约 §6.2-4 fail-closed）"
+    }
+    if (@($join.same_subject_groups).Count -gt 0) {
+        $gs = (@($join.same_subject_groups) | ForEach-Object { $_.subject + "(shards " + (@($_.shards) -join ',') + ")" }) -join ' · '
+        $jline += " · 同主体组（**潜在冲突，只报出**；裁决属领域语义）= [" + $gs + "]"
+    }
+    Write-Host $jline
+
+    Write-Host "SPLIT_DONE shards=$($shards.Count) all_ok=$allOk wall_ms=$([int]$wallMS) merged=$mergedTxt join=$joinFile"
     if (-not $allOk) {
         Write-Host 'SPLIT_PARTIAL_FAIL - at least one shard exited non-zero; review per-shard logs'
         return 1
@@ -4520,6 +4695,13 @@ mkdir -p "$stWorkDir/.attach/$nm2"
                            -GuardSink $d7t | Out-Null
             # ★ task 侧报数落点（与主路**同一处置**；备路还带着 P0 传来的 `CONTRACT.*`）
             if ($d7t.Count -gt 0) { $run['d7_guard'] = $d7t }
+            # ★★ 2026-10-13 晚（P0 尾款「另起一件」）：`RUNREPORT` 已转硬拒 —— 信封判据拒 ⇒ **拒收**
+            #   （`return 3` = 该 run 记录**不落盘**；落点在下一行写盘**之前** ⇒ 与 VD 同形）。
+            #   条件 = 唯一开关点 `Resolve-D7HardReject` ∧ sink 实读（必须在 `Write-D7Report` 之后）。
+            if ((Resolve-D7HardReject -Tag 'RUNREPORT') -and ([int]$d7t['RUNREPORT.envelope'] -eq 1)) {
+                Write-Host "D7_RUNREPORT_REJECT_HARD: RunReport 信封判据拒 ⇒ **拒收**（裁 A-甲 · P0 尾款 2026-10-13）[exit 3]"
+                return 3
+            }
             $run | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $runDir '.agent-run.json') -Encoding utf8
             # ⚠ 归零纪律(见 Invoke-Task 内注): 本函数返回 `$finalCode`, 故以下副作用一律 `| Out-Null`。
             if (Test-Path $outTxt) { Copy-Item $outTxt (Join-Path $runDir 'agent-output.txt') -Force | Out-Null }
@@ -6007,6 +6189,12 @@ function Invoke-Review {
         $review['d7_verdict'] = Get-D7Adjudication -L1Section $l1Section -CcSection $ccSection `
             -ExitCode $callCode -L2Ran $false -Card $card -ExecHost ([string]$l1Record.exec_host) `
             -GuardSink $d7g
+        # ★★ 2026-10-13 裁 A-甲（VD 的 `open` 桶已清空 ⇒ **转硬拒**）：信封判据拒 ⇒ **拒收**（`return 3`，**不写盘**）。
+        #   条件 = 唯一开关点 `Resolve-D7HardReject` ∧ sink 实读（⚠ 必须在 `Get-D7Adjudication` **之后**读 —— 同 `d7_guard`"跑过才可读"）。
+        if ((Resolve-D7HardReject -Tag 'VERDICT') -and ([int]$d7g['VERDICT.envelope'] -eq 1)) {
+            Write-Host "D7_VERDICT_REJECT_HARD: Verdict 信封判据拒 ⇒ **拒收**（裁 A-甲 2026-10-13）[exit 3]"
+            return 3
+        }
         # ★★ 报数落点**必须在【填充它的那次调用之后】**（2026-10-01 真跑当场抓到：首版把这一行写在
         #   `Get-D7Adjudication` **之前** ⇒ 那时 sink 还是空的 ⇒ `Count -gt 0` 为假 ⇒ **什么都没落盘**，
         #   而夹具只**计数不判序** ⇒ **假绿**）。⇒ 同 `O-139` 的"**顺序承重**"家族；与 `blind` /
@@ -6108,6 +6296,13 @@ function Invoke-Review {
     $review['d7_verdict'] = Get-D7Adjudication -L1Section $l1Section -CcSection $ccSection `
         -ExitCode 0 -L2Ran $true -Card $card -ExecHost ([string]$l1Record.exec_host) `
         -GuardSink $d7g
+    # ★★ 2026-10-13 裁 A-甲（VD 的 `open` 桶已清空 ⇒ **转硬拒**）：信封判据拒 ⇒ **拒收**（`return 3`，**不写盘**）。
+    #   条件 = 唯一开关点 `Resolve-D7HardReject` ∧ sink 实读（⚠ 必须在 `Get-D7Adjudication` **之后**读 —— 同 `d7_guard`"跑过才可读"）。
+    #   ⚠ 本检查放在**写盘行之前** ⇒ "拒收"= **不落盘**（该次产物不被接受）。（夹具 `b3-51` 钉此顺序）
+    if ((Resolve-D7HardReject -Tag 'VERDICT') -and ([int]$d7g['VERDICT.envelope'] -eq 1)) {
+        Write-Host "D7_VERDICT_REJECT_HARD: Verdict 信封判据拒 ⇒ **拒收**（裁 A-甲 2026-10-13）[exit 3]"
+        return 3
+    }
     # ★ 报数落点**在填充它的调用之后**（顺序承重，同 `O-139`；与失败路**同一处置**）
     if ($d7g.Count -gt 0) { $review['d7_guard'] = $d7g }
     $review | ConvertTo-Json -Depth 8 | Set-Content $reviewPath -Encoding utf8
