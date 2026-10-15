@@ -40,6 +40,8 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 'Get-SplitDispatchPlan',
 # 2026-10-13 (P1 · `CONCLUSION #6` 兑现): join 的两个**纯函数** = 声明解析（唯一解析点）+ 汇聚判定核。
 'Expand-DecomposeSubject', 'Resolve-SplitJoin',
+# 2026-10-16（方案 `a`）：分片依赖声明 `needs=` 的**完整性校验核**（纯函数：吃声明数组 ⇒ 离线可单测）。
+'Resolve-SplitNeeds',
 # D7-P3-1 (2026-09-26): **不得自审**的判定本体（纯函数）。
 'Resolve-SelfReviewGuard',
 # D7-P3-2 (2026-09-26): **编排层 —— 谁审谁** 的选择器（纯函数）。
@@ -2728,6 +2730,79 @@ Assert-True "O141-join⑧(接线·主控侧): SPLIT_JOIN 恰一处打印 + join.
 Assert-True "O141-join⑨(接线·片卡声明): 分片卡生成处用了 Expand-DecomposeSubject（恰一处）且 subject 落进片卡文本" (
     ([regex]::Matches($content, [regex]::Escape('$shardSpec = Expand-DecomposeSubject $shardBody')).Count -eq 1) -and
     $content.Contains('声明主体（subject）=「'))
+
+# ══ 2026-10-16（方案 `a`）：分片依赖声明 `needs=` —— 解析扩展 + 完整性校验 + **接线顺序** ═══════════
+#   验证 §5.0 的"离线层"；"真跑层"见设计与实施方案 §5（另批真派发）。
+$n1 = Expand-DecomposeSubject 'subject=路由层 | needs=缓存层 | 分析 router 数据流'
+Assert-True "NEEDS①(解析): subject=/needs= 两前缀 ⇒ 三段正确切开" (
+    ($n1.subject -eq '路由层') -and ((@($n1.needs) -join ',') -eq '缓存层') -and ($n1.task -eq '分析 router 数据流'))
+$n2 = Expand-DecomposeSubject 'needs=缓存层 | 只写 needs 不写 subject'
+Assert-True "NEEDS②(解析·附加式): 只带 needs ⇒ subject 空、needs 有值、task 保留原文" (
+    ($n2.subject -eq '') -and ((@($n2.needs) -join ',') -eq '缓存层') -and ($n2.task -eq '只写 needs 不写 subject'))
+$n3 = Expand-DecomposeSubject 'subject=路由层 | 分析 router 数据流'
+Assert-True "★NEEDS③(向后兼容·逐字): 旧 `subject=X | task` ⇒ subject/task 与旧实现逐字相同 · needs 空" (
+    ($n3.subject -eq '路由层') -and ($n3.task -eq '分析 router 数据流') -and (@($n3.needs).Count -eq 0))
+$n4 = Expand-DecomposeSubject '分析日志格式'
+Assert-True "★NEEDS④(向后兼容·逐字): 裸字符串 ⇒ subject 空 · task 原文 · needs 空" (
+    ($n4.subject -eq '') -and ($n4.task -eq '分析日志格式') -and (@($n4.needs).Count -eq 0))
+$n5 = Expand-DecomposeSubject 'subject=A | subject=B | 任务'
+Assert-True "★NEEDS⑤(向后兼容·同键只解析一次): 第二个 `subject=` 归 task（保旧语义）" (
+    ($n5.subject -eq 'A') -and ($n5.task -eq 'subject=B | 任务'))
+$n6 = Expand-DecomposeSubject 'subject=A | A | B'
+Assert-True "★NEEDS⑥(向后兼容·task 含裸 `|`): task 里的 `|` 不失真（旧行为保留）" (
+    ($n6.subject -eq 'A') -and ($n6.task -eq 'A | B'))
+
+$k0 = Resolve-SplitNeeds -Decls @(
+    @{ idx = 1; station = 'A'; subject = '路由层'; needs = @() },
+    @{ idx = 2; station = 'B'; subject = '缓存层'; needs = @('路由层') })
+Assert-True "NEEDS⑦(校验·正例): 引用可达 ⇒ ok · with_needs=1 · 恰一条边" (
+    ($k0.ok) -and ($k0.n_with_needs -eq 1) -and (@($k0.edges).Count -eq 1) -and ($k0.status -eq 'ok'))
+$k1 = Resolve-SplitNeeds -Decls @(
+    @{ idx = 1; station = 'A'; subject = '路由层'; needs = @() },
+    @{ idx = 2; station = 'B'; subject = '缓存层'; needs = @('不存在的主体') })
+Assert-True "NEEDS⑧(校验·★反例 悬空): 引用未声明主体 ⇒ !ok · dangling 恰 1" (
+    (-not $k1.ok) -and (@($k1.dangling).Count -eq 1) -and ($k1.status -eq 'bad'))
+$k2 = Resolve-SplitNeeds -Decls @(
+    @{ idx = 1; station = 'A'; subject = '路由层'; needs = @('路由层') },
+    @{ idx = 2; station = 'B'; subject = '缓存层'; needs = @() })
+Assert-True "NEEDS⑨(校验·★反例 自指): needs 指自己 ⇒ !ok · selfref 恰 1" (
+    (-not $k2.ok) -and (@($k2.selfref).Count -eq 1))
+$k3 = Resolve-SplitNeeds -Decls @(
+    @{ idx = 1; station = 'A'; subject = 'A'; needs = @('B') },
+    @{ idx = 2; station = 'B'; subject = 'B'; needs = @('A') })
+Assert-True "NEEDS⑩(校验·★反例 环): A→B→A ⇒ !ok · cycle 非空" (
+    (-not $k3.ok) -and (@($k3.cycle).Count -ge 1))
+$k4 = Resolve-SplitNeeds -Decls @(
+    @{ idx = 1; station = 'A'; subject = '同'; needs = @() },
+    @{ idx = 2; station = 'B'; subject = '同'; needs = @() },
+    @{ idx = 3; station = 'C'; subject = 'X'; needs = @('同') })
+Assert-True "NEEDS⑪(校验·★反例 歧义): 被引用主体由两片声明 ⇒ !ok · ambiguous 恰 1（与 join「只报出」立场不同）" (
+    (-not $k4.ok) -and (@($k4.ambiguous).Count -eq 1))
+$stubNeedsOk = { param($x) @{ ok = $true } }
+Assert-True "★NEEDS⑫(先验红·同源对照): 恒 ok 桩在 ⑧ 的输入上为真 ⇒ 真判据能判红、绝不恒真" (
+    ((& $stubNeedsOk $k1).ok) -and (-not $k1.ok))
+Assert-True "NEEDS⑬(接线): 校验调用在 · 打印 SPLIT_NEEDS · join.json 增记 needs_graph 且标『派生非真值』" (
+    ([regex]::Matches($content, [regex]::Escape('$needChk = Resolve-SplitNeeds -Decls $decls')).Count -eq 1) -and
+    $content.Contains('SPLIT_NEEDS: n=') -and $content.Contains("`$join['needs_graph']") -and
+    $content.Contains('派生非真值'))
+Assert-True "★NEEDS⑭(接线·★顺序不变量): `needs` 校验 **早于** 首个 `Start-Process`（最便宜的失败点）" (
+    ($content.IndexOf('$needChk = Resolve-SplitNeeds -Decls $decls') -ge 0) -and
+    ($content.IndexOf('$needChk = Resolve-SplitNeeds -Decls $decls') -lt $content.IndexOf('Start-Process -FilePath $pshell')))
+Assert-True "★NEEDS⑮(接线·★前缀不落片正文): 片卡任务取自**已剥前缀**的 `$shardSpec.task`（承吃狗粮复审 a-prefix）" (
+    $content.Contains('$shardTask = if ($shardSpec.task) { $shardSpec.task } else { $shardBody }') -and
+    (-not $content.Contains('$shardTask = $shardBody')))
+
+# ══ 2026-10-16（`O-161` · 真跑当场抓到的回归）：`split` 子进程的 REPO_ROOT 在注册表数据化后失效 ══════
+#   根因：子进程 BOM 副本落在 TEMP ⇒ `$PSScriptRoot` 不在 `ops\station-bin` ⇒ 算不出 REPO_ROOT ⇒
+#        载 `$Script:PROJECTS` 得空表（fail-closed）⇒ 子进程 `unknown/missing project ... (registered: )`。
+#   修法：父进程经 env 传根（`Start-Process` 继承 env），子进程 INIT **优先**取它（⚠ 无 env ⇒ 逐字回退旧算法）。
+Assert-True "O161①(父侧接线): `Invoke-SplitTask` 在派发前把 REPO_ROOT 经 env 传下去" (
+    $content.Contains('$env:AGENT_CLI_REPO_ROOT = $Script:REPO_ROOT'))
+Assert-True "O161②(子侧优先·向后兼容): REPO_ROOT 解析**优先取 env**（无 env ⇒ 回退旧算法，常规调用零变化）" (
+    $content.Contains('if ($env:AGENT_CLI_REPO_ROOT) { [string]$env:AGENT_CLI_REPO_ROOT }'))
+Assert-True "★O161③(接线·★顺序): env 赋值 **早于** 首个 `Start-Process`（否则子进程拿不到）" (
+    ($content.IndexOf('$env:AGENT_CLI_REPO_ROOT = $Script:REPO_ROOT') -ge 0) -and
+    ($content.IndexOf('$env:AGENT_CLI_REPO_ROOT = $Script:REPO_ROOT') -lt $content.IndexOf('Start-Process -FilePath $pshell')))
 
 # --- ★★ O-151 (2026-10-07): `http-local` 判官的**常规路径 = 站上直发**（消掉手工 SSH 隧道）-----
 #   由来：首次 `sem_verified` 靠**手工 SSH 隧道 + 手设 REVIEW_HTTP_BASE**（非常规 ⇒ 不可重复）。

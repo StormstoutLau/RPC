@@ -53,7 +53,11 @@ $Script:PROJECTS_ERR = ''   # 诊断用（载入失败原因）；命令侧以 (
 $Script:TMP_ROOT = Join-Path $env:TEMP 'agent-cli'
 # O-12 REPO_ROOT: repo root for golden source resolution (this file is d:\RPC\ops\station-bin\ ->
 # two parents up = d:\RPC). NEW script var (IMPLEMENTATION §3.2 P1-1: not inherited/现役).
-$Script:REPO_ROOT = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+# ★ 2026-10-16（`O-161` · 注册表数据化的**第三个消费面**）：子进程（`split` 的 BOM 副本落在 TEMP ⇒
+#   `$PSScriptRoot` 不在 `ops\station-bin`）**算不出 REPO_ROOT** ⇒ 载 `$Script:PROJECTS` 失败
+#   （空表 ⇒ `unknown/missing project ... (registered: )`）。⇒ **父进程经 env 传根**（`Start-Process` 继承 env）：
+#   有 `AGENT_CLI_REPO_ROOT` 则**优先**用它；⚠ 无 env ⇒ **逐字回退旧算法**（常规调用/站上**零变化**）。
+$Script:REPO_ROOT = if ($env:AGENT_CLI_REPO_ROOT) { [string]$env:AGENT_CLI_REPO_ROOT } else { Split-Path (Split-Path $PSScriptRoot -Parent) -Parent }
 # V2 concurrency (O-11 L2/O-26): 单控制台并发调用时, TMP_ROOT 用 per-invocation token 子目录,
 #   避免固定名临时脚本 (agent-cli-attach-mkdir.sh 等) 被并发进程互撞 (shared-temp race)。
 $Script:RUN_TOKEN = [Guid]::NewGuid().ToString('N')
@@ -3890,13 +3894,29 @@ function Expand-DecomposeSubject {
     #   · 有前缀 ⇒ @{ subject=<X>;  task=<task> }
     #   · 无前缀（或没写 `|`）⇒ @{ subject=''; task=<原文> } ⇒ join 侧计「**未声明**」（fail-closed，见 Resolve-SplitJoin）
     # ⚠ **不做任何归一/推断**（"这俩是不是同一件事"是**语义**判断 ⇒ 归声明面；`O-126` 禁阈值/相似度）。
+    # ── ★★ 2026-10-16（方案 `a`）：追加**可选**前缀 `needs=<s1,s2>`（分片**血缘/读序**声明）────────────
+    #   语义（D1(a)）= **声明的血缘/读序**，**不是执行顺序**（分片并行且互不可见 ⇒ 契约 §6.2-2）⇒ 对执行**零影响**；
+    #   本函数只**解析**，完整性判据 = `Resolve-SplitNeeds`（另处，纯函数）。
+    #   解析 = **剥前缀循环**（键 ∈ {subject, needs}，可任意顺序/可缺省；**同一键只解析一次** ⇒
+    #   第二个 `subject=` 归 task，保旧语义）。★ **旧语法逐字不变**（旧 `subject=X | task` 与裸字符串的
+    #   subject/task = 原值，仅**多一个** `needs` 键）。
     param([string]$Item)
     $s = [string]$Item
-    if (-not $s) { return @{ subject = ''; task = '' } }
-    $s2 = $s.Trim()
-    $m = [regex]::Match($s2, '^\s*subject\s*=\s*([^|]*?)\s*\|\s*(.+)$')
-    if ($m.Success) { return @{ subject = $m.Groups[1].Value.Trim(); task = $m.Groups[2].Value.Trim() } }
-    return @{ subject = ''; task = $s2 }
+    if (-not $s) { return @{ subject = ''; needs = @(); task = '' } }
+    $rest = $s.Trim()
+    $subject = ''; $needs = @(); $seen = @{}
+    while ($true) {
+        $m = [regex]::Match($rest, '^\s*(subject|needs)\s*=\s*([^|]*?)\s*\|\s*(.+)$')
+        if (-not $m.Success) { break }
+        $k = $m.Groups[1].Value
+        if ($seen.ContainsKey($k)) { break }          # 同一键只解析一次 ⇒ 第二个 subject= 归 task（保旧行为）
+        $seen[$k] = $true
+        $v = $m.Groups[2].Value.Trim()
+        if ($k -eq 'subject') { $subject = $v }
+        else { $needs = @($v -split '\s*,\s*' | Where-Object { $_ -ne '' }) }
+        $rest = $m.Groups[3].Value
+    }
+    return @{ subject = $subject; needs = @($needs); task = $rest }
 }
 
 function Resolve-SplitJoin {
@@ -3928,6 +3948,77 @@ function Resolve-SplitJoin {
 }
 
 
+function Resolve-SplitNeeds {
+    # ── ★★ 2026-10-16（方案 `a`）：分片**依赖声明**（`needs=`）的**完整性校验**（纯函数，离线可单测）──
+    # 语义（D1(a)）= **声明的血缘/读序**，**不是执行顺序**：分片并行且互不可见（契约 §6.2-2「片间不共享锚点」）
+    #   ⇒ 本函数**只判声明的引用是否完好**，对执行**零影响**（不排波次、不阻断派发 —— 唯一失败点是**声明本身坏**）。
+    # 规则（D2）：① 引用**恰被一片**声明（重复 `subject` ⇒ **歧义 ⇒ 拒**）—— ⚠ 与 `Resolve-SplitJoin` 的
+    #   `same_subject_groups`「**只报出、不裁决**」**立场不同且必须写明**：那边重复是**潜在冲突（只报）**；
+    #   这边重复让**引用不可解析** ⇒ **拒**。② **禁自指** ③ **禁环** ④ **禁阈值/相似度**（`O-126`）。
+    # 输入：@( @{ idx; station; subject; needs[] } … )（各片由 `Expand-DecomposeSubject` 产出后组装）
+    # 输出：@{ ok; dangling[]; ambiguous[]; selfref[]; cycle[]; n_with_needs; edges[]; status }
+    #   · `edges` = 已解析的**血缘边**（`from` → `to_subject`/`to_idx`）—— 仅观测用（写进 `join.json.needs_graph`，
+    #     ★ **派生非真值**：机械由卡面 `decompose:` 重算 ⇒ 不许当作第二定义点）。
+    param([object[]]$Decls)
+    $rows = @($Decls)
+    $bySub = [ordered]@{}
+    foreach ($r in $rows) {
+        $sub = [string]$r['subject']
+        if ([string]::IsNullOrWhiteSpace($sub)) { continue }   # 未声明主体 ⇒ 不可作引用目标（join 侧计"未声明"）
+        if (-not $bySub.Contains($sub)) { $bySub[$sub] = @() }
+        $bySub[$sub] += [int]$r['idx']
+    }
+    $dangling = @(); $ambiguous = @(); $selfref = @(); $edges = @(); $nWith = 0
+    foreach ($r in $rows) {
+        $need = @($r['needs'])
+        if ($need.Count -eq 0) { continue }
+        $nWith++
+        $mySub = [string]$r['subject']
+        foreach ($t0 in $need) {
+            $t = [string]$t0
+            if ([string]::IsNullOrWhiteSpace($t)) { continue }
+            if (($mySub -ne '') -and ($t -eq $mySub)) { $selfref += ("shard$($r['idx']) needs '$t'（**自指**）"); continue }
+            if (-not $bySub.Contains($t)) { $dangling += ("shard$($r['idx']) needs '$t'（**未声明** ⇒ 无此片）"); continue }
+            $owners = @($bySub[$t])
+            if ($owners.Count -ge 2) { $ambiguous += ("shard$($r['idx']) needs '$t'（被 " + ($owners -join ',') + " 片声明 ⇒ **歧义**）"); continue }
+            $edges += @{ from = [int]$r['idx']; to_subject = $t; to_idx = [int]$owners[0] }
+        }
+    }
+    # 环检测（Kahn：处理不完 ⇒ 有环）—— 只在**已解析**的边上
+    $nodes = @{}; $indeg = @{}; $adj = @{}
+    foreach ($e in $edges) {
+        $f = [int]$e.from; $t = [int]$e.to_idx
+        $nodes[$f] = $true; $nodes[$t] = $true
+        if (-not $adj.ContainsKey($f)) { $adj[$f] = @() }
+        $adj[$f] += $t
+        if (-not $indeg.ContainsKey($t)) { $indeg[$t] = 0 }
+        $indeg[$t] = [int]$indeg[$t] + 1
+    }
+    foreach ($n in @($nodes.Keys)) { if (-not $indeg.ContainsKey($n)) { $indeg[$n] = 0 } }
+    $queue = @(@($nodes.Keys) | Where-Object { [int]$indeg[$_] -eq 0 })
+    $processed = 0
+    while ($queue.Count -gt 0) {
+        $n = $queue[0]; $queue = @($queue | Select-Object -Skip 1)
+        $processed++
+        if ($adj.ContainsKey($n)) {
+            foreach ($k in @($adj[$n])) {
+                $indeg[$k] = [int]$indeg[$k] - 1
+                if ([int]$indeg[$k] -eq 0) { $queue += $k }
+            }
+        }
+    }
+    $cycle = @()
+    if ($processed -lt $nodes.Count) { $cycle += ("环: 检出（" + ($nodes.Count - $processed) + " 个节点在环上/被环阻塞）") }
+    $bad = @($dangling) + @($ambiguous) + @($selfref) + @($cycle)
+    return @{
+        ok = ($bad.Count -eq 0)
+        dangling = @($dangling); ambiguous = @($ambiguous); selfref = @($selfref); cycle = @($cycle)
+        n_with_needs = $nWith; edges = @($edges)
+        status = $(if ($bad.Count -eq 0) { 'ok' } else { 'bad' })
+    }
+}
+
+
 function Invoke-SplitTask {
     param(
         [string]$proj,
@@ -3953,6 +4044,22 @@ function Invoke-SplitTask {
         Write-Host "SPLIT_REQUIRES_2P: decompose must declare >=2 shards (use 'task' for single dispatch) [exit 2]"
         return 2
     }
+    # ★★ 2026-10-16（方案 `a`）：分片依赖声明（`needs=`）**完整性校验** —— ★ 位置（D3 写死）= **解析完 `$shards` 后**
+    #   即 **早于 model 解析、更早于任何 `Start-Process`** ⇒ 坏声明**不需要**有效模型 / 引擎 / 站（最便宜的失败点）。
+    #   语义（D1(a)）= 声明的**血缘/读序**，**对执行零影响** ⇒ 本处只**拒坏声明**（悬空 / 歧义 / 自指 / 环），**不**改派发。
+    #   ⚠ 放在 model 解析**之前**是**判据正确性**要求：否则坏声明卡会先因"未知模型" exit 2 ⇒ 该用例**因错的原因通过**（假绿）。
+    $decls = @()
+    for ($i = 0; $i -lt $shards.Count; $i++) {
+        $sp = Expand-DecomposeSubject ([string]$shards[$i])
+        $decls += @{ idx = $i + 1; subject = [string]$sp.subject; needs = @($sp.needs) }
+    }
+    $needChk = Resolve-SplitNeeds -Decls $decls
+    if (-not $needChk.ok) {
+        $why = @($needChk.dangling) + @($needChk.ambiguous) + @($needChk.selfref) + @($needChk.cycle)
+        Write-Host ("SPLIT_NEEDS_FAIL: " + ($why -join ' · ') + " [exit 2] - 分片依赖声明的引用坏了；**未派发任何子进程**")
+        return 2
+    }
+    Write-Host "SPLIT_NEEDS: n=$($decls.Count) with_needs=$($needChk.n_with_needs) status=ok"
     $m = if ($model) { $model } else { if ($fm['model']) { $fm['model'] } else { '' } }
     if (-not $m) { Write-Host 'REJECT missing-model (exit 2) - card has no model and no --model (inv 3)'; return 2 }
     $sens = if ($sensitive) { $sensitive } else { if ($fm['sensitivity']) { $fm['sensitivity'] } else { 'public' } }
@@ -4006,9 +4113,18 @@ function Invoke-SplitTask {
     $selfPath = $MyInvocation.MyCommand.Path
     if (-not $selfPath) { $selfPath = $PSScriptRoot + '\agent-cli.ps1' }
     if (-not (Test-Path $selfPath)) { $selfPath = Join-Path $PSScriptRoot 'agent-cli.ps1' }
-    # V2 子进程启动脚本必须是 PS5.1 可解析的 BOM 版: 仓库源 committed BOM-less, PS5.1 CP936 直接 -File
-    #   会误解析其中 UTF-8 反引号/$( 序列. $MyInvocation 在函数体内无 Path(恒回退原始文件), 故此处
-    #   显式生成 per-run BOM 副本供 children 使用 (与 O-11 L2 生产 launcher 的 temp-BOM 一致)。
+    # V2 子进程启动脚本 = **UTF-8 带 BOM** 的副本：PS5.1 里 `-File` / `&` / `Parser::ParseFile` 对 **BOM-less**
+    #   的非 ASCII .ps1 一律**按 ANSI(GBK) 解码** ⇒ 可能吞换行致脚本静默损坏 ⇒ 本仓门禁 `ps1-bom` **要求**
+    #   非 ASCII 的 .ps1 必须带 BOM。$MyInvocation 在函数体内无 Path(恒回退原始文件)，故此处显式生成
+    #   per-run BOM 副本供 children 使用 (与 O-11 L2 生产 launcher 的 temp-BOM 一致)。
+    #   ⚠ **2026-10-16 就地更正**：旧注记写「仓库源 **committed BOM-less**」—— **已不成立**：实测 **HEAD blob
+    #     头三字节 = `EF BB BF`**（即**源已带 BOM**）⇒ 错的是"源那句"，**不是**本机制。★ **BOM 是承重件**：
+    #     编辑工具剥 BOM ⇒ `-File` / `&` 全按 ANSI 乱码（2026-10-16 实测：剥后 `syntax` 按 ANSI 报 191 错、
+    #     门禁 `ps1-bom` 双红）⇒ 该形态**由门禁 `ps1-bom` 兜住**。⚠ 本副本在"源已带 BOM"后是否仍必要 = **未裁**
+    #     （登记为 `O-161` 的**后续候选**，本批不动）。
+    # ★ 2026-10-16（`O-161`）：子进程 BOM 副本在 TEMP ⇒ 它**算不出 REPO_ROOT** ⇒ 父进程把根**经 env 传下去**
+    #   （`Start-Process` 继承 env；子进程 INIT 见 `AGENT_CLI_REPO_ROOT` ⇒ 优先用它，不再靠 `$PSScriptRoot`）。
+    $env:AGENT_CLI_REPO_ROOT = $Script:REPO_ROOT
     $ChildScript = Join-Path $subDir 'agent-cli-bom.ps1'
     $scriptSrc = if (Test-Path $selfPath) { [System.IO.File]::ReadAllText($selfPath, [System.Text.Encoding]::UTF8) } else { '' }
     [System.IO.File]::WriteAllText($ChildScript, $scriptSrc, (New-Object System.Text.UTF8Encoding $true))
@@ -4134,6 +4250,9 @@ function Invoke-SplitTask {
     }
     $join = Resolve-SplitJoin -Shards $joinRows
     $joinFile = Join-Path $mergedDir 'join.json'
+    # ★★ 2026-10-16（方案 `a`）：血缘图（**观测面**）—— ★ 标「**派生非真值**」（机械由卡面 `decompose:` 重算
+    #   ⇒ 不许当第二个定义点；见 `Resolve-SplitNeeds` 注释与门禁 `conclusion-ledger` 的"不新造账本"纪律）。
+    $join['needs_graph'] = @{ note = '派生非真值（机械由卡面 decompose: 重算）'; edges = @($needChk.edges) }
     $join | ConvertTo-Json -Depth 6 | Set-Content $joinFile -Encoding utf8
     $jline = "SPLIT_JOIN: n=$($join.n) declared=$($join.declared) undeclared=$($join.undeclared_count) status=$($join.status)"
     if ($join.undeclared_count -gt 0) {

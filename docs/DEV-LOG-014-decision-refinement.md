@@ -6851,3 +6851,42 @@ run `202610130354429167`（且该 run 在 **TC 已转之后**派发）⇒
 - **不加 `Open_Data`**（单独注册一个 `.agentsync` 未定的数据大仓 = **可被触发的 footgun** ⇒ 与步 ② 同批，推迟下一批）。
 - **不写外仓** / **不真派发**（`sensitivity` 未定 = 用户的裁）。
 
+***
+
+## 107. `split` 分片依赖声明（`needs=`）落地 + 真跑验收（2026-10-16 · 承社区编排调研 ②）
+
+> 承当日「社区 agent 编排调研与吸收评估」的 ② 小步。设计与实施方案 = [2026-10-16_split分片依赖声明needs_设计与实施方案](./2026-10-16_split分片依赖声明needs_设计与实施方案.md)（台账 `O-160`）。
+
+### 107.1 吃狗粮复审 → 一个会翻转设计的事实
+
+- 复审 (a)/(b) 断言时读到 **F4**：`split` 分片**信息隔离**（契约 §6.2-2「片间不共享锚点」，各片在不同站/工作区并行、互不可见）
+  ⇒ 分片级 `needs` **结构上无法表示运行时数据依赖** ⇒ 若实现成"依赖未满足就不派"，就撞本仓头号**假防线**形态（`O-157`/W1a）。
+- ⇒ **D1 裁决**：`needs` = **声明的血缘/读序**，**不是执行顺序**（对执行**零影响**）；**已裁 (a)**。
+
+### 107.2 落地（`O-160`）
+
+`Expand-DecomposeSubject` 加 `needs=`（**附加式**，旧语法逐字不变）· 新纯函数 `Resolve-SplitNeeds`（引用**恰被一片**声明 + 禁自指 + 禁环）·
+`Invoke-SplitTask` 在**解析 `$shards` 后、model 解析前**校验（坏声明 ⇒ `exit 2`、**未派发**）· `join.json.needs_graph`（标"**派生非真值**"）·
+夹具 **`FM_GOLDEN_TEST` 587 → 605/0**（+18 断言）· 两张探针卡。
+
+### 107.3 真跑验收（逐字读数见设计与实施方案 §5.2）
+
+- **负向**（悬空引用）：`SPLIT_NEEDS_FAIL: shard2 needs '不存在的主体'（未声明）[exit 2]` · **`EXITCODE=2`**
+  ★ 该卡 model **刻意无效** ⇒ **早于 model 解析**即拒 ⇒ 证明"**因 needs 而拒、非因未知模型**"（无假绿）。
+- **正向**：`SPLIT_NEEDS: n=2 with_needs=1 status=ok` · 两片 `rc=0 ok=True` · `SPLIT_DONE all_ok=True wall_ms=63048` · **`EXITCODE=0`** ·
+  `join.json.needs_graph` = `{edges:[{from:2,to_subject:"路由层",to_idx:1}], note:"派生非真值…"}`。
+
+### 107.4 ★★ 真跑当场抓到一个回归（`O-161`）
+
+- **根因**：`Invoke-SplitTask` 的子进程用 **TEMP 里的 BOM 副本** ⇒ `$Script:REPO_ROOT` 算错 ⇒ 载 `$Script:PROJECTS` 得**空表**（fail-closed）
+  ⇒ 子进程 `unknown/missing project: dogfood (registered: )`。**非本方案引入**，是 `O-159` 数据化的**第三个消费面**（前两个 = 外壳 / `cluster.py`）。
+- **修**：父进程经 **env 传根** + 子进程 INIT **优先取它**（无 env ⇒ **逐字回退旧算法**）· 夹具 `O161①-③`（含**顺序**断言）。
+
+### 107.5 ⚠ 真跑暴露的第二处（非回归 · 记录在案）
+
+`TaskContract.accept` **非空**是 `split` 卡的**新硬约束**（2026-10-13「转硬拒」）⇒ 探针卡**必须带 `accept:`**，否则子进程 P0 硬拒 `exit 3`。
+
+### 107.6 门禁读数（收官）
+
+全量门禁 **PASS**（46 绿 / 3 黄 / 0 红）· `_fm_golden_test.ps1` **605/0** · `py-tests` 全绿。
+
