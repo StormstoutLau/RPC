@@ -24,8 +24,8 @@ projects:
 - id: Open_Data
   root: F:\Open_Data
   reachable: true
-  files: 10
-  hits: 22
+  files: 13
+  hits: 30
 - id: factor_pipeline
   root: F:\Coding\factor_pipeline
   reachable: true
