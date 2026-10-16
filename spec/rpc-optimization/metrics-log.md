@@ -740,3 +740,28 @@ ggml_backend_rpc_start_server()                                                 
 - **步骤 6 收尾**：门禁 `rpc_check --only backend` = **PASS**；`docs/提速调研报告.md` 版本记录已更新；**冒烟后 unload**（回空载）。
   ⚠ 未执行：SOP「保留最近 2 个版本目录」应删 `master-91f6a6cf` —— **保留**（作为"退回上一生产版"的退路），待 Scott 定。
 - **现役**：三站 `/opt/llama.cpp` = **`master-23b0202a`**（含 #26610 / #29928 等）；生产形态 = **`-sm layer`**。
+
+---
+
+## Phase 9: 影子引擎 `b76b1337` 在 `-sm layer` 档的同会话 A/B (2026-10-16, E1) —— 净收益 ≈ 0
+
+> **起因**: TRACKER v3.26 上游核查（2026-10-16）判定「引擎更新 = 技术可行、但属**可选增量**，建议先影子 A/B 再定窗口」。本轮即该 A/B 的执行：把上游 `master` HEAD **`b76b1337`**（`b76b13379d3b7d67ab0bc424516bb6fd2522bd8e`，2026-10-15；落后现役 `23b0202a` **118 提交**、**无 revert 命中我方面**）建成影子引擎，与现役做**同口径**对照。
+
+**方法**: `codeload` tarball（B 站直下，38.2 MB / ~3.3 min；**git 协议不可用，见 UPGRADE_SOP 取源通道**）→ B 站单点构建（`-DGGML_VULKAN=1 -DGGML_RPC=ON Release -j`）→ **全量 `patchelf --set-rpath '$ORIGIN'`**（★ 新 cmake 产物 RUNPATH 硬编码 B 站 build 路径，§Phase 4 4.5 坑**复现**；只修 exec 不够，须含全部 `.so*`）→ MANIFEST **79 OK** → tar 分发 A/C（`md5sum -c` **79/79 成功 ×2**）→ conf 快照 → `cluster.py load deepseek-v4-flash-0731 --backend llama-rpc --engine master-b76b1337`（head=B shadow / worker=A shadow，**N=2**，`--rpc 10.10.10.1:50052`，`--n-cpu-moe 0`、`-fa on`、**无 `-sm` ⇒ 默认 layer**）→ 测量 → unload + 恢复 conf → 无 `--engine` 重载现役 → **重复完全相同测量**。
+
+| 指标 | 现役 `23b0202a`（10-12） | 影子 `b76b1337`（10-15） | Δ |
+|---|---|---|---|
+| 加载（至 READY） | 379 s | 381 s / 376 s | 持平 |
+| **decode**（max_tokens=512 ×3 中值，两轮） | **13.80** (13.79/13.80/13.80) · 13.80 | **13.77** (13.76/13.77/13.77) · 13.80 (13.78/13.80/13.81) | **≈ 0**（噪声内） |
+| **prefill ×7**（**随机 prompt**，防 prefix cache；均值/区间） | **219.5**（213.4–224.0） | **218.8**（217.1–222.0） | **−0.3%**（噪声内） |
+| 固定 prompt ×5（max_tokens=256） | 5/5 `AB_PONG_1..5` · finish=stop | 5/5 同 · `pred_n` 逐条一致 | 一致 |
+| `GGML_ASSERT` / 崩溃 | 0 | 0（head + 两 worker） | 一致 |
+
+**判读**:
+1. ★★ **净收益 ≈ 0** —— `b76b1337`（含 **#27703**「AMD 上 vulkan strided f16 KV 只拷一次、读跨内存通道」）在本集群 **`-sm layer` + V4-Flash** 负载上，**decode 与 prefill 均在噪声内**、加载持平、输出零差异。
+2. ⚠ **一次差点误判的噪声（可复用教训）**：首轮用**单条固定 prompt** 测 prefill 得 **207.5 vs 217.5（−4.6%，看似回退）**；改成**随机 prompt ×7** 后 = **218.8 vs 219.5（−0.3%）** ⇒ **单样本 prefill 离散达 ±2.5%**（213–224），**−4.6% 是噪声不是信号**。★ 另一坑：**重复同一 prompt 会命中 prefix cache，`prompt_n` 塌成 4 token**（同本文件 A4「测量坑」）⇒ **prefill 必须随机化 prompt**。
+3. **`#30547` 不命中我方形态**：其回归条件是 **multi-device + `--cpu-moe`**；本 alias 为 **`--n-cpu-moe 0`**（专家全在 GPU）⇒ 即便升级带进 **#29741**，**该回归的触发条件在本负载上不成立**。
+4. ⇒ **判定：本轮引擎更新 = 无可测收益** ⇒ **不排升级窗口**；`#27703` 的收益在本形态**未兑现**（可能因 decode 已内存带宽 bound）。**维持现役 `23b0202a` + `-sm layer`**。
+
+**生产影响 = 零**（symlink 自始未切 · conf 恢复与 `.bak-shadow-b76b1337` **IDENTICAL** · `/run` 覆盖层已清 · 三站影子目录 `/opt/llama.cpp-master-b76b1337` 已删 · 三站服务 inactive · 门禁 `backend` **PASS**：单站=HIP / 分布式=Vulkan / 三站同版）。
+证据: B 站 `~/llama-distributed/logs/ab-{baseline,shadow,shadow2,basePrep}*.json`。台账回写 = [TRACKER §1.5 EV-13](../upstream-tracker/TRACKER.md)。
