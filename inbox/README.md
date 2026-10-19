@@ -102,7 +102,7 @@ rejected（可从 triage / accepted / plan-review / plan-revise 任一进入）
 > 模板见 `_template/30_evidence/README.md`。
 
 1. **链死**：结案时把项目根 `agent-out/<ts>/` 的**实际存在的全部证据件**逐个 sha256，
-   写入 `30_evidence/MANIFEST.sha256`（与 `00_handoff` 同格式，`sha256sum -c` 可校验）。
+   写入 `30_evidence/MANIFEST.sha256`（与 `00_handoff` 同格式；**LF 行尾** ⇒ Linux 侧 `sha256sum -c` 可校验）。⚠ **Windows 侧**：若清单为 CRLF（如遗留的 `inbox/paper-2026-08-23/00_handoff/MANIFEST.sha256`），`sha256sum -c` 会把行尾 CR 当文件名而逐条失败 ⇒ 改用 python 递归比对（`cluster.py` 的 `verify_manifest`，用 `splitlines()` 容忍 CRLF；见台账 `O-163`）。
    **未附证据束 → 不 `done`**。
    - **一条命令**：`python ops/cluster.py inbox seal <proj-dir> [--run <ts>|--all-runs] [--grade Reproduced|Replicated] [--go]`
      （默认只出计划，`--go` 落盘；proj→项目根的真值取自 `agent-cli.ps1` 的 `$Script:PROJECTS`，不另抄一份）。

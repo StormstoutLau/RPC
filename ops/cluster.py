@@ -5285,7 +5285,7 @@ def _inbox_seal(argv) -> int:
     #   `Path.write_text(..., encoding=…)` 在 Windows 上会把 `\n` 翻成 `\r\n`，而 `sha256sum -c`
     #   把那个 `\r` 当成**文件名的一部分** ⇒ 逐条 `'agent-out/…/a.txt'$'\r': No such file or directory`
     #   → `FAILED open or read` → **exit 1** ⇒ 清单头自称的"`sha256sum -c` 应全 OK"**在 Windows 上不成立**
-    #   （本仓既有 `00_handoff/MANIFEST.sha256` 同样是 CRLF ⇒ **预先存在**，不是本次引入；那条属另案，勿动）。
+    #   （本仓既有 `00_handoff/MANIFEST.sha256` 同样是 CRLF ⇒ **预先存在**，不是本次引入；该件属**另案 `O-163`** —— 2026-10-20 以**甲**收口：**只就地更正其声明行、不动哈希行，见 `inbox/README.md` §5 的 Windows 口径**）。
     #   ⚠ python 侧消费者对两种行尾都容忍（`parse_manifest` 用 `splitlines()`）⇒ 影响**只在** CLI 那条路。
     dst.write_bytes(payload.encode("utf-8"))
     print(f"[seal] 已写入 {dst}（{len(payload)} 字节）。")

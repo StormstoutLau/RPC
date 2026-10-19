@@ -2,7 +2,7 @@
 # 作用：钉住需求方原始目录 D:\Paper\handoff_to_rpc_admin 的当前字节态；供与 D:\Paper\handoff_to_rpc_admin 复核，
 #   若源更新则本清单不再匹配 => 漂移可检。再生成：python - <<EOF（或重新跑生成脚本）
 # 生成时间: 2026-09-23T02:31:19.353758+08:00
-# 校验: cd 到 D:\Paper\handoff_to_rpc_admin 后 `sha256sum -c <本清单绝对路径>` 应全 OK（忽略开头 # 行）
+# 校验: Linux/LF 环境 = cd 到 D:\Paper\handoff_to_rpc_admin 后 `sha256sum -c <本清单绝对路径>`（忽略 # 行）；⚠ Windows 侧本清单为 CRLF ⇒ `sha256sum -c` 把行尾 CR 当文件名的一部分而逐条失败 ⇒ 改用 python 递归比对（cluster.py 的 verify_manifest，splitlines 容忍 CRLF）。
 f146cf3bca6ee34b31dbb62686d3a4f65a39ec8f06a4c46025f208ccc25145a2  01_DR-缺陷报告.md
 356b46a8253e548d86d2ee67deba488f82a01b95c62e2777ac3836b80e8e28e0  02_CR-变更需求.md
 e1e8908477a18111a9f053040571856aaa408f74e4e8ecf08822d0d25ccbb57d  03_编排与接口约定.md

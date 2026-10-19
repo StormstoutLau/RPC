@@ -16,7 +16,7 @@
    `.agent-run.json` / `agent-output.txt` / `prompt.txt` / `card.md` / `stderr.txt` …）。
    ⚠ **不要**硬套固定 6 件清单（`AGENT_EVIDENCE_FILES`）—— 那是**链校验的"声明件"**，
    真实 run 常缺其中几件（`judgment-record.txt`/`accept-*` 只在配 accept/golden 的任务里有）。
-   校验：在项目根下 `sha256sum -c <本清单绝对路径>`（忽略 `#` 行）。
+   校验：**Linux/LF 环境**下在项目根 `sha256sum -c <本清单绝对路径>`（忽略 `#` 行）；⚠ **Windows 侧**若清单为 CRLF，`sha256sum -c` 会因行尾 CR 失败 ⇒ 改用 python 递归比对（`verify_manifest`）。
    **未附本清单 → 不 `done`**（门禁对 `release`/`done`/`accepted-by-requester` 强判）；
    `done` 后本目录**冻结**（artifact freeze，不再改动）。
 2. **交付分级标注**（写在 MANIFEST 注释头，由 `--grade` 写入）：
