@@ -123,7 +123,8 @@
 | **Auto_Prover** | **8** | ✅ **已逐点分类（2026-09-26，8 行全部有归属）** —— **6 个是产物 ID 产出点 / 归到 3 个 ID 概念 / 2 个不是 ID**：<br>　· **`verdict_id`** = `v_` + md5 + **`[:12]`** —— ⚠⚠ **同一公式三处实现**：`kg/verdict_writer.py:65`（JSONL）· `kg/verdict_store.py:111`（SQLite）· **`pipeline.py:203`（构造 UnifiedCase 时又写了一遍）** ⇒ **改公式必须同时改三处**，漏一处则两个存储的 id **静默不一致**（**同一事实三个定义点**，正是本仓头号形态）。<br>　· **`case_id`** —— ⚠ **两套并存、且互不通**：`kg/unified_cases.py:68`（`u_` + md5 + **16**，被 `i2_extractor` / `UnifiedCase` 用）· `atlas_bridge/agent_runner.py:189`（`case_` + md5 + **8**）⇒ **同一个 case 在两个子系统里 id 不同**。<br>　· **`theorem_name`** = `thm_` + md5 + **`[:8]`**（`stages/stage1_5_sketching.py:142`）。<br>　· **不是 ID**：`mathematica_bridge.py:414`（`_cache_key` —— 10 个调用点**全是缓存键**）· `verdict_store.py:110`（`assertion_hash` = sha256 **全 64** —— **内容哈希**，与 id 并存于**同一条记录**）。<br>★ **存储已可达**：`F:\Auto_Prover\.artifacts\m1\` —— `verdicts.db`（SQLite，**1 行**，`verdict_id='v_971ce89d9a1e'`）· `verdicts/verdicts_20260907.jsonl`（同一条记录，**id 与库里完全一致**）· `unified_cases.jsonl`（`case_id='u_971ce89d9a1e03f6'`）。<br>★★ **公式不再是纸面**：`v_` + md5[:12] 与 `u_` + md5[:16] **都由真实产物证实**，且二者**前 12 位相同**（`971ce89d9a1e`）—— 因为**同一个 assertion**、只是截断长度不同 ⇒ **这也回过头证实了 U1 spec §1.2 的拆分是对的**（`case_id` 与 `verdict_id` 是两个字段、**不是一件事**）。<br>⚠ 原写 `114` 并据此推断"疑含大量 Lean / 构建无关用法" ⇒ **该推断作废**（`114` 无口径；口径化后只有 8 行）⇒ 需核的**理由要重写**：不是"量太大"，而是"这 8 行**一处都没分类过**"。 |
 | **Textbook** | **67** | ✅ 确有哈希用法（但 KG **不是**其一，见 §2）；⚠ 原写 `10` —— 同样是**无口径**的数（低报） |
 | **Fin_Agent** | **2** | ◐ 未核 |
-| **Cpp_Hub / Spec_Workflow / Full_Weather** | **0** | 本项目**不产哈希形态 ID**（口径化后仍为 0 ⇒ 这一条**经受住了复核**） |
+| **Cpp_Hub / Spec_Workflow** | **0** | 本项目**不产哈希形态 ID**（口径化后仍为 0 ⇒ 这一条**经受住了复核**） |
+| **Full_Weather** | **8** | ★ **2026-10-20 改判**（原与上两项目并列为 `0`）：`F:\Full_Weather` 的**真实源码**新增哈希用法 ⇒ 实测 **8 行 / 4 文件**（`scripts/build_real_io.py` **5** · `src/datasources/china/macro_panel.py` · `src/datasources/synthetic/datasource.py` · `src/models/plan_c_simulation.py` 各 1）⇒ 原「**不产哈希形态 ID**、经受住复核」**作废**；**是否属"产物 ID"未分类**（待 U-4 普查） |
 | **Macro_Data** | **47** | ✅ **目录已定位 = `E:\Macro_Data`** —— ⚠ **2026-09-26 二次更正**：首稿写"❓ **目录未定位** ⇒ 可能不是本地目录"，而它**一直在 `E:` 盘**；首稿**只搜了 `F:\` 与 `D:\`**，且 **D7 调研 §1 的路径表（[docs/2026-09-23_D7调研_立项·机制·统一基座.md](file:///d:/RPC/docs/2026-09-23_D7调研_立项·机制·统一基座.md#L19)）本来就写着 `E:\Macro_Data`** ⇒ 这是"**没读自己项目里已有的路径表**"，不是"找不到"。<br>代码面代表：`src/cache/world_monitor.py:148`（`sha256(full_url)` **全 64**，缓存键）· `src/storage/manifest_manager.py:367`（`sha256(schema_json)` 全 64）· `manifest_manager.py:387`（md5 全 64）· `src/core/resumable_download.py:33`（md5 全 64）· `src/governance/metadata_drift_monitor.py:136`（md5 全 64）⇒ **全为全长度、0 截断、0 前缀**，且多数是**内容/完整性哈希**（与 §2 的 inbox `MANIFEST.sha256` 同形态）⇒ **是否有"产物 ID"未分类** |
 | **本仓 RPC** | **25** | ✅ **已迁**（2 个 `u1:` 声明）；`inbox/MANIFEST.sha256` 按本规范 §2 **不动**（保 `sha256sum -c`）。⚠ 本行的 **25** 里绝大多数是**本仓自己的门禁/工具代码**（`ops/cluster.py` · `ops/rpc_check.py` 等），不是"待迁移的产物 ID" ⇒ **别把这一格读成"本仓自己也在影响面里"**。★ 本格 **2026-09-29 由 `40` 改为 `22`**（口径变更 = 排除 gitignored 的 `tmp/`）；**同一日再由 `22` 改为 `23`**（`A4` 新 gate 的 `_md_line_hash` 新增一行 `hashlib.sha256(` ⇒ 真实新增一个哈希用法，按纪律重跑 `--emit` 复核下游，详见下口径注）；**同一日再由 `23` 改为 `25`**（`A3` 的 `ops/derived_view.py` 贡献 **2 行**：`hashlib.sha256()`（起哈希器）+ `h.hexdigest()`（取摘要），文件数 **5 → 6**（新增该件））—— 改前当场复算为 `41`，故原写的 `40` 本身也已滞后 |
 
@@ -146,6 +147,8 @@
 > 该目录名**以 `.tmp` 开头**，却不在**逐名精确匹配**的 `EXCLUDE_DIRS` 里 ⇒ 处置 = `scope()` 增 `exclude_dir_prefixes=[".tmp"]`
 > + **重跑 `--emit`** + 本表复核：**10 个项目数字全不变**（`Full_Weather` 回到 `0/0`；其余 9 个本就在受控源码内）⇒ `id-census` 回绿。
 > 理由与 09-29 的 `tmp` **完全同源**（会话临时暂存区**不是 ID 产出点**、会让真值在**干净 clone 上不可复现** / **反复漂**）。
+>
+> ★ **2026-10-20 数值重出（非口径变更）**：姊妹项目 `F:\Full_Weather` 的**真实源码**新增哈希用法（`scripts/build_real_io.py` **5** · `src/datasources/china/macro_panel.py` · `src/datasources/synthetic/datasource.py` · `src/models/plan_c_simulation.py` 各 1）⇒ 真值 `Full_Weather 0/0` **已过期** ⇒ 按处置 ①：**重跑 `--emit`**（`0/0 → 8/4`）+ **改判本表两处**（§1 表 + §6 结论）。★ **口径未变**，故其余 9 个项目数字**仍不变**。
 >
 > ⚠⚠ **本节的原数字（`34` / `114` / `10` / `3`）已全部作废** —— 它们是**无口径**的数，实测无法复算：
 > 以 `Open_Data` 为例，换四种口径得 **12 / 14 / 117 / 139**，**没有一个是 34**。
@@ -205,7 +208,7 @@
    · **误列**：至少一条（Textbook KG）的 ID 是语义主键，U-1 切换**不会动它**；
    · **漏项**：`factor_pipeline`（`F:\Coding\factor_pipeline`）**不在原清单里**，口径化后实测 **21 行**、
      且截断**项目内并存 5 种** ⇒ 它**真受影响**，还**推翻**了 U1 spec 里"截断同为 16"的判据。
-   ⇒ 另一侧也真：`Cpp_Hub` / `Spec_Workflow` / `Full_Weather` **不产哈希 ID**（0 命中）。
+   ⇒ 另一侧也真：`Cpp_Hub` / `Spec_Workflow` **不产哈希 ID**（0 命中）；★ **2026-10-20 改判**：`Full_Weather` **已不成立**（真实源码新增哈希用法 ⇒ 实测 **8 行 / 4 文件**）。
    ★ 教训合起来是一句：**清单是线索，不是事实** —— 两个方向都要实测（只测一个方向会得到系统性偏差）。
    ★★ **而且这句话对"自查"本身同样成立**：本条的**首稿计数（18 / 4 种）也是错的**（见 §1 表内更正）——
    ⇒ **"查错的那一步"本身不受任何保护**，它和被测对象一样需要**逐行复核**；否则会变成"用错的数字去纠正错的数字"。
