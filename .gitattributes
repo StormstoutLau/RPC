@@ -38,8 +38,27 @@ ops/rpc-nodes          text eol=lf
 #     一旦发生即 `bad interpreter: …bash^M`。
 #   ⚠ 仍**不铺全仓**：`archive/**` 与 `tests/b5q/**` 的 CRLF 已**裁「不处理」**（理由 = 不面向执行）——
 #     该裁定的全文写在 `spec/d6-agent-standard/O102-line-ending-closure-verification.md`。
+#     ★ **2026-10-19 改判**：该「不处理」**仅对两目录下的 `.sh` 撤销**（非 `.sh` 维持）—— 见文末新增块 + 该报告 §8。
 ops/lm-download/*.sh      text eol=lf
 
 # systemd 单元（scp 到 /etc/systemd/system/）
 ops/*.service          text eol=lf
 ops/*.timer            text eol=lf
+
+# ============================================================================
+# 2026-10-19：【改判】`archive/**` 与 `tests/b5q/**` 的 **`.sh`** 纳入射程
+#
+# 原「不处理」的理由（"不面向执行"）本身没错，但被**两条新实测代价**压过：
+#   ① 本仓 `core.autocrlf=true`，而这批 `.sh` 经 `.sh-crlf` 门禁整改后为 **工作树 LF / 而 git 期望 CRLF**
+#      ⇒ 长期以 **231 个「假 M」** 出现（工作树字节 == HEAD blob；`update-index --refresh` 亦清不掉）；
+#   ② 任何整树 `checkout` / `stash pop` / `reset --hard` 都会把它们**再落 CRLF**
+#      ⇒ 既复现①、又让 `.sh-crlf` 门禁**假红**（内容其实没坏）。
+#   ⇒ 两行 `text eol=lf` 同时挡住这两件事（检出即 LF，与门禁要求一致）。
+#
+# ★ 刻意**只覆盖 `.sh`**（**不用** `archive/**`）：同两目录下另有 28 个非 `.sh` 件（`.py` 23 · `.ps1` 3 ·
+#   `.txt` 1 · `.json` 1）**当前本就是 `w/crlf` 且 clean** ⇒ 若一并纳入会**新造 28 个真 M**；
+#   且 `archive/**` 还会罩到潜在二进制件。★ 非 `.sh` 维持原「不处理」。
+# 改判全文（原文保留）见 spec/d6-agent-standard/O102-line-ending-closure-verification.md §8。
+# ============================================================================
+archive/**/*.sh          text eol=lf
+tests/b5q/**/*.sh        text eol=lf

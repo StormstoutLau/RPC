@@ -59,6 +59,7 @@ O-102 原登记（2026-09-26）三条「为什么值得登记」，2026-09-30 �
   `ops/llama-serve-instance` · `ops/lm-download/*.sh` · `ops/*.service` · `ops/*.timer`。
 - ★ **已裁「不处理」**：`archive/**` 与 `tests/b5q/**` 的 `w/crlf`（原文实测：`.sh` 中 `w/crlf` 的 235 里
   **211 在 `archive/`**）—— 理由 = **不面向执行**，且原文已实测"无伤害路径"。
+  - ★ **2026-10-19 改判（见 §8）**：该「不处理」**仅对两目录下的 `.sh` 撤销**（非 `.sh` 维持）。
 - ⚠ **仍如实留着（本闭环不消灭它们）**：
   1. **全仓仍 `w/lf` / `w/crlf` 并存**（射程刻意不铺全仓）⇒ 原文那句"**两种约定并存**"**依旧成立**；
   2. **`w/mixed` 仍在产生**（生成源 = 编辑工具）—— 射程内已结构性挡住，射程外无危害；
@@ -77,3 +78,17 @@ O-102 原登记（2026-09-26）三条「为什么值得登记」，2026-09-30 �
 - **落地记录**：[DEVELOPMENT-LOG.md](./DEVELOPMENT-LOG.md) `2026-09-30（续②）`。
 - **前置**：commit `fc1ae8f`（`.gitattributes` 立，2026-09-29，ADR-0006 v1.3 同批）· 判据 = `gates`（站上件逐字节比对）。
 - **未新增脚本**（`ADR-0004` 无需登记）· **未改任何产物字节**（§3）。
+
+## 8. 【改判】2026-10-19：`archive/**` 与 `tests/b5q/**` 的 `.sh` 纳入射程（§5「不处理」部分撤销）
+
+- **触发**：清理工作区长期存在的 **231 个「假 M」**（`archive/scripts-history` 119 · `archive/root-scripts` 91 · `tests/b5q` 21；**全部 `.sh`**）。
+- **根因（实测，非推测）**：本仓 `core.autocrlf=true`。这 231 件的**工作树字节与 HEAD blob 逐字节相同**（`git hash-object --no-filters` == `HEAD:<path>`，**231/231 一致**）且为 **LF**；git 因 autocrlf **期望**工作树为 CRLF ⇒ 因此永久判 ` M`。
+  - `git update-index --refresh` **清不掉**（复测：报 `needs update` 230 行、`exit=1`）；`git add`（仅重写索引 stat，`git diff --cached` 空）可**临时**清掉，但**一次整树 `checkout` / `stash pop` / `reset --hard` 即复发**。
+  - ⇒ 该「不处理」的**新代价**有两条：① 假 M 常驻（污染 `git status`）；② 检出后为 CRLF ⇒ **`.sh-crlf` 门禁假红**（`.sh` 被 bash 执行前必须是 LF）。
+- **改判动作（最小改动）**：[.gitattributes](../../.gitattributes) 新增两行 —— `archive/**/*.sh  text eol=lf` · `tests/b5q/**/*.sh  text eol=lf`。
+  - ★ **刻意只覆盖 `.sh`（不用 `archive/**`）**：实测这两目录下另有 **28 个非 `.sh` 件**（`.py` 23 · `.ps1` 3 · `.txt` 1 · `.json` 1）**当前全为 `w/crlf` 且 clean** ⇒ 若一并纳入会**新造 28 个「真 M」**；且 `archive/**` 还会罩到潜在二进制件。
+  - ★ **非 `.sh` 维持原「不处理」**。
+- **口径（别读错）**：原「不处理」的理由（"不面向执行"）**本身没错**；改判针对的是**新出现的第二条代价**（假 M + 假红），与"是否面向执行"无关。§5 射程的**其余部分不动**（`ops/**` 站上件 · `service` / `timer`）。
+- **同源对照自证**：改后 `git check-attr text eol -- <样本>.sh` = `text: set` · `eol: lf`；`git ls-files --eol` 该批 = `i/lf w/lf`；`git status` **= 0 条**（改前 231）；`syntax` 的 **`.sh-crlf: 424 文件 / 0 失败`** 不变；门禁结论 **PASS**。
+- **不变项**：§5 第 2 条「全仓仍 `w/lf` / `w/crlf` 并存」**仍成立**（本次仅收 `.sh` 一轴）。
+- **台账**：[OPEN-ISSUES.md](./OPEN-ISSUES.md) 的 **`O-102`** 维持 `✅ 已闭环`；本改判为**射程修订**，已在该行补一行指向本节，**不新开条目**。
