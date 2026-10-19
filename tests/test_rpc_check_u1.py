@@ -256,6 +256,29 @@ def test_the_domain_rule_is_not_vacuous():
     assert R.namespace_domain_error(bad["namespace"], _real_reg()) is not None
 
 
+def test_u1_decl_conflicts_duplicate_identity_and_fallback_version():
+    """`U1#6`（2026-10-18）：**声明集合级**两条 —— ①**身份冲突**（两个声明共用同一 `identity`）必判红；
+    ②**兜底版本可见化**：`version == U1_DEFAULT_VERSION` 的声明被**报数**（该维度**实际失效**）。
+    ⚠ 刻意**不改默认值** —— 全仓两条真实身份都用 `0.0.0`，改它会破坏复算。
+
+    ★ 先验红：本测试在 `u1_decl_conflicts` **未实现**前必然失败（属性不存在）。
+    """
+    f = getattr(R, "u1_decl_conflicts", None)
+    assert f is not None, "`u1_decl_conflicts` 不存在 ⇒ U1#6 的集合级判据缺失"
+    dup = f"{R.U1_PREFIX}:" + "a" * R.U1_TRUNC
+    decls = [("b.yaml", {"namespace": "rpc", "identifier": "b", "version": "0.0.0", "identity": dup}),
+             ("c.yaml", {"namespace": "rpc", "identifier": "c", "version": "0.0.0", "identity": dup})]
+    bad, n_fb = f(decls)
+    assert bad and any("重复" in b for b in bad), f"重复身份必须判红: {bad}"
+    assert n_fb == 2, f"兜底版本应报数 2，实为 {n_fb}"
+    ok = [("b.yaml", {"namespace": "rpc", "identifier": "b", "version": "1.2.3",
+                      "identity": f"{R.U1_PREFIX}:" + "a" * R.U1_TRUNC}),
+          ("c.yaml", {"namespace": "rpc", "identifier": "c", "version": "0.0.0",
+                      "identity": f"{R.U1_PREFIX}:" + "b" * R.U1_TRUNC})]
+    bad2, n_fb2 = f(ok)
+    assert bad2 == [] and n_fb2 == 1, f"正例应 无冲突 + 兜底 1：bad={bad2} n_fb={n_fb2}"
+
+
 def test_repo_registry_covers_real_declarations_and_the_census_gap():
     """★ 端到端：真读 `inventory/namespaces.yaml` —— ① 注册表自洽；② 两个真声明都在域内；
     ③ **`U1#5` 普查出的缺口已补**：`auto_prover` 在域里、且 `Open_Data` 是 **alias 而非 id**。"""
@@ -275,6 +298,71 @@ def test_repo_registry_covers_real_declarations_and_the_census_gap():
     assert R.namespace_for_project("Auto_Prover", reg) == "auto_prover"
     # ⚠ 未登记 ⇒ **原样返回**（不猜、不造白名单）—— 这是与旧行为一致的那一半
     assert R.namespace_for_project("Unknown_Proj", reg) == "Unknown_Proj"
+
+
+# ── ⑤d ★★ `U3#5`（2026-10-18）：**RFC 8785 的转义 ≡ 第二个工具链的 JSON 序列化** ──────
+# 未实测原话（U3 spec 末节 5 · U1 spec §1.3 同一条）："**RFC 8785 跨语言 / 跨工具链的字节级一致性未验证**"。
+# 本段两半（刻意分开，因为它们的**证据强度不同**）：
+#   ① **字面量**钉住 JCS 的转义形态 —— **不依赖任何外部工具** ⇒ 门禁永远跑得到，且改动会被抓住；
+#   ② **若本机有 node**，拿它的 `JSON.stringify`（ECMAScript 的 JSON 序列化）与我们的字节**逐字节对**。
+#      ⚠ **无 node ⇒ 打印【可见的】SKIP**（环境降级，**不是**静默消失 —— 本仓纪律：降级必须可见）。
+# ⚠ 射程如实：只对 `[str, str, str]` 这一形状声称（见 `u1_canonical_bytes` 的 docstring）——
+#    JCS 的数字序列化 / 键排序本实现**既不实现也不声称**，故**不在此测**（测了就是假装覆盖面更大）。
+_ESCAPE_CASES = [
+    ("分隔符注入面（本规范最关心的那类）", ("a|b", "c__d", "0.0.0"), b'["a|b","c__d","0.0.0"]'),
+    ("引号 / 反斜杠", ('ns"q', "id" + "\\" + "back", "1.2.3"), b'["ns\\"q","id\\\\back","1.2.3"]'),
+    ("控制字符（tab ⇒ `\\t` · U+0001 ⇒ `\\uXXXX` **小写** hex）",
+     ("ns\tx", "id\u0001y", "0.0.0"), b'["ns\\tx","id\\u0001y","0.0.0"]'),
+    ("非 ASCII（**不转义**，原样 UTF-8 字节）", ("中文空间", "标识-ñ-ü", "0.0.0"),
+     '["中文空间","标识-ñ-ü","0.0.0"]'.encode("utf-8")),
+]
+
+
+def test_jcs_escaping_is_pinned_by_literals():
+    """★ 逐字节钉住 JCS 的转义：注入面 / 引号 / 反斜杠 / 控制字符 / 非 ASCII。"""
+    for why, (ns, i, v), want in _ESCAPE_CASES:
+        got = R.u1_canonical_bytes(ns, i, v)
+        assert got == want, f"JCS 转义不符（{why}）: got={got!r} want={want!r}"
+
+
+def _node_canonical_hex(cases):
+    """把 cases 交给 `node` 的 `JSON.stringify` ⇒ 每例的**字节 hex**；**无 node / 失败 ⇒ None**。"""
+    import json as _json        # 仅在**喂给 node** 这一步用（是把字符串序列化成 JSON **文本**，不是我们的判据）
+    import shutil
+    import subprocess
+    exe = shutil.which("node")
+    if not exe:
+        return None
+    script = ("const a=JSON.parse(require('fs').readFileSync(0,'utf8'));"
+              "for(const c of a) console.log(Buffer.from(JSON.stringify(c),'utf8').toString('hex'));")
+    payload = _json.dumps([[ns, i, v] for _why, (ns, i, v), _w in cases]).encode("utf-8")
+    try:
+        p = subprocess.run([exe, "-e", script], input=payload, capture_output=True, timeout=30)
+    except Exception:
+        return None
+    if p.returncode != 0:
+        return None
+    return [l.strip() for l in p.stdout.decode("utf-8", "replace").splitlines() if l.strip()]
+
+
+def test_cross_toolchain_json_serialization_is_byte_identical():
+    """★★ `U3#5` 的本体：本实现 vs **第二个工具链**（node / ECMAScript 的 `JSON.stringify`）**逐字节**对。"""
+    py_hex = [R.u1_canonical_bytes(ns, i, v).hex() for _why, (ns, i, v), _w in _ESCAPE_CASES]
+    node_hex = _node_canonical_hex(_ESCAPE_CASES)
+    if node_hex is None:
+        print("  SKIP 环境降级：本机无 node（或调用失败）⇒ 跨工具链这**一半没跑**"
+              "（可见，非静默；字面量那一半仍在上一条里跑着）")
+        return
+    assert node_hex == py_hex, f"跨工具链**字节不一致**：\n  py  ={py_hex}\n  node={node_hex}"
+
+
+def test_the_literal_vectors_are_not_vacuous():
+    """★ **先验红自证**：`json.dumps` 的**默认**（`ensure_ascii=True` + 默认分隔符）在**每一例**上
+    都必须与上面的 JCS 字面量**不同** —— 否则这些字面量没在判 JCS（本仓头号形态：判据什么都没判）。"""
+    import json as _json
+    same = [why for why, (ns, i, v), want in _ESCAPE_CASES
+            if _json.dumps([ns, i, v]).encode("utf-8") == want]
+    assert not same, f"默认 `json.dumps` 竟与 JCS 字面量同值 ⇒ 这些字面量是恒真的（假绿）: {same}"
 
 
 # ── ⑥ 端到端真读：本仓真的写了这两个声明（消掉 U1 spec 未实测 #2）──────────

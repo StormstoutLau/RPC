@@ -9,7 +9,7 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
     python ops/cluster.py frames
     python ops/cluster.py unload
     python ops/cluster.py estimate <alias> [--station A|B|C] [--ctx N] [--parallel N] [--ctk q8_0] [--ctv q8_0]  # 事前预估 (内存/耗时)
-    python ops/cluster.py models {list|orphan|link|prune|verify|meta} [--station A|B|C] [--go]  # 模型全生命周期
+    python ops/cluster.py models {list|orphan|link|prune|verify|meta|fetch} [--station A|B|C] [--go]  # 模型全生命周期 (fetch=下发下载任务)
     python ops/cluster.py versions                                         # 引擎版本矩阵 (RPC/单机/LM Studio/opencode/内核)
     python ops/cluster.py e2e
     python ops/cluster.py studio status                                     # studio 套件矩阵 (版本/修复/防线 pin/引擎同版/复原路径; 只读)
@@ -53,7 +53,13 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
              支持 --station/--ctx/--parallel/--ctk/--ctv 覆盖 conf 推测值。
     models   模型全生命周期 (P1-2): list=按 (repo,模型目录) 聚合的清单(体积/量化/conf/是否已加载);
              orphan=物理库有但聚合视图看不到; link=给孤儿建软链; prune=清断链;
-             verify 校验, meta=单站元数据。改站上状态的子命令**默认只出计划, --go 才动手**。
+             verify 校验, meta=单站元数据。
+             ★ fetch=**下发站上 `lm-download@<任务>` 下载任务**（把"下载"纳入唯一入口；ADR-0004 D3 路径①）:
+               `models fetch <repo> <文件> [<文件>...] --station A|B|C [--name 任务名] [--dir DL_DIR]
+                [--mirror hf-mirror|hf] [--go]`。单元 `ExecStart` 只吃**一个** `${DL_URL}`
+               ⇒ 多文件（GGUF 分片 + mmproj）自动拆成 N 个任务；必须走本通道（`hf-mirror` 无 Xet
+               ⇒ `hf download` 撞 HF >50 GB 常规上限，ADR-0010 实测踩过）。
+             改站上状态的子命令**默认只出计划, --go 才动手**。
     versions 引擎版本矩阵 (P1-3): RPC 引擎 / 单机引擎 / LM Studio / opencode / 内核 三站并列,
              暴露版本漂移与受控路径完整性缺口 (MANIFEST md5 计数)。
     studio   studio 套件矩阵 (只读): 三站版本/修复项/防线 pin/引擎是否同版/复原路径。
@@ -1484,7 +1490,7 @@ def _cmd_models_meta(stations) -> int:
 
 
 def cmd_models(argv) -> int:
-    """cluster.py models {list|orphan|link|prune|verify|meta} [--station A|B|C] [--go]
+    """cluster.py models {list|orphan|link|prune|verify|meta|fetch} [--station A|B|C] [--go]
 
     list   三站模型资产概览（物理库 / 聚合视图 / 孤儿 / 断链 计数）
     orphan 只列孤儿与断链详情（诊断用）
@@ -1492,12 +1498,15 @@ def cmd_models(argv) -> int:
     prune  清理死链（默认 dry-run, 加 --go 才写入）
     verify 断链检查 + 主 gguf 可读性抽验（gguf-meta）
     meta   模型元数据表: 原生 ctx / 量化(含来源) / 站上 conf 加载参数 (P1-6)
+    fetch  下发站上 `lm-download@<任务>` 下载任务（默认只出计划, --go 才下发; 见 _cmd_models_fetch）
     """
     act = (argv[0] if argv else "list").lower()
-    if act not in ("list", "orphan", "link", "prune", "verify", "meta"):
-        print("用法: cluster.py models {list|orphan|link|prune|verify|meta} "
+    if act not in ("list", "orphan", "link", "prune", "verify", "meta", "fetch"):
+        print("用法: cluster.py models {list|orphan|link|prune|verify|meta|fetch} "
               "[--station A|B|C] [--go]")
         return 1
+    if act == "fetch":          # fetch 自带参数解析（repo + 多个文件 + --mirror/--dir/--name）
+        return _cmd_models_fetch(argv[1:])
     only, do_go = None, False
     for a in argv[1:]:
         if a in ("A", "B", "C") or (len(a) == 1 and a.upper() in ("A", "B", "C")):
@@ -1565,6 +1574,128 @@ def cmd_models(argv) -> int:
         print(f"\n[cluster] 合计: 孤儿 {total_orphan} / 断链 {total_broken}"
               + ("   → 用 `cluster.py models link --go` 修复孤儿" if total_orphan else "   ✓ 无遗漏"))
     return 0
+
+
+# ── models fetch：把「下载」纳入唯一入口（ADR-0004 D3 路径①）─────────────
+LM_DL_UNIT = "lm-download@"
+LM_DL_TASKS = "/etc/lm-download/tasks"
+LM_DL_UNIT_FILE = "/etc/systemd/system/lm-download@.service"
+# 下载通道产物的属主归位目标 = 站上服务用户（与推理/管理面同一身份）。
+# ★ 为什么必须显式 chown（2026-10-17 实测教训）：`lm-download@` 是 **root** oneshot，且本命令
+#   用 `sudo -n mkdir` 建目录 ⇒ 目录归 root:root 755 ⇒ **服务用户对该目录只读** ⇒ 站上用户执行的
+#   任何"改写目录内容"的动作（分片合并 / 改名 / 裁撤）都会失败 —— 实测 `llama-gguf-split --merge`
+#   以 `std::__ios_failure`(SIGABRT) 中止，排查成本高（看着像工具坏了）。
+#   只 chown **目录本身**（不做 -R）即足够：unlink / 建文件只需**父目录**写权限，文件保持
+#   root 0644 不影响读取（推理面只读权重）。
+SERVICE_USER = "scott-lau"
+
+
+def _fetch_plan(repo, files, base, dl_dir, mirror):
+    """离线可测的**纯函数**：repo/文件 → [任务]。
+
+    ★ 为什么**一个任务一个 URL**：站上 `lm-download@.service` 的 `ExecStart` 只吃**一个** `${DL_URL}`
+      （2026-10-17 实测该 unit 文件）⇒ GGUF 分片 + mmproj 这类多文件**必须拆成 N 个任务**，塞进同一 env 无解。
+    ★ 为什么**必须走本通道**：`hf-mirror` 无 Xet 端点 ⇒ `hf download` 回落常规 HTTP ⇒ 撞 HF 的
+      **>50 GB 常规下载上限**（ADR-0010 已实测踩过）；本单元是 aria2c `--max-connection-per-server=16
+      --split=16 --min-split-size=64M --continue=true` 分段并行 + 断点续传（净速 ≈ hf-mirror 单流的 11×）。
+    ★ `DL_DIR` 缺省落在**聚合视图** `/data/models/gguf/<owner>/<repo>`，与既有落点约定一致（手册 §5.7）。
+    """
+    owner, _, rname = repo.partition("/")
+    rname = rname or owner
+    dl = dl_dir or f"/data/models/gguf/{owner}/{rname}"
+    host = "https://huggingface.co" if mirror == "hf" else "https://hf-mirror.com"
+    out = []
+    for i, f in enumerate(files, 1):
+        task = base if len(files) == 1 else f"{base}-{i}"
+        env = [f"# {task} — 由 `cluster.py models fetch` 下发（统一入口; ADR-0004 D3①）",
+               f"# repo: {repo}",
+               f"# file: {f}",
+               f"DL_URL={host}/{repo}/resolve/main/{f}",
+               f"DL_DIR={dl}",
+               f"DL_OUT={f.rsplit('/', 1)[-1]}"]
+        out.append({"task": task, "url": f"{host}/{repo}/resolve/main/{f}", "dir": dl, "env": env})
+    return out
+
+
+def _cmd_models_fetch(argv) -> int:
+    """cluster.py models fetch <repo> <文件> [<文件>...] --station A|B|C
+    [--name 任务名] [--dir DL_DIR] [--mirror hf-mirror|hf] [--go]
+
+    ★ 默认只出计划；`--go` 才下发（与 link / prune / containers 同纪律）。
+    ★ 用 `systemctl start --no-block`：单元是 `Type=oneshot` ⇒ 不带 `--no-block` 会在**整个下载过程**阻塞。
+    """
+    pos, station, base, dl_dir, mirror, go = [], None, None, None, "hf-mirror", False
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("--station", "--name", "--dir", "--mirror") and i + 1 < len(argv):
+            v = argv[i + 1]
+            if a == "--station":
+                station = v.upper()
+            elif a == "--name":
+                base = v
+            elif a == "--dir":
+                dl_dir = v
+            else:
+                mirror = v
+            i += 2
+            continue
+        if a == "--go":
+            go = True
+            i += 1
+            continue
+        pos.append(a)
+        i += 1
+    if len(pos) < 2:
+        print("用法: cluster.py models fetch <repo> <文件> [<文件>...] --station A|B|C "
+              "[--name 任务名] [--dir DL_DIR] [--mirror hf-mirror|hf] [--go]")
+        return 1
+    repo, files = pos[0], pos[1:]
+    if "/" not in repo:
+        print("[models fetch] <repo> 需为 `<owner>/<name>` 形态（如 unsloth/Foo-GGUF）")
+        return 1
+    if "'" in repo or any("'" in f for f in files):
+        print("[models fetch] repo/文件名含单引号 ⇒ 会被远端下发命令截断，拒绝执行")
+        return 1
+    if station not in ("A", "B", "C"):
+        print("[models fetch] 必须显式 --station A|B|C（落盘站）。实测 2026-10-17: B 站已装该单元，C 站无 tasks 目录")
+        return 1
+    if base is None:
+        base = repo.split("/")[-1].replace("-GGUF", "").lower() or "model"
+    plan = _fetch_plan(repo, files, base, dl_dir, mirror)
+    print(f"[models fetch] {repo} → {station} 站 · {len(plan)} 个任务（mirror={mirror}）"
+          + ("" if go else "   （计划 · --go 才下发）"))
+    for t in plan:
+        print(f"\n  ── 任务 {t['task']} —— {t['url']}")
+        print(f"    {LM_DL_TASKS}/{t['task']}.env:")
+        for ln in t["env"]:
+            print(f"      {ln}")
+        print(f"    $ sudo -n mkdir -p '{t['dir']}' && sudo -n chown {SERVICE_USER}:{SERVICE_USER} '{t['dir']}'")
+        print(f"    $ sudo -n systemctl start --no-block {LM_DL_UNIT}{t['task']}")
+    if not go:
+        print(f"\n  提示: 加 --go 下发；进度 `journalctl -u {LM_DL_UNIT}<任务> -f`")
+        return 0
+    ok, out = ssh_run(station, f"[ -f {LM_DL_UNIT_FILE} ] && echo UNIT_OK || echo UNIT_MISSING", timeout=60)
+    if "UNIT_OK" not in (out or ""):
+        print(f"[models fetch] ✗ {station} 站无 {LM_DL_UNIT_FILE} ⇒ 该站未接下载通道（先装单元，或换站）")
+        return 1
+    ok_all = True
+    for t in plan:
+        env_cmd = ("printf '%s\\n' " + " ".join("'%s'" % ln for ln in t["env"])
+                   + f" | sudo -n tee {LM_DL_TASKS}/{t['task']}.env >/dev/null")
+        for c in (f"sudo -n mkdir -p '{t['dir']}' && sudo -n chown {SERVICE_USER}:{SERVICE_USER} '{t['dir']}'",
+                  f"sudo -n mkdir -p {LM_DL_TASKS}",
+                  env_cmd,
+                  f"sudo -n systemctl start --no-block {LM_DL_UNIT}{t['task']}"):
+            ok, out = ssh_run(station, c, timeout=120, strict=True)
+            print(f"  {'✓' if ok else '✗'} {t['task']}: {c[:70]}")
+            if not ok:
+                print(f"      {(out or '').strip()[:200]}")
+                ok_all = False
+                break
+    if ok_all:
+        print(f"\n[models fetch] 已下发 ✓  进度: journalctl -u {LM_DL_UNIT}<任务> -f")
+    return 0 if ok_all else 1
 
 
 # ── e2e ────────────────────────────────────────────────
@@ -4876,6 +5007,86 @@ def _inbox_truth():
 
 _MANIFEST_LINE_RE = re.compile(r"^([0-9a-f]{64})\s{2}(.+)$")
 
+# ── inbox 交付束的 **U-1 坐标**（2026-10-19 裁定落地 · 用户「按照建议执行」）──────────────
+# ★★ **真值只在这一处**（`U1#7-三元组`）：算法 / 截断 / 前缀拼法一律调 `rpc_check`，
+#    **不在此重抄**（重抄 = 同一事实两个定义点）。
+# 依据：U1 spec §1.3 —— identifier 的**既有映射表已写**「inbox 的文件路径」；「无版本者写 `0.0.0`」
+#        + `inventory/namespaces.yaml` 的 `rpc_inbox`（`status: active`）。
+# 口径（裁定）：**id = 清单数据行里的相对路径**（相对清单头声明的「项目根」）· **ver = `0.0.0`**。
+# ⚠ 不许把 `run` / 交付分级 / 生成时间写进 identity —— 它们**都在头部、或已在 id 里**
+#    ⇒ 写进去 = "同一事实两处表达"，**且重封即变 ⇒ 身份抖动**。
+# ⚠ **已知残余（登记，不在本次改）**：id 按构造**不含受理目录** ⇒ 两条不同受理目录若出现
+#    `agent-out/<同 run>/<同名>` 会**撞身份**；本仓当前零消费者 ⇒ 登记为条件触发（见 U1 spec §未实测 7）。
+INBOX_U1_NS = "rpc_inbox"
+INBOX_U1_VER = "0.0.0"
+
+
+def _u1_identity(rel):
+    """一条 inbox 条目的 **U-1 身份**（坐标在这里拼，算法/截断来自 `rpc_check`）。"""
+    import rpc_check                      # 惰性 import —— 同 `_proj_roots` 的做法（避免顶层循环依赖）
+    return rpc_check.u1_identity(INBOX_U1_NS, rel, INBOX_U1_VER)
+
+
+def _u1_decl_line():
+    """文件级**声明行** `# u1:<algo>:<trunc>` —— 拼法取自 `rpc_check.u1_header_line`（唯一真值源）。"""
+    import rpc_check
+    return rpc_check.u1_header_line()
+
+
+def parse_u1_track(text, decl_line=None):
+    """**纯函数** → `(declared, pairs, errors)`：解析 MANIFEST 的 **u1 轨**（`U1#7` 的第二轨）。
+
+    `declared` = 首部有没有**声明行** `# u1:<algo>:<trunc>` —— ★★ **这就是本轨的开关**：
+      没有声明 ⇒ `verify_manifest` **不判** u1（**旧清单零影响** ⇒ 不追溯改历史）。
+    `pairs`    = `[(identity, relpath)]`，**按邻近配对**：一条 `# u1:…` 行 + **紧随其后**的数据行
+      （identifier 就是数据行里那条路径 ⇒ **路径只写一处**，身份对得上一一）。
+    `errors`   = 轨道缺陷（数据行缺身份行 / 身份行后面没有数据行 / 有 u1 行却没声明行 …）。
+
+    ⚠ 为什么是"**声明制**"而不是"有条目就必须双轨"：后者会让**既有清单当场判红**
+      —— 那正是 D-23 要防的"**追溯改历史**"。⇒ 老清单照旧、新清单强制双轨。
+    """
+    if decl_line is None:
+        decl_line = _u1_decl_line()
+    # ★★ **先判"本文件是否声称带 u1 轨"** —— 这决定要不要严判：
+    #    · 有声明行（正常新清单） ⇒ 严判（每条数据行都要有身份行）
+    #    · 既无声明、也**一条 u1 行都没有**（旧清单） ⇒ **不严判** ⇒ 一个字都不报（零影响）
+    #    · 无声明却**出现了** u1 行（半拉子） ⇒ 严判 + 点名"轨不自描述"
+    #   ⚠ 首稿把"每条数据行都要有身份行"**无条件**执行 ⇒ 旧清单**当场判红**
+    #     —— 那正是 D-23 要防的"追溯改历史"；夹具第 ① 条当面抓住（先验红的收益）。
+    stripped = [ln.strip() for ln in text.splitlines()]
+    declared = decl_line in stripped
+    has_u1 = any(ln.startswith("# u1:") for ln in stripped)
+    strict = declared or has_u1
+    pairs, errors = [], []
+    pending = None
+    for s in stripped:
+        if not s:
+            continue
+        if s == decl_line:
+            continue
+        if s.startswith("# u1:"):
+            if pending is not None:
+                errors.append(f"上一条 u1 行（{pending[:28]}…）后面**没有数据行** ⇒ 身份悬空")
+            pending = s[2:].strip()
+            continue
+        if s.startswith("#"):
+            continue
+        m = _MANIFEST_LINE_RE.match(s)
+        if not m:
+            continue
+        rel = m.group(2).strip()
+        if pending is None:
+            if strict:
+                errors.append(f"{rel}: **缺 u1 轨**（该数据行前面没有紧邻的 `# u1:…` 身份行）")
+        else:
+            pairs.append((pending, rel))
+            pending = None
+    if pending is not None:
+        errors.append(f"末一条 u1 行（{pending[:28]}…）后面**没有数据行** ⇒ 身份悬空")
+    if not declared and has_u1:
+        errors.append(f"出现 u1 行却**没有**文件级声明行 `{decl_line}` ⇒ 轨不自描述")
+    return declared, pairs, errors
+
 
 def parse_manifest(text):
     """**纯函数**: 解析 `MANIFEST.sha256` -> `(项目根, [(sha256, 相对路径)])`。
@@ -4900,12 +5111,20 @@ def parse_manifest(text):
     return root, entries
 
 
-def verify_manifest(text, read_bytes=None):
+def verify_manifest(text, read_bytes=None, identity_of=None):
     """**纯函数**（注入 `read_bytes` ⇒ 离线可测）: 重算每条 sha256 与记录比对。
 
     D6-P1-1 §11.1-C 纪律 2「**`--check` 等价物（重算 → 比对）**」的唯一落点 ——
     供 `inbox seal --check`（生产者侧）与门禁 `inbox` 断言（**禁手改**机判）**共用**（避免两份实现）。
     返回 `(root, ok, missing, bad)`：`bad` = 逐条不符 / 读不到的明细（**含相对路径**）。
+
+    ★ 2026-10-19 起**还判 u1 轨**（`U1#7` 裁定落地）—— 口径是「**声明制**」：
+      仅当清单首部有**声明行**（`# u1:<algo>:<trunc>`）**才**判第二轨；**没有声明 ⇒ 不判**
+      （旧清单**零影响** ⇒ 不重跑、不追溯改历史）。判据两条：
+        ① **轨完整性**：每条数据行都要有**紧邻**的 `# u1:…` 身份行（缺一轨 ⇒ bad）；
+        ② **身份复算**：身份必须与 `identity_of(rel)` 相符 ⇒ 格式合规但内容编造**也拦得住**。
+      `identity_of` **注入**（同 `edge_direction_error` 的做法）⇒ 夹具离线可跑；默认
+      走 `rpc_check.u1_identity`（**唯一真值源** ⇒ 此处不造第二份实现）。
     """
     read_bytes = read_bytes or (lambda p: Path(p).read_bytes())
     root, entries = parse_manifest(text)
@@ -4925,6 +5144,19 @@ def verify_manifest(text, read_bytes=None):
             bad.append(f"{rel}: **哈希不符**（记录 {want[:12]}… 实算 {got[:12]}…）⇒ 被手改或源被改动")
         else:
             ok += 1
+
+    # ── u1 轨（**声明制**：无声明 ⇒ 一律不判 ⇒ 旧清单/旧束零影响，不追溯改历史）──────────
+    declared, pairs, terrs = parse_u1_track(text)
+    bad.extend(terrs)
+    if declared:
+        identity_of = identity_of or _u1_identity
+        if not entries:
+            bad.append("声明了 u1 轨却**零数据行** ⇒ 判据没有对象（本轨要求至少 1 条）")
+        for ident, rel in pairs:
+            want_id = identity_of(rel)
+            if want_id != ident:
+                bad.append(f"{rel}: u1 身份**复算不符**（记录 {ident[:28]}… 复算 {want_id[:28]}…）"
+                           f"⇒ 格式合规但内容编造，或身份被手改")
     return root, ok, missing, bad
 
 
@@ -5017,12 +5249,15 @@ def _inbox_seal(argv) -> int:
         for f in sorted(r.iterdir()):
             if not f.is_file():
                 continue
-            lines.append(f"{hashlib.sha256(f.read_bytes()).hexdigest()}  agent-out/{r.name}/{f.name}")
+            rel = f"agent-out/{r.name}/{f.name}"
+            lines.append(f"# {_u1_identity(rel)}")        # ★ u1 轨：**紧邻**在数据行之前（§1.4「每条之前一行」）
+            lines.append(f"{hashlib.sha256(f.read_bytes()).hexdigest()}  {rel}")
             total += 1
 
     dst = entry / "30_evidence" / "MANIFEST.sha256"
     when = datetime.datetime.now().astimezone().isoformat()
     head = [
+        _u1_decl_line(),                              # ★ 文件级**声明行**（§1.4「每文件首行」）：本清单带 u1 轨
         "# MANIFEST.sha256 — 30_evidence 交付证据束 (ADR-0008 §5.1)",
         "# 作用：钉住本次交付的证据件字节态 —— 证明「这一批产出就是这些」，且回收之后未被改动。",
         f"# 受理目录: inbox/{name}    项目根: {root}    交付分级: {grade}",
@@ -5046,7 +5281,13 @@ def _inbox_seal(argv) -> int:
         print("[seal] 以上为**计划**（未写文件）。确认无误后加 --go 落盘。")
         return 0
     dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_text(payload, encoding="utf-8")
+    # ★ 2026-10-19 改 `write_text` → `write_bytes`：**行尾必须是 LF**（本次真跑实测抓出的缺陷）
+    #   `Path.write_text(..., encoding=…)` 在 Windows 上会把 `\n` 翻成 `\r\n`，而 `sha256sum -c`
+    #   把那个 `\r` 当成**文件名的一部分** ⇒ 逐条 `'agent-out/…/a.txt'$'\r': No such file or directory`
+    #   → `FAILED open or read` → **exit 1** ⇒ 清单头自称的"`sha256sum -c` 应全 OK"**在 Windows 上不成立**
+    #   （本仓既有 `00_handoff/MANIFEST.sha256` 同样是 CRLF ⇒ **预先存在**，不是本次引入；那条属另案，勿动）。
+    #   ⚠ python 侧消费者对两种行尾都容忍（`parse_manifest` 用 `splitlines()`）⇒ 影响**只在** CLI 那条路。
+    dst.write_bytes(payload.encode("utf-8"))
     print(f"[seal] 已写入 {dst}（{len(payload)} 字节）。")
     _delivery = "/".join(s for s, sp in _inbox_truth().items()
                          if "manifest" in ((sp or {}).get("requires") or []))

@@ -551,6 +551,41 @@ def check_syntax(ctx):
                     detail.append(f"无扩展名脚本覆盖不全: 实际检查 {seen} / 应有 {len(sb_sh)} 个")
     counts[".sh"] = (len(sh_files), bad_sh)
 
+    # ── A. `.sh` 行尾: **CRLF 字节判据** (2026-10-17, 与上面的 `.ps1-bom` 同机理) ──────────
+    # 为什么必须**另判一次"字节"**: 本栏的 `bash -n` 跑在 **Git Bash(MSYS)** 上, 而脚本的**靶子是 Linux bash**。
+    #   实测(同一份 CRLF 的 .sh, 样本 `archive/scripts-history/gen_manifest.sh`):
+    #     · 门禁侧 MSYS `bash -n` ⇒ **rc=0 通过**   (⇒ 本栏报 `.sh:414文件/0失败`, **漏判**)
+    #     · 站上 Linux `bash -n` ⇒ **报语法错** `未预期的记号 "}"`
+    #   ⇒ 解析式判据对"行尾"这类**字节级**属性**结构性不可见**, 那个绿是**假的**。
+    #   与 `.ps1-bom` 的教训**完全同源**: 解析判据抓不到字节级属性 ⇒ 必须另加一个"读字节"的维度。
+    # 判据(确定性, 与内容无关): `.sh` 与无扩展名 shebang 脚本**含任何 `0x0D`** ⇒ FAIL。
+    #   为什么不能靠 `.gitattributes`: 那里的 `text eol=lf` 只覆盖**已登记前缀**, 覆盖不到全仓与站上产物。
+    crlf_targets = sh_files + sb_sh
+    bad_crlf = 0
+    with tempfile.TemporaryDirectory() as td:
+        # 自证(双向): LF 样本必**不**含 CR、CRLF 样本必含 —— 判据本身要能被证伪, 才配写进 FAIL 集
+        lf_s, crlf_s = Path(td) / "lf.sh", Path(td) / "crlf.sh"
+        lf_s.write_bytes(b"#!/bin/bash\necho hi\n")
+        crlf_s.write_bytes(b"#!/bin/bash\r\necho hi\r\n")
+        ok_crlf_self = (b"\x0d" not in lf_s.read_bytes()) and (b"\x0d" in crlf_s.read_bytes())
+    if not ok_crlf_self:
+        bad_crlf = len(crlf_targets)
+        detail.append("(sh-crlf) 字节判据自证失败: LF 样本被误判 / CRLF 样本未被识别 ⇒ 本栏不可信, 拒绝给 PASS")
+    else:
+        for rel, path in crlf_targets:
+            try:
+                raw = path.read_bytes()
+            except OSError as e:
+                bad_crlf += 1
+                detail.append(f"(sh-crlf) {rel}  读字节失败: {type(e).__name__}")
+                continue
+            if b"\x0d" in raw:
+                bad_crlf += 1
+                detail.append(f"(sh-crlf) {rel}  含 CR(0x0D) ⇒ 行尾为 CRLF; 靶子是 **Linux bash**, "
+                              f"CRLF 会破坏解析(实测同文件 MSYS `bash -n` 通过而 Linux `bash -n` 报错) "
+                              f"⇒ 修: 转 LF (`dos2unix` / 编辑器设 LF / `.gitattributes` 加 `text eol=lf`)")
+    counts[".sh-crlf"] = (len(crlf_targets), bad_crlf)
+
     # 无扩展名脚本的 python 半边 (与 bash 无关, 总能查)
     bad_sb_py = 0
     if sb_py:
@@ -1273,6 +1308,16 @@ def _u1_prefix(trunc):
     return f"u1:{U1_ALGO}:{trunc}"
 
 
+def u1_header_line(trunc=U1_TRUNC):
+    """`# u1:<algo>:<trunc>` —— §1.4 的**头部注释行**（**唯一**拼它的地方）。
+
+    ★ 2026-10-19 新增（`U1#7` 裁定落地）：`ops/cluster.py` 的 inbox 清单要写这条**文件级声明行**
+      （声明"本清单带 u1 轨"），而算法 / 截断**只在本文件定义一次** ⇒ 拼法也必须只有一处
+      （消费方自己拼 = 造出第二个定义点）。⚠ `trunc` 参数只为历史长度复用，日常不传。
+    """
+    return "# " + _u1_prefix(trunc)
+
+
 def u1_canonical_bytes(namespace, identifier, version=U1_DEFAULT_VERSION) -> bytes:
     """U-1 的**哈希输入**：`["<ns>","<id>","<ver>"]` 的 RFC 8785 规范化 JSON 的 UTF-8 字节序列。
 
@@ -1422,7 +1467,73 @@ def edge_provenance_invalid(prov, prefixes):
         return True, f"前缀 {pref!r} 不在封闭集 {sorted(prefixes)}"
     if payload.strip() == "":
         return True, "载荷为空（有前缀没有内容）"
+    # ── ★ U3#3（2026-10-18）：`manual` 载荷必须是三段式 `<标识>:<日期>:reason=<理由>`（spec §3）──
+    #   此前只判「前缀 ∈ 封闭集 + 载荷非空」⇒ `manual:operator-a:2026-09-26`（缺理由段）与
+    #   `manual:C:/Users/admin:…`（作者标识是盘符路径）都被**放行** = 形态断言只做了一半。
+    if pref == "manual":
+        parts = payload.split(":")
+        if len(parts) < 3:
+            return True, f"`manual` 载荷不成**三段式** `<标识>:<日期>:reason=<理由>`（只切出 {len(parts)} 段）"
+        ident, date, rest = parts[0].strip(), parts[1].strip(), ":".join(parts[2:]).strip()
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+            return True, f"`manual` **日期段** {date!r} 不成 `YYYY-MM-DD`"
+        if not rest.startswith("reason=") or not rest[len("reason="):].strip():
+            return True, f"`manual` 第三段须以 `reason=<非空>` 起（实为 {rest!r}）"
+        if (not ident) or re.fullmatch(r"(\d{1,3}\.){3}\d{1,3}", ident) or ("/" in ident) or ("\\" in ident):
+            return True, (f"`manual` **作者标识** {ident!r} 不合规（不得是用户名/主机名/IP/盘符路径 ⇒ "
+                          f"用角色标识或哈希短串，如 `operator-a`）")
     return False, ""
+
+
+def edge_direction_error(e, identity_of):
+    """`U3#9`：`filetrack` 边的**方向自洽性** → `(错误原因 或 None, 是否**已核**方向)`。
+
+    spec §1.1：**`src` 依赖 `dst`** ⇒ `out=`（被写文件 = 依赖方产物）的身份应 == `src`；
+    `in=`（被读文件 = 被依赖方产物）的身份应 == `dst`。
+    ⚠ 方向反了**不报错、只静默多算/漏算**（U-4 失效传播全反）⇒ 必须机判（spec §未实测 9 的修法候选）。
+
+    ⚠ `identity_of(relpath) -> u1 身份 或 None` 是**注入**的（本函数保持纯 ⇒ 可离线正反夹测）。
+    ⚠ **解析不到身份 ⇒ 返回 `(None, False)`**（= 未核）—— 由调用方在 `notes` 里**显式报「未核 N 条」**，
+      绝不静默判通过（D-26：降级要有呈现位）。
+    """
+    prov = str(e.get("provenance") or "")
+    pref, _, payload = prov.partition(":")
+    if pref != "filetrack":
+        return None, False                       # 只对带 `in=`/`out=` 的 filetrack 可核
+    kv = {}
+    for tok in payload.split(","):
+        k, sep, v = tok.partition("=")
+        if not sep:
+            continue
+        # 形态是 `<版本>:in=…,out=…` ⇒ 键名取**最后一个 `:` 之后**那段（`in=` 前面还挂着版本号）
+        kv[k.rsplit(":", 1)[-1].strip()] = v.strip()
+    inp, outp = kv.get("in"), kv.get("out")
+    if not inp or not outp:
+        return (f"`filetrack` 载荷缺 `in=`/`out=`（spec §3 声明的形态）⇒ **无法核方向**（今 {kv}）"), False
+    if identity_of is None:
+        return None, False
+    id_in, id_out = identity_of(inp), identity_of(outp)
+    if id_in is None or id_out is None:
+        return None, False                       # 未核：解析不到 ⇒ 交调用方报「未核」
+    if id_out != e.get("src"):
+        return (f"方向**不自洽**：`out=`({outp}) 的身份 {id_out!r} ≠ `src` {e.get('src')!r}"), True
+    if id_in != e.get("dst"):
+        return (f"方向**不自洽**：`in=`({inp}) 的身份 {id_in!r} ≠ `dst` {e.get('dst')!r}"), True
+    return None, True
+
+
+def _u1_identity_of_path(relpath):
+    """读 `relpath`（相对仓根）yaml 的 `u1.identity`（U3 §5：`src`/`dst` 直接采用 U-1 身份）。"""
+    try:
+        import yaml
+        p = (ROOT / str(relpath)).resolve()
+        if not p.is_file():
+            return None
+        d = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        u = d.get("u1") or {}
+        return u.get("identity") if isinstance(u, dict) else None
+    except Exception:
+        return None
 
 
 def validate_edges(doc):
@@ -1506,6 +1617,20 @@ def check_edges(ctx):
     except Exception as e:
         return "FAIL", f"inventory/edges.yaml 解析失败: {type(e).__name__}: {e}", []
     bad, notes = validate_edges(doc)
+    # ── ★ U3#9（2026-10-18）：**方向自洽性**（`src` 依赖 `dst`，spec §1.1）──
+    #   此前**没有任何断言**检查"`src` 是否真的依赖 `dst`" ⇒ 方向反了不报错、只静默多算/漏算。
+    dir_bad, n_unres = [], 0
+    for i, e in enumerate((doc.get("edges") or []), 1):
+        if not isinstance(e, dict):
+            continue
+        reason, checked = edge_direction_error(e, _u1_identity_of_path)
+        if reason:
+            dir_bad.append(f"`edges[{i}]` {reason} ⇒ 方向反了会**静默**多算/漏算（U-4 失效传播全反）")
+        elif not checked and str(e.get("provenance") or "").startswith("filetrack"):
+            n_unres += 1
+    bad = bad + dir_bad
+    if n_unres:
+        notes.append(f"⚠ 方向**未核** {n_unres} 条（`filetrack` 解析不到身份 ⇒ 呈现位，不静默通过）")
     return ("FAIL" if bad else "PASS"), " · ".join(notes), bad
 
 
@@ -1648,6 +1773,32 @@ def check_id_storage(ctx):
     return "PASS", note, []
 
 
+def u1_decl_conflicts(decls):
+    """`U1#6`（2026-10-18）：**声明集合级**检查 → `(bad, n_fallback)`。
+
+    - **身份冲突**：两个文件声明**同一 `u1.identity`** ⇒ 同一身份两处声明（"唯一答案"被破坏）⇒ 判红。
+    - **兜底版本可见化**：`version == U1_DEFAULT_VERSION` 的声明计数 —— `0.0.0` 让「同一 identifier、
+      不同版本」产生**相同哈希** ⇒ 该维度**实际失效**（spec §未实测 6）。
+      ⚠ **刻意不判红、也不改默认值**：全仓两条真实身份都写 `0.0.0`，**改值会破坏复算**
+      （哈希变 ⇒ 身份变 ⇒ `edges.yaml` 的 `src`/`dst` 全失效）⇒ 只做**报数可见**。
+
+    `decls` = `[(文件名, decl_dict), ...]` —— **纯函数**（离线可正反夹测）。
+    """
+    bad, seen, n_fallback = [], {}, 0
+    for name, decl in decls:
+        if not isinstance(decl, dict):
+            continue
+        if str(decl.get("version")) == U1_DEFAULT_VERSION:
+            n_fallback += 1
+        iid = decl.get("identity")
+        if isinstance(iid, str) and iid:
+            if iid in seen:
+                bad.append(f"{name}: `u1.identity` 与 {seen[iid]} **重复** ⇒ 同一身份两处声明（U-1 冲突）")
+            else:
+                seen[iid] = name
+    return bad, n_fallback
+
+
 def check_u1_identity(ctx):
     """D7-P1 实现侧（U-1 落地）：`inventory/*.yaml` 的 **U-1 身份声明必须可复算**。
 
@@ -1679,6 +1830,7 @@ def check_u1_identity(ctx):
         return "FAIL", "命名空间注册表自身不自洽（见明细）", ns_bad
     ns_note = " · ".join(ns_notes)
     bad, declared, ok_recalc = [], 0, 0
+    pairs = []                                    # (`U1#6`) 供集合级冲突检查
     for p in sorted(U1_DECL_SCAN_DIR.glob("*.yaml")):
         text = p.read_text(encoding="utf-8")
         try:
@@ -1690,6 +1842,7 @@ def check_u1_identity(ctx):
         if decl is None:
             continue
         declared += 1
+        pairs.append((p.name, decl))                  # (`U1#6`)
         err = u1_verify_declaration(decl)
         # ★ `U1#5` ④：取值域 —— 与复算**分开报**（复算过不了 ≠ 取值域不对，反之亦然）
         if not err:
@@ -1701,12 +1854,17 @@ def check_u1_identity(ctx):
         if not any(U1_HEADER_RE.match(l) for l in text.splitlines()[:5]):
             bad.append(f"{p.name}: 有 `u1:` 身份声明，但**前 5 行内没有** `# u1:sha256:{U1_TRUNC}` 头部注释行"
                        f"（D-25：前缀进头部注释；U1 spec §1.4 要求每文件首行）")
+    # ── ★ U1#6（2026-10-18）：**集合级** —— 身份冲突判红 + 兜底版本可见化 ──
+    cbad, n_fallback = u1_decl_conflicts(pairs)
+    bad.extend(cbad)
     if declared == 0:
         bad.append("`inventory/*.yaml` 里**一个 `u1:` 身份声明都没有** ⇒ 本条判据**没有对象**（= 空判）⇒ 判红；"
                    "U-1 的落地以『至少一个可复算的声明』为可判形式")
     # ⚠ 这两个数**算出来**，不写死 —— 上一版我在这里硬编码了"复算 0 处不符"，
     #   那正是刚修掉的"标签在说谎"同族（标签比事实硬）。
     notes = (f"已声明 U-1 身份 {declared} 个 · 复算+值域通过 {ok_recalc} 个（扫描 inventory/*.yaml）"
+             f" · ⚠ 兜底版本 {U1_DEFAULT_VERSION} 的声明 {n_fallback} 个"
+             f"（version 维度**实际失效** · spec §未实测 6；刻意不改默认值以免破坏复算）"
              f" · {ns_note}")
     return ("FAIL" if bad else "PASS"), notes, bad
 
