@@ -19,6 +19,15 @@ upstream: \[d6-agent-standard-.* 全量文档]
 
 ## 历史回溯（2026-09-03 起）
 
+### 2026-10-19 — **既有改动入库（22 文件）+ 231 个「假 M」根治 + `id-census` 口径收窄**（⚠ **非 D6 本体** —— 登记为「框架/仓库维护」+ 一处 D6 台账面回写）
+
+- **事件**: 三块。① **既有改动入库**：把工作区既有的 **11 个真改动 + 4 个未跟踪文档**按主题分 **6 条**提交（模型面 / 上游·引擎面 / 手册面 / D6 台账面 / 约束文件族 / 调研登记）；② **根治 231 个「假 M」**：把 `archive/**` 与 `tests/b5q/**` 的 **`.sh`** 纳入 [.gitattributes](../../.gitattributes) 射程（`text eol=lf`）—— 根因 = `core.autocrlf=true` 下这些件**工作树 LF / git 期望 CRLF**，**字节等于 HEAD blob 却永久判 ` M`**（`update-index --refresh` 清不掉；整树 `checkout` 即复发）；③ **`id-census` 口径收窄**：`scope()` 增 `exclude_dir_prefixes=[".tmp"]`（起因 = 姊妹项目 `F:\Full_Weather\.tmp_spec_install\` 的**在写下载暂存区**令真值 `0/0` ≠ 实测 `2/1`，**阻断提交**）。
+- **涉及文件**: **8 条提交 / 22 文件**：`e03c7b9`（模型面 4：`models.yaml`·`model-families.yaml`·`cluster_const.py`·`results-ledger.md`）· `311337a`（上游·引擎 3：`TRACKER.md`·DeepSeek 调研·`UPGRADE_SOP.md`）· `7f569b9`（手册 1）· `ced5e81`（D6 台账 2：`REMEDIATION-PLAN.md`·`UNTESTED-TRIAGE-PLAN.md`）· `e94afcb`（约束文件族 4：`CONSTRAINTS.md`·`constraints/quant-academic.md`·A-B 设计档·`metrics-log.md`）· `585d0f1`（调研登记 2：Hermes 调研 + `docs/research/README.md` 索引行）· `0572c48`（行尾根治 3：`.gitattributes`·O102 报告·`OPEN-ISSUES.md`）· `f8b8cc9`（`id-census` 口径 3：`id_site_census.py`·`id-site-census.yaml`·`U4` §1）。
+- **验收证据**: `git status` **0 条**（复验两次）· `git ls-files --eol` 该批 `.sh` = `i/lf w/lf attr/text eol=lf` · `id_site_census.py --check` **10 项目全 ok** · 门禁 `--quick` **PASS · 39/2/0**（`.sh-crlf: 424 文件 / 0 失败`）；提交前全量 **PASS · 46/3/0**（黄灯均存量）。
+- **关联条目**: **`O-102`**（行尾射程**改判** —— `.sh` 由「不处理」改为纳入；全过程 = [O102 闭环报告](O102-line-ending-closure-verification.md) **§8**，台账行同步）· **`O-85`**（`id-census` **口径变更** —— 重出真值 + 复核下游 [U4 §1](U4-INVALIDATION-RULES.md)，10 项目数字全不变）。
+- **口径留痕**: 原文「`archive/**` / `tests/b5q/**` 不处理」**本身没错**，改判针对的是**新出现的第二条代价**（假 M 常驻 + `.sh-crlf` 假红）；**非 `.sh`（28 件）维持「不处理」** —— 其 `w/crlf` 与 autocrlf 期望一致 ⇒ 不产生假 M（一并纳入反而会**新造 28 个真 M**）。
+- **未做（如实）**: 8 条提交**未 push**；`F:\Full_Weather\.tmp_spec_install\` 本体**未动**（仅口径排除）。
+
 ### 2026-10-12 — **引擎升级落地 + 框架工具面三缺陷修复**（⚠ **非 D6 本体** —— 登记为「框架工具面维护」，供 D6/D7 消费方知悉 `cluster.py` / `station-bin` 变动）
 
 - **事件**: ① 分布式引擎 `/opt/llama.cpp` 三站原子升级 `91f6a6cf → master-23b0202a`（含 #26610；`-sm tensor` 形态验证 = **No-Go**，生产维持 `-sm layer`）；② 退役单站引擎轴 `~/llama.cpp`；③ **修 3 个框架工具缺陷**（**直接动 D6/D7 的工具面**）：**Bug A** `ops/cluster.py` `_cmd_load_c` 丢 `engine`（**C 站 `--engine` 静默失效**）· **Bug B** `ops/station-bin/infer-load` 别名扫描只覆盖 depth-2（"仓库级直放"别名无法解析）· **Bug C** `_set_conf_key` 追加不补末行换行（**conf 拼行 ⇒ 引擎启动失败**）；④ `load-gate` 推三站对齐 ADR-0014。
