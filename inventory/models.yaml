@@ -22,7 +22,7 @@
 #   stations 与 conf 不一致 = 已知漂移, 记在文件末尾 known_issues
 # ============================================================================
 version: 1
-updated: 2026-09-16
+updated: 2026-10-17
 
 models:
   - alias: gpt-oss-120b
@@ -52,6 +52,28 @@ models:
     conf: [B, C]
     route: B
     note: 主力 (1M ctx)。A 站有模型库条目但无 conf
+
+  - alias: nvidia-nemotron-3.5-super-vl-120b-a12b
+    engine_id: unsloth/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-GGUF
+    quant: UD-Q4_K_XL
+    stations: [B]
+    conf: [B]
+    note: |
+      2026-10-17 登记 —— 替换 `nvidia-nemotron-3-super-120b-a12b` 的**候选**（替换评估进行中）。
+      权重 = `unsloth/…-GGUF` 的 UD-Q4_K_XL（3 分片）已用 `llama-gguf-split --merge` 合并为单文件
+      86,907,243,200 B / 781 tensors，另有 `mmproj-BF16.gguf`（视觉投影器）。
+      ★ 该 alias 的 conf **必须**有两处非默认设置（缺任一即退化）：
+        ① `LLAMA_SERVER_BIN=/opt/llama.cpp-v0.7.0-620d2225/llama-server` —— 视觉投影器
+           `nemotron-omni` 只在 **v0.7.0 起**才有；用现役 `/opt`(23b0202a) 或 studio 自带引擎都读不到。
+        ② `EXTRA_FLAGS` 含 `--mmproj <mmproj 路径> --spec-type draft-mtp --spec-draft-n-max 2`
+           —— MTP 实测 **+52.6% decode**（18.37→28.03 t/s，接受率 85.8–88.9%）。
+      ⚠ **MTP 头是"隐式可用"**：该 GGUF 元数据**无** `nextn_predict_layers` 键，不显式开投机时整个
+        `blk.88.nextn.*` 会被**静默**丢为 unused（仅 WARN，不报错）⇒ 删掉 `--spec-type` 就白丢 52%
+        吞吐。判据 = 加载日志有无 `model has unused tensor blk.*.nextn.*`。
+      ⚠ 该目录由 root 下载通道创建 ⇒ 属主已就地归位（`chown scott-lau:scott-lau`）；新下载由
+        `cluster.py models fetch` 自动归位（见其 `SERVICE_USER` 注释）。
+      证据：2026-10-17 实测（加载/视觉/MTP A/B/domain_matrix 冒烟 5 题）；引擎 = 并存变体
+      `/opt/llama.cpp-v0.7.0-620d2225`（**未切 symlink**）。
 
   - alias: deepseek-v4-flash-0731
     engine_id: lmstudio-community/DeepSeek-V4-Flash-0731-GGUF

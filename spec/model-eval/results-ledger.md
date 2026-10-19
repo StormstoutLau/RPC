@@ -496,3 +496,108 @@ a3 通过 (0.70710678/same, 108.5s) / b2 通过 (-0.1575/rho, 34.1s) / a1 良好
 
 本文件今日三次遭外部工具重排/截断 (380→317→重建→再截→再重建), q35u/q36m/q38m 章节反复丢失 — 已 .bak 双备份 + 本浓缩重建。**根治方案: spec/ 建 git。**
 
+***
+
+## 冒烟: nvidia-nemotron-3.5-super-vl-120b-a12b (2026-10-17, 单机 B 站 Vulkan + MTP) — 替换候选 vs 被替换对象 nemotron-3-super-120b
+
+**模型**: nvidia-nemotron-3.5-super-vl-120b-a12b (`unsloth/…-GGUF` UD-Q4_K_XL 三分片合并单文件 **86,907,243,200 B / 781 tensors** + `mmproj-BF16.gguf`)
+**形态**: **单机 B 站** · 引擎 `/opt/llama.cpp-v0.7.0-620d2225`（**Vulkan**，与 `/opt` 分布式轴同族）· ctx 32768 · **`--spec-type draft-mtp --spec-draft-n-max 2`**
+**套件/口径**: domain\_matrix 冒烟 5 题（同套件同参数）；temperature=0；JSONL 落 B 站 `/tmp/b6_smoke_nemotron35.jsonl`
+
+| 题号 | 型 | 结果 | 评级 | 证据要点 |
+| --- | --- | --- | --- | --- |
+| dmx-a3 | 数值 | GAUSS\_RHO=0.7071067812, T\_RHO=same, RELATION=same (28.6s) | **优秀** | 输出显式"对任意椭圆 copula（高斯与 t 均适用, ν 不改变此关系）" — τ 不变性陷阱识别 |
+| dmx-b2 | 数值 | SLOPE=-0.1575, SIGN\_DRIVER=rho (29.5s) | **通过** | ρσ/4 正确代入 + 符号驱动参数正确 |
+| dmx-a1 | rubric | Φ=(ρ−ρ\*)e^{−(ρ−ρ\*)²}, Φ(ρ\*)=0, Φ′=1 有限, S→∞ (75.9s) | **良好** | 小分母机制 + 具体构造（注: 单侧导数 + ρ<ρ\* 处 Φ<0 的构造瑕疵, 不影响机制说明） |
+| dmx-g1 | rubric | ψ 管跨期替代(C^{−1/ψ}) / γ→不确定性(R\_c^{1/ψ−γ}) + γ=1/ψ 退化 CRRA (42.0s) | **良好** | 定价核分解式, 与 qwen 系 SDF 分解同深度 |
+| dmx-c2 | 代码 | 投影梯度（交替投影）+ 沙箱可运行 / `Σv·dt=100` 精确清仓 / v≥0 | **失败 (F-D 静默次优)** | ★ **cost=182,897 ≈ 最优锚点 10326.15 的 17.7×**（v\_max=3084, v 尾端→0 = "前冲后停"）；约束全过 / rc=0 但数值严重次优 —— 正是 **F-D 判分门**命中 |
+
+**冒烟判定: 4/5 通过 + 1 失败（C2 F-D）** —— 与**被替换对象** `nvidia-nemotron-3-super-120b-a12b`（2026-09-01, 双机 RPC, **5/5, C2 优秀+ 解析闭式 sinh, cost=10326.15**）相比，**唯一退化点 = 代码题**（解析闭式 → 投影梯度次优）；数值/概念四题同档。
+
+### MTP 效果实测（同题 A/B, greedy, 单机 B 站）
+
+| 臂 | 配置 | decode t/s | draft 接受 |
+| --- | --- | --- | --- |
+| **OFF** | `--spec-type none`（默认） | **18.39 / 18.36** | — |
+| **ON** | `--spec-type draft-mtp --spec-draft-n-max 2` | **28.28 / 27.15 / 28.03** | 201–203 / 232–236（**85.8%–88.9%**） |
+
+⇒ **+52.6%**（18.37 → 28.03，取中值）。★ **机理取证**：关闭时日志逐块报 `model has unused tensor blk.88.nextn.* -- ignoring`（MTP 块整块被弃）；**开启后该告警消失**，并出现 `common_speculative_init_result: creating MTP draft context against the target model` ⇒ 该档 MTP 头**可用且被真正消费**（GGUF 元数据**无** `nextn_predict_layers` 键，引擎按 `n_mtp_layers = max(1, n_layer_nextn)` 回退取 1 块）。逐题接受率 78.2%–88.9%。
+
+### 基础设施追加发现
+
+1. **★ 合并需 sudo**：该模型目录由 root 服务（`lm-download@`）写入 ⇒ **root 属主 755**，非 root 跑 `llama-gguf-split --merge` 会以 `std::__ios_failure`（SIGABRT）中止；`sudo -n` 后成功。⇒ 收编链属主需在 `inventory/models.yaml` 登记时一并收口。
+2. **MTP 头"未声明即弃"是静默的**：同一份档在无 `--spec-type` 时把整个 MTP 块丢为 unused（**仅 WARN，不报错**）⇒ 不主动开投机就白丢 52% 吞吐；判据 = 日志有无 `unused tensor blk.*.nextn.*`。
+3. **C2 判分门再次实战生效**：本次靠 cost 锚点 10326.15 抓到 17.7× 的 F-D —— 若只判"约束是否满足"会误判为"合格"。
+4. **加载形态**：`cluster.py load nvidia-nemotron-3.5-super-vl-120b-a12b --backend llama-single --engine v0.7.0-620d2225` → READY ✓ ~46 s；视觉路径另证（`--mmproj` 后日志 `load_model: loaded multimodal model`，data-URL 红图问色**答 "Red"**）。
+
+### 原始数据
+
+- B 站 `/tmp/b6_smoke_nemotron35.jsonl`（5 题，含 usage/timings/draft 计数）；**已另存 `.keep.jsonl`**
+- 沙箱: B 站 `/tmp/nm_c2check.py` / `nm_c2check2.py`（rc=0；len=100 / Σv·dt=100.0 / x\_N≈0 / cost 182,897）
+- 判分脚本: `d:\RPC\tmp\b6_smoke_nemotron35.py`（**ADR-0004：一次性验证脚本落 `tmp/`，不入库**）
+- 引擎: `/opt/llama.cpp-v0.7.0-620d2225`（B 站并存变体，**未切 symlink**）
+
+***
+
+## domain_matrix 20 题全集: nvidia-nemotron-3.5-super-vl-120b-a12b (2026-10-17 晚) — MTP 开启
+
+**模型/形态**: 同前 3.5 单机 B 站 Vulkan（`/opt/llama.cpp-v0.7.0-620d2225`）· ctx 131072 · mmproj + **`--spec-type draft-mtp --spec-draft-n-max 2`** · temperature=0
+**题源**: `spec/model-eval/questions/domain_matrix.md`（md5 `a4a82afdef3f750ada9c86f3f29a9476`）程序化抽取 20 题（A1..J2，无缺失）
+**分型**（DESIGN 决策 6）: 代码题禁思考（6144）/ 计算题 8192 思考 / 概念·证明·诊断 16384 思考
+**产出**: **20/20 全 `finish=stop`**（零截断）· 总耗时 ≈ 3720s（62min）· 单题 44.2–428.6s
+
+### 判分总览（rubric: 锚点 + 幻觉标志, 人工判 100%）
+
+| 题 | 型 | 评级 | 证据要点 |
+|---|---|---|---|
+| dmx-a1 | 概念 | **良好** | 构造 Φ=ε+(ρ−ρ\*), Φ′=1 有限, S=1/ε→∞；两锚点命中；**构造瑕疵**: ρ<ρ\*−ε 处 Φ<0（与 5 题冒烟同型）|
+| dmx-a2 | 证明 | **优秀** | 显式「Φ 对 C 线性 ⇒ DΦ 与 C 无关」+ L2 控制收敛条件 (∂_ρc 存在 + L¹ 支配) + 发散落回密度导数可积性 |
+| dmx-a3 | 数值 | **优秀** | ρ=√2/2≈0.7071 且明示两族相同；**λ_U≈0.39 正确**（未踩 gpt-oss/fable/120B 的 λ_U 坑）|
+| dmx-b1 | 证明 | **优秀** | α=σ²/2 归二次项、β=ρσiu−κ、γ=−u²/2−iu/2 全对；线性化误差 O(σ²) 定性对 |
+| dmx-b2 | 计算 | **优秀** | 短期 ATM 斜率 ρσ/4 + 符号由 ρ 定；三根因判别讯据齐 + 判定选一（曲面自洽性）|
+| dmx-c1 | 概念 | **优秀** | 线性影响的日程不变性 γ∫\|v\|dt=γX 识别；角点 vs 内点对照；反驳「=匀速」|
+| dmx-c2 | 代码 | **失败** | 见下「关键发现 1」— 沙箱 **Singular matrix** 崩溃 |
+| dmx-d1 | 概念·计算 | **优秀** | 矩形窗 Dirichlet 旁瓣/折叠 + 参数化权重单峰平滑 + Almon 二参降维自由度论证 |
+| dmx-d2 | 诊断 | **优秀** | 精确定位「窗口右端 > 低频时点」=泄漏 + 修复（截断窗）；方向偏差落回支撑集越界判据 |
+| dmx-e1 | 诊断 | **优秀** | 4 机制离散（挖掘/拥挤/断裂/SDF 换核）各给可区分检验；未全归过拟合 |
+| dmx-e2 | 证明 | **优秀** | 逆方差权重放大「方差小偏置大」矩的机制 + 收缩/分数加权修正 + 代价明确 |
+| dmx-f1 | 概念 | **优秀** | 双向信息流消拖尾链路正确；退化代价（样本退化/重采样方差）+ 缓解（RM/时变参数）具体 |
+| dmx-g1 | 概念 | **优秀** | SDF 分解 m=β^θ(C)^{−θ/ψ}(R_c)^{θ−1}, θ=(1−γ)/(1−1/ψ)；ψ=1/γ ⇒ θ=1 退化 CRRA |
+| dmx-g2 | 诊断 | **优秀** | 滤波 vs 平滑、快切换、状态依赖 SDF 定价三链完整；判别检验 D>c 可操作 |
+| dmx-h1 | 概念 | **优秀** | 对齐=跨模态一致性约束（自证伪）；标签前视 + 按行为时点截断窗修复 |
+| dmx-h2 | 诊断 | **优秀** | 单位根/共整合 + 控制大新闻共因 Z + 安慰剂/IV，不满足于 Granger 显著 |
+| dmx-i1 | 概念 | **优秀** | 三类错误各命中（数值界/逻辑矛盾 UNSAT/前提漏载悬空节点），职责不重叠 |
+| dmx-i2 | 证明 | **优秀** | 二分/上确界构造链完整 + 诚实标注仅依赖 ℝ 完备性 + 存在性 vs 可计算差距 |
+| dmx-j1 | 诊断 | **优秀** | 四路径顺序正确（泄漏最前）+ 每步最小失败判据可执行 |
+| dmx-j2 | 概念 | **优秀** | 耦合论证 J·I⁻¹·Jᵀ + 无量纲尺标 V=κ_rel/(‖θ‖√λ_min) |
+
+**汇总: 18 优秀 / 1 良好 / 1 失败 · 幻觉标志触发 0**
+
+### 与 §I 五模型并表（同 20 题日程）
+
+| 模型 | 优秀 | 良好 | 不合格 | 幻觉标志 |
+|---|---|---|---|---|
+| Qwen3.8-Flash-Next | 19 | 1 | 0 | 0 |
+| gpt-oss-120b (MXFP4) | 19 | 1 | 0 | 0 |
+| gpt-oss-120b-Fable-5 | 18 | 2 | 0 | 0 |
+| **Nemotron-3-Super-120B（被替换对象）** | 18 | 2 | 0 | 0 |
+| MiniMax-M2.7 | 15 | 1 | 0 | 0 |
+| **Nemotron-3.5-Super-VL（本轮, MTP on）** | **18** | **1** | **1** | 0 |
+
+### 关键发现
+
+1. **C2 = 运行期崩溃（Singular matrix）— 不合格档**。本轮 C2 与 5 题冒烟的 F-D（cost 182,897 ≈ 17.7×）**不是同一份代码**；本轮模型用 KKT/QP 组装，存在**结构性缺陷**：`n_eq = N+2` 却只填充 `N+1` 行约束（末行恒全零）⇒ KKT 矩阵奇异，**参数无关地崩溃**。已在**规范参数**（Γ=1.0, λ=0.1）沙箱复跑证实崩溃 ⇒ 与 Qwen3.5-122b-Claude 的失败同族（未填满约束行 → 奇异矩阵）。
+2. **数值题全对且未踩 120B 的坑**：A3 达**优秀**（λ_U≈0.39；被替换对象 120B 仅良好、+11%），B2 优秀 ⇒ 3.5 在纯计算代入类题上比 120B 更稳。
+3. **A2（证明）达优秀** — 显式识别 L1 线性 + L2 控制收敛（120B 此项仅良好）。
+4. **唯一良好 = A1**（构造瑕疵，非机制问题）；**20/20 finish=stop**，预算管理优（对照 M2.7 部分不可测）。
+
+### 方法学注记（影响 C2 可比性，务必保留）
+
+本轮 20 题 prompt 由 md **程序化抽取**；md 的 C2「应用对象」**无具体数字**（Γ/λ/X0/T/N），而历史 5 题冒烟及 C2 数值锚点（**cost=10326.15**）用的是**硬编码 prompt** `solve_execution(T=1.0,N=100,Gamma=1.0,lam=0.1,X0=100.0)`。⇒ 本轮模型自选了参数（Γ=0.1, λ=0.01）。**复算已按规范参数重跑其代码 → 仍崩溃**，故「失败」判定不受参数缺失影响；但**其余题 prompt 是否与 §I 逐字一致未能核实**，跨模型并表保留此 caveat。**后续 20 题跑批应以含数字的规范 prompt 为准（待 DESIGN 增补题库机读版）。**
+
+### 原始数据
+
+- B 站 `/tmp/nm35_dm20.jsonl`（20 题，含 anchors/halluc_flags/finish/elapsed/usage）；本地副本 `d:\RPC\tmp\nm35_dm20.jsonl`
+- 跑批脚本 `d:\RPC\tmp\nm35_dm20.py` / 判分摘要 `d:\RPC\tmp\digest.py` / C2 规范参数复算 `d:\RPC\tmp\c2_nm35.py`（**ADR-0004：一次性脚本落 `tmp/`**）
+- 加载/卸载: `cluster.py load nvidia-nemotron-3.5-super-vl-120b-a12b --backend llama-single`（READY ~46s）→ 跑批 → `cluster.py unload`（三站 20:34 GTT 回收）
+

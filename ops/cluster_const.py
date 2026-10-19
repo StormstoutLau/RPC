@@ -59,6 +59,8 @@ STATION_ROUTES = {
     "gpt-oss-120b-fable-5-distilled-b": ("B", "gpt-oss-120b-fable-5-distilled"),
     "nvidia-nemotron-3-super-120b-a12b-b": ("B", "nvidia-nemotron-3-super-120b-a12b"),
     "nvidia-nemotron-3-super-120b-a12b-c": ("C", "nvidia-nemotron-3-super-120b-a12b"),
+    # 2026-10-17: 3.5-super-vl 登记（替换评估候选；conf 仅在 B 站，故无 -c 键）
+    "nvidia-nemotron-3.5-super-vl-120b-a12b-b": ("B", "nvidia-nemotron-3.5-super-vl-120b-a12b"),
     "deepseek-v4-flash-0731-b": ("B", "deepseek-v4-flash-0731"),
     "glm-5.3-flash-b": ("B", "glm-5.3-flash"),   # 2026-09-29: 146.1 GiB 单文件 ⇒ RPC 双机 (见 RPC_MODELS)
     "qwen3.8-27b-mtp-b": ("B", "qwen3.8-27b-mtp"),

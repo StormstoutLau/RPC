@@ -42,7 +42,8 @@ families:
     note: "`fable-5-distilled` 由 `autotrust` 蒸馏、`20b` 是缩小版 ⇒ **血统同族**（按依据判，不按发布者）"
   - id: nvidia
     basis: NVIDIA 自研权重（Nemotron 系列）
-    members: [nvidia-nemotron-3-super-120b-a12b]
+    members: [nvidia-nemotron-3-super-120b-a12b, nvidia-nemotron-3.5-super-vl-120b-a12b]
+    note: "3.5-super-vl 于 2026-10-17 入 `models.yaml`（替换评估候选）⇒ 本表**同一次改动**同步归类（否则门禁 `model-families` 双向对账点名）。血统仍 NVIDIA 自研"
   - id: deepseek
     basis: DeepSeek 自研权重
     members: [deepseek-v4-flash-0731]
