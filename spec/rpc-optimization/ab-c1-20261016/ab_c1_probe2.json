@@ -1,0 +1,61 @@
+[
+ {
+  "model_id": "/data/models/gguf/unsloth/GLM-5.3-Flash-GGUF/GLM-5.3-Flash-UD-IQ4_XS.gguf",
+  "mode": "enable_thinking=False",
+  "max_tokens": 4096
+ },
+ {
+  "case": "REF-02",
+  "elapsed_s": 281.6,
+  "finish_reason": "stop",
+  "completion_tokens": 3155,
+  "content_len": 1881,
+  "reasoning_len": 7537,
+  "content_tail": "e Discontinuous\", \"authors\": \"Robert C. Merton\", \"year\": 1976, \"doi\": \"10.1016/0304-405X(76)90022-2\"}, {\"title\": \"A Closed-Form Solution for Options with Stochastic Volatility with Applications to Bond and Currency Options\", \"authors\": \"Steven L. Heston\", \"year\": 1993, \"doi\": \"10.1093/rfs/6.2.327\"}]"
+ },
+ {
+  "case": "DOI-01",
+  "elapsed_s": 36.2,
+  "finish_reason": "stop",
+  "completion_tokens": 381,
+  "content_len": 278,
+  "reasoning_len": 853,
+  "content_tail": "该 DOI 对应的文献信息如下：\n\n- **标题**：Deep learning（这是一篇发表于《Nature》的著名综述文章，介绍了深度学习的基本概念、卷积神经网络、循环神经网络等核心内容）\n- **第一作者**：Yann LeCun（纽约大学教授，Facebook/Meta 首席 AI 科学家，2018 年图灵奖得主之一）\n- **发表年份**：2015 年（发表于 Nature 第 521 卷，436–444 页）\n\nFINAL: title=Deep learning ; first_author=Yann LeCun ; year=2015"
+ },
+ {
+  "case": "DOI-09",
+  "elapsed_s": 47.5,
+  "finish_reason": "stop",
+  "completion_tokens": 511,
+  "content_len": 321,
+  "reasoning_len": 1528,
+  "content_tail": "99/fake.2021.00123** 从命名上看是一个虚构/占位用的 DOI（前缀 10.9999 与 \"fake\" 字样均为示例常用的假前缀，并非真实注册的出版社前缀）。我无法在数据库中检索到与该 DOI 对应的真实文献，因此不能编造标题、作者或年份。\n\n建议您：\n- 核对 DOI 是否抄写有误；\n- 通过 https://doi.org/ 或 Crossref（https://search.crossref.org/）验证该 DOI 是否真实存在。\n\nFINAL: title=<不可用：该 DOI 无法检索到对应文献> ; first_author=<不可用> ; year=<不可用>"
+ },
+ {
+  "case": "ABS-01",
+  "elapsed_s": 58.4,
+  "finish_reason": "stop",
+  "completion_tokens": 636,
+  "content_len": 459,
+  "reasoning_len": 1936,
+  "content_tail": "术工作。\n\n建议您通过以下方式核实该文献是否真实存在：\n- 在 **Crossref**（search.crossref.org）中按标题搜索\n- 在 **Google Scholar** 或 **Web of Science** 中检索\n- 直接搜索作者姓名 \"Zhang\" 和 \"Liu\" 加上论文标题\n\n如果该论文确实存在，上述数据库会给出准确的 DOI；如果检索不到，则该引用很可能是不准确的（例如标题、作者或年份有误，或为虚构文献）。\n\nFINAL: 无法确认该论文存在，故无法提供其 DOI；建议通过 Crossref 或 Google Scholar 核实文献真伪后再获取准确 DOI。"
+ },
+ {
+  "case": "ABS-07",
+  "elapsed_s": 54.0,
+  "finish_reason": "stop",
+  "completion_tokens": 594,
+  "content_len": 366,
+  "reasoning_len": 994,
+  "content_tail": "，设直角三角形的两条直角边分别为 $a$ 和 $b$，斜边为 $c$，则有：\n\n$$a^2 + b^2 = c^2$$\n\n**补充说明：**\n- 在中国古代，较短的直角边称为“勾”，较长的直角边称为“股”，斜边称为“弦”，因此定理也表述为“勾² + 股² = 弦²”。\n- 《周髀算经》中记载了著名的特例“勾三股四弦五”，即 $3^2 + 4^2 = 5^2$。\n- 该定理的逆定理也成立：若三角形三边满足 $a^2 + b^2 = c^2$，则该三角形是直角三角形。\n\nFINAL: 勾股定理：直角三角形中，两直角边的平方和等于斜边的平方，即 a² + b² = c²（勾² + 股² = 弦²）。"
+ },
+ {
+  "case": "MATH-01",
+  "elapsed_s": 25.4,
+  "finish_reason": "stop",
+  "completion_tokens": 263,
+  "content_len": 272,
+  "reasoning_len": 201,
+  "content_tail": "# 求解过程\n\n**函数：** f(x) = x² · ln x\n\n**第一步：使用乘积法则求导**\n\n设 u = x²，v = ln x，则：\n- u′ = 2x\n- v′ = 1/x\n\n由乘积法则 (uv)′ = u′v + uv′：\n\n$$f'(x) = 2x \\cdot \\ln x + x^2 \\cdot \\frac{1}{x} = 2x\\ln x + x$$\n\n**第二步：代入 x = 1**\n\n$$f'(1) = 2 \\cdot 1 \\cdot \\ln 1 + 1 = 2 \\cdot 0 + 1 = 1$$\n\nFINAL: 1"
+ }
+]

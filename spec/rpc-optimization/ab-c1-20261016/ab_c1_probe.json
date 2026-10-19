@@ -1,0 +1,59 @@
+[
+ {
+  "model_id": "/data/models/gguf/unsloth/GLM-5.3-Flash-GGUF/GLM-5.3-Flash-UD-IQ4_XS.gguf"
+ },
+ {
+  "case": "MATH_mt4096",
+  "max_tokens": 4096,
+  "elapsed_s": 13.3,
+  "finish_reason": "stop",
+  "usage": {
+   "completion_tokens": 134,
+   "prompt_tokens": 34,
+   "total_tokens": 168,
+   "prompt_tokens_details": {
+    "cached_tokens": 9
+   }
+  },
+  "content_len": 106,
+  "reasoning_len": 199,
+  "content_head": "计算过程：\n\n5! = 5 × 4 × 3 × 2 × 1\n\n逐步计算：\n- 5 × 4 = 20\n- 20 × 3 = 60\n- 60 × 2 = 120\n- 120 × 1 = 120\n\nFINAL: 120",
+  "reasoning_tail": "The user wants me to calculate 5! (5 factorial).\n\n5! = 5 × 4 × 3 × 2 × 1 = 120\n\nThe output format requires the last line to be:\nFINAL: <数值>\n\nSo I should show the calculation and end with \"FINAL: 120\""
+ },
+ {
+  "case": "MATH_think_off_mt512",
+  "max_tokens": 512,
+  "elapsed_s": 6.0,
+  "finish_reason": "stop",
+  "usage": {
+   "completion_tokens": 62,
+   "prompt_tokens": 34,
+   "total_tokens": 96,
+   "prompt_tokens_details": {
+    "cached_tokens": 30
+   }
+  },
+  "content_len": 40,
+  "reasoning_len": 140,
+  "content_head": "5! = 5 × 4 × 3 × 2 × 1 = 120\n\nFINAL: 120",
+  "reasoning_tail": "We need answer in Chinese likely. Need compute 5! = 120. Need format last line FINAL: 120. Could include brief. Need ensure last line exact."
+ },
+ {
+  "case": "REF_mt8192",
+  "max_tokens": 8192,
+  "elapsed_s": 312.8,
+  "finish_reason": "stop",
+  "usage": {
+   "completion_tokens": 3480,
+   "prompt_tokens": 80,
+   "total_tokens": 3560,
+   "prompt_tokens_details": {
+    "cached_tokens": 9
+   }
+  },
+  "content_len": 1953,
+  "reasoning_len": 8399,
+  "content_head": "以下是 5 篇与 Black-Scholes 期权定价模型密切相关的经典学术文献：\n\n1. **The Pricing of Options and Corporate Liabilities**\n   - 作者：Fischer Black, Myron Scholes\n   - 年份：1973\n   - DOI: 10.1086/260062\n   - 说明：Black-Scholes 模型的开山之作，发表于 *Journal of Political Economy*。\n\n2. **Theory of Rational Option Pricing**\n   - 作者：Robert C. Merton\n   - 年份：1973\n   - DOI: 10.2307/3003143\n   - 说明：对 Black-Scholes 框架的严格推广，发表于 *Bell Journal of E",
+  "reasoning_tail": "le, authors, year, doi fields. Year as number.\n\nAuthors format: I'll use \"Fischer Black; Myron Scholes\" or \"Fischer Black & Myron Scholes\". JSON with commas. Let me use semicolons or \"and\". I'll use \"Fischer Black, Myron Scholes\" — simple.\n\nLength: Medium. The list plus JSON. Keep annotations brief."
+ }
+]

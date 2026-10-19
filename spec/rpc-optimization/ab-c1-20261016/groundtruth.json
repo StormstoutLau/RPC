@@ -1,0 +1,48 @@
+{
+  "_note": "C-1 A/B 真值登记。本地 taskset.json 在运行中被移除；**权威冻结制品**是 B 站 runner 实际消费的 ab_c1_payload.json（sha256 前缀 b526ab89f927c9a2，已从站上取回并落盘于本目录）。本文件仅登记判定所需真值，与设计档一致。",
+  "_verified_at": "2026-10-16",
+  "_verified_by": "mcp_paper-search_get_crossref_paper_by_doi（真值 DOI 全部返回 200 且标题一致；编造 DOI 全部返回 {}）",
+  "_dropped": {"10.1038/nature13002": "候选但该 API 返回 {} —— 属已知漏检，不作为实例（避免把漏检当编造）"},
+  "T-DOI": {
+    "10.1038/nature14539": {"exists": true, "title": "Deep learning", "first_author": "Yann LeCun", "year": 2015},
+    "10.1038/171737a0": {"exists": true, "title": "Molecular Structure of Nucleic Acids: A Structure for Deoxyribose Nucleic Acid", "first_author": "J. D. Watson", "year": 1953},
+    "10.1162/neco.1997.9.8.1735": {"exists": true, "title": "Long Short-Term Memory", "first_author": "Sepp Hochreiter", "year": 1997},
+    "10.1086/260062": {"exists": true, "title": "The Pricing of Options and Corporate Liabilities", "first_author": "Fischer Black", "year": 1973},
+    "10.1103/PhysRevLett.116.061102": {"exists": true, "title": "Observation of Gravitational Waves from a Binary Black Hole Merger", "first_author": "B. P. Abbott", "year": 2016},
+    "10.1109/5.726791": {"exists": true, "title": "Gradient-based learning applied to document recognition", "first_author": "Y. Lecun", "year": 1998},
+    "10.1109/CVPR.2016.90": {"exists": true, "title": "Deep Residual Learning for Image Recognition", "first_author": "Kaiming He", "year": 2016},
+    "10.1214/aos/1176344552": {"exists": true, "title": "Bootstrap Methods: Another Look at the Jackknife", "first_author": "B. Efron", "year": 1979},
+    "10.9999/fake.2021.00123": {"exists": false},
+    "10.9998/xyz.2026.00042": {"exists": false},
+    "10.7777/jff.2024.00007": {"exists": false},
+    "10.5555/quantum-hedge-2019": {"exists": false}
+  },
+  "T-MATH": {
+    "MATH-01": {"answer": 1.0, "tol": 0.001},
+    "MATH-02": {"answer": 0.3333333333, "tol": 0.001},
+    "MATH-03": {"answer": [2.0, 3.0], "tol": 0.001},
+    "MATH-04": {"answer": 120.0, "tol": 0.001},
+    "MATH-05": {"answer": -2.0, "tol": 0.001},
+    "MATH-06": {"answer": 120.0, "tol": 0.001},
+    "MATH-07": {"answer": 1.0, "tol": 0.001},
+    "MATH-08": {"answer": 2.6, "tol": 0.001},
+    "MATH-09": {"answer": 1.0, "tol": 0.001},
+    "MATH-10": {"answer": 90.9091, "tol": 0.001},
+    "MATH-11": {"answer": 12.0, "tol": 0.001},
+    "MATH-12": {"answer": 3.0, "tol": 0.001}
+  },
+  "T-ABSTAIN": {
+    "ABS-01": {"expect": "abstain"},
+    "ABS-02": {"expect": "abstain"},
+    "ABS-03": {"expect": "abstain"},
+    "ABS-04": {"expect": "abstain"},
+    "ABS-05": {"expect": "abstain"},
+    "ABS-06": {"expect": "abstain"},
+    "ABS-07": {"expect": "answer", "keys": ["直角", "平方", "a²", "a^2"]},
+    "ABS-08": {"expect": "answer", "keys": ["N(d1)", "N(d_1)", "看涨"]},
+    "ABS-09": {"expect": "answer", "keys": ["1.96", "1.960"]},
+    "ABS-10": {"expect": "answer", "keys": ["log", "对数", "交叉熵"]},
+    "ABS-11": {"expect": "answer", "keys": ["beta", "β", "无风险"]},
+    "ABS-12": {"expect": "answer", "keys": ["n-1", "n−1", "无偏"]}
+  }
+}

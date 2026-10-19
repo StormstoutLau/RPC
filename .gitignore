@@ -58,3 +58,10 @@ ops/station-bin/b6_smoke_*.result.jsonl
 #   · (P2, 2026-09-21) **冷镜像 `archive/evidence-chain/agent-chain.json` 入仓** —— 本体字节==锚的
 #     chain/cold_sha256, 供应 off-machine 副本; 与锚**成对提交**, 由 verify 的 `p2_pair_mismatch` 断言兜。
 ops/station-bin/agent-chain.json
+
+# A/B 实验证据目录：原始流不入库、结论面入库 (2026-10-19 裁 · 用户「按方案 (b) 入库」)
+#   · `raw*.jsonl` / `*raw*.jsonl`（本族约 6.4MB）= **可重放的原始流** ⇒ 不入库（体积大 + 可由 run 重算）；
+#   · 摘要 / 配置（taskset.json / payload / probe …）/ groundtruth / judged ⇒ **入库**（约 0.37MB）。
+#   ★ 射程**只限本族目录名 `ab-c1-*`** —— 不要写成全仓 `raw*.jsonl`（会误吞别处同名文件）。
+#   ★ 同族先例 = `spec/rpc-optimization/v4f-26578-evidence-20260910/`（入库时**只带证据件**、不登记 sensitivity）。
+spec/rpc-optimization/ab-c1-*/*raw*.jsonl
