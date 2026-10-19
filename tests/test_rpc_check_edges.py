@@ -76,6 +76,19 @@ CASES = [
     ("★反例 provenance 无 `:`（不成形式）",
      _nonempty(edges=[_edge(provenance="manual")]), False, "缺 `<前缀>:<载荷>` 形式"),
 
+    # ── ★ U3#3：`manual` 载荷必须是三段式 `<标识>:<日期>:reason=<理由>`（spec §3）──
+    # 先验红：本组用例在**未实现**前必须失败（当前 `edge_provenance_invalid` 只判「前缀 ∈ 集 + 载荷非空」）。
+    ("★反例 manual 载荷只有两段（缺 `reason=` 那一段）",
+     _nonempty(edges=[_edge(provenance="manual:operator-a:2026-09-26")]), False, "三段式"),
+    ("★反例 manual 日期段不成 `YYYY-MM-DD`",
+     _nonempty(edges=[_edge(provenance="manual:operator-a:20260926:reason=x")]), False, "日期段"),
+    ("★反例 manual 第三段不以 `reason=` 起",
+     _nonempty(edges=[_edge(provenance="manual:operator-a:2026-09-26:why=x")]), False, "reason="),
+    ("★反例 manual 作者标识是绝对路径（不得是用户名/主机名/IP/盘符）",
+     _nonempty(edges=[_edge(provenance="manual:/home/admin:2026-09-26:reason=x")]), False, "作者标识"),
+    ("正例 manual 三段式合规（角色标识 · 非用户名）",
+     _nonempty(edges=[_edge(provenance="manual:operator-a:2026-09-26:reason=initial_sync")]), True, "无效 0 条"),
+
     # ── ★ src/dst 必须与 U-1 咬合 ───────────────────────────────────────
     ("★反例 src 不是 U-1 身份形态（随手写路径）",
      _nonempty(edges=[_edge(src="out/foo.md")]), False, "不是 U-1 产物身份形态"),
@@ -170,6 +183,37 @@ def main() -> int:
           f"只抓到 {naive_caught}/{len(neg)} ⇒ 真判据的拦截率不是恒真")
     if not red:
         fails.append("先验红自证（#4）失败：假绿桩与真判据拦截数相同 ⇒ 断言可能恒真")
+
+    # ── ★★ `U3#9`（方向自洽性）：`filetrack` 的 `in=`/`out=` 必须与 src/dst **同向** ──
+    # spec §1.1：`src`=依赖方/写方(下游) · `dst`=被依赖方/读方(上游) ⇒
+    #   `out=`（被写文件）的身份 == src · `in=`（被读文件）的身份 == dst。
+    # ⚠ `identity_of` 是**注入**的（纯函数才可夹测）；解析不到 ⇒ **报「未核」**，绝不静默判通过。
+    # 先验红：本块在 `edge_direction_error` **未实现**前必然失败。
+    idmap = {"inventory/edges.yaml": S_ID, "inventory/dialect.yaml": D_ID}
+    d_cases = [
+        ("正例 方向自洽", _edge(provenance="filetrack:v0.0.0:in=inventory/dialect.yaml,out=inventory/edges.yaml"), idmap, True, False),
+        ("★反例 in/out 互换 ⇒ 依赖方向全反（静默错，故必抓）", _edge(provenance="filetrack:v0.0.0:in=inventory/edges.yaml,out=inventory/dialect.yaml"), idmap, True, True),
+        ("★反例 filetrack 缺 `out=` ⇒ 形态不完备", _edge(provenance="filetrack:v0.0.0:in=inventory/dialect.yaml"), idmap, False, True),
+        ("⚠ 解析不到身份 ⇒ 未核（不判同向，但必须可见）", _edge(provenance="filetrack:v0.0.0:in=missing.yaml,out=inventory/edges.yaml"), idmap, False, False),
+        ("不适用（非 filetrack ⇒ 本检查不接）", _edge(provenance="manual:operator-a:2026-09-26:reason=x"), idmap, False, False),
+    ]
+    fn = getattr(R, "edge_direction_error", None)
+    if fn is None:
+        fails.append("`edge_direction_error` 不存在 ⇒ U3#9 方向自洽性判据缺失")
+        print("  FAIL U3#9：`edge_direction_error` 不存在")
+    else:
+        for desc, e, im, want_checked, want_bad in d_cases:
+            reason, checked = fn(e, im.get)
+            ok = (checked == want_checked) and (bool(reason) == want_bad)
+            print(f"  {'ok  ' if ok else 'FAIL'} U3#9 {desc}\n        reason={reason!r} checked={checked}")
+            if not ok:
+                fails.append(f"U3#9 {desc} ⇒ reason={reason!r} checked={checked}")
+        import inspect
+        src = inspect.getsource(R.check_edges)
+        if "edge_direction_error(" not in src:
+            fails.append("`check_edges` 未调用 `edge_direction_error` ⇒ 判据写了不接线（挂名假判）")
+        else:
+            print("  ok   U3#9 结构护栏：check_edges 已调用 edge_direction_error")
 
     print(f"RESULT: {'ALL PASS' if not fails else f'失败 {len(fails)} 条'}")
     for f in fails:
