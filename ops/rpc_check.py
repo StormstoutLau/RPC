@@ -965,6 +965,58 @@ def namespace_for_project(project, reg):
     return a2i.get(project, project)
 
 
+# ── ★★ `O-162`（2026-10-20 裁「坐标语义进注册表字段」）：`identifier` / `version` 的**语义**登记 ──
+# 缺口（`U1#5` 的邻居格）：取值域**已**进注册表，而**语义**此前只有 spec §1.3 的 prose 一张表
+#   ⇒ "每处各自拼三元组"，且**新增一个 namespace 时没人逼它定语义**。
+# 处置 = 注册表条目加 `identifier_rule` / `version_rule`（**闭集**，真值只在那一处）⇒ 门禁可判。
+# ⚠ 如实标注射程：判的是**登记完整性**（有没有登记 · 值在不在闭集），**不是语义正确性** ——
+#   后者无法机判，不许把本判据读成"坐标语义已验证"。
+NS_ID_RULES = ("relpath", "biz-key", "composite", "unset")
+NS_VER_RULES = ("semver-0.0.0-fallback", "unset")
+NS_RULE_UNSET = "unset"
+
+
+def validate_namespace_coords(reg, used_ns=()):
+    """**纯函数** → `(bad, notes)`：每条 namespace 的**坐标语义**（`O-162` ② 的机判本体）。
+
+    判四条（**只管 `active`** —— 退役/保留条目只解释历史身份，不强制）：
+      ① `identifier_rule` / `version_rule` **必须登记**（缺 ⇒ 红，fail-closed）；
+      ② 取值必须落在闭集 `NS_ID_RULES` / `NS_VER_RULES` 里（值域封闭）；
+      ③ 登记成 `unset`（含义 = "尚无产物 ⇒ 坐标未定"）⇒ **必须**给 `coord_note` 说明
+         —— 否则"没定"是**无声的**（本仓头号形态：判不了 ≠ 没事）；
+      ④ ★★ 若该 namespace **已在用**（`used_ns` = `inventory/*.yaml` 里真实 `u1:` 声明的 namespace 集合）
+         而坐标仍登记成 `unset` ⇒ **红**（"**用了却没定语义**" —— 这正是本判据存在的理由）。
+    `notes` 里**报数**「坐标未定 N 条」（可见，不静默）。
+    """
+    bad, notes = [], []
+    items = (reg or {}).get("namespaces") if isinstance(reg, dict) else None
+    used = set(used_ns or ())
+    n_active = n_unset = 0
+    for i, n in enumerate(items or [], 1):
+        if not isinstance(n, dict) or not n.get("id"):
+            continue
+        if n.get("status") != "active":
+            continue
+        nid = n["id"]
+        n_active += 1
+        ir, vr = n.get("identifier_rule"), n.get("version_rule")
+        if ir not in NS_ID_RULES:
+            bad.append(f"`namespaces[{i}]`({nid}) 的 `identifier_rule`={ir!r} 缺失或不在闭集 "
+                       f"{list(NS_ID_RULES)} ⇒ `O-162`：坐标语义必须登记（真值只在注册表，别处不再各拼一份）")
+        if vr not in NS_VER_RULES:
+            bad.append(f"`namespaces[{i}]`({nid}) 的 `version_rule`={vr!r} 缺失或不在闭集 {list(NS_VER_RULES)}")
+        if NS_RULE_UNSET in (ir, vr):
+            n_unset += 1
+            if not str(n.get("coord_note") or "").strip():
+                bad.append(f"`namespaces[{i}]`({nid}) 的坐标登记成 `{NS_RULE_UNSET}` ⇒ **必须**写 `coord_note`"
+                           f"（说明「尚无产物 / 何时补」）—— 否则「没定」是无声的")
+            if nid in used:
+                bad.append(f"`namespaces[{i}]`({nid}) **已在用**（`inventory/*.yaml` 有它的 `u1:` 声明）"
+                           f"却把坐标登记成 `{NS_RULE_UNSET}` ⇒ **用了却没定语义**（`O-162` ④）")
+    notes.append(f"坐标语义：active {n_active} 条 · `{NS_RULE_UNSET}`（坐标未定）{n_unset} 条")
+    return bad, notes
+
+
 def validate_projects(reg):
     """**纯函数** → `(bad, notes)`：项目注册表自洽（治理三规则的**机判本体**，2026-10-13）。
 
@@ -1814,6 +1866,11 @@ def check_u1_identity(ctx):
          （写 alias / retired / 未登记 ⇒ 拒）。⚠ 本条此前**不存在**：旧判据只复算，
          于是 `namespace: 任何字符串` 都能过 ⇒ D-25 的"前缀必填 + 取值域封闭"**只有前半句落地了**。
          同时顺带判**注册表自身自洽**（`validate_namespaces`）。
+      ★★ ⑤ **坐标语义必须登记**（`O-162`，2026-10-20）—— 判据 ④ 问的是"**能不能用**这个 namespace"，
+         判据 ⑤ 问的是"**这个 namespace 的 identifier / version 怎么算**"。前者 `U1#5` 已落；
+         后者此前只有 spec §1.3 的 prose ⇒ 现由注册表 `identifier_rule` / `version_rule`（**闭集**）承载，
+         判据 = `validate_namespace_coords(reg, used_ns)`（`used_ns` = 上面扫到的声明的 namespace）
+         ⇒ ★ **用了却没定语义**判红。
     """
     try:
         import yaml
@@ -1857,6 +1914,12 @@ def check_u1_identity(ctx):
     # ── ★ U1#6（2026-10-18）：**集合级** —— 身份冲突判红 + 兜底版本可见化 ──
     cbad, n_fallback = u1_decl_conflicts(pairs)
     bad.extend(cbad)
+    # ── ★★ `O-162`（2026-10-20 裁「进注册表字段」）：判据 ⑤ —— **坐标语义**必须登记 ──
+    #   判据 ④ 问"能不能用这个 ns"；⑤ 问"这个 ns 的 identifier / version 怎么算"。
+    #   `used_ns` 取**真实声明用到的**（= "**用了却登记 unset**" 判红的依据 ⇒ 用了就得定语义）。
+    used_ns = {d.get("namespace") for _n, d in pairs if isinstance(d, dict)}
+    cbad2, cnotes = validate_namespace_coords(reg, used_ns)
+    bad.extend(cbad2)
     if declared == 0:
         bad.append("`inventory/*.yaml` 里**一个 `u1:` 身份声明都没有** ⇒ 本条判据**没有对象**（= 空判）⇒ 判红；"
                    "U-1 的落地以『至少一个可复算的声明』为可判形式")
@@ -1865,7 +1928,7 @@ def check_u1_identity(ctx):
     notes = (f"已声明 U-1 身份 {declared} 个 · 复算+值域通过 {ok_recalc} 个（扫描 inventory/*.yaml）"
              f" · ⚠ 兜底版本 {U1_DEFAULT_VERSION} 的声明 {n_fallback} 个"
              f"（version 维度**实际失效** · spec §未实测 6；刻意不改默认值以免破坏复算）"
-             f" · {ns_note}")
+             f" · {ns_note} · {' · '.join(cnotes)}")
     return ("FAIL" if bad else "PASS"), notes, bad
 
 

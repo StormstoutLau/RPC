@@ -10,7 +10,11 @@
 #    ⇒ 结果是**没有任何合法的新增路径**（改文件 = 违反生成物纪律；走重抽 = 源里根本没有 namespace 这一节）。
 # ⇒ 处置（2026-10-01，用户裁）：**把取值域剥成一个独立真值文件**（= 本文件），`dialect.yaml` 改为**指向它**。
 #
-# ── 治理规则（三条，都可机判；门禁 = `u1-identity` 的判据 ④ + `namespace-registry`）──
+# ── 治理规则（三条，都可机判；门禁 = `u1-identity` 的判据 ④）──
+# ⚠ **2026-10-20 更正（`O-162` 顺带查出）**：本行原写作「判据 ④ + **`namespace-registry`**」——
+#   而**那半句是假的**：**更正前**全仓 `grep namespace-registry` **只有本行这一处**（更正文本本身当然也含该串），门禁 id 实际只有
+#   `dialect` / `u1-identity` / `id-storage` / `edges` / `inbox` / `projects`
+#   ⇒ 它**声称了一个不存在的判据**（同族：标签比事实硬）。改为逐字写下真实落点。
 # ① **新增权**：只能向本文件追加一条（`status: active`）。**门禁不看人，只看登记** ——
 #    未登记 / `retired` ⇒ **拒**（fail-closed）。
 # ② **冲突裁**：`id` **先到先得**；`aliases` 只用于**承接历史/别处写法**（如 `Open_Data` 是 `open_data` 的别名），
@@ -26,30 +30,54 @@
 #   历史写法解析回 canonical id；② 让**冲突**可判（同一个串不能属于两条）。
 
 version: 1
-updated: 2026-10-01
+updated: 2026-10-20
 owner: Scott (鹏)
 
 # ── 白名单（`status` 闭集：active | reserved | retired）──────────────────────
 # `since` = 该 id **开始生效**的日期（不是"最近改动日"）。
+# ── ★★ 坐标语义（`identifier_rule` / `version_rule`）＝ `O-162`（2026-10-20 裁「进注册表字段」）──
+# **判据 ④ 问的是"能不能用这个 ns"（取值域）；本组字段问的是"这个 ns 的 `identifier` / `version` 怎么算"。**
+# 此前它**只在 spec §1.3 的 prose 里**（"既有各处可无损映射"）⇒ **不是判据**，每处各自拼三元组，
+#   且新增一个 namespace 时**没人逼它定语义**。⇒ 现搬进本文件（**语义的真值只在这里**，spec §1.3 指向它）。
+# `identifier_rule` ∈
+#   · `relpath`   —— 一条**相对路径**（`rpc` = 仓内相对路径 · `rpc_inbox` = 清单数据行的相对路径）
+#   · `biz-key`   —— **该项目自有的业务主键**（细则归该项目自身口径，本仓**不替它重定义**）
+#   · `composite` —— **多字段复合**（如 Textbook：code + statement + mathlib_ver + lean_ver）
+#   · `unset`     —— **尚无 U-1 产物 ⇒ 坐标未定**（★ **必须**写 `coord_note`，否则"没定"是无声的）
+# `version_rule` ∈
+#   · `semver-0.0.0-fallback` —— §1.3 既有规则：语义化版本；**无版本者写 `0.0.0`**
+#   · `unset`                  —— 同上（须 `coord_note`）
+# ★★ **机判落点**（`ops/rpc_check.py` 的 `validate_namespace_coords`，门禁 `u1-identity` **判据 ⑤**）：
+#   ① `status: active` 的每条**必须**登记本组字段（缺 / 闭集外 ⇒ FAIL）· ② `retired`/`reserved` **不强制**；
+#   ③ ★ **已在用**（`inventory/*.yaml` 里有它的 `u1:` 声明）却登记成 `unset` ⇒ **FAIL**
+#   ⇒ 这就是"**新增一个 namespace 时被迫定语义**"的机械落实。
+# ⚠ **射程如实**：判据判的是**登记完整性**（有没有登记 · 值在不在闭集），**不是语义正确性** ——
+#   后者无法机判，别把它的绿读成"坐标语义已验证"。
 namespaces:
   # ── 他方项目（2026-09-26 从 dialect 的取值域**原样搬入**，取值一字未改）──────────
-  - {id: paper,           label: Paper,           status: active, since: 2026-09-26, aliases: [Paper]}
-  - {id: textbook,        label: Textbook,        status: active, since: 2026-09-26, aliases: [Textbook]}
-  - {id: open_data,       label: Open_Data,       status: active, since: 2026-09-26, aliases: [Open_Data]}
-  - {id: macro_data,      label: Macro_Data,      status: active, since: 2026-09-26, aliases: [Macro_Data]}
-  - {id: fin_agent,       label: Fin_Agent,       status: active, since: 2026-09-26, aliases: [Fin_Agent]}
-  - {id: cpp_hub,         label: Cpp_Hub,         status: active, since: 2026-09-26, aliases: [Cpp_Hub]}
-  - {id: spec_workflow,   label: Spec_Workflow,   status: active, since: 2026-09-26, aliases: [Spec_Workflow]}
-  - {id: factor_pipeline, label: factor_pipeline, status: active, since: 2026-09-26, aliases: []}
+  - {id: paper,           label: Paper,           status: active, since: 2026-09-26, aliases: [Paper],           identifier_rule: unset,     version_rule: semver-0.0.0-fallback, coord_note: "本仓尚无该项目的 U-1 产物（坐标待它首次发身份时定）"}
+  - {id: textbook,        label: Textbook,        status: active, since: 2026-09-26, aliases: [Textbook],        identifier_rule: composite, version_rule: semver-0.0.0-fallback, coord_note: "code + statement + mathlib_ver + lean_ver（多字段复合）"}
+  - {id: open_data,       label: Open_Data,       status: active, since: 2026-09-26, aliases: [Open_Data],       identifier_rule: biz-key,   version_rule: semver-0.0.0-fallback, coord_note: "源 + 维度 + 日期（该项目自有主键）"}
+  - {id: macro_data,      label: Macro_Data,      status: active, since: 2026-09-26, aliases: [Macro_Data],      identifier_rule: biz-key,   version_rule: semver-0.0.0-fallback, coord_note: "full_url（该项目自有主键）"}
+  - {id: fin_agent,       label: Fin_Agent,       status: active, since: 2026-09-26, aliases: [Fin_Agent],       identifier_rule: biz-key,   version_rule: semver-0.0.0-fallback, coord_note: "text（该项目自有主键）"}
+  - {id: cpp_hub,         label: Cpp_Hub,         status: active, since: 2026-09-26, aliases: [Cpp_Hub],         identifier_rule: unset,     version_rule: semver-0.0.0-fallback, coord_note: "本仓尚无该项目的 U-1 产物（坐标待它首次发身份时定）"}
+  - {id: spec_workflow,   label: Spec_Workflow,   status: active, since: 2026-09-26, aliases: [Spec_Workflow],   identifier_rule: unset,     version_rule: semver-0.0.0-fallback, coord_note: "本仓尚无该项目的 U-1 产物（坐标待它首次发身份时定）"}
+  - {id: factor_pipeline, label: factor_pipeline, status: active, since: 2026-09-26, aliases: [],                identifier_rule: biz-key,   version_rule: semver-0.0.0-fallback, coord_note: "id（该项目自有主键）"}
   # ── 本仓（同一个仓的两个取值域：正式产物 vs 受理区）──────────────────────────────
-  - {id: rpc,             label: 本仓 RPC,         status: active, since: 2026-09-26, aliases: [RPC]}
-  - {id: rpc_inbox,       label: 本仓 inbox,       status: active, since: 2026-09-26, aliases: []}
+  - {id: rpc,             label: 本仓 RPC,         status: active, since: 2026-09-26, aliases: [RPC],             identifier_rule: relpath,   version_rule: semver-0.0.0-fallback, coord_note: "仓内相对路径（如 `inventory/edges.yaml`）"}
+  # ★ `rpc_inbox` 的坐标 = `U1#7`（2026-10-19 裁）的口径；⚠ **不含受理目录**（残余见 spec 未实测 7 的残余段 /
+  #   台账 `O-162` ①：2026-10-20 取证为**本机正常时钟下不可达**，真实风险 = 依赖 `Get-UniqueRunStamp` 的全局抢占
+  #   这一**隐藏前提** ⇒ 口径维持，前提写进 spec 与台账）。
+  - {id: rpc_inbox,       label: 本仓 inbox,       status: active, since: 2026-09-26, aliases: [],                identifier_rule: relpath,   version_rule: semver-0.0.0-fallback, coord_note: "清单数据行的相对路径（相对清单头声明的「项目根」）· `U1#7` 2026-10-19 裁定"}
   # ── ★ 2026-10-01 补登（`U1#5` 普查实测出的缺口，不是"顺手加的"）─────────────────
   - id: auto_prover
     label: Auto_Prover
     status: active
     since: 2026-10-01
     aliases: [Auto_Prover]
+    identifier_rule: biz-key
+    version_rule: semver-0.0.0-fallback
+    coord_note: "normalized（该项目自有主键）"
     note: >-
       ★ **补登理由**：`U1#5` 普查时实测 —— `Auto_Prover` 在 `inventory/id-storage-census.yaml` 里
       **有 2 处存储登记**（`verdicts.db` / `verdicts_*.jsonl` 等），却**不在**取值域里

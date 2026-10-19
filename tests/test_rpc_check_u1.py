@@ -365,6 +365,75 @@ def test_the_literal_vectors_are_not_vacuous():
     assert not same, f"默认 `json.dumps` 竟与 JCS 字面量同值 ⇒ 这些字面量是恒真的（假绿）: {same}"
 
 
+# ── ⑤e ★★ `O-162`（2026-10-20 裁「坐标语义进注册表字段」）：`identifier` / `version` 的语义 ──
+# 缺口：§1.3 的 identifier / version 语义**只有 prose 一张表**（"既有各处可无损映射"）⇒ **不是判据**
+#   ⇒ 每处各自拼三元组；`U1#5` 把"**取值域**"搬进了注册表、**没搬"语义"** ⇒ 缺的正是这一格。
+# 裁 = 注册表条目加 `identifier_rule` / `version_rule`（**闭集**）+ 判据「active 必须登记」
+#   + 「★ **已在用**（`inventory/*.yaml` 里有它的 `u1:` 声明）却登记成 `unset`」⇒ 判红（用了却没定语义）。
+# ⚠ 如实标注：本判据判的是**登记完整性**，**不是**语义正确性（后者无法机判 ⇒ 不许读成"语义已验证"）。
+_COORD_OK = {"namespaces": [
+    {"id": "a", "status": "active", "since": "2026-09-26", "aliases": [],
+     "identifier_rule": "relpath", "version_rule": "semver-0.0.0-fallback"},
+]}
+
+
+def test_namespace_coords_must_be_declared_and_in_closed_set():
+    """① active 缺字段 ⇒ 红；② 闭集外的取值 ⇒ 红；③ retired **不强制**（历史条目只解释历史身份）。"""
+    f = getattr(R, "validate_namespace_coords", None)
+    assert f is not None, "`validate_namespace_coords` 不存在 ⇒ O-162 ② 的坐标语义判据缺失"
+    assert f(_COORD_OK)[0] == [], f"正例误判: {f(_COORD_OK)[0]}"
+    miss = {"namespaces": [{"id": "a", "status": "active", "since": "2026-09-26", "aliases": []}]}
+    bad = f(miss)[0]
+    assert any("identifier_rule" in b for b in bad) and any("version_rule" in b for b in bad), bad
+    out = {"namespaces": [dict(_COORD_OK["namespaces"][0], identifier_rule="whatever")]}
+    assert any("identifier_rule" in b for b in f(out)[0]), f"闭集外的取值未判出: {f(out)[0]}"
+    old = {"namespaces": [{"id": "o", "status": "retired", "since": "2026-09-26", "aliases": []}]}
+    assert f(old)[0] == [], f"retired 不该被强制登记坐标: {f(old)[0]}"
+
+
+def test_unset_coords_need_a_reason_and_are_rejected_when_used():
+    """★★ 两半：`unset` **必须**带 `coord_note`（否则就是一句无声的"没定"）；而**已在用**的 ns ⇒ `unset` **一律拒**。"""
+    f = R.validate_namespace_coords
+    un = {"namespaces": [dict(_COORD_OK["namespaces"][0], identifier_rule="unset")]}
+    assert any("coord_note" in b for b in f(un)[0]), f"`unset` 没写理由 ⇒ 必须判红: {f(un)[0]}"
+    ok = {"namespaces": [dict(_COORD_OK["namespaces"][0], identifier_rule="unset", coord_note="尚无产物")]}
+    assert f(ok)[0] == [], f"写了理由应放行: {f(ok)[0]}"
+    bad2 = f(ok, used_ns={"a"})[0]
+    assert any("已在用" in b for b in bad2), f"已用的 ns 登记成 unset 必须判红（用了却没定语义）: {bad2}"
+
+
+def test_the_coord_check_is_not_vacuous():
+    """★ **先验红自证**：拿**真实注册表**，只把**一条** rule 改成闭集外的串 ⇒ 判据必须翻红。"""
+    reg = _real_reg()
+    assert R.validate_namespace_coords(reg, used_ns={"rpc"})[0] == [], "真实注册表应先绿（基线）"
+    items = [dict(n) for n in reg["namespaces"]]
+    for n in items:
+        if n["id"] == "rpc":
+            n["identifier_rule"] = "made-up"
+    assert R.validate_namespace_coords({"namespaces": items}, used_ns={"rpc"})[0], \
+        "只改一条却没红 ⇒ 这条判据是恒真的（在本仓，恒真 == 什么都没判）"
+
+
+def test_repo_registry_registers_coords_for_used_namespaces():
+    """★ 端到端真读：① 真实声明用到的 ns 坐标全登记（含 `unset` 的那几个**未被用到**）；
+    ② 本仓**两个真实生产者**（`rpc` / `rpc_inbox`）必须**不是** `unset` 且细则在 `coord_note` 里。"""
+    import yaml
+    reg = _real_reg()
+    used = set()
+    for p in sorted((ROOT / "inventory").glob("*.yaml")):
+        doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        d = doc.get("u1") if isinstance(doc, dict) else None
+        if isinstance(d, dict) and d.get("namespace"):
+            used.add(d["namespace"])
+    assert used, "`inventory/*.yaml` 里没有真实声明 ⇒ 本条没有对象（不许退化成空判）"
+    bad = R.validate_namespace_coords(reg, used_ns=used)[0]
+    assert bad == [], f"真实注册表未通过坐标判据: {bad}"
+    by_id, _a2i = R.namespace_index(reg)
+    for nid in ("rpc", "rpc_inbox"):
+        assert by_id[nid]["identifier_rule"] != "unset", f"{nid} 有真实生产者 ⇒ 坐标不许登记成 unset"
+        assert by_id[nid].get("coord_note"), f"{nid} 的坐标细则应写进 `coord_note`"
+
+
 # ── ⑥ 端到端真读：本仓真的写了这两个声明（消掉 U1 spec 未实测 #2）──────────
 def test_repo_inventory_declarations_exist_and_recompute():
     import yaml
