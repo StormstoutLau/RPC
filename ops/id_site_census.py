@@ -52,6 +52,12 @@ FILE_GLOB = "*.py"
 #   —— 计入它会让真值**在干净 clone 上不可复现**，且随临时件增删**反复漂**（本次报红即因少了一个临时脚本）。
 #   ⚠ 与 `archive` 同类：都是"不是 ID 产出点"的目录。
 EXCLUDE_DIRS = (".venv", "venv", "archive", "__pycache__", ".git", "node_modules", "site-packages", "tmp")
+# ★ 2026-10-19 新增（**口径变更**，已按纪律重跑 `--emit` 并复核下游 U4 §1）：按**前缀**排除会话临时目录。
+#   起因：`F:\Full_Weather\.tmp_spec_install\`（今日 19:19 起的下载暂存区，内含 `parallel_download.py`
+#   命中 2 行哈希用法）令真值 `Full_Weather 0/0` ≠ 实测 `2/1` —— 该目录名以 `.tmp` 开头，却不在上面
+#   **逐名精确匹配**的 `EXCLUDE_DIRS` 里。理由与 `tmp` 完全同源：会话临时暂存区**不是 ID 产出点**，
+#   且计入会让真值在**干净 clone 上不可复现**、随临时件增删**反复漂**。
+EXCLUDE_DIR_PREFIXES = (".tmp",)
 EXCLUDE_TESTS = True          # 测试不是"ID 产出点"⇒ 默认排除（改了这里必须重跑 --emit）
 
 # ── 口径 ③：单位 = 上面的 METRIC_UNIT（"行"而不是"匹配次数"，也不是"文件数"）──────
@@ -76,18 +82,22 @@ EXIT_DEGRADED = 2          # 有项目不可达 ⇒ 门禁降级为 WARN（不�
 
 
 def scope() -> dict:
-    """范围三件套（目录排除 + 文件 glob + 是否含测试）—— 原样写进真值，便于复现。"""
+    """范围（目录排除[精确名 + 前缀] + 文件 glob + 是否含测试）—— 原样写进真值，便于复现。"""
     skip = list(EXCLUDE_DIRS) + (["tests"] if EXCLUDE_TESTS else [])
-    return {"glob": FILE_GLOB, "exclude_dirs": sorted(set(skip)), "exclude_tests": EXCLUDE_TESTS}
+    return {"glob": FILE_GLOB, "exclude_dirs": sorted(set(skip)),
+            "exclude_dir_prefixes": list(EXCLUDE_DIR_PREFIXES),
+            "exclude_tests": EXCLUDE_TESTS}
 
 
 def measure(root: Path) -> tuple:
     """在 `root` 下按口径计数 ⇒ `(files, hits)`。`hits` = 命中**行数**。"""
     rx = re.compile(METRIC_REGEX)
-    skip = set(scope()["exclude_dirs"])
+    sc = scope()
+    skip = set(sc["exclude_dirs"])
+    prefixes = tuple(sc.get("exclude_dir_prefixes") or ())
     files = hits = 0
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in skip]
+        dirnames[:] = [d for d in dirnames if d not in skip and not d.startswith(prefixes)]
         for fn in filenames:
             if not fnmatch.fnmatch(fn, FILE_GLOB):
                 continue
@@ -156,7 +166,8 @@ def check() -> int:
         if m.get(k) != v:
             drift.append(k)
     print(f"[口径] {m.get('name')} · 单位={m.get('unit')} · 正则={m.get('regex')}")
-    print(f"[范围] glob={m.get('glob')} · 排除目录={m.get('exclude_dirs')} · 排除测试={m.get('exclude_tests')}")
+    print(f"[范围] glob={m.get('glob')} · 排除目录={m.get('exclude_dirs')} · "
+          f"排除目录前缀={m.get('exclude_dir_prefixes')} · 排除测试={m.get('exclude_tests')}")
     if drift:
         print(f"[FAIL] **口径已漂移**（真值是用旧口径生成的）: {drift} ⇒ 重跑 --emit 并复核下游结论")
 

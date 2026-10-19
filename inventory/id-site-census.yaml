@@ -19,6 +19,8 @@ metric:
   - tests
   - tmp
   - venv
+  exclude_dir_prefixes:
+  - .tmp
   exclude_tests: true
 projects:
 - id: Open_Data
