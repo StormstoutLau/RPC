@@ -233,10 +233,29 @@ upstream: \[ADR-0002]
 > **R6（"20 请求/分"的引用 · 本批只落一半）**：★ 官方文本**未**写"per account"（见上文 L193 的 2026-10-20 收窄段）⇒ 仓内多处**加工出**的「**/账户**」限定词**不再成立**。★ **本批落**：本 ADR（L193）与 `cluster_egress.py` 相邻文案；⚠ **其余 ≈30 处（`agent-cli.ps1` L3903 / L4134 / **L5636** · 各文档）【未扫】** ⇒ **登记随批**（清单见裁决分析稿 §10.6 / §10.8）。
 >
 > ⚠ **本块零行为变更**：**未删旧件 · 未改 `_free_quota()` · 未改任何 `state` / 判据 / 门禁**。★ **未裁/未做清单** = [待裁清单稿](../docs/2026-10-20_待裁事项依赖链与执行顺序.md) §0。
+>
+> ### ★★ 2026-10-20 · 批次②（R4 + X1）【已裁并落】（用户令「按建议方案执行 R4 和 X1 的裁定与落地」）
+>
+> ★ 本块与上块**分开记账**：上块逐字写着"**本块零行为变更**"、且"**未改 `_free_quota()`**"—— ★ **那两句只对批次①成立**，本块**改的就是它**（故另起一段，避免把两批混成一句）。
+>
+> **R4 ⇒ 裁【甲】（日限额依据：**直读 `free_limit`** + 兜底如实报出）** —— 落点 `ops/cluster_egress.py`：新增 `_free_quota_effective(info) -> (quota, source)`（`source ∈ {'limit','fallback-50'}`）；`cmd_egress` 的旁证行改调它并**打印来源**（`限额来源: limit(直读服务端 free_limit)` / `★兜底档 fallback-50`）；`_free_quota()` **保留**为兜底（档位真值源只有 `free_limit` 一个）；`ops/cluster.py` 门面**新增重导出** `_free_quota_effective`（漏了会被门禁 `facade` 判红 —— 消费者引用的符号必须在门面可达名里）。
+> ★ **先验红**：`tests/test_cluster_pure.py` 新增 7 条用例 ⇒ **实现前全红**（`<缺 _free_quota_effective>`）；**变异自证**：把兜底改成**非保守档** ⇒ 4 条 fail-closed 用例**当场红**（还原即绿）。
+> ★ **同源对照（非恒真）**：样本 `is_free_tier=false` 但 `limit=50` ⇒ **甲（直读 50）≠ 乙（推断 1000）**—— ★ 对照项**刻意在测试里本地重写**（不复用生产函数），否则"实现一改、对照就跟着改"= 判据被实现拖着走。
+> ★ **真跑**（`py ops/cluster.py egress`，只读 `GET /key`、零模型配额）：旁证行逐字 `本地计数(旁证, 仅主控侧入口) 0/1000 (限额来源: limit(直读服务端 free_limit))`，与四端 `free 25/1000 · A 25/1000 · B 22/1000 · C 2/1000` 一致。
+>
+> **X1 ⇒ 裁【甲】（`egress_pick` 段进 `.agent-run.json` · **X1′=甲 全量**）** —— 落点 `ops/station-bin/agent-cli.ps1`：新增**纯函数** `New-EgressPick`（五键 `alias` / `basis` / `candidates` / `chosen` / `route_station`，键序写死）；**主路**（`Invoke-Task` 的出网档派发点 L2496-2516）与**备路**（`Invoke-Task-Claude` 的选站点 L4513-4526）**各**建段，并在**两处 `Set-Content … .agent-run.json` 之前**注入 —— 与 `exec_host` / `d7_guard` **同址同法**（"先注入、后写盘"）；⚠ **绝不事后写**：该件**字节**被 `review.json.l1.record_sha256` 钉住（`O-139` 已写死）。★ **"跑过才加"**：主路只在**默认出网档**派发出现；备路只在 `$useStation`（真有站可选）出现。
+> ★ **夹具** `_fm_golden_test.ps1` 新增 **8 条 `X1-egress⑬–⑳`**：形状 + 值直通 + **同源对照（只换依据 ⇒ `basis`/`chosen` 必不同）** + 候选去空 + ★★ **AST 判相对位置**（"注入 < 写盘"、**两处各判一次**）+ 防"只落一处" + 夹具内置**先验红**（写盘后才注入的样本上该判据为假）+ 结构护栏（两路各恰一处调 `New-EgressPick`）。
+> ★ **手工变异自证**：把主路注入行**真挪到** `Set-Content` **之后** ⇒ `X1-egress⑰` **当场红**（`pass=624 fail=1`）⇒ 复原即 **625/0**。
+> ★ **真跑两向（同源对照）**：同一张 `spec/d6-agent-standard/dogfood-cards/glob-probe.md`（`model: ultra`）连发两次 —— **① 状态件在**（`{C:0,B:1,A:1}`）⇒ `EGRESS_PICK: ultra route_station=B -> station=C candidates=C,A,B basis=local-count`（run `202610201702375715`，`exec_host=192.168.10.37` = C 站）；**② 删掉状态件**（fail-closed 轮转）⇒ `EGRESS_PICK: ultra route_station=B -> station=A candidates=A,B,C basis=fail-closed-rotation`（run `202610201703259134`，`exec_host=scott-lau-NEX.local` = A 站）⇒ ★★ **同一输入、只换依据 ⇒ `chosen` 与 `basis` 双双翻转**，且两次 `.agent-run.json` 的 `egress_pick` 与控制台行**逐字一致**（两载体互证）。
+> ⚠ **诚实边界（不扩项）**：`exec_host` 由 `Resolve-D7Hosts -Station $station` **派生自 `$station`** ⇒ 它是**选站结论的投影**、**不是**"远端机器"的独立观测（同族：`Get-ActualStation` 正是为 claude 路"投影报错站"而建的读侧判据 · 见 `O-147` 格内已登记的边界）；本段落进证据链的是**选站结论**，不是机器实测。
+>
+> **门禁读数（本批末）**：`_fm_golden_test.ps1` **625/0**（617 + 8）· `py ops/rpc_check.py --quick` **39 绿 / 2 黄 / 0 红** · `py tests/run_py_tests.py` **52/52**。
+> ★ **仍未做（**不在本批射程**，如实）**：**R1 实施面**（删/改旧件四件 + `cmd_egress` 旁证行 + `cluster.py` 重导出清单 + `.gitignore` L36 —— 本批**未碰**）· **R7**（`O-148` 的"发作 ⇒ 就地修 / 修不动 ⇒ 降级 + 留痕"）· **X2**（守门人可机判）· **R8**（同账户第二把 key · 需人工动作）· **R6** 剩余 **≈30 处引用清扫**（本批只有 ADR 的 L193 那半已在批次①落）· **X3**（同族另两处引用）。
 
 
 **结论（2026-09-16；⚠ 已被上方 2026-09-21 更正部分推翻："**无服务器剩余 API**"不再成立）**：可以建，但只能"本地自建"计数（无服务器剩余 API）：
 - 统一入口 `egress` 增强：读 `GET /api/v1/key` 的 **`is_free_tier`**（True→日限额 50 / False→1000），并显示**主控本地每日计数**（`.egress_daily.json`，UTC 日滚动归零）+ 达 80% 预警。
+  - ★ **2026-10-20 就地更正（R4 裁【甲】· 已落）**：上面「读 `is_free_tier`（True→50 / False→1000）」是**代理判据** —— 官方 SDK 页逐字「`limit` … the ceiling depends on **total credits purchased** and is **independent of `is_free_tier`**」（见上文 L193 的 2026-10-20 收窄段）⇒ ★ **日限额的依据改【直读】** `free_model_daily_requests.limit`（落点 = `cluster_egress.py` 的 `_free_quota_effective`）；`_free_quota()` **退化为 fail-closed 兜底**（`free_limit` 缺 / `None` / 非数 / ≤0 ⇒ 取**保守档 50**，且 `cmd_egress` **如实报出**"取兜底档" —— **判不了 ≠ 通过**，也不许静默）。★ 历史上**同一事实本就有两处来源**（`cmd_egress` 的旁证行用推断 · 借用流程 L275/L325 **直读**）⇒ 本改动 = **把孤例收回权威字段**。⚠ 本行后半句（`.egress_daily.json` 的存废）属 **R1 实施面【仍待落】**，本行**未动**。
 - 写入手 `_egress_bump()`：由真正发 OpenRouter 免费请求的调用方（`opencode -m openrouter/...` / review 免费源）在发请求前自增。
 - **实证（2026-09-16）**：主控 + A/B/C 四端 `tier=paid`（`is_free_tier=false`）→ **本账户已曾充 ≥$10，免费档日限额 = 1000/天**；四端同账户（`label` 一致）印证跨 key 全局治理。
 - **诚实披露边界**：本地计数覆盖"主控侧入口能感知"的请求（wrapper/egress/review），**人手动 TUI 直调不在此计数** → 与 429 的 `X-RateLimit-*` 头交叉校准为准。

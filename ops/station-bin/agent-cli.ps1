@@ -2486,6 +2486,10 @@ function Invoke-Task {
     #   ⚠ 先算 `$effectiveCli`（故上面那行提前到闸之前）：**claude 通道豁免本闸** —— 其实施后端由 P3
     #     决定（`local-only` ⇒ 站上本地引擎 = 不出网；其余 ⇒ OpenRouter = 出网），交由 `Invoke-Task-Claude` 按运行时判；
     #     此处按 route id 判会**误杀 P3**（也会误杀 D7 的站上 OpenRouter 分支）。
+    # ★ X1 甲（2026-10-20 · 用户裁「按建议方案执行 R4 和 X1 的裁定与落地」）：
+    #   本函数**只在这一处**建"选站留痕段"（`New-EgressPick`）。★ 未派发 / 非默认出网档 ⇒ 保持 `$null`
+    #   ⇒ `.agent-run.json` 里**不出现**该键（"跑过才加"，与 `d7_guard` 同法）。
+    $egressPick = $null
     if ($effectiveCli -ne 'claude') {
         $rejB = Get-SensitivityBackendReject -sensitivity $sens -backendEgress (Get-BackendEgress $id)
         if ($rejB) { Write-Host "REJECT $rejB (task, $id) exit 4 - no override channel"; return 4 }
@@ -2511,8 +2515,13 @@ function Invoke-Task {
             $reqSt = [string]$station
             $station = [string]$cand[0]
             $null = Write-EgressStationPick -Station $station
+            # ★ X1 甲（2026-10-20）: 判据（basis）**只在这里算一次** —— 控制台行与 run 记录**同源**
+            #   （各算一次 = 两载体可能说两件事；同族="同一事实两处表达"）。
+            $pickBasis = if ($cnt) { 'local-count' } else { 'fail-closed-rotation' }
+            $egressPick = New-EgressPick -Alias $m -RouteStation $reqSt -Chosen $station `
+                                         -Candidates @($cand) -Basis $pickBasis
             Write-Host ("EGRESS_PICK: {0} route_station={1} -> station={2} candidates={3} basis={4}" -f `
-                $m, $reqSt, $station, (@($cand) -join ','), $(if ($cnt) { 'local-count' } else { 'fail-closed-rotation' }))
+                $m, $reqSt, $station, (@($cand) -join ','), $pickBasis)
         }
     }
     Write-Host "CLI=$effectiveCli route_station=$station"
@@ -3681,6 +3690,13 @@ exit `$FINAL_RC
                            -GuardSink $d7t | Out-Null
             # ★ task 侧报数落点（与 review 侧同款"跑过才加"；此处 sink 至少含 P0 与 `I1` ⇒ 必非空）
             if ($d7t.Count -gt 0) { $run['d7_guard'] = $d7t }
+            # ── ★★ X1 甲（2026-10-20 · 用户裁「按建议方案执行 R4 和 X1 的裁定与落地」）──────────
+            #   出网档**选站**的 run 级留痕。★ 落点刻意与上面 `exec_host`/`d7_guard` 同处
+            #   = **先注入、后写盘**（下一行 `Set-Content` 才是写盘）。
+            #   ⚠ **不可"事后写"**：`.agent-run.json` 的**字节**被 `review.json.l1.record_sha256` 钉住
+            #     ⇒ 事后补键会当场自伤该凭据（`O-139` 已把这件事写死）。
+            #   ★ "跑过才加"（同 `d7_guard`）：只有默认出网档派发才有该段（`$egressPick` 见本函数前段）。
+            if ($egressPick) { $run['egress_pick'] = $egressPick }
             # ★★ 2026-10-13 晚（P0 尾款「另起一件」）：`RUNREPORT` 已转硬拒 —— 信封判据拒 ⇒ **拒收**
             #   （`return 3` = 该 run 记录**不落盘**；落点在下一行写盘**之前** ⇒ 与 VD 同形）。
             #   条件 = 唯一开关点 `Resolve-D7HardReject` ∧ sink 实读（必须在 `Write-D7Report` 之后）。
@@ -4494,6 +4510,20 @@ function Invoke-Task-Claude {
         }
       }
     }
+    # ── ★★ X1 甲（2026-10-20 · 用户裁「按建议方案执行 R4 和 X1 的裁定与落地」）──────────────
+    #   本路（claude）**选站**的 run 级留痕 —— 与主路 `Invoke-Task` 用**同一形状**（`New-EgressPick`）。
+    # ★ 为什么备路必须**自建**而不是共用主路那个：主路的 `$egressPick` 是**函数局部**变量
+    #   ⇒ 传不到本函数（`Invoke-Task-Claude` 只收 `-GuardSink`，不收它）。
+    # ★ 为什么不复用本路的 `model`（站上分支写 `station:<站>/<别名>`）：那个只答"**哪站**"、答不了
+    #   "**凭什么**"（`basis` + 候选序）；且 `exec_host` 只是 `Resolve-D7Hosts` 对 `$st` 的**投影**、
+    #   **不是**独立观测（同族：`Get-ActualStation` 正是为"投影报错站"而建的读侧判据）。
+    # ★ "跑过才加"：`$useStation` 为假（主控本地 spawn ⇒ **无站可选**）⇒ 保持 `$null` ⇒ 不落空段。
+    $egressPick = $null
+    if ($useStation) {
+        $egressPick = New-EgressPick -Alias $m -RouteStation $stPref -Chosen $st `
+                                     -Candidates $(if ($backendLocal) { @($cands) } else { @($stPref) }) `
+                                     -Basis $(if ($backendLocal) { 'local-engine-ready' } else { 'openrouter-ready' })
+    }
     # 硬闸（P2 的核心: 判据输入从"型号前缀"改为"**后端出网属性**"）。`$backendLocal` ⇒ 不出网(放行 local-only);
     #   否则 ⇒ 出网 ⇒ local-only 必须被拒。**保留本闸是防线**: 若将来有人加了新的云端 claude
     #   后端却忘了同步 `$backendLocal`, 它仍会拦(而不是静默放行)。
@@ -4875,6 +4905,10 @@ mkdir -p "$stWorkDir/.attach/$nm2"
                            -GuardSink $d7t | Out-Null
             # ★ task 侧报数落点（与主路**同一处置**；备路还带着 P0 传来的 `CONTRACT.*`）
             if ($d7t.Count -gt 0) { $run['d7_guard'] = $d7t }
+            # ── ★★ X1 甲（2026-10-20）：本路选站的 run 级留痕（与主路**同一处置**）──────────
+            # ★ 同主路：**先注入、后写盘**（下一行 `Set-Content`）；⚠ 同样**不可事后写**
+            #   （`.agent-run.json` 的字节被 `review.json.l1.record_sha256` 钉住 ⇒ 当场自伤）。
+            if ($egressPick) { $run['egress_pick'] = $egressPick }
             # ★★ 2026-10-13 晚（P0 尾款「另起一件」）：`RUNREPORT` 已转硬拒 —— 信封判据拒 ⇒ **拒收**
             #   （`return 3` = 该 run 记录**不落盘**；落点在下一行写盘**之前** ⇒ 与 VD 同形）。
             #   条件 = 唯一开关点 `Resolve-D7HardReject` ∧ sink 实读（必须在 `Write-D7Report` 之后）。
@@ -5103,6 +5137,34 @@ function Get-EgressStationCandidates {
     }
     return $all
 }
+
+
+function New-EgressPick {
+    # X1 甲（2026-10-20 · 用户裁「按建议方案执行 R4 和 X1 的裁定与落地」）：
+    #   把"**这次派发把哪站选上了、凭什么**"做成**可落 run 记录的段**。
+    #   为什么要有它：`EGRESS_PICK` 此前只落**控制台行** + 状态件 `ops/.egress_station.json`
+    #     ⇒ **run 级无法复核**"这次派给哪站"；落进 `.agent-run.json` 后该结论**自动被证据链钉住**
+    #     （`.agent-run.json` 在件集内 ⇒ 被 `review.json.l1.record_sha256` 的**字节**摘要覆盖）。
+    #   ★ 与 `d7_guard` / `d7_verdict` **同址同法**（在**同一次写盘**内注入 ⇒ **绝不**事后写）。
+    #   ★ 形状（X1′=甲 · **全量**）：`alias` / `basis` / `candidates` / `chosen` / `route_station`。
+    #   ★ **纯函数**（只吃入参、不碰站 / 文件 / 状态件）⇒ 夹具可**离线单测**（`o147-egress⑬–⑯`）。
+    param(
+        [string]$Alias = '',
+        [string]$RouteStation = '',
+        [string]$Chosen = '',
+        [string[]]$Candidates = @(),
+        [string]$Basis = ''
+    )
+    # ⚠ 键序**刻意写死**（`[ordered]`）：消费者按形状读 ⇒ 键序稳定 = 少一类"看起来一样其实不一样"。
+    return [ordered]@{
+        alias         = [string]$Alias
+        basis         = [string]$Basis
+        candidates    = @($Candidates | Where-Object { $_ })
+        chosen        = [string]$Chosen
+        route_station = [string]$RouteStation
+    }
+}
+
 
 function Get-EgressStationStateFile {
     # O-147 丙 (2026-10-20): **本地按站出网计数**的唯一状态件（gitignored，同 `.egress_daily.json` 家族）。

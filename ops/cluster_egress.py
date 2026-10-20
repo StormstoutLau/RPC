@@ -115,11 +115,41 @@ def _egress_save(d: dict) -> None:
         pass
 
 
-def _free_quota(is_free_tier):
-    """按 key 档位给免费档日限额。is_free_tier 未知时取保守档 50。"""
-    if is_free_tier is False:
-        return FREE_QUOTA_PAID
+def _free_quota(is_free_tier=None):
+    """★ **fail-closed 兜底档**（R4 裁【甲】· 2026-10-20）—— 判不了时取**保守档 50**。
+
+    ⚠ **本函数不再是主口径**：它原用 `is_free_tier` 反推 50/1000（`False ⇒ 1000`），而官方 SDK 页逐字
+      「`limit` … the ceiling depends on **total credits purchased** and is **independent of
+      `is_free_tier`**」（见 ADR-0003 L193 的 2026-10-20 收窄段）⇒ ★ 那是**代理判据**：
+      `is_free_tier` 是"是否**曾**充值"的布尔，而档位看的是"**总充值额**"，两者只在"从未充 / 已充过"
+      两端重合。⇒ 主口径已改为**直读**服务端权威字段 `free_model_daily_requests.limit`
+      （`_free_quota_effective`）。
+    ★ 本函数**保留**为 `free_limit` 取不到时的兜底（`cluster.py` L545 仍重导出它）；参数**保留但不参与判档**
+      —— 档位真值源只有 `free_limit`。★ 兜底**必须如实报出**（调用方不许静默）。
+    """
     return FREE_QUOTA_FREE
+
+
+def _free_quota_effective(info: dict):
+    """免费档日限额【主口径】= **直读**服务端权威字段 `free_limit`；取不到 ⇒ 兜底并**如实报出来源**。
+
+    返回 `(quota, source)`，`source ∈ {'limit', 'fallback-50'}`。
+
+    为什么直读（R4 裁【甲】· 2026-10-20）：官方 SDK 页逐字「`limit` … depends on **total credits
+    purchased** and is **independent of `is_free_tier`**」⇒ 用 `is_free_tier` 反推档位 = **代理判据**；
+    且 `_parse_egress`（L61）**早已**把该字段解析成 `free_limit`，借用/指派流程（L275 / L325）**本就直接读**
+    ⇒ 本改动 = 把孤例**收回权威字段**（消掉"同一事实两处表达"）。
+    ★ 兜底为什么取 50 而不是按 tier 猜 1000：`free_limit` 取不到 ⇒ **判不了** ⇒ fail-closed 取保守档，
+      且**报出来源**（"判不了 ≠ 通过"，也不许静默）。
+    """
+    fl = info.get("free_limit")
+    try:
+        n = int(fl)
+    except Exception:
+        n = 0
+    if n > 0:
+        return n, "limit"
+    return _free_quota(), "fallback-50"
 
 
 def probe_egress_station(st: str) -> dict:
@@ -231,14 +261,18 @@ def cmd_egress() -> int:
     print("         ⇒ 仅供巡检/预警/事后对账; **不可当\"调用前实时闸门\"**(会误判为未用额度)")
 
     # 本地计数(2026-09-16 建; 2026-09-21 起降级为**旁证**): 只覆盖"主控侧入口能感知"的请求。
-    ft = (res.get("主控", {}).get("info") or {}).get("is_free_tier")
-    q = _free_quota(ft)
+    # ★ 2026-10-20（R4 裁【甲】）: 日限额改**直读**服务端 `free_limit`（权威字段；**不再**用 `is_free_tier` 反推）
+    #   —— 官方 SDK 页逐字「`limit` … is **independent of `is_free_tier`**」（见 ADR-0003 L193/L238）。
+    #   ★ 取不到 ⇒ fail-closed 兜底 50，且**如实报出来源**（不许静默 —— "判不了 ≠ 通过"）。
+    info_m = res.get("主控", {}).get("info") or {}
+    q, q_src = _free_quota_effective(info_m)
     d = _egress_daily()
     used = int(d.get("count", 0))
     ratio = used / q if q else 0
     warn = " ⚠ 已达阈值80%" if ratio >= FREE_ALERT_RATIO else ""
-    print(f"[egress] 本地计数(旁证, 仅主控侧入口) {used}/{q} "
-          f"({('曾充≥$10' if ft is False else '无充值')}档){warn}")
+    src = ("limit(直读服务端 free_limit)" if q_src == "limit"
+           else "★兜底档 fallback-50(⚠ free_limit 缺/非法 ⇒ fail-closed；判不了 ≠ 通过)")
+    print(f"[egress] 本地计数(旁证, 仅主控侧入口) {used}/{q} (限额来源: {src}){warn}")
     print("         ▸ 随时与上面\"主控\"那行的服务端计数比对: 差得多 ⇒ 有未被记录的调用方/手动 TUI 直调")
     print("[egress] 20 请求/分 fixed(充值不升) · **429 计入配额**(⚠ 400 类客户端错误**实测【不】计** —— 2026-10-20 收窄) · 限额按**账户**治理(多建 key 不能绕过同一账户)")
     print()

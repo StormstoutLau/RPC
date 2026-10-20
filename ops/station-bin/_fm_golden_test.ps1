@@ -41,6 +41,9 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 # O-147 乙+丙 (2026-10-20): 出网档的**候选站排序**（纯函数：吃 站池 + 按站计数 ⇒ 可离线单测）。
 #   ★ 依据 = 本地按站计数（**用得少在前**）；计数读不到/缺键 ⇒ **fail-closed 退回按站轮转**（绝不退回只吃 B）。
 'Get-EgressStationCandidates', 'Get-EgressStationStateFile', 'Read-EgressStationState', 'Write-EgressStationPick',
+# X1 甲 (2026-10-20): 出网档**选站的 run 级留痕段**（纯函数：吃 alias/站/basis ⇒ 可离线单测）。
+#   ★ 单独提它的理由：形状（五键 + 键序）与"跑过才加"的语义都要能被**真调用**钉住。
+'New-EgressPick',
 # 2026-10-13 (P1 · `CONCLUSION #6` 兑现): join 的两个**纯函数** = 声明解析（唯一解析点）+ 汇聚判定核。
 'Expand-DecomposeSubject', 'Resolve-SplitJoin',
 # 2026-10-16（方案 `a`）：分片依赖声明 `needs=` 的**完整性校验核**（纯函数：吃声明数组 ⇒ 离线可单测）。
@@ -2753,6 +2756,64 @@ $ecCall = @($itFn[0].FindAll({ param($n)
     $n -is [System.Management.Automation.Language.CommandAst] -and ($n.GetCommandName() -eq 'Get-EgressStationCandidates') }, $true))
 Assert-True "O147-egress⑫(结构): Invoke-Task 内**真的调** Get-EgressStationCandidates（接线不得被摘掉）" (
     ($itFn.Count -eq 1) -and ($ecCall.Count -eq 1))
+
+# ══ X1 甲（2026-10-20 · 用户裁「按建议方案执行 R4 和 X1 的裁定与落地」）═════════════════════
+#   `EGRESS_PICK` 的 **run 级留痕**：段形状（真调用 `New-EgressPick`）+ **注入点相对写盘点的位置**。
+#   ★★ 为什么位置**必须用 AST 判**、不许用文本匹配：本仓"文本判据被注释骗"已发生多次（★ **本批就现场
+#     踩到一次** —— 我在注释里写了 `Resolve-D7Hosts -Station`，b3⑬ 的**字符串计数** 2→3 **当场红**）
+#     ⇒ 只有 AST 能回答"**真的**有一条把键写进 `$run` 的语句，且它在**真的**写盘语句之前"。
+$ep1 = New-EgressPick -Alias 'ultra' -RouteStation 'B' -Chosen 'A' -Candidates @('A','B','C') -Basis 'fail-closed-rotation'
+Assert-True "X1-egress⑬(形状 · X1′=甲 全量): 五键齐 + 键序 == alias,basis,candidates,chosen,route_station" (
+    ((@($ep1.Keys) -join ',') -eq 'alias,basis,candidates,chosen,route_station'))
+Assert-True "X1-egress⑭(值直通): alias/route_station/chosen/basis 原样 + candidates 实名数组" (
+    ($ep1.alias -eq 'ultra') -and ($ep1.route_station -eq 'B') -and ($ep1.chosen -eq 'A') -and
+    ($ep1.basis -eq 'fail-closed-rotation') -and ((@($ep1.candidates) -join ',') -eq 'A,B,C'))
+$ep2 = New-EgressPick -Alias 'ultra' -RouteStation 'B' -Chosen 'B' -Candidates @('B','C','A') -Basis 'local-count'
+Assert-True "X1-egress⑮(先验红·同源对照): 同一别名、**只换依据** ⇒ basis 与 chosen **必须不同**（⑭ 非恒真）" (
+    ($ep2.basis -ne $ep1.basis) -and ($ep2.chosen -ne $ep1.chosen))
+$ep3 = New-EgressPick -Alias 'x' -RouteStation 'A' -Chosen '' -Candidates @($null, '', 'A') -Basis 'b'
+Assert-True "X1-egress⑯(边界): 候选里的 `$null`/空串被剔除（只留实名站）；空候选 ⇒ 空数组" (
+    ((@($ep3.candidates) -join ',') -eq 'A') -and
+    (@((New-EgressPick -Alias 'x' -Chosen '' -Candidates @()).candidates).Count -eq 0))
+
+# ★★ 主判据：**两处写点各判一次** —— "注入段 < 写盘"（AST 取位置）
+$epInjNodes = @($ast.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+    $n.Left.Extent.Text -eq "`$run['egress_pick']" }, $true))
+$epWrtNodes = @($ast.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.CommandAst] -and
+    ($n.GetCommandName() -eq 'Set-Content') -and ($n.Extent.Text -match 'agent-run\.json') }, $true))
+Assert-True "X1-egress⑰(★两处写点 + 顺序承重): 注入段**恰 2 处**(主路 + claude 备路) · 写盘恰 2 处 · 每处都 **注入 < 写盘**" (
+    ($epInjNodes.Count -eq 2) -and ($epWrtNodes.Count -eq 2) -and
+    ($epInjNodes[0].Extent.StartOffset -lt $epWrtNodes[0].Extent.StartOffset) -and
+    ($epInjNodes[1].Extent.StartOffset -lt $epWrtNodes[1].Extent.StartOffset))
+Assert-True "X1-egress⑱(★防「只落一处」): 注入点分处文件两端(主路在前、备路在后) ⇒ 不是同一处被数两遍" (
+    ($epInjNodes[0].Extent.StartOffset -lt $epInjNodes[1].Extent.StartOffset) -and
+    ($epWrtNodes[0].Extent.StartOffset -lt $epWrtNodes[1].Extent.StartOffset))
+
+# ★ 先验红·同源对照：**错顺序**样本（注入挪到写盘**之后**）⇒ 同一条判据必须为假
+$epBad = "`$run | ConvertTo-Json -Depth 6 | Set-Content (Join-Path `$runDir '.agent-run.json')`nif (`$egressPick) { `$run['egress_pick'] = `$egressPick }"
+$epbTok = $null; $epbErr = $null
+$epbAst = [System.Management.Automation.Language.Parser]::ParseInput($epBad, [ref]$epbTok, [ref]$epbErr)
+$epbInj = @($epbAst.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+    $n.Left.Extent.Text -eq "`$run['egress_pick']" }, $true))
+$epbWrt = @($epbAst.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.CommandAst] -and
+    ($n.GetCommandName() -eq 'Set-Content') -and ($n.Extent.Text -match 'agent-run\.json') }, $true))
+Assert-True "X1-egress⑲(先验红·同源对照): **写盘后**才注入的样本上「注入 < 写盘」为假 ⇒ ⑰ 非恒真" (
+    ($epbInj.Count -eq 1) -and ($epbWrt.Count -eq 1) -and
+    -not ($epbInj[0].Extent.StartOffset -lt $epbWrt[0].Extent.StartOffset))
+
+# ⑳ 结构护栏：`Invoke-Task` / `Invoke-Task-Claude` 内**各恰一处**调 `New-EgressPick`（防"函数在、没人用"）
+$epCallTask = @($itFn[0].FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.CommandAst] -and ($n.GetCommandName() -eq 'New-EgressPick') }, $true))
+$qFn = @($ast.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-Task-Claude' }, $true))
+$epCallClaude = @($qFn[0].FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.CommandAst] -and ($n.GetCommandName() -eq 'New-EgressPick') }, $true))
+Assert-True "X1-egress⑳(结构): 主路与备路**各**恰一处调 New-EgressPick（接线不得被摘掉）" (
+    ($qFn.Count -eq 1) -and ($epCallTask.Count -eq 1) -and ($epCallClaude.Count -eq 1))
 
 # ══ O-141 P1（2026-10-13 · `CONCLUSION #6` 兑现）：跨片 join —— 声明式主体 + fail-closed ══════════
 #   语义真值 = 结论契约 §6.2（五条定案）；载体 = 【选项①】（卡面声明，非产物自述）—— 映射见契约 §6.3。

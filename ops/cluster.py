@@ -544,6 +544,10 @@ from cluster_egress import (  # noqa: E402
     EGRESS_DAILY_FILE, EGRESS_SEP, EGRESS_URL, FREE_ALERT_RATIO, FREE_QUOTA_FREE,
     FREE_QUOTA_PAID, OR_BORROW_AT, OR_BORROW_FILE, OR_POOL_DIR, _egress_bump,
     _egress_cmd, _egress_daily, _egress_probe_all, _egress_save, _free_quota,
+    # R4 裁【甲】(2026-10-20): 免费档日限额的**主口径**（直读服务端 `free_limit` + 兜底如实）
+    #   —— ★ 必须一并重导出：门禁 `facade` 判「消费者引用的符号必须在门面可达名里」
+    #     （`tests/test_cluster_pure.py` 的新用例直接引用它）⇒ 漏了会当场 FAIL。
+    _free_quota_effective,
     _mask_key, _or_info, _or_line, _or_master_key_file, _or_own_key_file, _or_pct,
     _or_read_key, _or_state, _or_state_save, _parse_egress, cmd_egress,
     cmd_egress_borrow, probe_egress_master, probe_egress_station,

@@ -194,6 +194,56 @@ chk("resolve_quant: 无登记且文件名无量化串 → ('', 'none')",
     str(C.resolve_quant("__no_such_alias__", "plain.gguf")))
 
 
+# ── _free_quota_effective: 免费档日限额的【主口径】= 直读服务端 `free_limit` -------------------
+#   （R4 裁【甲】· 2026-10-20）为什么钉它：`_free_quota(is_free_tier)` 是**代理判据** —— 官方 SDK 页逐字
+#   「`limit` … depends on **total credits purchased** and is **independent of `is_free_tier`**」
+#   （见 ADR-0003 L193 的 2026-10-20 收窄段 + L238 的就地更正）⇒ 主口径改为**直读**
+#   `free_model_daily_requests.limit`；取不到 ⇒ fail-closed 兜底并**如实报出来源**（不静默）。
+#   判据（先写死，后实施）：① 缺 / `None` / 非数 ⇒ 取 50 **且** `source='fallback-50'`；
+#   ② ★ **同源对照**：`is_free_tier=False` 但 `limit=50` 的样本上，**直读（甲）与推断（乙）的结论必须不同**
+#      —— 否则本组判据恒真（`limit` 与 `is_free_tier` 只在"从未充 / 已充过"两端重合）。
+#   ⚠ 用 `getattr` 取函数：**先验红**时函数尚不存在 ⇒ 本组报 FAIL（而不是整文件崩掉）。
+_fqe = getattr(C, "_free_quota_effective", None)
+
+
+def _fqe_str(info):
+    return str(_fqe(info)) if _fqe else "<缺 _free_quota_effective>"
+
+
+def _legacy_proxy(info):
+    """★ **旧口径（乙 · 代理判据）的参照实现** —— 只存在于本测试里，**不是**生产路径。
+
+    规则 = 改动前的 `_free_quota(is_free_tier)`：`is_free_tier is False ⇒ 1000 else 50`。
+    ★ 为什么要**本地**留一份：同源对照要求「甲（直读）与乙（推断）的结论必须不同」，否则本组判据恒真；
+      对照项若复用生产函数，则生产函数一改，对照随之失效（**判据会被实现拖着走**）。
+    """
+    return 1000 if info.get("is_free_tier") is False else 50
+
+
+chk("_free_quota_effective: 直读 free_limit（权威字段优先）",
+    bool(_fqe) and _fqe({"is_free_tier": False, "free_limit": 1000}) == (1000, "limit"),
+    _fqe_str({"is_free_tier": False, "free_limit": 1000}))
+chk("_free_quota_effective: ★同源对照 —— is_free_tier=False 但 limit=50 ⇒ 直读 50（**不**按推断给 1000）",
+    bool(_fqe) and _fqe({"is_free_tier": False, "free_limit": 50}) == (50, "limit"),
+    _fqe_str({"is_free_tier": False, "free_limit": 50}))
+chk("★甲/乙结论必须不同（否则本组判据恒真）: 直读 limit=50 vs 推断 is_free_tier=False",
+    bool(_fqe) and _fqe({"is_free_tier": False, "free_limit": 50})[0] != _legacy_proxy({"is_free_tier": False}),
+    f"直读={_fqe({'is_free_tier': False, 'free_limit': 50})[0] if _fqe else '?'} 推断={_legacy_proxy({'is_free_tier': False})}")
+chk("_free_quota_effective: 缺字段 ⇒ fail-closed 50 且**如实报出** source='fallback-50'",
+    bool(_fqe) and _fqe({"is_free_tier": False}) == (50, "fallback-50"),
+    _fqe_str({"is_free_tier": False}))
+chk("_free_quota_effective: free_limit=None ⇒ 兜底 50 + fallback-50（判不了 ≠ 猜）",
+    bool(_fqe) and _fqe({"is_free_tier": False, "free_limit": None}) == (50, "fallback-50"),
+    _fqe_str({"is_free_tier": False, "free_limit": None}))
+chk("_free_quota_effective: 非数字串 ⇒ 兜底 50 + fallback-50",
+    bool(_fqe) and _fqe({"is_free_tier": True, "free_limit": "abc"}) == (50, "fallback-50"),
+    _fqe_str({"is_free_tier": True, "free_limit": "abc"}))
+chk("_free_quota_effective: 0/负 ⇒ 兜底 50 + fallback-50（不把 0 当有效上限）",
+    bool(_fqe) and _fqe({"is_free_tier": False, "free_limit": 0}) == (50, "fallback-50") and
+                   _fqe({"is_free_tier": False, "free_limit": -3}) == (50, "fallback-50"),
+    _fqe_str({"is_free_tier": False, "free_limit": 0}))
+
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAILED -> {fails}")
 sys.exit(1 if fails else 0)
