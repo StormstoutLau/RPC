@@ -44,6 +44,10 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 # X1 甲 (2026-10-20): 出网档**选站的 run 级留痕段**（纯函数：吃 alias/站/basis ⇒ 可离线单测）。
 #   ★ 单独提它的理由：形状（五键 + 键序）与"跑过才加"的语义都要能被**真调用**钉住。
 'New-EgressPick',
+# R7 (2026-10-20 · 用户裁「(a)=(a-1) 端到端连通探针 · (b)=(b-1) 保持人工」): 默认出网档
+#   「候选首站出不了网 ⇒ 降级到 B + 留痕」的**降级留痕段**（纯函数：吃 alias/from/to/依据/读数 ⇒ 可离线单测）。
+#   ★ 与 `New-EgressPick` **同址同法**（纯函数 + 键序写死 + "跑过才加"）。
+'New-EgressDegrade',
 # 2026-10-13 (P1 · `CONCLUSION #6` 兑现): join 的两个**纯函数** = 声明解析（唯一解析点）+ 汇聚判定核。
 'Expand-DecomposeSubject', 'Resolve-SplitJoin',
 # 2026-10-16（方案 `a`）：分片依赖声明 `needs=` 的**完整性校验核**（纯函数：吃声明数组 ⇒ 离线可单测）。
@@ -2814,6 +2818,110 @@ $epCallClaude = @($qFn[0].FindAll({ param($n)
     $n -is [System.Management.Automation.Language.CommandAst] -and ($n.GetCommandName() -eq 'New-EgressPick') }, $true))
 Assert-True "X1-egress⑳(结构): 主路与备路**各**恰一处调 New-EgressPick（接线不得被摘掉）" (
     ($qFn.Count -eq 1) -and ($epCallTask.Count -eq 1) -and ($epCallClaude.Count -eq 1))
+
+# ══ R7（2026-10-20 · 用户裁「(a)=(a-1) 端到端连通探针 · (b)=(b-1) 保持人工」）═════════════════
+#   默认出网档：「候选首站当前出不了网 ⇒ 降级到 B + 留痕」（设计稿 §8；边界四条照 §3-C）。
+#   ★★ 本组**承重的判据全在结构面（AST）** —— 形状类断言**单独不承重**（纯函数本来就能过）；
+#     真正要防的是本仓头号形态："**函数在、没人用** / 用了却**不在唯一点** / 注入了却**写在写盘之后**"。
+$ed1 = New-EgressDegrade -Alias 'ultra' -From 'A' -To 'B' -BaseBasis 'local-count' -Reason 'probe-failed' -Probe '000'
+Assert-True "R7-degrade①(形状): 六键齐 + 键序 == alias,base_basis,from,probe,reason,to" (
+    ((@($ed1.Keys) -join ',') -eq 'alias,base_basis,from,probe,reason,to'))
+Assert-True "R7-degrade②(值直通 · 不加工成结论): alias/from/to/依据/原因 原样；probe 保持**原始读数**" (
+    ($ed1.alias -eq 'ultra') -and ($ed1.from -eq 'A') -and ($ed1.to -eq 'B') -and
+    ($ed1.base_basis -eq 'local-count') -and ($ed1.reason -eq 'probe-failed') -and ($ed1.probe -eq '000'))
+$ed2 = New-EgressDegrade -Alias 'ultra' -From 'C' -To 'B' -BaseBasis 'fail-closed-rotation' -Reason 'probe-failed' -Probe 'TIMEOUT(8s)'
+Assert-True "R7-degrade③(先验红·同源对照): 同一别名、**只换** from/依据/读数 ⇒ 三值必须不同（② 非恒真）" (
+    ($ed2.from -ne $ed1.from) -and ($ed2.base_basis -ne $ed1.base_basis) -and ($ed2.probe -ne $ed1.probe))
+
+# ④ 结构：`Invoke-Task` 内**真的调**探针（防"函数在、没人用"；同 O147-egress⑫ 路子）
+$orCall = @($itFn[0].FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.CommandAst] -and
+    ($n.GetCommandName() -eq 'Test-StationOpenRouterEgressReady') }, $true))
+Assert-True "R7-degrade④(结构): Invoke-Task 内**恰一处**调出网探针（接线不得被摘掉）" (
+    ($itFn.Count -eq 1) -and ($orCall.Count -eq 1))
+# ⑤ 结构 · 边界 (ii)：探针调用点**必须落在「默认出网档」那一块内**（不进 pin 路 ⇒ 降级不外溢）
+$emIf = @($itFn[0].FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.IfStatementAst] -and
+    ($n.Extent.Text -match 'EGRESS_MULTI_ALIASES\s+-contains') }, $true)) | Select-Object -First 1
+Assert-True "R7-degrade⑤(结构 · 边界(ii)): 探针调用点落在 if(EGRESS_MULTI_ALIASES -contains `$m) 块内" (
+    ($orCall.Count -eq 1) -and ($null -ne $emIf) -and
+    ($orCall[0].Extent.StartOffset -gt $emIf.Extent.StartOffset) -and
+    ($orCall[0].Extent.StartOffset -lt $emIf.Extent.EndOffset))
+# ⑥ 结构 · 边界 (iv)：降级段**只在同一块内建一次**，且 `-To` 是**字符串字面量 'B'**（固定目标落在**调用方**）
+#   ⚠⚠ 本批踩到的形状坑（记下来防下次再撞）：**命令实参的元素是 `CommandParameterAst`、不是 `ParameterAst`**
+#     —— 后者是 **`param()` 块**的东西 ⇒ 用 `ParameterAst` 取 `-To` **一个都取不到**（本夹具第一版就这么假红了一次）。
+#     且 `-To 'B'` 是**空格分隔**形式 ⇒ 实参 = `-To` 那个元素的**下一个** `CommandElement`（不是 `.Argument`）。
+$edCall = @($itFn[0].FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.CommandAst] -and
+    ($n.GetCommandName() -eq 'New-EgressDegrade') }, $true))
+$edToEl = $null
+if ($edCall.Count -eq 1) {
+    $edEls = @($edCall[0].CommandElements)
+    for ($i = 0; $i -lt $edEls.Count; $i++) {
+        if (($edEls[$i] -is [System.Management.Automation.Language.CommandParameterAst]) -and
+            ($edEls[$i].ParameterName -eq 'To') -and ($i + 1 -lt $edEls.Count)) { $edToEl = $edEls[$i + 1] }
+    }
+}
+Assert-True "R7-degrade⑥(结构 · 边界(iv)): 恰一处建降级段 · 落在同一 if 块内 · `-To` 是字面量 'B'（不走候选序）" (
+    ($edCall.Count -eq 1) -and ($null -ne $emIf) -and
+    ($edCall[0].Extent.StartOffset -gt $emIf.Extent.StartOffset) -and
+    ($edCall[0].Extent.StartOffset -lt $emIf.Extent.EndOffset) -and
+    ($null -ne $edToEl) -and
+    ($edToEl -is [System.Management.Automation.Language.StringConstantExpressionAst]) -and
+    ($edToEl.Value -eq 'B'))
+# ⑥b 先验红·同源对照：**取项改成候选序**（`-To $cand[1]`）的样本 ⇒ 同一条取法**取不到字面量** ⇒ ⑥ 非恒真
+$edToBadSrc = '$d = New-EgressDegrade -Alias ultra -From A -To $cand[1] -BaseBasis b -Reason r -Probe p'
+$edtTok = $null; $edtErr = $null
+$edtAst = [System.Management.Automation.Language.Parser]::ParseInput($edToBadSrc, [ref]$edtTok, [ref]$edtErr)
+$edtEl = $null
+foreach ($edtCmd in @($edtAst.FindAll({ param($n)
+        $n -is [System.Management.Automation.Language.CommandAst] -and
+        ($n.GetCommandName() -eq 'New-EgressDegrade') }, $true))) {
+    $edtEls = @($edtCmd.CommandElements)
+    for ($i = 0; $i -lt $edtEls.Count; $i++) {
+        if (($edtEls[$i] -is [System.Management.Automation.Language.CommandParameterAst]) -and
+            ($edtEls[$i].ParameterName -eq 'To') -and ($i + 1 -lt $edtEls.Count)) { $edtEl = $edtEls[$i + 1] }
+    }
+}
+Assert-True "R7-degrade⑥b(先验红·同源对照): `-To` 走候选序的样本上「是字面量 'B'」为假 ⇒ ⑥ 非恒真" (
+    ($null -ne $edtEl) -and
+    -not ($edtEl -is [System.Management.Automation.Language.StringConstantExpressionAst]))
+
+# ⑦ 结构 · 承重：`$run['egress_degrade']` 的**注入 < 写盘**（同 X1-egress⑰ 判法；AST 取位置）
+$edInjNodes = @($ast.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+    $n.Left.Extent.Text -eq "`$run['egress_degrade']" }, $true))
+$edWrtNodes = @($ast.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.CommandAst] -and
+    ($n.GetCommandName() -eq 'Set-Content') -and ($n.Extent.Text -match 'agent-run\.json') }, $true))
+Assert-True "R7-degrade⑦(★顺序承重): 降级段**恰 1 处**注入（只走 opencode 主路）· 写盘恰 2 处 · **注入 < 主路写盘**" (
+    ($edInjNodes.Count -eq 1) -and ($edWrtNodes.Count -eq 2) -and
+    ($edInjNodes[0].Extent.StartOffset -lt $edWrtNodes[0].Extent.StartOffset))
+# ⑧ 先验红·同源对照：**写盘之后**才注入的样本 ⇒ ⑦ 的同一判据必须为假
+$edBad = "`$run | ConvertTo-Json -Depth 6 | Set-Content (Join-Path `$runDir '.agent-run.json')`nif (`$egressDegrade) { `$run['egress_degrade'] = `$egressDegrade }"
+$edbTok = $null; $edbErr = $null
+$edbAst = [System.Management.Automation.Language.Parser]::ParseInput($edBad, [ref]$edbTok, [ref]$edbErr)
+$edbInj = @($edbAst.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+    $n.Left.Extent.Text -eq "`$run['egress_degrade']" }, $true))
+$edbWrt = @($edbAst.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.CommandAst] -and
+    ($n.GetCommandName() -eq 'Set-Content') -and ($n.Extent.Text -match 'agent-run\.json') }, $true))
+Assert-True "R7-degrade⑧(先验红·同源对照): 写盘后才注入的样本上「注入 < 写盘」为假 ⇒ ⑦ 非恒真" (
+    ($edbInj.Count -eq 1) -and ($edbWrt.Count -eq 1) -and
+    -not ($edbInj[0].Extent.StartOffset -lt $edbWrt[0].Extent.StartOffset))
+# ⑨ 结构：探针函数**存在且是 ssh 探针**（防"空壳/纯函数冒充"：它必须真的走 `Invoke-CappedSsh` ⇒ 有整体墙钟）
+$orFn = @($ast.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $n.Name -eq 'Test-StationOpenRouterEgressReady' }, $true))
+$orSsh = @()
+if ($orFn.Count -eq 1) {
+    $orSsh = @($orFn[0].FindAll({ param($n)
+        $n -is [System.Management.Automation.Language.CommandAst] -and
+        ($n.GetCommandName() -eq 'Invoke-CappedSsh') }, $true))
+}
+Assert-True "R7-degrade⑨(结构): 探针函数恰 1 处定义，且**真的**走 Invoke-CappedSsh（有墙钟；不是空壳）" (
+    ($orFn.Count -eq 1) -and ($orSsh.Count -ge 1))
 
 # ══ O-141 P1（2026-10-13 · `CONCLUSION #6` 兑现）：跨片 join —— 声明式主体 + fail-closed ══════════
 #   语义真值 = 结论契约 §6.2（五条定案）；载体 = 【选项①】（卡面声明，非产物自述）—— 映射见契约 §6.3。

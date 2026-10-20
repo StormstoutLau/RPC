@@ -2490,6 +2490,10 @@ function Invoke-Task {
     #   本函数**只在这一处**建"选站留痕段"（`New-EgressPick`）。★ 未派发 / 非默认出网档 ⇒ 保持 `$null`
     #   ⇒ `.agent-run.json` 里**不出现**该键（"跑过才加"，与 `d7_guard` 同法）。
     $egressPick = $null
+    # ★★ R7（2026-10-20 · 用户裁「(a)=(a-1) 端到端连通探针 · (b)=(b-1) 保持人工」）：
+    #   同址再建**降级留痕段**（`New-EgressDegrade`）—— ★ 只在"默认出网档 + 候选站探针未通过"时非空
+    #   （同"跑过才加"）。★ F6-① 的「就地修」**不自动化** ⇒ 本函数**不** ssh 改站上配置。
+    $egressDegrade = $null
     if ($effectiveCli -ne 'claude') {
         $rejB = Get-SensitivityBackendReject -sensitivity $sens -backendEgress (Get-BackendEgress $id)
         if ($rejB) { Write-Host "REJECT $rejB (task, $id) exit 4 - no override channel"; return 4 }
@@ -2514,10 +2518,51 @@ function Invoke-Task {
             }
             $reqSt = [string]$station
             $station = [string]$cand[0]
-            $null = Write-EgressStationPick -Station $station
             # ★ X1 甲（2026-10-20）: 判据（basis）**只在这里算一次** —— 控制台行与 run 记录**同源**
             #   （各算一次 = 两载体可能说两件事；同族="同一事实两处表达"）。
-            $pickBasis = if ($cnt) { 'local-count' } else { 'fail-closed-rotation' }
+            $egBaseBasis = if ($cnt) { 'local-count' } else { 'fail-closed-rotation' }
+            $pickBasis = $egBaseBasis
+            # ★★ R7（2026-10-20 · 用户裁「(a)=(a-1) 端到端连通探针 · (b)=(b-1) 保持人工」）：
+            #   F6-② 的自动化 = 「候选站当前出不了网 ⇒ 降级到 B + 留痕」（§3-C 边界四条）。
+            #   ★ 判据 = **只读探针**（ssh + 站上 curl 打 openrouter 端点）⇒ **不碰站上配置**；
+            #     ★ 为什么**不复用** `Test-StationClaudeEgressReady`：那个判的是**凭据面**（ssh/claude/站上 key），
+            #       **不问"到不到得了 openrouter.ai"** ⇒ 本条发作时它**照样通过**（那正是本题要补的缺口）。
+            #   ★ 探针顺序：**首选候选**先探；★ 只在它未通过时才**追加探 B**（B = 边界 (iv) 写死的降级目标）
+            #     ⇒ **通过路径只探一次**（不加额外开销）；⚠ 探 B 是"降级前先确认目标可用"，**不是**"另找候选"。
+            $egProbeStations = @($station)
+            if ($station -ne 'B') { $egProbeStations += 'B' }
+            $egProbe = @{}
+            foreach ($egSt in $egProbeStations) {
+                $egProbe[$egSt] = Test-StationOpenRouterEgressReady -hostName (Get-TargetHost $egSt) -remoteUser $Script:REMOTE_USER
+                if ($egProbe[$egSt].ok) { break }
+            }
+            if (-not $egProbe[$station].ok) {
+                $egFrom = $station
+                $egReason = 'probe-failed'
+                if ($station -ne 'B') {
+                    if ($egProbe['B'].ok) {
+                        # ── 降级：目标**固定 B**（**不**去 `$cand` 后面找"下一个能用的站" = F4 反对的原形）──
+                        $station = 'B'
+                        $pickBasis = 'egress-probe-degrade'
+                        Write-Host ("EGRESS_DEGRADE: {0} from={1} to=B reason=probe-failed base_basis={2} probe={3}" -f `
+                            $m, $egFrom, $egBaseBasis, $egProbe[$egFrom].read)
+                    }
+                    else {
+                        Write-Host ("REJECT egress-degrade-target-down ($id) exit 4 - 候选站 {0} 与降级目标 B **都**探针未通过 ⇒ fail-closed（边界 (iv)：**不**找第三候选）；probe={1} / probeB={2}" -f `
+                            $egFrom, $egProbe[$egFrom].read, $egProbe['B'].read)
+                        return 4
+                    }
+                }
+                else {
+                    # 首选站**就是 B** ⇒ 无处可降（**不**改站、**不**报错退出 —— 照现状失败）
+                    $egReason = 'probe-failed-already-B'
+                    Write-Host "EGRESS_DEGRADE: none (chosen=B) reason=probe-failed-already-B - 首选站即 B 且探针未通过 ⇒ 无处可降（照现状失败）"
+                }
+                $egressDegrade = New-EgressDegrade -Alias $m -From $egFrom -To 'B' -BaseBasis $egBaseBasis `
+                                                   -Reason $egReason -Probe $egProbe[$egFrom].read
+            }
+            # ⚠ 计数记**实际派发站**（降级后 = B）：否则"用得少在前"的均衡依据会被记到**没被用的**那站。
+            $null = Write-EgressStationPick -Station $station
             $egressPick = New-EgressPick -Alias $m -RouteStation $reqSt -Chosen $station `
                                          -Candidates @($cand) -Basis $pickBasis
             Write-Host ("EGRESS_PICK: {0} route_station={1} -> station={2} candidates={3} basis={4}" -f `
@@ -3697,6 +3742,11 @@ exit `$FINAL_RC
             #     ⇒ 事后补键会当场自伤该凭据（`O-139` 已把这件事写死）。
             #   ★ "跑过才加"（同 `d7_guard`）：只有默认出网档派发才有该段（`$egressPick` 见本函数前段）。
             if ($egressPick) { $run['egress_pick'] = $egressPick }
+            # ★★ R7（2026-10-20 · 用户裁「(a)=(a-1) 端到端连通探针 · (b)=(b-1) 保持人工」）：
+            #   降级留痕段 —— **同址同法**（先注入、后写盘；"跑过才加"）。
+            #   ★ 只有"默认出网档 + 探针未通过"才有该段（`$egressDegrade` 见本函数前段）
+            #     ⇒ 非默认出网档 / 探针通过 ⇒ 键**不出现**。
+            if ($egressDegrade) { $run['egress_degrade'] = $egressDegrade }
             # ★★ 2026-10-13 晚（P0 尾款「另起一件」）：`RUNREPORT` 已转硬拒 —— 信封判据拒 ⇒ **拒收**
             #   （`return 3` = 该 run 记录**不落盘**；落点在下一行写盘**之前** ⇒ 与 VD 同形）。
             #   条件 = 唯一开关点 `Resolve-D7HardReject` ∧ sink 实读（必须在 `Write-D7Report` 之后）。
@@ -5166,6 +5216,38 @@ function New-EgressPick {
 }
 
 
+function New-EgressDegrade {
+    # ★★ R7（2026-10-20 · 用户裁「(a)=(a-1) 端到端连通探针 · (b)=(b-1) 保持人工」）：
+    #   把"**这次派发为什么降级到 B**"做成**可落 run 记录的段**（与 `New-EgressPick` **同址同法**）。
+    #   为什么要有它：F6-② **逐字**要求「降级**不许静默**」；★ 而只有**可机判的落痕**才算"不静默"
+    #     （形状照 `O-140` 裁【甲·可机判版】：纯函数 + fail-closed + 落 run 记录）。
+    #   ★ 形状（**六键 · 键序写死**，同 `New-EgressPick` 的理由：消费者按形状读）：
+    #     `alias` / `base_basis`（**降级前**的选站依据）/ `from`（原候选站）/ `probe`（**原始读数**）/
+    #     `reason`（`probe-failed` 或 `probe-failed-already-B`）/ `to`（**恒 B** —— 边界 (iv)）。
+    #   ★★ **`probe` 只记原始读数、不加工成结论**：探针**不区分**"DNS 坏应答 / 连不上 / 超时"
+    #     ⇒ 留痕里**绝不**写成"DNS 发作"（那没判出来 —— 本仓头号形态：把"没判"说成"判了"）。
+    #   ★ **纯函数**（只吃入参、不碰站 / 文件 / 状态件）⇒ 夹具可**离线单测**（`R7-degrade①–③`）。
+    #   ⚠ 边界 (iv) 的"降级目标**固定 B**"落在**调用方**（`Invoke-Task` 传**字面量** `'B'`）——
+    #     本函数**不**替调用方兜（一兜就成了"另找候选"的入口；`R7-degrade⑥` 钉在调用方那侧）。
+    param(
+        [string]$Alias = '',
+        [string]$From = '',
+        [string]$To = '',
+        [string]$BaseBasis = '',
+        [string]$Reason = '',
+        [string]$Probe = ''
+    )
+    return [ordered]@{
+        alias      = [string]$Alias
+        base_basis = [string]$BaseBasis
+        from       = [string]$From
+        probe      = [string]$Probe
+        reason     = [string]$Reason
+        to         = [string]$To
+    }
+}
+
+
 function Get-EgressStationStateFile {
     # O-147 丙 (2026-10-20): **本地按站出网计数**的唯一状态件（gitignored，同 `.egress_daily.json` 家族）。
     Join-Path $Script:REPO_ROOT 'ops/.egress_station.json'
@@ -5287,6 +5369,42 @@ function Test-StationClaudeEgressReady {
     } catch {
         Write-Host "  [station-claude-egress $hostName] EXC: $($_.Exception.Message)"
         return $false
+    }
+}
+
+function Test-StationOpenRouterEgressReady {
+    # ★★ R7（2026-10-20 · 用户裁「(a)=(a-1) 端到端连通探针 · (b)=(b-1) 保持人工」）：
+    #   默认出网档的**发作判据** —— ★ **只读**探针：ssh + 站上 `curl` 打 openrouter 端点。
+    #   ★ 为什么**不复用**上面那个 `Test-StationClaudeEgressReady`：它三条判据全在**凭据面**
+    #     （ssh 可达 / `claude` 可执行 / 站上 `~/.config/rpc/openrouter.key` 存在）
+    #     ⇒ ★ **不问"这站到不到得了 `openrouter.ai`"** ⇒ `O-148` 发作时它**照样返回 true**
+    #     ⇒ 那**正是**本题要补的缺口（不是"重造一个已有判据"）。
+    #   ★ 判据 = **站上拿到一个 HTTP 响应**（curl 的 `%{http_code}` 落 1xx–5xx）——
+    #     ★ **不依赖"已知好 IP 段"**（台账 `O-148` [甲2] 被否的脆弱点③：段会变 ⇒ 判据会漂）。
+    #   ★★ **诚实边界（写死）**：本函数**不区分**"DNS 坏应答 / 连不上 / 超时 / 站上无 curl" ——
+    #     一律"未通过"；★ 且**把原始读数带出**（`read` = `%{http_code}` + curl 的 rc）
+    #     ⇒ 留痕里只写"探针未通过 + 原始读数"，**绝不**编造成因。
+    #   ★ 端点取**公开**的 `/api/v1/models` ⇒ **不读**站上 key、**不消耗**账户配额（探的是**出网能力**）。
+    #   归零纪律：本函数**只回一个 hashtable**（**不是** bool）⇒ 内部一切输出必须 Write-Host。
+    param([string]$hostName, [string]$remoteUser)
+    try {
+        # 单引号串 ⇒ `$C` / `$?` / `%{http_code}` 保持字面量交给远端 shell（**不在本机展开**）。
+        # ★ 纪律 12（引号地狱）：远端命令**一个引号都不含** ⇒ 可安全进 `ProcessStartInfo.Arguments`（与上面两条探针同法）。
+        # ⚠ `-m 8` = curl 自身的总时限；外层还有 `Invoke-CappedSsh` 的**整体墙钟**（双保险）。
+        $orCmd = 'C=$(curl -4 -s -o /dev/null -m 8 -w %{http_code} https://openrouter.ai/api/v1/models 2>/dev/null); echo PROBE_HTTP=$C rc=$?'
+        $res = Invoke-CappedSsh -Arguments ("-o ConnectTimeout=8 ${remoteUser}@${hostName} " + $orCmd)
+        $orRead = ''
+        foreach ($x in (("$($res.out)" + "`n" + "$($res.err)") -split "`n")) {
+            if ($x) { Write-Host "  [station-openrouter-egress $hostName] $x" }
+            if (-not $orRead -and ("$x" -match 'PROBE_HTTP=(.+)$')) { $orRead = $Matches[1] }
+        }
+        if (-not $orRead) {
+            $orRead = if ("$($res.err)".Trim()) { 'ssh:' + ("$($res.err)".Trim() -split "`n")[0] } else { 'no-output' }
+        }
+        return @{ ok = [bool]("$orRead" -match '^[1-5][0-9][0-9]'); code = $res.code; read = [string]$orRead }
+    } catch {
+        Write-Host "  [station-openrouter-egress $hostName] EXC: $($_.Exception.Message)"
+        return @{ ok = $false; code = 255; read = ('exc:' + $_.Exception.Message) }
     }
 }
 

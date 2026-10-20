@@ -265,6 +265,19 @@ upstream: \[ADR-0002]
 > ⚠ **仍未做（本批射程外，如实）**：**`FREE_QUOTA_PAID` 现为"仅定义 + 重导出"**（模块内**已无消费者** —— 它是 **R4 的语义产物**：档位真值源已收到 `free_limit`）⇒ ★ **本批不顺手删**（不在 R1 射程），**登记为待裁**；另 `_free_quota(is_free_tier=None)` 的**入参已不参与判档**（保留只为签名兼容）。
 
 
+> ### ★★ 2026-10-20 · 批次③-R7（`O-148` 的「运行期降级 + 留痕」）【已裁并落】（用户令「好的，执行吧」）
+>
+> ★ **本块兑现上块末句**：批次③ 写「**候选站"当前不可用"时的降级仍未落**（`O-148` ④ `(甲1)`）」⇒ 本块即它。
+>
+> ★★ **两处设计待定项 ⇒ 用户裁（2026-10-20）**：**(a) 「发作」的判据 = 【(a-1) 端到端连通探针】**（派发前对候选站做一次只读探针；**否决** DNS 形状判据与事后失败信号）· **(b) F6-①「就地修」= 【(b-1) 保持人工（runbook）】** ⇒ ★ **本批只自动化 F6-②**（**不**自动 ssh 改站上配置）。
+>
+> **落点** `ops/station-bin/agent-cli.ps1`（**新增两件 + 一处接线 + 一处注入**）：**只读探针** `Test-StationOpenRouterEgressReady`（ssh + 站上 `curl` 拿 `%{http_code}`；★ **刻意不复用** `Test-StationClaudeEgressReady` —— 那个判的是**凭据面**，`O-148` 发作时**照样通过**）· **纯函数** `New-EgressDegrade`（六键 `alias`/`base_basis`/`from`/`probe`/`reason`/`to`）· **默认出网档**接线（在 `if ($Script:EGRESS_MULTI_ALIASES -contains $m)` 块内）：候选首站探针未通过 ⇒ **降级到 B**（`to='B'` **写死**）；★ B **亦**未通过 ⇒ `REJECT egress-degrade-target-down` **exit 4**（**不找第三候选** —— 边界 (iv)）· `egress_degrade` 进 `.agent-run.json`（**主路写盘之前**注入，同 X1）· ★ **计数改记【实际派发站】**（降级后 = B —— 否则"用得少在前"的均衡依据会被记到**没被用的**那站）。
+> ★ **口径（沿用 §3-C 划界裁的边界四条，不重议）**：显式 pin 路（`claude-a/-b/-c` · `ultra-a/-b/-c` · 批行 `station=`）**一字不改**（仍"拒跑 + 列替代站"）· 降级**只**发生在默认出网档 · 留痕**可机判** · 降级目标**固定 B**。
+> ★ **读数（全部实测）**：**先验红** = 夹具落地、实现未落 ⇒ `_fm_golden_test.ps1` **exit 1**（`New-EgressDegrade not found`）· **后验绿** `_fm_golden_test.ps1` **635/0**（+10 条 `R7-degrade①–⑨`/`⑥b`；★ 承重判据全在 **AST 结构面**）· **变异自证两向**（注入挪到写盘**之后** ⇒ **634/1** · 摘掉探针调用 ⇒ **633/2**）⇒ 两次均**逐字复原** ⇒ 635/0 · **受控真跑** run `202610201814118568`（卡 `glob-probe.md` · `model: ultra`；★ 受控 = **只在主控侧** `~/.ssh/config` 临时把 A 指向 `127.0.0.1:1`，**用后字节还原** · **零站上配置**）⇒ 探针 A 拒（`ssh:…Connection refused`）⇒ 先**只**追加探 B `PROBE_HTTP=200 rc=0` ⇒ `EGRESS_DEGRADE: ultra from=A to=B reason=probe-failed base_basis=local-count` ⇒ `EGRESS_PICK … basis=egress-probe-degrade` `chosen=B` ⇒ **`exec_host=scott-lau-GTR-Pro.local`（真的落在 B）** · `exit_code=0` · `ACCEPT_OK=1`。
+> ⚠ **诚实边界（写死）**：探针**不区分**"DNS 坏应答 / 连不上 / 超时" ⇒ 留痕 `probe` **只记原始读数**，**绝不**写成"DNS 发作"；且为换取**可受控真跑**，把"**探针未完成**"并入"该站在派发面上不可用"（代价 = 瞬态抖动会**多降一次级** —— 属**取舍**，不是遗漏）。
+> ⚠ **仍未做（如实）**：**(b-1) 描述里的「留痕里打印那条修法命令」未实现**（判为超出"保持人工"的最小射程；手册 §8 **已逐字给出**该命令）· **`O-148` 的 ⏳ 不变**（间歇 · 成因未定 ⇒ **复发即回本条**）· **`O-147` 乙/丙 仍暂缓**。
+> ★ **真值 / 全文** = [设计稿 §3-C + §8](../docs/2026-10-20_O-148_站上出网发作处置_设计与实施方案.md) 与 [台账 `O-148` 状态格](../spec/d6-agent-standard/OPEN-ISSUES.md)（**不在此重述** —— 避免"同一事实两处表达"）。
+
 **结论（2026-09-16；⚠ 已被上方 2026-09-21 更正部分推翻："**无服务器剩余 API**"不再成立）**：可以建，但只能"本地自建"计数（无服务器剩余 API）：
 - 统一入口 `egress` 增强：读 `GET /api/v1/key` 的 **`is_free_tier`**（True→日限额 50 / False→1000），并显示**主控本地每日计数**（`.egress_daily.json`，UTC 日滚动归零）+ 达 80% 预警。
   - ★ **2026-10-20 就地更正（R4 裁【甲】· 已落）**：上面「读 `is_free_tier`（True→50 / False→1000）」是**代理判据** —— 官方 SDK 页逐字「`limit` … the ceiling depends on **total credits purchased** and is **independent of `is_free_tier`**」（见上文 L193 的 2026-10-20 收窄段）⇒ ★ **日限额的依据改【直读】** `free_model_daily_requests.limit`（落点 = `cluster_egress.py` 的 `_free_quota_effective`）；`_free_quota()` **退化为 fail-closed 兜底**（`free_limit` 缺 / `None` / 非数 / ≤0 ⇒ 取**保守档 50**，且 `cmd_egress` **如实报出**"取兜底档" —— **判不了 ≠ 通过**，也不许静默）。★ 历史上**同一事实本就有两处来源**（`cmd_egress` 的旁证行用推断 · 借用流程 L275/L325 **直读**）⇒ 本改动 = **把孤例收回权威字段**。
