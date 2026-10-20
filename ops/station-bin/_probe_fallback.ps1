@@ -16,7 +16,7 @@
 # (ssh/scp), not part of this change. We want the stubbed rc=6 path to COMPLETE and hit
 # the fallback gate, so swallow the offline-scp native errors in the probe.
 param(
-    [switch]$SmokeOnly   # 2026-09-22: 只跑"提取清单齐备性"自检, 不派发/不触站/不起 claude ⇒ 供夹具冒烟
+    [switch]$SmokeOnly, [switch]$DryDispatch   # 2026-09-22 只静态自检(不派发/不触站) · 2026-10-20 X2 只"零触站零网络"的 dry 派发
 )
 $ErrorActionPreference = 'SilentlyContinue'
 $cliPath = 'd:\RPC\ops\station-bin\agent-cli.ps1'
@@ -187,6 +187,46 @@ $Script:ROUTE_TABLE = @{ 'claude' = @{ id='claude-sonnet-4-5'; station=''; cli='
 #     = 这正是本仓反复吃的那个形态）⇒ 所以下面那组断言**必然**能把它抓出来（期望值刻意取**非 B**）。
 $Script:STATION_POOL = @('A', 'B', 'C')
 $Script:EGRESS_MULTI_ALIASES = @('ultra', 'free-1m', 'lightning')
+
+# ── X2 (2026-10-20): 「能驱动派发」的**可机判**判据（补 `-SmokeOnly` 的盲区）────────────────────
+# 为什么要这一维: 上面 `-SmokeOnly` 是**静态**自检(存在性 + 顺序不变量), 它**从不真的调用** `Invoke-Task`
+#   ⇒ 探针"**首次派发就抛**"这类死亡**照样绿**。★★ 实测(本仓): `$Script:D7_GAP_CLASS` **未被提取**
+#   ⇒ `Split-D7Gaps` 读 `$null` ⇒ 首次派发报 `Cannot index into a null array` ⇒ 探针**已死约 3 周**,
+#   而夹具只跑 `-SmokeOnly` ⇒ **没有任何判据看见它** —— 这正是"守门人自己死了, 而没判据判它活着"。
+# 判据(零触站 · 零网络): 驱动**一次**真 `Invoke-Task`, 断言**它不 throw**。
+#   ⚠ 为什么只判"不 throw"而不判 rc: rc 是**行为读数**(会被无关改动扰动); 本模式判的是
+#     "**守门人还活着**", **不是**它选中了哪站/哪个码 ⇒ 刻意**不断言具体 rc**。
+#   ⚠ 为什么形状取 `-cli opencode` + `-model claude`(路由站为空): 这是下方 `=== negative gate ===`
+#     那条**已验证零触站**的路径; ★ 与"默认出网档"(`ultra`) 不同 —— 后者会进 R7 的**站上连通探针**
+#     (那个走 `Invoke-CappedSsh` ⇒ 真起 `ssh.exe`) ⇒ 本模式**零触站**(站名是桩值 `PROBE-`)、**不发任何出网请求**。
+if ($DryDispatch) {
+    $env:AGENT_AUTO_FALLBACK = '0'   # 不进 claude 出网通道(与负向闸同法)
+    $dryCard = Join-Path $env:TEMP 'probe-dry-card.md'
+    @"
+---
+proj: paper
+task: probe dry dispatch (X2: 守门人可机判 · 零触站零网络)
+model: claude
+sensitivity: public
+timeout_s: 5
+continue-timeout-s: 3
+accept:
+  - true
+---
+## probe
+reply with 'PASS'
+"@ | Set-Content -Path $dryCard -Encoding utf8
+    try {
+        $dryRc = Invoke-Task -proj 'paper' -card $dryCard -model 'claude' -sensitive 'public' -cli 'opencode' -AutoFallback:$false -attach @()
+        Write-Host ('PROBE_DRY_OK: 首次 Invoke-Task 未 throw · rc=' + ($dryRc -join ',') +
+                    ' · 依赖全桩(站点名=桩值 · 无真实站/无出网请求) ⇒ 兑现"能驱动派发"这一维')
+        exit 0
+    } catch {
+        Write-Host ('PROBE_DRY_FAIL: 首次 Invoke-Task 抛错: ' + $_.Exception.Message)
+        Write-Host ('PROBE_DRY_FAIL stack: ' + $_.ScriptStackTrace)
+        exit 1
+    }
+}
 
 # helper: newest numeric run dirs only (exclude split-*, *_audits)
 function Get-NumericRuns([string]$root) {

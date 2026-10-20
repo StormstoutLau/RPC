@@ -902,6 +902,27 @@ Assert-True "probe: `-SmokeOnly` 通过(rc=0) —— 探针可驱动那条链、
 if ($probeSmokeRc -ne 0) { Write-Host ('        smoke: ' + ((@($probeSmoke) | Select-Object -Last 3) -join ' / ')) }
 else { Write-Host ('        smoke: ' + ((@($probeSmoke) | Where-Object { "$_" -match 'PROBE_SMOKE_OK' }) -join '')) }
 
+# --- X2（2026-10-20）: 探针"能驱动派发"的**可机判**判据 —— 补上一条 (`-SmokeOnly`) 的盲区 ---
+# 为什么要这一维（与上一条互补、**两条都不可省**）: 上一条是**静态**自检（`Invoke-Task` 是否存在 + stub
+#   顺序不变量）⇒ 它**从不真的调用** `Invoke-Task` ⇒ 探针"**首次派发就抛**"这类死亡**照样绿**。
+#   ★★ 实测（本仓）: `$Script:D7_GAP_CLASS` **未被提取** ⇒ `Split-D7Gaps` 读 `$null` ⇒ 首次派发报
+#   `Cannot index into a null array` ⇒ 探针**已死约 3 周**，而夹具只跑 `-SmokeOnly` ⇒ **没有任何判据
+#   看见它**（= 本仓最防的形态："守门人自己死了, 而没判据判它活着"）。⇒ 本维 = 驱动一次**真派发**。
+# 判据 = 「零触站 · 不发任何出网请求」的**一次 dry 派发**：`-DryDispatch`（探针里 `model=claude`/`cli=opencode`
+#   ⇒ 路由站为空 ⇒ 不进 R7 的站上连通探针）⇒ 断言**它不 throw**（只判"守门人还活着"，**不**判具体 rc）。
+# ⚠ 手工变异自证（已验证）：拿掉探针里 `$Script:*` 赋值提取那行 ⇒ dry 派发**当场抛**（栈在 `Write-D7Report`）
+#   ⇒ 本判据红（实测 **635/1**），**而上一条 `-SmokeOnly` 照样绿** —— 这就是"两条互补、缺一不可"的直接证据。
+#   ★ 另一向（原理由"注释掉 dry 块"）**已弃用**：PS 对**未声明**的 `-DryDispatch` **不报错** ⇒ 探针会**静默落回
+#     完整跑法**（真发出网请求 ⇒ 又慢又不隔离）⇒ 那不是一条干净的负样本（本批实测踩到，如实记录）。
+$probeDry = @(); $probeDryRc = -1
+try {
+    $probeDry = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $probePath -DryDispatch 2>&1)
+    $probeDryRc = $LASTEXITCODE
+} catch { $probeDry = @($_.Exception.Message) }
+Assert-True "probe: `-DryDispatch` 通过(rc=0) —— 首次 `Invoke-Task` 调用不 throw(零触站 · 零出网请求)" ($probeDryRc -eq 0)
+if ($probeDryRc -ne 0) { Write-Host ('        dry: ' + ((@($probeDry) | Select-Object -Last 3) -join ' / ')) }
+else { Write-Host ('        dry: ' + ((@($probeDry) | Where-Object { "$_" -match 'PROBE_DRY_OK' }) -join '')) }
+
 # --- ssh/scp 调用纪律（2026-09-22 统一）: 每个调用点必须带 `-o BatchMode=yes` ---
 # 为什么: 认证异常时（典型 = `~/.ssh/config` 缺身份块 ⇒ 用户名退化）OpenSSH 会**弹口令并阻塞等
 #   stdin** ⇒ 自动化里表现为"卡住"（实测挂起 >90s）而不是"失败"。BatchMode 让它立刻失败。
