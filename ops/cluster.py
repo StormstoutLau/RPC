@@ -541,9 +541,13 @@ from cluster_secrets import (  # noqa: E402
 # 显式重导出 ⇒ cluster.py 内 cmd_egress/cmd_egress_borrow 分发与 cluster_web.py 用到的
 # probe_egress_station 均不变。实现改 ops/cluster_egress.py。
 from cluster_egress import (  # noqa: E402
-    EGRESS_DAILY_FILE, EGRESS_SEP, EGRESS_URL, FREE_ALERT_RATIO, FREE_QUOTA_FREE,
-    FREE_QUOTA_PAID, OR_BORROW_AT, OR_BORROW_FILE, OR_POOL_DIR, _egress_bump,
-    _egress_cmd, _egress_daily, _egress_probe_all, _egress_save, _free_quota,
+    EGRESS_SEP, EGRESS_STATION_FILE, EGRESS_URL, FREE_ALERT_RATIO, FREE_QUOTA_FREE,
+    FREE_QUOTA_PAID, OR_BORROW_AT, OR_BORROW_FILE, OR_POOL_DIR,
+    # ★ 2026-10-20 R1 裁【丙】（用户令「继续执行 R1 实施面，清理旧件四件」）：
+    #   旧的主控侧单计数器四件 —— `EGRESS_DAILY_FILE` / `_egress_daily` / `_egress_bump` / `_egress_save`
+    #   —— **已随该件一并删除** ⇒ **不再重导出**（本地计数面单件承载 = 派发侧 `ops/.egress_station.json`）。
+    #   ⚠ 门禁 `facade` 会让"消费者引用了不存在的门面名"当场变红 ⇒ 这里删与实现删必须同步。
+    _egress_cmd, _egress_probe_all, _egress_station_today, _free_quota,
     # R4 裁【甲】(2026-10-20): 免费档日限额的**主口径**（直读服务端 `free_limit` + 兜底如实）
     #   —— ★ 必须一并重导出：门禁 `facade` 判「消费者引用的符号必须在门面可达名里」
     #     （`tests/test_cluster_pure.py` 的新用例直接引用它）⇒ 漏了会当场 FAIL。

@@ -250,13 +250,27 @@ upstream: \[ADR-0002]
 > ⚠ **诚实边界（不扩项）**：`exec_host` 由 `Resolve-D7Hosts -Station $station` **派生自 `$station`** ⇒ 它是**选站结论的投影**、**不是**"远端机器"的独立观测（同族：`Get-ActualStation` 正是为 claude 路"投影报错站"而建的读侧判据 · 见 `O-147` 格内已登记的边界）；本段落进证据链的是**选站结论**，不是机器实测。
 >
 > **门禁读数（本批末）**：`_fm_golden_test.ps1` **625/0**（617 + 8）· `py ops/rpc_check.py --quick` **39 绿 / 2 黄 / 0 红** · `py tests/run_py_tests.py` **52/52**。
-> ★ **仍未做（**不在本批射程**，如实）**：**R1 实施面**（删/改旧件四件 + `cmd_egress` 旁证行 + `cluster.py` 重导出清单 + `.gitignore` L36 —— 本批**未碰**）· **R7**（`O-148` 的"发作 ⇒ 就地修 / 修不动 ⇒ 降级 + 留痕"）· **X2**（守门人可机判）· **R8**（同账户第二把 key · 需人工动作）· **R6** 剩余 **≈30 处引用清扫**（本批只有 ADR 的 L193 那半已在批次①落）· **X3**（同族另两处引用）。
+> ★ **仍未做（**本批射程外**，如实）**：**R7**（`O-148` 的"发作 ⇒ 就地修 / 修不动 ⇒ 降级 + 留痕"）· **X2**（守门人可机判）· **R8**（同账户第二把 key · 需人工动作）· **R6** 剩余 **≈30 处引用清扫**（本批只有 ADR 的 L193 那半已在批次①落）· **X3**（同族另两处引用）。★ ~~**R1 实施面**~~ ⇒ ✅ **已在批次③落**（见下）。
+>
+> ### ★★ 2026-10-20 · 批次③（**R1 实施面**：清理旧件四件）【已裁并落】（用户令「继续执行 R1 实施面，清理旧件四件」）
+>
+> **裁【丙】· 废弃旧件 ⇒ 本地计数面「单件承载」**。★ **落点四件**：
+> **①** `ops/cluster_egress.py`：删 `EGRESS_DAILY_FILE` · `_egress_daily()` · `_egress_bump()` · `_egress_save()`；★ 新增读者 `_egress_station_today(path=None)`（读**派发侧** `ops/.egress_station.json` ⇒ `(per_station, reason)`）与常量 `EGRESS_STATION_FILE`。
+> **②** `cmd_egress` 的**旁证行** ⇒ **改**为**对账行**（"单件承载"+"差值"口径）：逐字读数（本批真跑）`限额 1000 (来源: limit(直读服务端 free_limit))` · `派发侧计数 1/1000 (A=1 B=0 C=0) [按站·UTC]` · `▸ 对账: 服务端(主控行) used=27 − 派发侧 1 = 26 ⇒ 其余出网路径(review 判官 / per-station 别名 / 手动 TUI)`。★ **不可判就不印 0**（读不到 ⇒ 如实说"**不可判**"）—— 旧件那套"跨日自动归零"正是把"**昨天没记账**"读成"**今天没用额度**"。
+> **③** `ops/cluster.py`：重导出清单**删四件**、加 `EGRESS_STATION_FILE` / `_egress_station_today`（⚠ 门禁 `facade` 会因"消费者引用了不存在的门面名"**当场红** ⇒ 两边删/加**必须同步**）。
+> **④** `.gitignore`：删 `ops/.egress_daily.json` 那条忽略规则（该件**按构造恒 0**、盘上也不存在），并把两处相邻注释的"同 `.egress_daily.json` 家族"改指 `.or-borrow.json` / `.egress_station.json`。
+> ★ **先验红（8 条 · `tests/test_cluster_pure.py`）**：① 旧件四件"**真的不在了**"（防死件复活）· ② 可判态读数正确 · ③–⑦ **fail-closed 五态**（缺件 / 坏 JSON / 缺 `by_station` / 值非法 / **跨 UTC 日**）⇒ **实现前全红**（① 报"仍可达: [四个名字]"）。★ 判据用**注入式路径**（写系统 TEMP、**不落仓**）= 离线真跑。
+> ★★ **真跑当场抓到一个「夹具假绿」（本批最有价值的一条）**：夹具②–⑦ 原本用 **python 的写形状**（`write_text(..., 'utf-8')` ⇒ **无 BOM**）冒充生产者，而**真写侧**是 PS5.1 的 `Set-Content -Path … -Encoding UTF8` ⇒ 落 **UTF-8 BOM**（实测首 3 字节 `EF BB BF`）⇒ 读者用 `utf-8` 时**真路径下"永远不可判"**，而夹具**全绿**。⇒ 已三件：**(a)** 补 `R1-⑧`（**带 BOM 的件必须可判** —— 补上后**当场红**）**(b)** 读者改 `utf-8-sig`（有/无 BOM 通吃）**(c)** 该教训写进读者 docstring（"**夹具的形状必须取自真生产者**"）。★ 与既有纪律同族（`O-21` 的"注入式夹具抓不到真站形态"）。
+> ★ **门禁读数**：`_fm_golden_test.ps1` **625/0** · `rpc_check.py --quick` **39 绿 / 2 黄 / 0 红** · `py-tests` **52/52**。
+> ⚠ **仍未做（本批射程外，如实）**：**`FREE_QUOTA_PAID` 现为"仅定义 + 重导出"**（模块内**已无消费者** —— 它是 **R4 的语义产物**：档位真值源已收到 `free_limit`）⇒ ★ **本批不顺手删**（不在 R1 射程），**登记为待裁**；另 `_free_quota(is_free_tier=None)` 的**入参已不参与判档**（保留只为签名兼容）。
 
 
 **结论（2026-09-16；⚠ 已被上方 2026-09-21 更正部分推翻："**无服务器剩余 API**"不再成立）**：可以建，但只能"本地自建"计数（无服务器剩余 API）：
 - 统一入口 `egress` 增强：读 `GET /api/v1/key` 的 **`is_free_tier`**（True→日限额 50 / False→1000），并显示**主控本地每日计数**（`.egress_daily.json`，UTC 日滚动归零）+ 达 80% 预警。
-  - ★ **2026-10-20 就地更正（R4 裁【甲】· 已落）**：上面「读 `is_free_tier`（True→50 / False→1000）」是**代理判据** —— 官方 SDK 页逐字「`limit` … the ceiling depends on **total credits purchased** and is **independent of `is_free_tier`**」（见上文 L193 的 2026-10-20 收窄段）⇒ ★ **日限额的依据改【直读】** `free_model_daily_requests.limit`（落点 = `cluster_egress.py` 的 `_free_quota_effective`）；`_free_quota()` **退化为 fail-closed 兜底**（`free_limit` 缺 / `None` / 非数 / ≤0 ⇒ 取**保守档 50**，且 `cmd_egress` **如实报出**"取兜底档" —— **判不了 ≠ 通过**，也不许静默）。★ 历史上**同一事实本就有两处来源**（`cmd_egress` 的旁证行用推断 · 借用流程 L275/L325 **直读**）⇒ 本改动 = **把孤例收回权威字段**。⚠ 本行后半句（`.egress_daily.json` 的存废）属 **R1 实施面【仍待落】**，本行**未动**。
+  - ★ **2026-10-20 就地更正（R4 裁【甲】· 已落）**：上面「读 `is_free_tier`（True→50 / False→1000）」是**代理判据** —— 官方 SDK 页逐字「`limit` … the ceiling depends on **total credits purchased** and is **independent of `is_free_tier`**」（见上文 L193 的 2026-10-20 收窄段）⇒ ★ **日限额的依据改【直读】** `free_model_daily_requests.limit`（落点 = `cluster_egress.py` 的 `_free_quota_effective`）；`_free_quota()` **退化为 fail-closed 兜底**（`free_limit` 缺 / `None` / 非数 / ≤0 ⇒ 取**保守档 50**，且 `cmd_egress` **如实报出**"取兜底档" —— **判不了 ≠ 通过**，也不许静默）。★ 历史上**同一事实本就有两处来源**（`cmd_egress` 的旁证行用推断 · 借用流程 L275/L325 **直读**）⇒ 本改动 = **把孤例收回权威字段**。
+  - ★★ **2026-10-20 就地更正（R1 裁【丙】· 已落）**：上面那句「显示**主控本地每日计数**（`.egress_daily.json`，UTC 日滚动归零）」**已不再成立** —— 该件连同其四件代码符号 **已废弃删除**，本地计数面改**单件承载** = **派发侧** `ops/.egress_station.json`（按站、UTC 日界，写侧 = `agent-cli.ps1` 的 `Write-EgressStationPick`）；`cluster.py egress` 的那行现为**对账行**（`服务端 used − 该件 sum` ⇒ 其余出网路径）。详见下方「2026-10-20 · 批次③」块。
 - 写入手 `_egress_bump()`：由真正发 OpenRouter 免费请求的调用方（`opencode -m openrouter/...` / review 免费源）在发请求前自增。
+  - ★★ **2026-10-20 就地更正（R3 + R1 裁【丙】· 已落）**：该"**写入手**"**从未接线**（实测全仓**零调用点**：只有定义 + 重导出）⇒ 它是一面**设计过却从未生效的假防线**；★ 且 `R1 裁【丙】` 后 `_egress_bump()` **已被删除** ⇒ 本句**整句作废**（不再是"待接线的写入手"，而是"**已废弃的死符号**"）。★ 连带：旧件用 `datetime.date.today()`（**本地日**）而注释与本 ADR 写"UTC 日" ⇒ **两套日界口径**；★ **裁定：日界一律以 UTC 为准**（官方 SDK 页逐字"resets at **UTC midnight**"）—— 新的派发侧件**本就已是 UTC** ✓。
 - **实证（2026-09-16）**：主控 + A/B/C 四端 `tier=paid`（`is_free_tier=false`）→ **本账户已曾充 ≥$10，免费档日限额 = 1000/天**；四端同账户（`label` 一致）印证跨 key 全局治理。
 - **诚实披露边界**：本地计数覆盖"主控侧入口能感知"的请求（wrapper/egress/review），**人手动 TUI 直调不在此计数** → 与 429 的 `X-RateLimit-*` 头交叉校准为准。
 

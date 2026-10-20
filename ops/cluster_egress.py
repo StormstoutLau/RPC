@@ -10,8 +10,9 @@ docs/2026-09-23_cluster.py模块化重构_调研与方案.md。
   · 依赖 `cluster_secrets._secrets_push`（额度借用要把同侪 key 推给目标站）⇒ 单向依赖，
     cluster_secrets **不**反向依赖本模块（无环）。
   · 额度借用**默认只出计划，`--go` 才写凭据** —— 这是本模块最要紧的安全约定，勿改默认值。
-  · 账本落点: `ops/.egress_daily.json`（免费档日计数）/ `ops/.or-borrow.json`（借用台账）；
-    凭据池 `secrets/or-borrow/`。
+  · 账本落点: `ops/.egress_station.json`（**派发侧按站**日计数；★ **2026-10-20 R1 裁【丙】**：
+    旧的主控侧单计数器 `ops/.egress_daily.json` **已废弃删除** ⇒ 本地计数面**单件承载**）
+    / `ops/.or-borrow.json`（借用台账）；凭据池 `secrets/or-borrow/`。
   · `cluster.py` 显式重导出全部符号，外部调用点（cluster_web.py 的 cluster.probe_egress_station）
     与 cluster.py 内 cmd_egress/cmd_egress_borrow 分发均不变。
 """
@@ -69,50 +70,75 @@ def _egress_cmd(keyexpr: str) -> str:
             f"-H \"Authorization: Bearer $K\" {EGRESS_URL}; fi")
 
 
-# ── OpenRouter 免费档每日计数 (2026-09-16 建; **2026-09-21 更正口径**) ──────────
+# ── OpenRouter 免费档每日计数 (2026-09-16 建; **2026-09-21 更正口径**; **2026-10-20 R1 裁【丙】**) ──
 # ⚠ **旧述(2026-09-16)："OpenRouter 不提供免费请求剩余数的可查询 API ⇒ 每日计数只能本地自建"**
 #   —— **已被实测推翻**：`GET /api/v1/key` 现返回 `free_model_daily_requests{used,limit,remaining}`
 #   (+ `creator_user_id` 账户身份)。详见 ADR-0003 的 2026-09-21 更正块。
 # **现口径(两者并用)**：
 #   · **服务端(权威)**：`free_model_daily_requests` —— 逐端展示与预警以此为准；
 #     ⚠ **但有分钟级延迟**(实测 ~20s 不变、~4min 到位) ⇒ **不可当"调用前实时闸门"**，只适合巡检/预警/对账。
-#   · **本地(旁证)**：本文件计数 = "主控侧入口能感知"的请求数(实时近似)，可反查"是否有未记录的调用方"。
+#   · **本地(派发侧 · 单件承载)**：`ops/.egress_station.json`（**按站**计数；写侧 = `agent-cli.ps1` 的
+#     `Write-EgressStationPick`，在**默认出网档派发**时写）。
+#     ★★ **2026-10-20 R1 裁【丙】**：原"主控侧单计数器" `ops/.egress_daily.json` + `_egress_daily()`
+#        / `_egress_bump()` / `_egress_save()` / `EGRESS_DAILY_FILE` **已废弃删除** —— 依据三条：
+#        ① 该件**按构造恒 0**（写入手 `_egress_bump()` **全仓零调用点** + 该件**盘上不存在**）；
+#        ② 与派发侧件**同名两件**（都叫"本地计数"、定义域不同 = 一个 ⊂ 另一个）易被读错；
+#        ③ 两件**日界口径不同**（旧件用 `datetime.date.today()` = **本地日**，派发侧用 **UTC**）。
+#        ⇒ 旧件"未被记录的调用方"那一半口径**由本读者 + 差值接管**（见 `cmd_egress` 的对账行）。
 # 免费档限额：20 请求/分 且 每日 50(从未充≥$10) / 1000(曾累计充≥$10, is_free_tier=false, 一次性解锁永久生效)。
 # 429 带 X-RateLimit-* 头(服务器真值), **429 计入每日配额**, 且**按账户**治理(多建 key 不能绕过同一账户)。
 # ★ 2026-10-20 就地收窄(E2 实测; 与 ADR-0003 L194 的 2026-10-20 更正同源): 原写"**429/失败仍计入每日配额**"
 #   ⇒ 实测**只对 429 成立** —— 连打 20 次全 **400**(客户端) 后该账户 used **纹丝未动**(5→5)
 #     ⇒ **400 类客户端错误【不】计**; ⚠ 429 那半本轮**未测到**(20 次全 200) ⇒ 保留原样: 不冒认、也不否认。
-EGRESS_DAILY_FILE = Path(__file__).resolve().parent.parent / "ops" / ".egress_daily.json"
-FREE_QUOTA_PAID = 1000   # is_free_tier=False (曾充≥$10) → 1000/天
-FREE_QUOTA_FREE = 50     # is_free_tier=True  (从未充值)   → 50/天
+FREE_QUOTA_PAID = 1000   # 历史档位值；★ **不再是主口径**（档位真值源 = 服务端 `free_limit`，见 R4）
+FREE_QUOTA_FREE = 50     # ★ 现役用途 = `_free_quota()` 的 **fail-closed 兜底档**（判不了 ⇒ 取保守）
 FREE_ALERT_RATIO = 0.8
+EGRESS_STATION_FILE = Path(__file__).resolve().parent.parent / "ops" / ".egress_station.json"
 
 
-def _egress_daily() -> dict:
-    """读主控本地每日计数文件; 跨 UTC 日自动归零。返回 {"date","count"}。"""
-    today = datetime.date.today().strftime("%Y-%m-%d")
+def _egress_station_today(path=None):
+    """读**派发侧按站计数件** `ops/.egress_station.json`（UTC 日界）⇒ `(per_station, reason)`。
+
+    · 可判 ⇒ `({"A": n, "B": n, "C": n}, "")`
+    · 不可判 ⇒ `(None, "<原因>")` —— ★ **fail-closed**：**不印 0、不猜**（"判不了 ≠ 0"）——
+      五种：缺件 / 坏 JSON / 缺 `by_station` / 某站计数非整数 / **`date` 不是今天(UTC)**。
+
+    ★ 为什么不"自动归零"（与已删的旧件 `_egress_daily()` 的关键差别）：跨日时**判不了**比**报 0** 更诚实
+      —— 报 0 会让人把"昨天没记账"读成"今天没用额度"（本仓头号失败形态：判据在跑 ≠ 判据在判）。
+    ⚠ **schema 的唯一定义点在写侧**（`agent-cli.ps1` 的 `Write-EgressStationPick`：`{date, by_station,
+      last_used}`）—— 本处**只读不改**；schema 一旦改形状，这里会 **fail-closed**（宁可判不了，不猜）。
+    ⚠⚠ **编码必须 `utf-8-sig`**（★ 本批真跑当场抓到的真缺陷）：写侧是 PS5.1 的 `Set-Content … -Encoding
+      UTF8` ⇒ **落 UTF-8 BOM**（实测首 3 字节 `EF BB BF`）⇒ 用 `utf-8` 读会留下 `\ufeff` ⇒ `json.loads`
+      直接抛 ⇒ **真路径下"永远不可判"**。★ 而离线夹具当时用 **python 的写形状**（无 BOM）⇒ **夹具全绿、
+      真路径全坏**（"夹具形状 ≠ 真生产者形状"= 假绿）。`utf-8-sig` 对**有/无 BOM 都能读** ⇒ 两侧同源。
+    ★ `path` 可注入（默认 `EGRESS_STATION_FILE`）⇒ 夹具可**离线真跑**六态（写系统 TEMP、不落仓）。
+    """
+    p = path or EGRESS_STATION_FILE
     try:
-        d = json.loads(EGRESS_DAILY_FILE.read_text(encoding="utf-8")) or {}
+        raw = Path(p).read_text(encoding="utf-8-sig")
     except Exception:
-        d = {}
-    if d.get("date") != today:
-        d = {"date": today, "count": 0}
-    return d
-
-
-def _egress_bump(n: int = 1) -> dict:
-    """++今日 openrouter 免费请求计数 (由真正发生请求的调用方在发请求时调用)。"""
-    d = _egress_daily()
-    d["count"] = int(d.get("count", 0)) + n
-    _egress_save(d)
-    return d
-
-
-def _egress_save(d: dict) -> None:
+        return None, "状态件不存在/不可读"
     try:
-        EGRESS_DAILY_FILE.write_text(json.dumps(d), encoding="utf-8")
+        d = json.loads(raw)
     except Exception:
-        pass
+        return None, "状态件不是合法 JSON"
+    if not isinstance(d, dict):
+        return None, "状态件顶层不是对象"
+    if d.get("date") != datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"):
+        return None, "状态件的 date 不是今天(UTC) ⇒ 跨日/陈旧"
+    bs = d.get("by_station")
+    if not isinstance(bs, dict) or not bs:
+        return None, "状态件缺 by_station / 为空"
+    out = {}
+    for k, v in bs.items():
+        try:
+            n = int(v)
+        except Exception:
+            return None, f"状态件 by_station['{k}'] 不是整数"
+        if n < 0:
+            return None, f"状态件 by_station['{k}'] 为负"
+        out[str(k)] = n
+    return out, ""
 
 
 def _free_quota(is_free_tier=None):
@@ -260,20 +286,36 @@ def cmd_egress() -> int:
     print("[egress] ⚠ 服务端免费请求计数**有分钟级延迟**(实测 ~20s 不变、~4min 到位)")
     print("         ⇒ 仅供巡检/预警/事后对账; **不可当\"调用前实时闸门\"**(会误判为未用额度)")
 
-    # 本地计数(2026-09-16 建; 2026-09-21 起降级为**旁证**): 只覆盖"主控侧入口能感知"的请求。
-    # ★ 2026-10-20（R4 裁【甲】）: 日限额改**直读**服务端 `free_limit`（权威字段；**不再**用 `is_free_tier` 反推）
-    #   —— 官方 SDK 页逐字「`limit` … is **independent of `is_free_tier`**」（见 ADR-0003 L193/L238）。
-    #   ★ 取不到 ⇒ fail-closed 兜底 50，且**如实报出来源**（不许静默 —— "判不了 ≠ 通过"）。
+    # ── 派发侧计数**对账行**（2026-10-20 · R1 裁【丙】+ R2 口径）────────────────────────────────
+    #   ★ **单件承载**：本地计数面只有一件 —— `ops/.egress_station.json`（按站，写侧在 `agent-cli.ps1`）。
+    #     旧件 `.egress_daily.json` 及其四件符号**已删除**（理由见上方「免费档每日计数」块）。
+    #   ★ **覆盖面写死**（ADR-0003 的 R2）：只覆盖「**默认出网档**（ultra / free-1m / lightning）
+    #     的 `task` 派发」—— **不含** per-station 别名（不进候选 ⇒ 不 bump）· `review` 判官出网 ·
+    #     人手动 TUI。⇒ ★ 故「**服务端 used − 该件 sum**」= **其余出网路径** ⇒ 这才是可解释的
+    #     "未被记录的调用方"口径（替换旧件那条**从未生效**的旁证）。
+    #   ★ 限额仍**直读**服务端权威字段（R4 裁【甲】）—— 见 `_free_quota_effective`；取不到 ⇒ 兜底如实。
     info_m = res.get("主控", {}).get("info") or {}
     q, q_src = _free_quota_effective(info_m)
-    d = _egress_daily()
-    used = int(d.get("count", 0))
-    ratio = used / q if q else 0
-    warn = " ⚠ 已达阈值80%" if ratio >= FREE_ALERT_RATIO else ""
+    srv_used = info_m.get("free_used")
+    per_st, why = _egress_station_today()
     src = ("limit(直读服务端 free_limit)" if q_src == "limit"
            else "★兜底档 fallback-50(⚠ free_limit 缺/非法 ⇒ fail-closed；判不了 ≠ 通过)")
-    print(f"[egress] 本地计数(旁证, 仅主控侧入口) {used}/{q} (限额来源: {src}){warn}")
-    print("         ▸ 随时与上面\"主控\"那行的服务端计数比对: 差得多 ⇒ 有未被记录的调用方/手动 TUI 直调")
+    print(f"[egress] 限额 {q} (来源: {src})")
+    if per_st is None:
+        # ⚠ **不可判就如实说"不可判"** —— 绝不印 0（"判不了 ≠ 0"；旧件那套"跨日自动归零"正是这么骗人的）
+        print(f"[egress] 派发侧计数 **不可判** ({why}) ⇒ 不与上面\"主控\"行对账（判不了 ≠ 0）")
+    else:
+        tot = sum(per_st.values())
+        byst = " ".join(f"{k}={per_st[k]}" for k in sorted(per_st))
+        ratio = (tot / q) if q else 0
+        warn = " ⚠ 已达阈值80%" if ratio >= FREE_ALERT_RATIO else ""
+        print(f"[egress] 派发侧计数 {tot}/{q} ({byst}) [按站·UTC]{warn}")
+        if isinstance(srv_used, int) and srv_used >= tot:
+            print(f"         ▸ 对账: 服务端(主控行) used={srv_used} − 派发侧 {tot} = {srv_used - tot}"
+                  " ⇒ 其余出网路径(review 判官 / per-station 别名 / 手动 TUI)")
+        else:
+            print(f"         ▸ 对账: **判不了**（服务端 used={srv_used} 取不到或 < 派发侧 {tot}）"
+                  " —— 服务端计数有分钟级延迟，别急着读成'异常'")
     print("[egress] 20 请求/分 fixed(充值不升) · **429 计入配额**(⚠ 400 类客户端错误**实测【不】计** —— 2026-10-20 收窄) · 限额按**账户**治理(多建 key 不能绕过同一账户)")
     print()
     print("[egress] 注: `:free` 档模型受 agentic-harness 门禁, 裸 API 调用返回 403;")
@@ -297,7 +339,7 @@ def cmd_egress() -> int:
 #   · **只对"日额度穷尽"**: 阈值 95%(留 5% 裕度, 因服务端计数有**分钟级延迟**);
 #     RPM(20/分)类属分钟级自愈 ⇒ **应退避而非借用**(退避已由 Invoke-JudgeHttp 兜)。
 #   · **同账户不借**: 用服务端 `creator_user_id` 判"是否同一账户"(A 与主控同账户 ⇒ 互借无意义)。
-#   · **台账**: `ops/.or-borrow.json`(与 `.egress_daily.json` 同域, 已 gitignore)
+#   · **台账**: `ops/.or-borrow.json`(与 `.egress_station.json` 同域, 已 gitignore)
 #     ⇒ "某站某日在用谁的 key"**可回答**; 归还即从台账移除。
 OR_POOL_DIR = Path(__file__).resolve().parent.parent / "secrets" / "or-borrow"
 OR_BORROW_FILE = Path(__file__).resolve().parent.parent / "ops" / ".or-borrow.json"

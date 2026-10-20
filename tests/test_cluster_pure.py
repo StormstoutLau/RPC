@@ -12,7 +12,10 @@
 用法（退出码 0 = 全过；需带 paramiko 的解释器，如 Python312）：
     py tests\\test_cluster_pure.py
 """
+import datetime
+import json
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -242,6 +245,70 @@ chk("_free_quota_effective: 0/负 ⇒ 兜底 50 + fallback-50（不把 0 当有�
     bool(_fqe) and _fqe({"is_free_tier": False, "free_limit": 0}) == (50, "fallback-50") and
                    _fqe({"is_free_tier": False, "free_limit": -3}) == (50, "fallback-50"),
     _fqe_str({"is_free_tier": False, "free_limit": 0}))
+
+
+# ── R1 实施面（2026-10-20 · 裁【丙】）：旧件四件【已删】+ 派发侧件成为【单件承载】──────────────
+#   裁【丙】= 废弃 `.egress_daily.json`（**恒 0 的死件** + 与写侧**两套日界口径**）⇒ 本地计数面
+#   **单件承载** = 派发侧 `ops/.egress_station.json`（由 `agent-cli.ps1` 的 `Write-EgressStationPick` 写）。
+#   ★ 两块判据：**(a) 旧件四件真的不在了**（防"删了又被加回来" —— 同一类死件复活的守卫）；
+#     **(b) 新读者 `_egress_station_today` 的 fail-closed 五态**（缺件 / 坏 JSON / 结构不符 / 值非法 /
+#        **跨 UTC 日** ⇒ 判不了，**不印 0、不猜**）。★ (b) 用**注入式路径**（写系统 TEMP、**不落仓**）
+#        ⇒ 离线真跑（同 PS 侧状态件夹具的处置）。
+_est = getattr(C, "_egress_station_today", None)
+_GONE = ("EGRESS_DAILY_FILE", "_egress_daily", "_egress_bump", "_egress_save")
+_still = [n for n in _GONE if hasattr(C, n)]
+chk("R1-①(旧件四件已删): 门面上不再有 EGRESS_DAILY_FILE/_egress_daily/_egress_bump/_egress_save（防死件复活）",
+    (not _still), f"仍可达: {_still}")
+
+
+def _est_str(p):
+    return str(_est(p)) if _est else "<缺 _egress_station_today>"
+
+
+def _est_write(name, obj):
+    p = Path(tempfile.gettempdir()) / name
+    p.write_text(obj if isinstance(obj, str) else json.dumps(obj), encoding="utf-8")
+    return p
+
+
+_today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+_p1 = _est_write("egress_st_ok.json", {"date": _today, "by_station": {"A": 1, "B": 0, "C": 2}, "last_used": "C"})
+_r1 = _est(_p1) if _est else None
+chk("R1-②(可判): 今日件 + 实名按站 ⇒ (dict, '') 且 sum == 3（**单件承载**读数正确）",
+    bool(_est) and (_r1[1] == "") and (sum(_r1[0].values()) == 3),
+    _est_str(_p1))
+_p2 = Path(tempfile.gettempdir()) / "egress_st_none.json"
+if _p2.exists():
+    _p2.unlink()
+chk("R1-③(fail-closed·缺件): 文件不存在 ⇒ (None, 原因非空) —— **不印 0**（判不了 ≠ 0）",
+    bool(_est) and (_est(_p2)[0] is None) and bool(_est(_p2)[1]),
+    _est_str(_p2))
+_p3 = _est_write("egress_st_stale.json", {"date": "1970-01-01", "by_station": {"A": 9}})
+chk("R1-④(fail-closed·跨 UTC 日): `date` 不是今天 ⇒ 判不了（日界与写侧同口径 = UTC）",
+    bool(_est) and (_est(_p3)[0] is None), _est_str(_p3))
+_p4 = _est_write("egress_st_bad.json", "{ not json")
+chk("R1-⑤(fail-closed·坏 JSON): 解析失败 ⇒ 判不了（绝不静默当 0）",
+    bool(_est) and (_est(_p4)[0] is None), _est_str(_p4))
+_p5 = _est_write("egress_st_nostation.json", {"date": _today, "last_used": "A"})
+chk("R1-⑥(fail-closed·结构不符): 缺 `by_station` ⇒ 判不了",
+    bool(_est) and (_est(_p5)[0] is None), _est_str(_p5))
+_p6 = _est_write("egress_st_badval.json", {"date": _today, "by_station": {"A": "x"}})
+chk("R1-⑦(fail-closed·值非法): 某站计数非整数 ⇒ 判不了（不按半个计数对账）",
+    bool(_est) and (_est(_p6)[0] is None), _est_str(_p6))
+# ★★ **真生产者形状**（本批真跑当场抓到：夹具此前用 **python 的写形状**（`write_text(..., 'utf-8')`，**无 BOM**）
+#   冒充生产者 —— 而**真写侧**是 PS5.1 的 `Set-Content -Path … -Encoding UTF8`，它落 **UTF-8 BOM**
+#   ⇒ `json.loads` 见 `\ufeff` 直接抛 ⇒ **真路径下"永远不可判"**，而夹具全绿 = **假绿**。
+#   ★ 教训与前案同族：**夹具的"形状"必须取自真生产者**（见 O-21 的"注入式夹具抓不到真站形态"）。
+#   ⇒ 判据升级：**带 BOM 的件必须可判**（读者须用 `utf-8-sig`）。
+_p7 = Path(tempfile.gettempdir()) / "egress_st_bom.json"
+_p7.write_bytes(b"\xef\xbb\xbf" + json.dumps({"date": _today, "by_station": {"A": 5}}).encode("utf-8"))
+chk("R1-⑧(★真生产者形状): 写侧 PS5.1 落 **BOM** ⇒ 带 BOM 的件**必须可判**（不得用 python 写形状冒充生产者）",
+    bool(_est) and (_est(_p7)[0] is not None), _est_str(_p7))
+for _p in (_p1, _p3, _p4, _p5, _p6, _p7):
+    try:
+        _p.unlink()
+    except Exception:
+        pass
 
 
 print()
