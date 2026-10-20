@@ -79,6 +79,17 @@ try {
     $Script:PROJECTS_ERR = "项目注册表载入失败: $($_.Exception.Message)"
 }
 
+# ---------------- O-147 乙+丙 常量 (2026-10-20) ----------------
+# ★ 三站站池 —— **唯一定义点**（出网档候选站排序 与 `split` 容量共用同一份；此前在
+#   `Invoke-SplitTask` 内**内联** `@('A','B','C')` ⇒ 同族风险"同一事实两处表达"，本批收拢）。
+$Script:STATION_POOL = @('A', 'B', 'C')
+# ★ **默认出网档**（= 三个"三站共用、不点名站"的出网别名）⇒ 站位改由【候选站排序】定
+#   （依据 = 本地按站计数，见 `Get-EgressStationCandidates`）。
+#   ⚠ 与 `ultra-a` / `ultra-b` / `ultra-c`（**per-station 别名 = "指定站"的唯一通道**）**刻意分开**：
+#     后者仍**显式定站**，不进候选。★ 本清单是**本仓可控**的显式清单（不 derive，避免"恰好等于 B"这类含糊判据）；
+#     新增默认出网别名时**须同步**本清单（夹具 `o147-egress⑪` 钉住"清单里每个别名都存在且是出网"）。
+$Script:EGRESS_MULTI_ALIASES = @('ultra', 'free-1m', 'lightning')
+
 # ---------------- ROUTE_TABLE (BP-2 alias->full-id, T3 task uses; fixed here) ----------------
 # NOTE (2026-09-16): provider 名已统一为 `local`（三站 opencode.jsonc 实况: 仅 local + openrouter）。
 # 旧名 'cluster-litellm/*' 已不存在 —— 沿用会让 _station_ready.sh 注入 ERR_INJECT exit 11、整条派发门挂掉。
@@ -117,6 +128,11 @@ $Script:ROUTE_TABLE = @{
     #   （该纪律禁的是新立**模型**；此处未引入新模型 id）。
     #   用途：**O-20 / O-28 RC① 的正解** —— task 的目标站只能由本表决定（`-HostName` 对 task 无效），
     #   故"要指定站"唯一通道就是 per-station 别名。
+    #   ★★ **O-147（2026-10-20 就地更正）**：上句有**一个例外** —— **默认出网档**
+    #      （`$Script:EGRESS_MULTI_ALIASES` = `ultra` / `free-1m` / `lightning`）的站位**改由
+    #      【候选站排序】定**（依据 = 本地按站计数，用得少在前；读不到 ⇒ fail-closed 按站轮转）⇒
+    #      ★ 上句"只能由本表决定"**只对【非默认出网档】成立**；★ **要指定站**仍只认 per-station 别名
+    #      （它们**不进候选** —— 这正是本批刻意分开的那条界）。
     #   前提核查（2026-09-24 实测，已过）：三站 `opencode` 1.18.25 一致 · `~/.config/opencode/opencode.jsonc`
     #   **md5 全一致**(755975db…) · `~/.config/rpc/openrouter.key` **三站各异**（独立账户 ⇒ 限流互不干扰）。★ 但见 `O-148`（2026-10-08 就地更正）：账户独立 ✓，而 **A / C 站上 `openrouter.ai` 出网【间歇性】失败**（DNS 错误应答）⇒ ★「限流互不干扰」**不等于**「跨站腿随时可用」。
     'ultra-a'    = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';   station = 'A' }
@@ -2477,6 +2493,27 @@ function Invoke-Task {
         #   `Invoke-Task-Claude` 按运行时 `$backendLocal` 判 —— 它的后端属性只有那里才知道）。
         $rejAtt = Get-AttachEgressReject -attachCount @($attach).Count -backendEgress (Get-BackendEgress $id) -declared $fm['attach-egress']
         if ($rejAtt) { Write-Host "REJECT $rejAtt (task, $id) exit 4 - 附件默认不出网; 卡里加 ``attach-egress: ok`` 才放行"; return 4 }
+        # ★★ O-147 乙+丙（2026-10-20 · 用户裁「解除暂缓 + 落乙+丙（合并一步）」）：
+        #   **默认出网档**（`$Script:EGRESS_MULTI_ALIASES`）的站位**不再固定在表里那个站** ——
+        #   改由【候选站排序】定（依据 = **本地按站计数**，用得少在前）；
+        #   ★ 读不到 ⇒ **fail-closed 按站轮转**（**绝不**退回"只吃 B" —— 那正是本项要治的形态）。
+        #   ★ **per-station 别名（`ultra-a/-b/-c`）不进这里** ⇒ "指定站"仍只由它们。
+        #   ⚠ 依据**不是**服务端 `free_model_daily_requests`（它有分钟级延迟 ⇒ 只用于巡检/对账）。
+        if ($Script:EGRESS_MULTI_ALIASES -contains $m) {
+            $stt = Read-EgressStationState
+            $cnt = if ($stt) { $stt.counts } else { $null }
+            $lst = if ($stt) { $stt.last_used } else { '' }
+            $cand = Get-EgressStationCandidates -Stations @($Script:STATION_POOL) -Counts $cnt -LastUsed $lst
+            if (@($cand).Count -eq 0) {
+                Write-Host "REJECT egress-no-candidate ($id) exit 4 - 候选站池为空 ⇒ fail-closed"
+                return 4
+            }
+            $reqSt = [string]$station
+            $station = [string]$cand[0]
+            $null = Write-EgressStationPick -Station $station
+            Write-Host ("EGRESS_PICK: {0} route_station={1} -> station={2} candidates={3} basis={4}" -f `
+                $m, $reqSt, $station, (@($cand) -join ','), $(if ($cnt) { 'local-count' } else { 'fail-closed-rotation' }))
+        }
     }
     Write-Host "CLI=$effectiveCli route_station=$station"
     if ($effectiveCli -eq 'claude') {
@@ -3870,7 +3907,7 @@ exit `$FINAL_RC
 function Get-SplitDispatchPlan {
     param(
         [int]$ShardCount,
-        [string[]]$StationPool = @('A','B','C'),
+        [string[]]$StationPool = $Script:STATION_POOL,
         [int]$LegsPerStation = 1
     )
     if ($LegsPerStation -lt 1) { $LegsPerStation = 1 }
@@ -4100,7 +4137,7 @@ function Invoke-SplitTask {
     #   **未实测**（O-141 P0 ②）⇒ 在没有读数前把 legs 调大 = **凭空取数**，且会**超发各账户配额**。
     #   ⇒ ★ 本次改动 = **结构显式化 + 假边界措辞清除**；容量数值不变（3 = 3 站 × 1 腿）⇒ **行为零变化**。
     $legsPerStation = 1   # ★ 口径见 Get-SplitDispatchPlan（升 2 须先有 P0② 实测）
-    $stationPool = @('A','B','C')
+    $stationPool = @($Script:STATION_POOL)
     $plan = Get-SplitDispatchPlan -ShardCount $shards.Count -StationPool $stationPool -LegsPerStation $legsPerStation
     if (-not $plan.ok) {
         Write-Host "SPLIT_INFEASIBLE: $($shards.Count) shards > split capacity $($plan.capacity) (stations $($stationPool.Count) x legs/station $legsPerStation; this is a DISPATCH-POLICY bound, NOT a physical bound; O-18 + ADR-0003) [exit 18]"
@@ -5016,6 +5053,104 @@ function Resolve-ClaudeStationCandidates {
         }
     }
     return $order
+}
+
+function Get-EgressStationCandidates {
+    # O-147 乙+丙 (2026-10-20 · 用户裁「解除暂缓 + 落乙+丙（合并一步）」): 出网档的**候选站排序**。
+    #   纯函数（只吃 站池 + 按站计数 + 上次用站）⇒ 夹具可离线单测（`o147-egress①`–`⑦`）。
+    #   ★ 依据 = **本地按站计数**（丙）：**用得少的站排前面** ⇒ 默认出网档不再"只吃 B"。
+    #   ★ fail-closed（`O-147` 四条代价/风险 ①）：**计数读不到**（缺键 / 非法 / 负值） ⇒ **退回按站轮转**
+    #     （从 $LastUsed 之后那站起）—— ★ **绝不**退回"只吃 B"（那正是本项要治的形态）。
+    #   ★ 空 $Stations ⇒ @()（无候选 ⇒ **调用方必须 fail-closed**：不得退回主控本地 spawn = 那会出网）。
+    #   ⚠ 稳定序自理（**不用** `Sort-Object` —— PS5 的排序**不稳定**，并列时会打乱站池序）。
+    #   返回 = 有序站字母数组（首个 = 本次建议站）。
+    param(
+        [string[]]$Stations,
+        [hashtable]$Counts = $null,
+        [string]$LastUsed = ''
+    )
+    $all = @($Stations | Where-Object { $_ })
+    if ($all.Count -eq 0) { return @() }
+
+    # 计数可用性：**每站都要有非负整数**（缺一个 ⇒ 判不了 ⇒ fail-closed 退回轮转）
+    $usable = [bool]$Counts
+    if ($usable) {
+        foreach ($s in $all) {
+            if (-not $Counts.ContainsKey($s)) { $usable = $false; break }
+            $n = 0
+            if (-not [int]::TryParse([string]$Counts[$s], [ref]$n)) { $usable = $false; break }
+            if ($n -lt 0) { $usable = $false; break }
+        }
+    }
+
+    if ($usable) {
+        # 插入排序（**只**在"严格大于"时后移 ⇒ **稳定**）；并列保持站池原序
+        $ord = @($all)
+        for ($i = 1; $i -lt $ord.Count; $i++) {
+            $cur = $ord[$i]; $cv = [int]$Counts[$cur]; $j = $i - 1
+            while ($j -ge 0 -and ([int]$Counts[$ord[$j]] -gt $cv)) { $ord[$j + 1] = $ord[$j]; $j-- }
+            $ord[$j + 1] = $cur
+        }
+        return $ord
+    }
+
+    # fail-closed：按站轮转（$LastUsed 之后那站起；$LastUsed 为空/不在池里 ⇒ 按站池原序）
+    if ($LastUsed -and ($all -contains $LastUsed)) {
+        $i = [array]::IndexOf($all, $LastUsed)
+        $rot = @()
+        for ($k = 1; $k -le $all.Count; $k++) { $rot += $all[($i + $k) % $all.Count] }
+        return $rot
+    }
+    return $all
+}
+
+function Get-EgressStationStateFile {
+    # O-147 丙 (2026-10-20): **本地按站出网计数**的唯一状态件（gitignored，同 `.egress_daily.json` 家族）。
+    Join-Path $Script:REPO_ROOT 'ops/.egress_station.json'
+}
+
+function Read-EgressStationState {
+    # O-147 丙: 读 `{date, by_station, last_used}`。
+    #   ★ **fail-closed**：缺件 / 坏 JSON / **跨 UTC 日** / 结构不符 / 空 ⇒ 返回 `$null`
+    #     ⇒ 调用方**退回按站轮转**（**绝不**退回"只吃 B"）。
+    #   ⚠ 服务端 `free_model_daily_requests` **有分钟级延迟**（ADR-0003 点 2 + Stage 1.5 实测 T≈1–5 分钟）
+    #     ⇒ **只用于巡检/对账**，**不得**当"派发前实时闸门" ⇒ 本件的**本地计数才是实时依据**。
+    param([string]$Path = '')
+    if (-not $Path) { $Path = Get-EgressStationStateFile }
+    try {
+        if (-not (Test-Path $Path)) { return $null }
+        $o = Get-Content -Raw -Path $Path | ConvertFrom-Json
+        if ($null -eq $o) { return $null }
+        $today = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
+        if ([string]$o.date -ne $today) { return $null }
+        if (-not $o.by_station) { return $null }
+        $h = @{}
+        foreach ($p in @($o.by_station.PSObject.Properties)) { $h[$p.Name] = $p.Value }
+        if ($h.Count -eq 0) { return $null }
+        return @{ counts = $h; last_used = [string]$o.last_used }
+    } catch { return $null }
+}
+
+function Write-EgressStationPick {
+    # O-147 丙: 记一次出网派发 ⇒ 该站计数 ++1 且记 `last_used`（**同一次写**，不留半态）。
+    #   ★ 站池里**其它站缺键则补 0**（否则"缺键 ⇒ 判不了 ⇒ 退轮转"，本件就永远用不上）。
+    #   ★ 跨 UTC 日自动归零（同 `.egress_daily.json` 口径）。
+    param([string]$Station, [string]$Path = '')
+    if (-not $Path) { $Path = Get-EgressStationStateFile }
+    $today = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
+    $st = Read-EgressStationState -Path $Path
+    $h = if ($st) { $st.counts } else { @{} }
+    foreach ($s in @($Script:STATION_POOL)) { if (-not $h.ContainsKey($s)) { $h[$s] = 0 } }
+    $n = 0
+    if ($h.ContainsKey($Station)) { [void][int]::TryParse([string]$h[$Station], [ref]$n) }
+    $h[$Station] = $n + 1
+    $obj = [ordered]@{ date = $today; by_station = $h; last_used = $Station }
+    try {
+        $dir = Split-Path -Parent $Path
+        if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+        ($obj | ConvertTo-Json -Compress) | Set-Content -Path $Path -Encoding UTF8
+        return $true
+    } catch { return $false }
 }
 
 function Get-ActualStation {

@@ -38,6 +38,9 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 # O-141 P0 (2026-10-05): `split` 的**派发计划**（纯函数：容量 = 站 × 腿 + 片→站映射）——
 #   ★ 此前 split **零覆盖**；有了它，"站×腿/映射走 .Count" 才能被**真跑**而不是扫文本。
 'Get-SplitDispatchPlan',
+# O-147 乙+丙 (2026-10-20): 出网档的**候选站排序**（纯函数：吃 站池 + 按站计数 ⇒ 可离线单测）。
+#   ★ 依据 = 本地按站计数（**用得少在前**）；计数读不到/缺键 ⇒ **fail-closed 退回按站轮转**（绝不退回只吃 B）。
+'Get-EgressStationCandidates', 'Get-EgressStationStateFile', 'Read-EgressStationState', 'Write-EgressStationPick',
 # 2026-10-13 (P1 · `CONCLUSION #6` 兑现): join 的两个**纯函数** = 声明解析（唯一解析点）+ 汇聚判定核。
 'Expand-DecomposeSubject', 'Resolve-SplitJoin',
 # 2026-10-16（方案 `a`）：分片依赖声明 `needs=` 的**完整性校验核**（纯函数：吃声明数组 ⇒ 离线可单测）。
@@ -115,7 +118,11 @@ foreach ($asn in @('$Script:GATE_TABLE', '$Script:GATE_SUMMARY_RE', '$Script:GAT
                    # 2026-10-01（`O-136` "灰度转硬拒"前置）：`gaps` 两分的**唯一真值表**。
                    #   ⚠ 漏提取 ⇒ `Split-D7Gaps` 见到的表是 `$null` ⇒ **每一项都落 `unknown`** ⇒
                    #     下面的分类断言会**假绿**（"看起来分了类"）—— 故必须提取**真表**。
-                   '$Script:D7_GAP_CLASS')) {
+                   '$Script:D7_GAP_CLASS',
+                   # O-147 乙+丙 (2026-10-20): **站池** + **默认出网档清单**（唯一定义点；状态件与接线都读它们）。
+                   #   ⚠ 漏提取 ⇒ `$Script:STATION_POOL` 为空 ⇒ 状态件写不出"全站键" ⇒ 本组断言会**假绿**
+                   #     （"看起来在按站统计"，其实只补了被选那站）。
+                   '$Script:STATION_POOL', '$Script:EGRESS_MULTI_ALIASES')) {
     $a = @($ast.FindAll({ param($n)
         $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
         $n.Left.Extent.Text -eq $asn }, $true)) | Select-Object -First 1
@@ -2690,6 +2697,62 @@ $splitFn = @($ast.FindAll({ param($n)
     $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-SplitTask' }, $true))
 Assert-True "O141-split⑨(结构): Invoke-SplitTask 内无字面「% 3」（映射必须经 Get-SplitDispatchPlan）" (
     ($splitFn.Count -eq 1) -and (-not ($splitFn[0].Extent.Text -match '%\s*3')))
+
+# ══ O-147 乙+丙（2026-10-20）：出网档**候选站排序** —— 依据 = 本地按站计数；读不到 ⇒ fail-closed 轮转 ══
+#   被测 = `Get-EgressStationCandidates`（纯函数 ⇒ 本组是**真调用**）。
+#   钉三件：① 依据真进排序（用**同源对照**证非恒真）· ② fail-closed 退回**按站轮转**（**不退回只吃 B**）·
+#   ③ 边界（空站池 ⇒ @() · 缺键 ⇒ 判不了 ⇒ 退回轮转）。
+$ec1 = Get-EgressStationCandidates -Stations @('A','B','C') -Counts @{A=0;B=5;C=2}
+Assert-True "O147-egress①(按计数排): 计数 0/5/2 ⇒ 序 A,C,B（**用得少在前**）" (
+    (($ec1 -join ',') -eq 'A,C,B'))
+$ecSwap = Get-EgressStationCandidates -Stations @('A','B','C') -Counts @{A=5;B=0;C=2}
+Assert-True "O147-egress②(先验红·同源对照): 同一组站、**只换计数** ⇒ 序必须翻转（① 非恒真）" (
+    ((($ecSwap -join ',') -eq 'B,C,A') -and (($ec1 -join ',') -ne ($ecSwap -join ','))))
+$ec2 = Get-EgressStationCandidates -Stations @('A','B','C') -Counts @{A=3;B=3;C=3}
+Assert-True "O147-egress③(并列稳定): 三站同计数 ⇒ 保持站池稳定序 A,B,C（不额外轮转）" (
+    (($ec2 -join ',') -eq 'A,B,C'))
+$ec3 = Get-EgressStationCandidates -Stations @('A','B','C') -Counts $null -LastUsed 'B'
+Assert-True "O147-egress④(fail-closed): 计数读不到 ⇒ **按站轮转**、从 B 之后起 = C,A,B（**绝不退回只吃 B**）" (
+    (($ec3 -join ',') -eq 'C,A,B'))
+Assert-True "O147-egress⑤(同源对照): ④ 的首选 ≠ B（证「不退回只吃 B」非恒真）" (
+    ($ec3[0] -ne 'B'))
+$ec5 = Get-EgressStationCandidates -Stations @('A','B','C') -Counts @{A=0;B=1}
+Assert-True "O147-egress⑥(fail-closed·缺键): 缺一个站的计数 ⇒ **判不了** ⇒ 退回轮转（不得按半个计数排）" (
+    (($ec5 -join ',') -eq 'A,B,C'))
+$ec4 = Get-EgressStationCandidates -Stations @() -Counts @{A=0}
+Assert-True "O147-egress⑦(边界): 空站池 ⇒ @()（无候选 ⇒ 调用方须 fail-closed，不得本地代跑）" (
+    (@($ec4).Count -eq 0))
+
+# 状态件**真跑**（写在系统 TEMP，**不落仓**）：⑧ round-trip · ⑨ 该件喂排序 · ⑩ 缺件 fail-closed
+$esPath = Join-Path $env:TEMP ('egress_st_' + [guid]::NewGuid().ToString('N') + '.json')
+try {
+    $null = Write-EgressStationPick -Station 'C' -Path $esPath
+    $null = Write-EgressStationPick -Station 'C' -Path $esPath
+    $null = Write-EgressStationPick -Station 'A' -Path $esPath
+    $esSt = Read-EgressStationState -Path $esPath
+    Assert-True "O147-egress⑧(状态件 round-trip): C×2 + A×1 ⇒ **全站键齐**(C=2/A=1/B=0)、last_used=A" (
+        ($esSt -and ([int]$esSt.counts['C'] -eq 2) -and ([int]$esSt.counts['A'] -eq 1) -and
+         ([int]$esSt.counts['B'] -eq 0) -and ($esSt.last_used -eq 'A')))
+    Assert-True "O147-egress⑨(状态件 ⇒ 喂排序): 该 counts（B 最少）⇒ 候选首站 = B（依据真的接上了）" (
+        (((Get-EgressStationCandidates -Stations @($Script:STATION_POOL) -Counts $esSt.counts) -join ',') -eq 'B,A,C'))
+    Assert-True "O147-egress⑩(fail-closed): 不存在的状态件 ⇒ `$null（判不了 ⇒ 调用方退轮转，**绝不只吃 B**）" (
+        ($null -eq (Read-EgressStationState -Path ($esPath + '.nope'))))
+} finally { Remove-Item -Force -ErrorAction SilentlyContinue $esPath }
+
+# ⑪ 唯一清单一处表达：清单里每个别名都**必须**在**真 ROUTE_TABLE** 里且**都是出网**
+$multiMissing = @($Script:EGRESS_MULTI_ALIASES | Where-Object { -not $Script:ROUTE_TABLE.ContainsKey($_) })
+$multiNonEgress = @($Script:EGRESS_MULTI_ALIASES | Where-Object {
+    $Script:ROUTE_TABLE.ContainsKey($_) -and ([string]$Script:ROUTE_TABLE[$_]['id']) -notlike 'openrouter/*' })
+Assert-True "O147-egress⑪(清单一致性): EGRESS_MULTI_ALIASES 每个别名都在真表里、且都是出网" (
+    (($multiMissing.Count -eq 0) -and ($multiNonEgress.Count -eq 0) -and (@($Script:EGRESS_MULTI_ALIASES).Count -ge 1)))
+
+# ⑫ 结构护栏：`Invoke-Task` 内**必须真调**该函数（防"函数在、没人用"；同 O141-split⑨ 路子）
+$itFn = @($ast.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-Task' }, $true))
+$ecCall = @($itFn[0].FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.CommandAst] -and ($n.GetCommandName() -eq 'Get-EgressStationCandidates') }, $true))
+Assert-True "O147-egress⑫(结构): Invoke-Task 内**真的调** Get-EgressStationCandidates（接线不得被摘掉）" (
+    ($itFn.Count -eq 1) -and ($ecCall.Count -eq 1))
 
 # ══ O-141 P1（2026-10-13 · `CONCLUSION #6` 兑现）：跨片 join —— 声明式主体 + fail-closed ══════════
 #   语义真值 = 结论契约 §6.2（五条定案）；载体 = 【选项①】（卡面声明，非产物自述）—— 映射见契约 §6.3。

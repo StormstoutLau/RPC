@@ -34,6 +34,12 @@ __pycache__/
 ops/cluster_status.html
 ops/agent-dashboard.html
 ops/.egress_daily.json
+# 2026-10-20 (O-147 乙+丙): 出网档**按站计数**状态件 —— 由 `agent-cli.ps1` 的**派发路径**（
+# `Write-EgressStationPick`）读写, 内容是"今日各站各用了几次 + 上次用站"; 属**环境态**、按构造
+# **每派发一次就变** ⇒ 同 `.egress_daily.json` 家族, 不入库。
+# ⚠ 加这条不是可选项: 该件**就在真实派发路径上写** ⇒ 不忽略, 第一次出网派发就留下一个**未跟踪文件**
+#   （`agent-cli.ps1` 里那句"gitignored"才成立; 漏加时它是一句**假陈述**）。
+ops/.egress_station.json
 # 2026-09-21: OpenRouter 额度借用台账 —— 运行时状态(谁在借、借自谁、起于何日), 由
 # `cluster.py egress borrow --go/--restore --go` 读写; 无密钥内容, 但属环境态 ⇒ 同 .egress_daily.json 不入库。
 ops/.or-borrow.json

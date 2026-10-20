@@ -38,6 +38,29 @@ $fns = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.
 #   本探针自身机制要用的 cmdlet。
 foreach ($f in $fns) { Invoke-Expression $f.Extent.Text }
 
+# ── ★★ 2026-10-20（`O-147` 取证途中发现, 就地修）: 还要提取**脚本级 `$Script:*` 赋值** ──────────
+# 为什么: 与"函数清单腐烂"**同族、同后果** —— 这些赋值**从未**被提取过 ⇒ 任何**新的脚本级真值**
+#   一进来, 探针就**静默变死**。★ **实测（本批首跑当场红, 且 HEAD 版一模一样红）**:
+#   `Split-D7Gaps` 读 `$Script:D7_GAP_CLASS`, 而本探针里它是 `$null` ⇒ **第一次派发就**
+#   `Cannot index into a null array` ⇒ 该件自 **2026-10-01** `O-136` 引入 `D7_GAP_CLASS` 起
+#   **已死约 3 周**; ⚠⚠ 而夹具只跑 `-SmokeOnly`(**零派发**) ⇒ **没有任何判据看见它**
+#   —— 这正是本仓最防的形态("守门人自己死了, 而没有任何判据判它活着")。
+# 做法（与函数**同源**、**免维护**）: 提取**全部** `$Script:*` 顶层赋值, 但**排除**右侧引用
+#   `$PSScriptRoot` 的那些 —— 它们锚在 `agent-cli.ps1` **自身所在目录**, 对本探针无意义
+#   （`$Script:REPO_ROOT` / `$Script:REVIEW_DIR` 正是因此被排除; 而 **`REPO_ROOT` 在下面显式重定义**为
+#   本仓路径）。⚠ 不排除就会 `Cannot bind argument to parameter 'Path' because it is an empty string`。
+# ⚠ **不吞异常**: 某个赋值若意外抛错 ⇒ 探针**当场死在启动处**（响的, 不是静默的）⇒ 夹具冒烟立刻红。
+$ScriptAsn = @($ast.FindAll({ param($n)
+            $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+            ($n.Left.Extent.Text -match '^\$Script:') -and
+            -not ($n.Extent.Text -match '\$PSScriptRoot') }, $true))
+$ScriptAsnSkipped = @($ast.FindAll({ param($n)
+            $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+            ($n.Left.Extent.Text -match '^\$Script:') -and
+            ($n.Extent.Text -match '\$PSScriptRoot') }, $true) |
+        ForEach-Object { $_.Left.Extent.Text } | Sort-Object -Unique)
+foreach ($a in $ScriptAsn) { Invoke-Expression $a.Extent.Text }
+
 # ── 自检 (2026-09-22): 把"探针还活着"变成可判（静态、零派发；供夹具冒烟）────────────────
 # 两条判据:
 #   ① **存在性** —— `Invoke-Task` / `Invoke-Task-Claude` 都已在 agent-cli.ps1 里(没它们探针无从谈起);
@@ -49,7 +72,8 @@ try {
     $probeTxt = [System.IO.File]::ReadAllText($MyInvocation.MyCommand.Path)
     $probeAst = [System.Management.Automation.Language.Parser]::ParseInput($probeTxt, [ref]$null, [ref]$null)
     $probeFnAsts = @($probeAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))
-    # 边界 = 本文件里**唯一**那处 `Invoke-Expression` 命令(即上面的提取行)
+    # 边界 = 本文件里**最早**那处 `Invoke-Expression` 命令(即上面的提取行; 2026-10-20 起有 2 处:
+    #   函数提取 + `$Script:*` 赋值提取 ⇒ 取**最早**者仍是"提取边界"的正确含义)
     $ieCmds = @($probeAst.FindAll({ param($n)
                 $n -is [System.Management.Automation.Language.CommandAst] -and
                 $n.GetCommandName() -eq 'Invoke-Expression' }, $true))
@@ -57,17 +81,19 @@ try {
     $missing = @(@('Invoke-Task', 'Invoke-Task-Claude') | Where-Object { $haveInCli -notcontains $_ })
     if ($missing.Count -gt 0) {
         $smokeFail = ('agent-cli.ps1 里找不到: ' + ($missing -join ', ') + ' ⇒ 探针要驱动的那条链不在')
-    } elseif ($ieCmds.Count -ne 1) {
-        $smokeFail = ('提取边界不唯一: 本文件里有 ' + $ieCmds.Count + ' 处 Invoke-Expression(期望 1) ⇒ 自检无法定位边界')
+    } elseif ($ieCmds.Count -lt 1) {
+        $smokeFail = ('提取边界找不到: 本文件里 0 处 Invoke-Expression(期望 >=1) ⇒ 自检无法定位边界')
     } else {
-        $boundary = $ieCmds[0].Extent.StartOffset
+        $boundary = (@($ieCmds | ForEach-Object { $_.Extent.StartOffset }) | Measure-Object -Minimum).Minimum
         $early = @($probeFnAsts | Where-Object { $_.Extent.StartOffset -lt $boundary } | ForEach-Object { $_.Name })
         if ($early.Count -gt 0) {
             $smokeFail = ('顺序不变量破了: 下列函数定义在**提取边界之前**, 会被提取覆盖 ⇒ ' + ($early -join ', ') +
                           '（stub 被覆盖 = 探针可能真的去 ssh; 把它们挪到提取行之后）')
         } else {
             $smokeInfo = ('提取边界@' + $boundary + '; 本文件 ' + $probeFnAsts.Count + ' 个函数全部晚于边界(stub 有效); ' +
-                          'agent-cli.ps1 已提取 ' + $fns.Count + ' 个函数(免维护: 不提清单)')
+                          'agent-cli.ps1 已提取 ' + $fns.Count + ' 个函数(免维护: 不提清单); ' +
+                          '★ 脚本级赋值已提取 ' + $ScriptAsn.Count + ' 个(免维护) · 按 `$PSScriptRoot` 规则排除 ' +
+                          $ScriptAsnSkipped.Count + ' 个[' + ($ScriptAsnSkipped -join ',') + ']')
         }
     }
 } catch {
@@ -78,13 +104,22 @@ Write-Host ('PROBE_SMOKE_OK: ' + $smokeInfo)
 if ($SmokeOnly) { exit 0 }
 
 # --- stub site/remote deps so opencode main path returns rc=124 -> 6 without a live site ---
-function Get-TargetHost([string]$station) { return 'PROBE-A' }
+# ⚠ O-147 乙+丙 (2026-10-20) 就地改动: 原为 `return 'PROBE-A'`(与实际站无关的常量)。
+#   为什么改: 出网候选站排序的**行为判据**必须落在"**哪个站真的被用了**"上, 而本探针里唯一
+#   **下游可见**的站载体 = `.agent-run.json.exec_host`(= `Resolve-D7Hosts -Station $station` → 本函数;
+#   ⚠ 主路 run 记录**不含** station 字母) ⇒ 让该桩**带上站字母**, 断言才有对象。
+#   ★ 站上一切远调用在本探针里都是 stub ⇒ 改本桩对其它断言**无影响**。
+function Get-TargetHost([string]$station) { return "PROBE-$station" }
 function Resolve-Model([string]$m) {
     # mirror the real ROUTE_TABLE claude entries (2026-09-21: OpenRouter-served ids, NOT Claude-native)
     if ($m -eq 'claude' -or $m -eq 'thinkingmachines/inkling:free') { return @{ id='thinkingmachines/inkling:free'; station=''; cli='claude' } }
     # P0 止血自证用: 站上**本地引擎**型号 —— 非 `opencode/*` ⇒ 三处旧闸**不拦**(这正是洞的前提);
     #   走主路必然 ssh 到站上, 由 Invoke-RemoteScript stub 产出 rc=124→6。
     if ($m -eq 'gpt-oss') { return @{ id='local/gpt-oss-20b'; station='B'; cli='' } }
+    # O-147 乙+丙 (2026-10-20): **默认出网档**(站位**本应**由候选站排序重定 · 路由表声明 = B)
+    #   + **per-station 别名**(站位 = 表里写死的 C ⇒ **不进候选** —— 那是"指定站"的唯一通道)。
+    if ($m -eq 'ultra')   { return @{ id='openrouter/nvidia/nemotron-3-ultra-550b-a55b:free'; station='B'; cli='' } }
+    if ($m -eq 'ultra-c') { return @{ id='openrouter/nvidia/nemotron-3-ultra-550b-a55b:free'; station='C'; cli='' } }
     return $null
 }
 function Resolve-Profile { param() return [pscustomobject]@{ profile='reason'; context=8192; max_output=1000; thinking='OFF'; template=''; reasoning_format=''; flavor=''; source='stub' } }
@@ -107,6 +142,15 @@ function Test-StationEngineReady {
     $script:probeStationProbes++
     return $false
 }
+
+# O-147 乙+丙 (2026-10-20): **注入式**状态件桩 —— 把"候选站排序的**输入**"变成可控量,
+#   于是本探针判的是**接线行为**(真 `Get-EgressStationCandidates` 照常生效, 只换输入),
+#   而**不动**仓库真状态件 `ops/.egress_station.json`（否则本探针会**污染真实派发**用的计数 ——
+#   那正是它要治的东西: 计数一变, 之后真实的出网派发就会按被污染的计数选站）。
+#   `$script:probeEgressState = $null` ⇒ 走 **fail-closed 按站轮转**那条路（与生产同一分支）。
+$script:probeEgressState = $null
+function Read-EgressStationState { param([string]$Path = '') return $script:probeEgressState }
+function Write-EgressStationPick { param([string]$Station, [string]$Path = '') return $true }
 
 # 2026-09-21 加固(真实站实弹教训): 也让"远端证据回收"产出一个 `.meta`。
 #   为什么必须加: 主路 collect 段有 `$m = Get-Content $metaTxt | Out-String`, 会把 `$m` **改写成
@@ -138,6 +182,11 @@ $Script:WORKSPACE_ROOT = 'C:\Windows\Temp\probe-ws'
 $Script:WORKSPACE_ARCHIVE_ROOT = 'C:\Windows\Temp\probe-arch'
 $Script:TMP_ROOT = 'C:\Windows\Temp\probe-tmp'
 $Script:ROUTE_TABLE = @{ 'claude' = @{ id='claude-sonnet-4-5'; station=''; cli='claude' } }
+# O-147 乙+丙 (2026-10-20): **站池 + 默认出网档清单**（唯一定义点；接线与状态件都读它们）。
+#   ⚠ 不定义 ⇒ `$Script:EGRESS_MULTI_ALIASES` 为空 ⇒ "出网重定站"那段**根本不跑, 也不报错**（静默跳过
+#     = 这正是本仓反复吃的那个形态）⇒ 所以下面那组断言**必然**能把它抓出来（期望值刻意取**非 B**）。
+$Script:STATION_POOL = @('A', 'B', 'C')
+$Script:EGRESS_MULTI_ALIASES = @('ultra', 'free-1m', 'lightning')
 
 # helper: newest numeric run dirs only (exclude split-*, *_audits)
 function Get-NumericRuns([string]$root) {
@@ -175,7 +224,12 @@ $capture = @()
 try {
     $code = Invoke-Task -proj 'paper' -card $card -model 'claude' -sensitive 'public' -cli 'opencode' -AutoFallback:$true
 } catch {
-    Write-Host ("FAIL dispatch threw: " + $_.Exception.Message); exit 1
+    # 2026-10-20（`O-147` 取证途中）: 只打 `Exception.Message` 时, "探针为什么死"**无从判**
+    #   —— 本次正是靠补上调用栈, 才一眼定位到 `Split-D7Gaps` 读 `$Script:D7_GAP_CLASS`。
+    #   ⇒ 失败时一并打出**调用栈**与**位置**（下一个人不必再复现一遍）。
+    Write-Host ("FAIL dispatch threw: " + $_.Exception.Message)
+    Write-Host ('FAIL dispatch stack: ' + $_.ScriptStackTrace)
+    exit 1
 }
 $code = Scalar $code
 Write-Host ('dispatch exit=' + $code)
@@ -380,6 +434,63 @@ if ($nCalls -ge 2 -and $src.Contains('(claude-direct, $id)') -and $src.Contains(
 } else {
     Write-Host ('     FAIL  coverage: Invoke-Task 体内调用点 ' + $nCalls + ' 处(期望 >=2) 或拒绝串缺失'); $ok = $false
 }
+
+Write-Host ''
+Write-Host '=== O-147 乙+丙: 默认出网档的候选站排序 —— 接线行为 ==='
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# O-147 乙+丙 (2026-10-20 · 用户裁「解除暂缓 + 落乙+丙」): 站位的**替换**与**传播** —— 行为判据
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# 为什么必须在这条链上验(而不是只在夹具里): 夹具 `o147-egress①–⑦` 判的是**纯函数返回值**,
+#   ⑫ 只判"`Invoke-Task` 体内**出现**了那个调用" —— ★ **两者都测不到**"候选站真的**替换了**站位、
+#   且一路传播到**下游可见的载体**"(本项目已多次吃过"判据在跑, 但判的不是你以为的东西")。
+# 判据载体 = `.agent-run.json.exec_host`(= `Resolve-D7Hosts -Station $station` → `Get-TargetHost`);
+#   ★ 本探针把 `Get-TargetHost` 桩改成 **PROBE-<站>** ⇒ 该字段就是"**本次真的用了哪个站**"的读数。
+# 判据的**可分辨性**(本组要害): 路由表声明 `ultra` 的站位 = **B** ⇒ 接线若不生效(或清单缺失 ⇒
+#   静默跳过), **三例都会落 `PROBE-B`** ⇒ 故三例期望值**刻意取非 B**。
+# 三例(两向 + 边界):
+#   A 计数可用: 注入 counts A=5/B=5/C=0, last_used=C ⇒ 序 = C,A,B ⇒ 期望 **PROBE-C**(用得少在前)。
+#   B fail-closed: 注入 $null(← 生产里"缺件/跨日/坏 JSON"走**同一分支**) ⇒ **按站轮转**(last_used
+#      读不到 ⇒ 站池原序) = A,B,C ⇒ 期望 **PROBE-A**。★ 与 A 期望**不同** ⇒ 二者互为**同源对照**。
+#   C 边界·per-station 别名: 注入 counts A=0/B=0/**C=9**(← 若该别名被误进候选, 首选必是 **A**);
+#      型号 = `ultra-c`(表里 station='C', **不在**默认清单) ⇒ 期望 **PROBE-C**(不进候选)。
+function Get-NewestRunRecord([string]$root) {
+    foreach ($d in @(Get-NumericRuns $root)) {
+        $rj = Join-Path $d.FullName '.agent-run.json'
+        if (Test-Path $rj) { try { return (Get-Content $rj -Raw | ConvertFrom-Json) } catch { return $null } }
+    }
+    return $null
+}
+$egressTagA = 'A 计数可用(用得少在前)'
+$egressTagB = 'B fail-closed(按站轮转)'
+$egressCases = @(
+    @{ tag = $egressTagA; model = 'ultra';   counts = @{A=5;B=5;C=0}; last = 'C'; want = 'PROBE-C' },
+    @{ tag = $egressTagB; model = 'ultra';   counts = $null;           last = 'C'; want = 'PROBE-A' },
+    @{ tag = 'C 边界·per-station 别名'; model = 'ultra-c'; counts = @{A=0;B=0;C=9}; last = 'A'; want = 'PROBE-C' }
+)
+$egressSeen = @{}
+foreach ($c in $egressCases) {
+    # 注入本轮输入(真 `Read-EgressStationState` 已被上方同名桩覆盖 ⇒ 不读盘、不写盘)
+    $script:probeEgressState = if ($c.counts) { @{ counts = $c.counts; last_used = $c.last } } else { $null }
+    $rcE = Scalar (Invoke-Task -proj 'paper' -card $card -model $c.model -sensitive 'public' -cli 'opencode' -AutoFallback:$false -attach @())
+    $rec = Get-NewestRunRecord $outRoot
+    $hostE = if ($rec) { [string]$rec.exec_host } else { '<no-run>' }
+    $egressSeen[$c.tag] = $hostE
+    if (($hostE -eq $c.want) -and ($rcE -ne 4)) {
+        Write-Host ('     PASS  ' + $c.tag + ': rc=' + $rcE + ' exec_host=' + $hostE + ' (期望 ' + $c.want + ')')
+    } else {
+        Write-Host ('     FAIL  ' + $c.tag + ': rc=' + $rcE + ' exec_host=' + $hostE + ' (期望 ' + $c.want +
+                    '; = PROBE-B ⇒ 候选站**没**替换站位, 或清单缺失致静默跳过)')
+        $ok = $false
+    }
+}
+# 同源对照(两向): A 与 B **注入不同** ⇒ 结论**必须不同**; 若相同 ⇒ 判据恒真, 判的不是"依据进排序了"
+if ($egressSeen[$egressTagA] -ne $egressSeen[$egressTagB]) {
+    Write-Host ('     PASS  O147-egress(同源对照): 计数可用 => ' + $egressSeen[$egressTagA] +
+                ' · 计数读不到 => ' + $egressSeen[$egressTagB] + ' (两者不同 ⇒ 非恒真)')
+} else {
+    Write-Host '     FAIL  O147-egress(同源对照): 两种注入给出**同一** exec_host ⇒ 判据可能恒真'; $ok = $false
+}
+$script:probeEgressState = $null
 
 Write-Host '--------------------------------'
 if ($ok) { Write-Host 'PROBE_FALLBACK pass'; exit 0 } else { Write-Host 'PROBE_FALLBACK FAIL'; exit 1 }
