@@ -2081,8 +2081,21 @@ Scott 提供外部诊断清单后，我按第 2 条（**网卡绑定 ⇒ 静默�
 - ★ **配置分析**（"本地模型 / OpenRouter 免费档怎么配"）= 见
   [docs/2026-10-20_p019独立复验_异基座模型配置分析.md](../../docs/2026-10-20_p019独立复验_异基座模型配置分析.md)
   —— ★ 结论摘要：**本地档结构性不可用**（卡硬令"不在 A/B/C 站执行"，而 D6 本地档站位全在站上）；
-  可用 = **OpenRouter 免费档 + 主控本地执行**（`claude` 通道 `station=''` 那一路）；
-  ⚠ 卡片与 RPC 有两处冲突（`cli: opencode` vs route `cli=claude`；`readonly: true` vs 必须写 `out/`）**待裁**。
+  可用 = **OpenRouter 免费档 + 主控本地执行**（`claude` 通道 `station=''` 那一路）。
+- ★ **2026-10-20 续（同一稿的 §0/§6/§10 已更新）**：
+  **(A) 工作树脏【已解】** —— 产出方提交 **`626c0cb`**；复测 `git status --porcelain` = **`<CLEAN>`**；
+  **(B) `cli: opencode`【桌面版不是解法】** —— 主控只有 **Electron 桌面版**（`%LOCALAPPDATA%\Programs\@opencode-aidesktop`，
+  `OpenCode.exe` + `resources/app.asar`，**无 CLI 入口 / `app.asar.unpacked` 无 core 二进制**）；
+  ★★ 决定性理由：**RPC 的 opencode 路从来不落在主控**（ROUTE_TABLE 里每条 `cli=opencode` 的 `station` 都非空）
+  ⇒ **主控装什么 opencode 都到不了那一步** ⇒ 处置 = 改卡为 `cli: claude` / 显式 `--cli claude` / 手工走 claude CLI；
+  **(C) `readonly` 缺口【给了三条方案 + 推荐】**（稿 §10）—— 机制 = `agent-cli.ps1` L4803-4807 的 `$pmArg`（**逐字**：
+  "`readonly: true` 的卡**不加**（保持只读 —— **破卡面契约 = D-06/D-07 同级安全面**）"）⇒ ★ **刻意的安全面**，不许顺手改；
+  ★ **本轮加重的一条**：`settings.json` 的 `defaultMode` 在 `-p` 下**不生效** ⇒ readonly 卡**连 Bash 都可能被拒**，
+  而本卡协议**全是 bash** ⇒ **不是"写不进 out/"，而是"跑不起来"**。
+  三条方案 = **(甲)** 卡改 `readonly: false`（零 RPC 改动 · 闸降纪律面）· **(乙)** RPC 新增**显式可写通道**
+  （默认拦 + 通道 + 留痕，同 `O-140`/`-AllowL1Red`/`-AllowSelfReview` 四处先例；属**外壳语义变更 ⇒ 须先验红 + 独立裁定**）·
+  **(丙)** 手工执行（零改动、但不进 RPC 任何面）· (丁 ✗) 直接放开 = 全局破安全面。
+  ★ **推荐**：只跑这一次 ⇒ (丙)/(甲)；要变一等公民 ⇒ (乙) 并**先裁**"要不要为审计类任务开第三个档"。
 
 ***
 
