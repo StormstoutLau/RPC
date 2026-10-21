@@ -59,11 +59,11 @@ managed:
 
   - port: 8080
     proto: http
-    purpose: 本地推理引擎 API (unsloth studio 对外面)
+    purpose: "本地推理引擎 API 面 (后端随加载: unsloth studio | halogen 容器)"
     scope: [A, B, C]
     bind: 127.0.0.1
     expect_bind: 127.0.0.1
-    owner: unsloth studio (后端 llama-server)
+    owner: unsloth studio (后端 llama-server) | docker (halogen)
     mode: on_demand
     consumers: [opencode, claude code, hermes, ops/cluster.py, ops/rpc_check.py]
     note: |
@@ -75,6 +75,10 @@ managed:
       运行前置**所要求，见 O-146）; 也曾服务 **MiniMax-M2.7** 而非常记的 gpt-oss-120b ⇒
       **"哪条路径 / 哪个模型"由当班消费者决定**。门禁只判"占用者形态**认不认得出**"
       （`other` / `unknown` ⇒ WARN，见 O-146 乙′），**刻意不判"哪一站该跑哪个"**。
+      ★ 2026-10-21 (ADR-0014 D7): 8080 的后端多了**第三形态** = halogen 容器
+      (`ops/cluster_const.py` CONTAINER_MODELS, `-p 127.0.0.1:8080:8731`)。此时宿主监听者
+      是 **docker 发布路径**（实测进程名见 rpc_check 的 `_OCCUPANT_KINDS`），不是 studio/llama-server;
+      回退到 unsloth 仍用 `cluster.py load <别名> --backend unsloth`。
 
   - port: 32837
     proto: http

@@ -128,6 +128,22 @@ upstream: [ADR-0004]
 - **联动面（须一并改，否则「默认」是空话）**：`ops/cluster.py` 的 `ROUTE` / `BACKENDS`（按站路由 `qwen3.8-flash-next-{a,b,c}`）；`ops/rpc_check.py` 的路由断言；`load-gate` 的容器占用判据；`inventory/models.yaml` 的 `route` 字段。
 - **★ 前置已解（E1 2026-10-11）**：D7 要求「默认框架」在**三站**都成立 ⇒ 前提是 B/C **也能跑 halogen**。该前提由 **D8(a) 落地 + B/C 真部署**（见 §V6.1 实证）**已满足**：三站 `containers status` 均 `docker: active` 且各起 `halogen` 容器、`/health` = `ok`、冒烟同档。
   ★ 用户指令为「**D7 文档等 BC 复用配置成功后更新**」⇒ 本节**按 BC 复用成功**回写；**代码层**（`ROUTE`/`BACKENDS`/`rpc_check`/`load-gate`/`models.yaml`）仍**未改**，**待用户确认后**执行（见未实测登记 #8）。
+- ★★ **代码层已落地（E1 2026-10-21，用户裁定「halogen 默认引擎主线」）**：
+  · `ops/cluster_const.py` 新增 **`CONTAINER_MODELS`**（别名 → 整份 `docker run` 配方，与 `DS4_PP_MODELS` 同构）
+    + `BACKENDS` 增 `halogen`；
+  · `ops/cluster.py` 新增 **`_load_container_model`**：`load` / `load-on` 在解析出别名后分派
+    （缺省 backend 或 `--backend halogen` ⇒ 容器路径；显式 `--backend unsloth` ⇒ **保留回退路径**），
+    命令仍由既有 `containers_plan("up", …)` 生成（计划与执行同源）；
+  · `unload` / `unload-on` 改为 **先 `docker rm -f` 再 `infer-unload`** —— 否则 `infer-unload` 的
+    `wait_gtt` 会因容器仍持 ~90 GB GTT 白等满 180 s；
+  · `rpc_check` 占用者白名单增 **`docker-publish`**（宿主监听者是 `docker-proxy`，非引擎进程；
+    同时把 `flash_serve` 纳入 `engine` 断言的进程判据，避免「有端口无 llama 进程」误报），
+    占用者探测改 `sudo -n ss -ltnp`（root 进程对普通用户不可见 ⇒ 旧实现恒 `unknown`）；
+  · **镜像升 0.18.11**（0.18.1 起 `/v1/messages` 才钳制超 `max_tokens_cap` 的请求）。
+  · **B 站实证**：`/health` = ok / `context=262144` / `kv_pool_positions=524288`（无 `LOWERING THE POOL`）/
+    `model=halogen-qwen3.8-flash-next`；chat 与 messages 200；`max_tokens=100000` 的 messages 请求 → **200**（钳制生效）；
+    回退 `--backend unsloth` 可用（回到 studio 默认 `--parallel 4`，因 `STUDIO_FLAGS` 固化尚未做）。
+  · A/C 两站按同一配方复验（见「未实测登记」处置状态）。
 - ⚠ 与 **D1「测试性 ≠ 常驻」** 的关系：D7 是**升格**，D1 是**引入形态**。D7 生效后，三站 halogen 从「测试性」变为「Qwen3.8-Flash-Next 的默认执行框架」。
 
 ### D8. **B/C 两站复用 A 站配方 —— ★ 已落地并真部署（E1 2026-10-11）**
@@ -270,6 +286,8 @@ prompt set = **上游 `tools/eval-prompts.json`**（10 例：code/proof/proc/cha
 1. ~~**`containers` 子命令与真部署分两批**~~ **→ 已实测（2026-10-11 · A 站）**：V6 对象即本轮真部署，全程只经统一入口。
 2. ~~**镜像 digest 未钉死、体积未实测**~~ **→ 已实测**：4.56 GB、digest `sha256:485cc8cb…f6b655ca8`（见 §V6 实证 1）。
    ⚠ **仍开放**：digest **未写入**任何 pin 文件/配置（本次仅记录，**未**固化为引用）。
+   ★ 2026-10-21 补：**0.18.11** 三站同一制品，digest `sha256:a5797467d2bff173e0c661d9700292bd55eac305faff68c86261ae35385ad6ad`；
+   `CONTAINER_MODELS` 仍按 **tag** 引用（未按 digest 钉死）。
 3. ~~**A 站 IOMMU = 默认开，halogen 在该内核/驱动组合下是否可用未实测**~~ **→ 已实测**：A 站（内核 6.17.0-40-generic）**可用**，冒烟通过。
 4. ~~**`--group-add video/render` 的实际效果未验**~~ **→ 部分实测**：容器内 GPU **可见且推理成功**；
    ⚠ 但生效值是**数字 GID**（44/992），**非** D4 字面的组名 —— 见 #7。
@@ -278,13 +296,17 @@ prompt set = **上游 `tools/eval-prompts.json`**（10 例：code/proof/proc/cha
 6. **与 A 站既有容器的相互影响未评**（**仍开放**）：`~/searxng` 等既有 compose 栈与本引擎的**资源竞争未测**。
 7. **★ D4 组名口径偏离未回写**（**新登记**）：实证用**数字 GID** 44/992 成功，D4 字面 `video`/`render` 失败（rc=125）；
    ⇒ 待用户在「(i) 回写 D4 为数字 GID / (ii) 保留组名但登记例外」间裁定。
-8. **★ D7「默认执行框架 = halogen」落地未做**（**新登记**）：裁定已下（见 D7），但 `cluster.py` `ROUTE`/`BACKENDS`、
-   `rpc_check` 路由断言、`load-gate`、`models.yaml` `route` **均未改**。
+8. ~~**D7「默认执行框架 = halogen」落地未做**~~ **→ 已落（2026-10-21 · E1）**：代码面见 D7 的「代码层已落地」段；
+   **三站**均以 0.18.11 起容器并 `/health` = ok（B 首跑 + A/C 复验，`context=262144` / `kv_pool_positions=524288`）。
+   ⚠ **仍开放**：`STUDIO_FLAGS` 固化（用户排在 halogen 之后）⇒ 回退到 unsloth 仍是 `--parallel 4`。
 9. **★ 共享权重目录落物未清理**（**新登记**）：`down` 后 `qwen38-flash-next-mtp.hgn` / `tokenizer/` / `.cache/`（root 属主）
    仍留在 `UD-IQ4_XS/`；**未**定是否保留（复起加速）或删除。
 10. ~~**B/C 复用 A 配方仍阻断**~~ **→ 已解（2026-10-11）**：用户裁定 **(a)** ⇒ 经 `containers install` 补 daemon + `containers up` 真部署，
     B/C `/health` = ok、冒烟同档（见 §V6.1）。⚠ **仍开放**：B/C 侧既有容器/负载与本引擎的**资源竞争未测**（与 #6 同类）；
     `8730/8731` 的 `ports.yaml` **scope 已同步 `[A, B, C]`**（见 D8 后续）。
+11. **★ 空闲 TTL 不回收容器**（**新登记** 2026-10-21）：`cluster-ttl` 到期只执行 `infer-unload`，
+    不会 `docker rm -f halogen` ⇒ 若开启 TTL，容器的 ~90 GB 不会随空闲释放。
+    **当前三站 `TTL_ENABLED=关` ⇒ 无现网影响**；开启前须先补这一步（站上件改动，另裁）。
 
 ---
 

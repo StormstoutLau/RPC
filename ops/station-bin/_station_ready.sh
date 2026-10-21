@@ -40,13 +40,26 @@ if [ -n "$ALIAS" ]; then
 fi
 
 # ---- [2] 引擎 ctx (radical fix B: engine ctx = source of truth) ----
-if [ -n "$K" ]; then
-  V=$(curl -s -m5 -H "Authorization: Bearer $K" "http://127.0.0.1:$PORT/props" 2>/dev/null | grep -oE '"n_ctx":[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | head -1)
-else
-  V=$(curl -s -m5 "http://127.0.0.1:$PORT/props" 2>/dev/null | grep -oE '"n_ctx":[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | head -1)
-fi
+# 回退链: /props(n_ctx) -> /health(context) -> /v1/models(context_length)。
+# 为什么需要: 后端不再只有 unsloth —— halogen 容器 (`CONTAINER_MODELS`) 不提供 /props,
+#   只有 /health.context 与 /v1/models.context_length (2026-10-21 默认引擎切换)。
+# 判据不变: 三者取到任一即 `ENGINE_CTX=<n>`; 另打一行 `ENGINE_CTX_SRC=` 说明来源。
+_eng_get() {  # $1=path
+  if [ -n "$K" ]; then
+    curl -s -m5 -H "Authorization: Bearer $K" "http://127.0.0.1:$PORT$1" 2>/dev/null
+  else
+    curl -s -m5 "http://127.0.0.1:$PORT$1" 2>/dev/null
+  fi
+}
+_eng_num() {  # $1=json key —— 只取 `"key": <int>` 的整数 (不引入 jq, 与其他探测器同口径)
+  grep -oE "\"$1\"[[:space:]]*:[[:space:]]*[0-9]+" | grep -oE '[0-9]+$' | head -1
+}
+V=$(_eng_get /props | _eng_num n_ctx); SRC=props
+if [ -z "$V" ]; then V=$(_eng_get /health | _eng_num context); SRC=health; fi
+if [ -z "$V" ]; then V=$(_eng_get /v1/models | _eng_num context_length); SRC=models; fi
 if [ -n "$V" ]; then
   echo "ENGINE_CTX=$V"
+  echo "ENGINE_CTX_SRC=$SRC"
 else
   echo "WARN_ENGINE_CTX_NA"
 fi

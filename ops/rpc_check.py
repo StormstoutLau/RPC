@@ -5829,7 +5829,11 @@ ENGINE_PORTS = ("8080", "8081", "18080", "18081", "50052")
 #   `none`（LISTEN 段与占用者取数矛盾）⇒ 也记 `unknown`。
 _OCCUPANT_KINDS = (("opt-vulkan", "/opt/llama.cpp/"),  # /opt/llama.cpp/（Vulkan 分布式路径 · ★ 当前基线）
                    ("opt-variant", "llama.cpp-"),      # /opt/llama.cpp-<变体>/（GLM 等特性分支）
-                   ("studio", "unsloth"))              # studio 启动器（cmdline 含 `unsloth studio run`）
+                   ("studio", "unsloth"),              # studio 启动器（cmdline 含 `unsloth studio run`）
+                   # ★ 2026-10-21 (ADR-0014 D7): halogen 容器把 8080 发布到宿主 ⇒ 宿主监听者
+                   #   是 docker 的 **userland proxy**，不是引擎进程本身（实测 B 站:
+                   #   `127.0.0.1:8080 users:(("docker-proxy",pid=…))`，容器内引擎叫 flash_serve）。
+                   ("docker-publish", "docker-proxy"))
 # ⚠⚠ **顺序承重（2026-10-05 活体检查抓到）**：`/opt/llama.cpp` 是 **symlink → `/opt/llama.cpp-master-<hash>`**
 #   ⇒ 若按 `readlink -f` 的 **exe** 分类，**当前基线**会撞上 `llama.cpp-` 而被误标 `opt-variant`。
 #   故：① **opt-vulkan 必须排在 opt-variant 之前**；② 分类用的 blob **含 cmdline**（cmdline 保留
@@ -5861,14 +5865,16 @@ def classify_engine_occupant(path, listening=False, cmdline=""):
 
 # ★★ O-146 乙′（2026-10-05）：**允许出现的占用者形态**（有限已知集，NIST SP 800-167 白名单同构）。
 #   ⚠ 刻意**不**含"哪一站该跑哪个" —— 那正是被否的甲案（期望随外部消费者时变）。
-_OCCUPANT_OK = ("studio", "opt-vulkan", "opt-variant")
+_OCCUPANT_OK = ("studio", "opt-vulkan", "opt-variant", "docker-publish")
 
 
 def _engine_api_ports():
     """从 `inventory/ports.yaml` 取"**推理引擎 API**"端口（★ 真值表驱动，不硬编码）。
 
-    判据 = 该端口条目的 `purpose` 含「推理引擎」（现 = 8080：`本地推理引擎 API (unsloth studio 对外面)`）。
+    判据 = 该端口条目的 `purpose` 含「推理引擎」（现 = 8080：`本地推理引擎 API 面 (后端随加载: …)`）。
     读不到/解析失败 ⇒ 退回 `("8080",)`（**fail-safe 到已知端口**，不是"跳过判定"）。
+    ⚠ 已知缺陷（`O-164`，2026-10-21 登记）：本函数**未 import yaml** ⇒ `NameError` 被下面
+    `except Exception` 吞掉 ⇒ **实际恒返回 `("8080",)`**，"真值表驱动"当前**未生效**。本批只登记不修。
     """
     try:
         doc = yaml.safe_load(INVENTORY_PORTS.read_text(encoding="utf-8")) or {}
@@ -5970,7 +5976,9 @@ _HEALTH_CMD = (
     #   `etimes_min_s` = **最年轻**那个 llama 系进程的年龄 —— O-143 的"刚起"读数。
     #   ★ 本项**只报数**（判据阈值待读数足够后再定，见 O-126「不许凭空取数」）。
     "echo '===PROC==='; ps -eo rss,etimes,comm 2>/dev/null "
-    "| grep -E 'llama-server|ggml-rpc-server|llama-cli' | grep -v grep "
+    # ★ flash_serve = halogen 容器的推理进程 (2026-10-21 实测 B 站: host 侧可见, RSS ~77G);
+    #   不纳入则"有端口 + 无 llama 系进程"会把它误判成"端口被占" (classify_engine_band)。
+    "| grep -E 'llama-server|ggml-rpc-server|llama-cli|flash_serve' | grep -v grep "
     "| awk '{s+=$1; n++; if (n==1 || $2+0<m) m=$2+0} "
     "END {printf \"rss_mb=%d\\n\", s/1024; printf \"etimes_min_s=%d\\n\", m; "
     "printf \"n_proc=%d\\n\", n}'; "
@@ -5978,7 +5986,11 @@ _HEALTH_CMD = (
     "| grep -E '^(" + "|".join(ENGINE_PORTS) + ")$' | sort -u | tr '\\n' ','; echo; "
     # ★ O-146（2026-10-05）：**占用者是谁** —— 见 `classify_engine_occupant` 的注释（只报数）。
     "echo '===OCCUPANT==='; for P in " + " ".join(ENGINE_PORTS) + "; do "
-    "L=$(ss -ltnp 2>/dev/null | awk -v s=\":$P\" '$4 ~ s\"$\"{print $NF}' | head -1); "
+    # ★ 2026-10-21: root 进程 (docker-proxy / systemd 起的引擎) 的 `users:(...)` 对普通用户
+    #   **不可见** ⇒ 旧实现恒得 `unknown` (实测 B 站 halogen: sudo 前 unknown / sudo 后 docker-proxy)。
+    #   故先 `sudo -n ss`，无免密 sudo 时回退普通 ss (仍可能 unknown —— 判不了 ≠ 通过)。
+    "L=$(sudo -n ss -ltnp 2>/dev/null | awk -v s=\":$P\" '$4 ~ s\"$\"{print $NF}' | head -1); "
+    "[ -z \"$L\" ] && L=$(ss -ltnp 2>/dev/null | awk -v s=\":$P\" '$4 ~ s\"$\"{print $NF}' | head -1); "
     "if [ -z \"$L\" ]; then printf 'occupant_%s=none\\n' \"$P\"; continue; fi; "
     "PID=$(printf '%s' \"$L\" | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2); "
     "E=$(readlink -f \"/proc/${PID:-0}/exe\" 2>/dev/null); "

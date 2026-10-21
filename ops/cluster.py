@@ -33,7 +33,10 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
     load     自动路由到正确站并执行 infer-load (gpt-oss-120b->A, qwen3.8-27b-mtp->C, 其余->B;
              支持按站路由名 STATION_ROUTES, 如 gpt-oss-120b-c = C 站的 gpt-oss-120b;
              RPC 双机类 (RPC_MODELS) 走 _load_rpc 编排, 已自动化 —— 2026-09-15 P0-3 前为"打印手动步骤, exit 2")
-             --backend 显式指定后端五线切换 (unsloth|llama-rpc|llama-single|vllm|ds4)。
+             --backend 显式指定后端六线切换 (unsloth|llama-rpc|llama-single|vllm|ds4|halogen)。
+             ★ 容器化模型 (CONTAINER_MODELS, 当前 = qwen3.8-flash-next): 缺省或 --backend halogen
+               时**不分派 infer-load**, 改走 `_load_container_model` (docker run + /health 轮询);
+               `--backend unsloth` 即回退到既有站内路径。
              换后端只需 load <alias> --backend <new> 一次 (infer-load 已做站内互斥), 无需先 unload;
              但显式 --backend 才会改后端, 缺省沿用 conf 旧值。
              对 llama-rpc 类模型: 显式 --backend 单机后端(非 llama-rpc) 视为强制单机加载, 走正常路径。
@@ -137,7 +140,8 @@ import paramiko
 # 改常量请改 ops/cluster_const.py —— 单一真值在那里。
 from cluster_const import (  # noqa: E402
     STATIONS, STATION_PORT, ROUTE, STATION_ROUTES, BACKENDS,
-    DEFAULT_STATION, RPC_MODELS, DS4_PP_MODELS, HTML_OUT, SSH_TIMEOUT, PANELS,
+    DEFAULT_STATION, RPC_MODELS, DS4_PP_MODELS, CONTAINER_MODELS,
+    HTML_OUT, SSH_TIMEOUT, PANELS,
 )
 
 
@@ -807,6 +811,117 @@ def _build_infer_load_cmd(matched: str, backend: str, engine: str = None) -> str
     return cmd
 
 
+# ── 容器化模型 (halogen) 编排 ─────────────────────────────
+def _container_cleanup_cmd() -> str:
+    """站内**全部**已登记容器的一次性回收命令 (幂等)。供 unload 与启动前互斥共用。"""
+    names = sorted({s["name"] for s in CONTAINER_MODELS.values()})
+    return "; ".join(f"docker rm -f {n} 2>/dev/null || true" for n in names) or "true"
+
+
+def _reclaim_containers(station: str) -> bool:
+    """回收站上已登记的容器。**必须先于 `infer-unload`** —— 反之 infer-unload 的
+    wait_gtt 会因容器仍持 ~90 GB GTT 每站白等满 180 s (90×2s) 才 WARN 退出。"""
+    ok, out = ssh_run(station, _container_cleanup_cmd())
+    if not ok:
+        print(f"[cluster] {station} 站容器回收失败: {out} (继续 —— 同名容器会在 docker run 处响亮失败)")
+    return ok
+
+
+def _load_container_model(alias: str, station: str) -> int:
+    """容器化模型的加载编排 (2026-10-21, ADR-0014 D7 落地)。
+
+    与 `_load_rpc` / `_load_ds4_pp` 同构的"别名 -> 特殊编排"分支, 但**不经 infer-load**:
+    命令由既有 `containers_plan("up", ...)` 生成 (计划与执行同源, ADR-0012 D2),
+    配方来自 `CONTAINER_MODELS` (单一真值在 cluster_const.py)。
+
+    四步:
+      [1/4] 回收 —— `docker rm -f` **先于** `infer-unload` (理由见 _reclaim_containers)
+      [2/4] 镜像存在性 —— 缺失则**后台拉取并中止**: 4.56 GB 拉取远超 ssh exec 上界
+            (与 containers pull --detach 同一实测结论), 阻塞拉取必 TimeoutError
+      [3/4] `docker run -d` (镜像已在, 秒级返回)
+      [4/4] 轮询 `/health` 至 `status: ok` (冷启: GGUF repack 实测 1–2 min), 打印身份 +
+            检查启动日志无 `LOWERING THE POOL TO N` (池被自动下调 = 内存余量不足, 须人读)
+    """
+    spec = CONTAINER_MODELS[alias]
+    name, image = spec["name"], spec["image"]
+    host = STATIONS[station]["host"]
+    timeout = int(spec.get("ready_timeout", 300))
+
+    print(f"[cluster] 容器化模型: {alias} -> {station} 站 ({host}) · 引擎 {spec.get('backend')} · 镜像 {image}")
+
+    # [1/4] 回收 (互斥: 同站禁止叠加加载)
+    print(f"[cluster] [1/4] 回收站内既有引擎/容器 ...")
+    _reclaim_containers(station)
+    rc = ssh_stream(station, "infer-unload")
+    if rc != 0:
+        print(f"[cluster] infer-unload 失败 (rc={rc}), 中止。")
+        return 1
+
+    # [2/4] 镜像存在性 —— 不做阻塞拉取
+    ok, _ = ssh_run(station, "docker image inspect " + image + " --format '{{.Id}}'", strict=True)
+    if not ok:
+        pull_cmd = containers_plan("pull", station=station, image=image,
+                                   detach=True, log="/tmp/cluster-docker-pull.log")[0]
+        ok2, out2 = ssh_run(station, pull_cmd, timeout=30)
+        print(f"[cluster] [2/4] 镜像未落地 ⇒ {'已后台拉取' if ok2 else '拉取下发失败: ' + out2}")
+        print(f"[cluster]   进度: ssh {station} 'tail -f /tmp/cluster-docker-pull.log'; 完成后重跑本命令。")
+        return 1
+    print(f"[cluster] [2/4] 镜像已在站上 ✓")
+
+    # [3/4] 起容器 —— 与 `containers up --go` 同一生成器
+    run_cmd = containers_plan(
+        "up", station=station, image=image, name=name,
+        publish=spec.get("publish", ()), group_add=spec.get("group_add", ()),
+        device=spec.get("device", ()), volume=spec.get("volume", ()),
+        env=spec.get("env", ()), ipc=spec.get("ipc"), ulimit=spec.get("ulimit", ()),
+    )[0]
+    print(f"[cluster] [3/4] docker run -d --name {name} ...")
+    ok, out = ssh_run(station, run_cmd, timeout=120, strict=True)
+    if not ok:
+        print(f"[cluster] 容器启动失败: {out}")
+        return 1
+
+    # [4/4] 就绪轮询 + 身份 + 池下调检查
+    print(f"[cluster] [4/4] 等待引擎就绪 (≤{timeout}s; 冷启需 GGUF repack) ...")
+    deadline = time.time() + timeout
+    health = None
+    while time.time() < deadline:
+        ok, out = ssh_run(station, "curl -s --max-time 5 http://127.0.0.1:8080/health")
+        if ok and out.strip():
+            try:
+                health = json.loads(out)
+            except ValueError:
+                health = None
+            if isinstance(health, dict) and health.get("status") == "ok":
+                break
+        # 提前失败: 容器已退出就不必空等 (轮询期间 container 可能因取件/内存失败而 exit)
+        ok_r, running = ssh_run(station, f"docker inspect -f '{{{{.State.Running}}}}' {name}")
+        if ok_r and running.strip() == "false":
+            ok_l, logs = ssh_run(station, f"docker logs --tail 30 {name} 2>&1")
+            print(f"[cluster] 容器已退出, 最后 30 行日志:\n{logs if ok_l else '(取日志失败)'}")
+            return 1
+        time.sleep(5)
+    if not (isinstance(health, dict) and health.get("status") == "ok"):
+        ok_l, logs = ssh_run(station, f"docker logs --tail 30 {name} 2>&1")
+        print(f"[cluster] 就绪超时 ({timeout}s)。最后 30 行日志:\n{logs if ok_l else '(取日志失败)'}")
+        return 1
+
+    ver = health.get("version") if isinstance(health.get("version"), dict) else {}
+    ident = [("model", health.get("model") or health.get("model_id")),
+             ("version.api", ver.get("api") or health.get("api")),
+             ("context", health.get("context")),
+             ("kv_pool_positions", health.get("kv_pool_positions"))]
+    print(f"[cluster] {station} 站 halogen 就绪: " +
+          " · ".join(f"{k}={v}" for k, v in ident if v is not None))
+    if health.get("context") is None:   # 0.18.11 的字段名未在本仓实测过 ⇒ 原文兜底, 不猜
+        print(f"[cluster] /health 原文: {json.dumps(health, ensure_ascii=False)[:400]}")
+    ok_l, lowered = ssh_run(station, f"docker logs {name} 2>&1 | grep -i 'LOWERING THE POOL' | tail -3")
+    if ok_l and lowered.strip():
+        print(f"[cluster] ⚠ 池被自动下调 (内存余量不足, 见 ADR-0014 A3):\n{lowered.strip()}")
+    print(f"[cluster] READY ✓ ({alias} 由 halogen 容器服务; 回退用 load {alias} --backend unsloth)")
+    return 0
+
+
 def cmd_load(alias: str, backend: str = None, engine: str = None) -> int:
     if backend is not None and backend not in BACKENDS:
         print(f"[cluster] 非法 --backend '{backend}'. 可选: {', '.join(sorted(BACKENDS))} (exit 1)")
@@ -823,6 +938,18 @@ def cmd_load(alias: str, backend: str = None, engine: str = None) -> int:
         print(f"  按站路由名 : {', '.join(sorted(STATION_ROUTES))}")
         print(f"  其余别名按默认站 {DEFAULT_STATION} 处理")
         return 2
+    # 容器化模型 (halogen, CONTAINER_MODELS): 不走 infer-load ⇒ 必须在 **C 站分支之前**分派。
+    # 显式 `--backend unsloth` 等其它后端时**不**分派 —— 保留既有回退路径 (load ... --backend unsloth)。
+    if matched in CONTAINER_MODELS and backend in (None, CONTAINER_MODELS[matched]["backend"]):
+        if how == "station":
+            print(f"[cluster] 按站路由: {alias} -> {station} 站, 容器编排 {matched}")
+        if engine:
+            print(f"[cluster] ⚠ --engine '{engine}' 对容器化模型无意义, 已忽略。")
+        return _load_container_model(matched, station)
+    if backend == "halogen":     # 非容器模型没有 halogen 配方 ⇒ 响亮拒绝, 不让 infer-load 报"未知后端"
+        print(f"[cluster] '{matched}' 不在 CONTAINER_MODELS 中, 无 halogen 容器配方 "
+              f"(已登记: {', '.join(sorted(CONTAINER_MODELS))}) (exit 1)")
+        return 1
     if station == "C":
         # C 站分支在通用路由行之前 return, 故这里单独标一下"按站路由" —— 让用户知道
         # 自己是靠按站路由名进来的 (A/B 路径的标注在下面 tag 处)。
@@ -990,6 +1117,12 @@ def cmd_load_on(station: str, alias: str, backend: str = None) -> int:
     if backend is not None and backend not in BACKENDS:
         print(f"[cluster] 非法 --backend '{backend}'. 可选: {', '.join(sorted(BACKENDS))} (exit 1)")
         return 1
+    # 容器化模型 (CONTAINER_MODELS): 与 cmd_load 同一分派判据 (显式别的后端 ⇒ 保留回退路径)。
+    if alias in CONTAINER_MODELS and backend in (None, CONTAINER_MODELS[alias]["backend"]):
+        return _load_container_model(alias, station)
+    if backend == "halogen":
+        print(f"[cluster] '{alias}' 不在 CONTAINER_MODELS 中, 无 halogen 容器配方 (exit 1)")
+        return 1
     print(f"[cluster] 指定站加载: {alias} -> {station} 站 ({STATIONS[station]['host']})")
     ok, out = ssh_run(station, "curl -s --max-time 5 http://127.0.0.1:8080/health")
     if ok and out.strip():
@@ -1012,6 +1145,9 @@ def cmd_unload_on(station: str) -> int:
     if station not in STATIONS:
         print(f"[cluster] 未知站 '{station}'")
         return 1
+    # ★ 容器**必须先回收** —— 否则 infer-unload 的 wait_gtt 会因容器仍持 ~90 GB GTT
+    #   在站上白等满 180 s (90×2s) 才 WARN。
+    _reclaim_containers(station)
     rc = ssh_stream(station, "infer-unload")
     print(f"[cluster] {station} 站 infer-unload: {'OK' if rc == 0 else f'rc={rc}'}")
     return 0 if rc == 0 else 1
@@ -1028,6 +1164,7 @@ def cmd_unload() -> int:
         # (2026-09-29 实测形态: C 站 LAN 192.168.1.37 不通 —— 命令直接 traceback, 只回显了 A/B。
         #  与 P1-4「解析失败不能表现成业务全错」同一原则。)
         try:
+            _reclaim_containers(st)          # 同为 wait_gtt 前置; 且是"卸载"该有的语义
             results[st] = ssh_stream(st, "infer-unload")
         except Exception as e:          # 连接级异常: 超时 / 认证 / 端口不可达
             results[st] = f"{type(e).__name__}: {e}"

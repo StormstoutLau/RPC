@@ -76,7 +76,10 @@ STATION_ROUTES = {
 }
 # 与路由表解耦: 后端是站内概念, 换后端不改 alias->station 映射。C 专属键应置于本字典尾部以保前缀匹配序
 # infer-load --backend 白名单; ds4 = DwarfStar (2026-09-28 并入, 见 spec/ds4-backend/DESIGN.md)
-BACKENDS = {"unsloth", "llama-rpc", "llama-single", "vllm", "ds4"}
+# halogen = 容器化引擎 (2026-10-21 并入): **不经站上 infer-load**, 由 cluster.py 的容器分支
+#   (`_load_container_model`) 用 `containers_plan("up")` 起容器 —— 见 CONTAINER_MODELS。
+#   列入本表只为让 `load --backend halogen` 通过白名单; 站内 infer-load 并不认它。
+BACKENDS = {"unsloth", "llama-rpc", "llama-single", "vllm", "ds4", "halogen"}
 DEFAULT_STATION = "B"
 # C 站 (2026-09-09): 常驻引擎为手动 /opt/llama.cpp llama-server (Vulkan, 如 nemotron Q4_K_M :8080),
 # 非 systemd llama-server@*.service 单元。infer-* 工具链已补装 (load 用 infer-load, 含 pkill 兜底),
@@ -100,6 +103,45 @@ RPC_MODELS = {"deepseek-v4-flash-0731", "gpt-oss-120b-fable-5-distilled", "glm-5
 #     coordinator 持 prompt/采样/客户端 API, worker 持层片 + KV 分片。
 #   · 官方要求**先起 worker, 再起 coordinator** (coordinator 等 worker 注册层片路由) —— 序不可反。
 DS4_PP_MODELS = {"glm53-q4": ("B", "C")}   # 值 = (coordinator 站, worker 站)
+# ── 容器化模型: 别名 -> **整份 docker run 配方** (2026-10-21, 见 ADR-0014 D7) ──────────
+# 与 DS4_PP_MODELS 同构 (别名 -> 特殊编排), 但**值不同**: 这里是"从零起一个容器"的全部参数,
+# 由 cluster.py `_load_container_model` 交给既有的 `containers_plan("up", ...)` 生成命令 ——
+# 计划与执行同源 (ADR-0012 D2), 不在别处另拼一份 docker run。
+#
+# ★ 只登记**经本仓实测**的字段 (ADR-0014 §V6/§V6.1):
+#   · image: 0.18.11 —— 升级是**功能性**前置, 非顺手: 0.18.1 起 `/v1/messages` 才把超
+#     `max_tokens_cap`(65536) 的请求钳制 (docs/claude-code.md), 而 qwen3.8-flash-next 的
+#     默认消费者就是 claude code。0.17.4 无此钳制 (实测: 审计类任务撞 32k cap 返回 length)。
+#   · group_add: **数字 GID** 44/992 —— 组名会 rc=125 (docker 按**容器内** /etc/group 解析,
+#     容器里没有 video/render); 与 ADR-0014 未实测登记 #7 的实测修正一致。
+#   · volume 用 **rw** (不写 :ro): `HALOGEN_DOWNLOAD` 要往该目录写 MTP head (1.4 GiB) + tokenizer。
+#   · publish 双绑: 8080 给既有客户端 (零迁移), 8731 保留引擎原生 API 面 (与 0.17.4 部署一致)。
+#   · **刻意不写** HALOGEN_CTX / HALOGEN_KV_POOL_POSITIONS / HALOGEN_KV_SLOTS / PROMPT_CACHE:
+#     保持镜像默认。ctx 约束的是**单请求**(非分配), pool 才是内存旋钮, 且启动可能自动下调
+#     (日志打 `LOWERING THE POOL TO N`) —— 先按默认跑, 实测后再决定是否收紧 (见验证步骤)。
+#     ★ 回退: `load <别名> --backend unsloth` 仍走站内 infer-load, 本表不改变那条路径。
+CONTAINER_MODELS = {
+    "qwen3.8-flash-next": {
+        "backend": "halogen",
+        "name": "halogen",
+        "image": "ghcr.nju.edu.cn/peonist-ai/halogen-flash-server:0.18.11",
+        "models_dir": "/data/models/gguf/lmstudio-community/Qwen3.8-Flash-Next-GGUF/UD-IQ4_XS",
+        "volume": ["/data/models/gguf/lmstudio-community/Qwen3.8-Flash-Next-GGUF/UD-IQ4_XS:/models"],
+        "checkpoint": "/models/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf",
+        "device": ["/dev/kfd", "/dev/dri"],
+        "group_add": ["44", "992"],
+        "ipc": "host",
+        "ulimit": ["memlock=-1:-1"],
+        "publish": ["127.0.0.1:8080:8731", "127.0.0.1:8731:8731"],
+        "env": [
+            "HALOGEN_CHECKPOINT=/models/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf",
+            "HALOGEN_DOWNLOAD=peonist-ai/halogen-qwen3.8-flash-next",
+            "HF_ENDPOINT=https://hf-mirror.com",
+            "HF_HUB_DISABLE_XET=1",
+        ],
+        "ready_timeout": 300,   # 冷启: GGUF repack (1166 tensors) 实测 B ≈1 min / C ≈2 min
+    }
+}
 # LiteLLM 网关服务 :4000 已退役 (2026-09-13): ADR-0002 决策 C 后链路一律直连各站引擎端口。
 # 2026-09-16: opencode provider 名统一为 `local`（三站实况仅 local + openrouter）；旧名 "cluster-litellm" 已不存在。
 # 网关已无活依赖。故移除 LITELLM_BASE / KEY_FILE / read_key 及 status/e2e 对网关的硬依赖。

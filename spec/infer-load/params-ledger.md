@@ -63,6 +63,16 @@ upstream: null
 > ③ ★★ **CTX 档位推翻重定（当日二次实测）**：`131072` **不够**深度推理场景 —— 实测单轮 xhigh 输出 **25,174 tok**、极端任务 **≥32,000 tok（撞 cap）**，
 > 而 `131072 − MAXC 120000` 只剩 **11,072 tok** 输出余量 ⇒ **必然截断**。改判 `CTX=262144`（引擎已按此值实跑）。
 > ⇒ ★ **仍未固化**（重启 `cluster.py load` 即回 studio 默认 `--parallel 4 -c 262144`），下表按"实测生效值"记，**并标注固化状态**。
+>
+> ★★ **2026-10-21 晚 · 默认引擎已落地（ADR-0014 D7 代码化）**：`qwen3.8-flash-next` 的**缺省**加载不再走
+> infer-load，改走 **halogen 容器**（配方单一真值 = `ops/cluster_const.py` 的 `CONTAINER_MODELS`）。
+> B 站首跑实测（镜像 **0.18.11**，digest `sha256:a5797467…`）：`/health` = `status:ok`、`model=halogen-qwen3.8-flash-next`、
+> `context=262144`、`slots=4`、`slot_ctx=262144`、`kv_pool_positions=524288`（**未被下调**，启动日志 `LOWERING THE POOL` 计数 **0**）、
+> `max_tokens_cap=65536`、`prompt_cache.mode=2`；发布 `127.0.0.1:8080->8731` + `8731->8731`。
+> `/v1/chat/completions` 与 `/v1/messages` 均 200；**超 cap 实测**：`/v1/messages` 传 `max_tokens=100000` → **HTTP 200**
+> （0.18.1 起静默钳制，`0.17.4` 无此行为 —— 这是升级镜像的功能性理由）。
+> ★ 回退实测：`load qwen3.8-flash-next --backend unsloth` 可用，但**回落 studio 默认 `--parallel 4`**
+> （`STUDIO_FLAGS` 固化仍未做）⇒ 上表 PARALLEL/BATCH/UBATCH/CACHE_REUSE 三行的"★ 未固化"**继续有效**。
 
 | 字段          | 值                                                                                                                  | 依据                                                                                   |
 | ----------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
