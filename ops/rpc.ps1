@@ -74,6 +74,13 @@ function Install-HookEntry {
         }
     }
     $pyUnix = $script:Py -replace '\\', '/'
+    # ★ 2026-10-21 实测修复：候选是 **py 启动器** 时，hook 必须显式带 `-3`。
+    #   否则启动器"无选项 + 给了脚本"会**读脚本 shebang**（`#!/usr/bin/env python3`）⇒ 本机落到
+    #   WindowsApps 的 `python3` = Anaconda 3.13（**无 paramiko/duckdb**）⇒ aliases/evidence/mirror
+    #   误报不可判、id-storage 把"探测失败"误判成"角色不实"。而上面的 paramiko 探测用的是
+    #   `py -c`（**不读 shebang**，= 启动器默认 3.x）⇒ `-3` 与探测到的是**同一个解释器**，结论可迁移。
+    #   直接路径的 python.exe 不带该参数（它不是启动器，没有 shebang 选择行为）。
+    $pyOpt = if ($script:Py -match '(?i)[\\/]py\.exe$') { ' -3' } else { '' }
     $lines = @(
         '#!/bin/sh',
         "# rpc 统一校验门禁 ($Name) — 由 ops/rpc.ps1 install-hooks 生成, 请勿手改",
@@ -86,14 +93,14 @@ function Install-HookEntry {
         '  echo "[rpc-check] 未找到 Python ($PY), 门禁放行 — 见 ops/rpc.ps1 install-hooks"',
         '  exit 0',
         'fi',
-        '"$PY" ops/cluster.py agent chain >/dev/null 2>&1 || true'
+        "`"`$PY`"$pyOpt ops/cluster.py agent chain >/dev/null 2>&1 || true"
     )
     # ★ 2026-09-30: 上一行会**改写受跟踪的链档** (archive/evidence-chain/*)，而钩子**不自动暂存**
     #   ⇒ 提交内容取的是"改写前"的快照 ⇒ 每次提交后工作区恒脏、链档永远落后一次提交（实测复现）。
     #   修法 = 提交前**就地暂存**；⚠ 只 add 这两个路径 —— 不用 `git add -A`（那会把无关改动静默卷进本次提交）。
     #   ⚠ 只在 pre-commit 加：pre-push 不产生提交，暂存反而留下"已暂存但未提交"的假象。
     if ($Name -eq 'pre-commit') { $lines += 'git add -- archive/evidence-chain/ANCHOR.txt archive/evidence-chain/agent-chain.json 2>/dev/null || true' }
-    $lines += "exec `"`$PY`" ops/rpc_check.py $RunArgs"
+    $lines += "exec `"`$PY`"$pyOpt ops/rpc_check.py $RunArgs"
     $text = ($lines -join "`n") + "`n"
     [System.IO.File]::WriteAllText($hook, $text, (New-Object System.Text.UTF8Encoding($false)))
     Write-Host "  已安装 $Name 门禁" -ForegroundColor Green
