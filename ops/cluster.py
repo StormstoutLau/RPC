@@ -975,6 +975,10 @@ def cmd_load(alias: str, backend: str = None, engine: str = None) -> int:
            "station": "  [按站路由 —— 由路由名显式指定来源站]",
            "default": f"  [★未在路由表中 → 落默认站; 若站上无此别名, infer-load 会失败]"}.get(how, "")
     print(f"[cluster] 路由: {matched} -> {station} 站 ({st_host}){tag}")
+    # ★ 2026-10-21: 老后端路径也必须先回收**容器** —— infer-unload 只杀进程, 看不见 docker 容器
+    #   (容器仍占 8080 发布面 + ~90 GB GTT)。缺这一步时 `load ... --backend unsloth` 会与
+    #   halogen 容器抢 8080/GTT。回收幂等, 无容器时零副作用。
+    _reclaim_containers(station)
     # P1 换模型串行化: 先探 :8080, 有响应即视为已有引擎占用, 先 unload 等 GTT 释放再加载。
     # 判定放宽为"任意 HTTP 响应" (非 {"status" 前缀)——unsloth OpenAI 后端 /health 返回 {"detail":...} 也是占用实据。
     # infer-unload 幂等, 误判(如杂散 8080 服务)时快速成功退出, 无害; infer-load 内部亦会再兜底互斥+释放。
@@ -1124,6 +1128,8 @@ def cmd_load_on(station: str, alias: str, backend: str = None) -> int:
         print(f"[cluster] '{alias}' 不在 CONTAINER_MODELS 中, 无 halogen 容器配方 (exit 1)")
         return 1
     print(f"[cluster] 指定站加载: {alias} -> {station} 站 ({STATIONS[station]['host']})")
+    # ★ 2026-10-21: 同 cmd_load —— 老后端路径必须先回收容器 (infer-unload 看不见 docker)。
+    _reclaim_containers(station)
     ok, out = ssh_run(station, "curl -s --max-time 5 http://127.0.0.1:8080/health")
     if ok and out.strip():
         print(f"[cluster] {station} 站 :8080 有引擎占用, 先卸载并等待 GTT 释放 ...")

@@ -20,8 +20,12 @@
 ## 两站一致性
 
 修改后核对：`md5sum /usr/local/bin/<file>`（两站必须一致）。
-**当前（2026-10-12，站上件 · 三站一致）**：infer-load **`2dd2f6cf...`**、infer-unload `a9f8f3f0...`、
-llama-serve-instance `e8c20ede...`、**rpc-serve-instance `24a3e592...`**、infer-list `74033ef1...`。
+**当前（2026-10-21，站上件 · 三站一致）**：infer-load **`582fd068...`**、infer-unload `a9f8f3f0...`、
+llama-serve-instance `e8c20ede...`、**rpc-serve-instance `24a3e592...`**、infer-list `74033ef1...`、
+**cluster-ttl `89af1078...`**。
+（2026-10-21 `infer-load` 改动 `2dd2f6cf…` → `582fd068…`：新增 `STUDIO_FLAGS`（conf 键 + unsloth 启动行追加
++ 禁 `-c/--ctx-size/-fa/--flash-attn` 的守卫）；`cluster-ttl` 改动：容器先 `docker rm -f` + `flash_serve` 识别。
+两张 `.bak-studioflags-20261021` / `.bak-halogen-20261021` 留在三站 `/usr/local/bin`。）
 （2026-10-12 `infer-load` 改动 `a2e8604f…` → `2dd2f6cf…`：**Bug B** = `ALL_ALIASES` 改为按 gguf **文件**
 分组（覆盖"仓库级直放"depth-1，与 `infer-list` 同规则）；**Bug C** = `_set_conf_key` 追加前补换行（防末行粘连）。
 详见 [单站引擎轴不一致调研与统一方案 §5.2](../../docs/2026-10-12_单站引擎轴不一致调研与统一方案.md)。

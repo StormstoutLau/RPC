@@ -5871,12 +5871,15 @@ _OCCUPANT_OK = ("studio", "opt-vulkan", "opt-variant", "docker-publish")
 def _engine_api_ports():
     """从 `inventory/ports.yaml` 取"**推理引擎 API**"端口（★ 真值表驱动，不硬编码）。
 
-    判据 = 该端口条目的 `purpose` 含「推理引擎」（现 = 8080：`本地推理引擎 API 面 (后端随加载: …)`）。
+    判据 = 该端口条目的 `purpose` 含「推理引擎」（现 = 8080 与 8731：前者是客户端面，后者是
+    halogen 的原生 API 面）。
     读不到/解析失败 ⇒ 退回 `("8080",)`（**fail-safe 到已知端口**，不是"跳过判定"）。
-    ⚠ 已知缺陷（`O-164`，2026-10-21 登记）：本函数**未 import yaml** ⇒ `NameError` 被下面
-    `except Exception` 吞掉 ⇒ **实际恒返回 `("8080",)`**，"真值表驱动"当前**未生效**。本批只登记不修。
+    ★ 2026-10-21（`O-164` 修复）：原实现**未 import yaml** ⇒ `NameError` 被下面
+    `except Exception` 吞掉 ⇒ 实际恒返回 `("8080",)`，"真值表驱动"**从未生效**。
+    现与文件内其它断言同口径：**函数内** `import yaml`（缺 pyyaml 时降级为 fail-safe）。
     """
     try:
+        import yaml                          # 函数内导入 ⇒ 缺 pyyaml 时走 fail-safe, 不整仓崩
         doc = yaml.safe_load(INVENTORY_PORTS.read_text(encoding="utf-8")) or {}
     except Exception:
         return ("8080",)

@@ -138,6 +138,11 @@ THREADS=${THREADS:-16}
 N_CPU_MOE=${NCM}
 RPC_TARGET=${RPCV}
 EXTRA_FLAGS="-fa on ${EMB}"
+# STUDIO_FLAGS: **仅 unsloth 路径**追加的调优旗标 (2026-10-21, ADR-0014 D7 后续)。
+#   禁含 -c/--ctx-size/-fa/--flash-attn —— CTX 与 flash-attn 由本 wrapper 拥有, 重复 -c 是
+#   llama.cpp 硬失败面, 且会造成"两处真值"。例:
+#   STUDIO_FLAGS="--parallel 1 -b 4096 -ub 1024 --cache-reuse 256"
+STUDIO_FLAGS=""
 BACKEND=${BACKEND}
 CEOF
   log "conf 生成: $CONF (backend=$BACKEND)"
@@ -468,12 +473,22 @@ if [ "$BACKEND" = "unsloth" ]; then
     log "引擎设备探测: 候选=[${_DEVS}] 选中=${INFER_DEVICE:-无}"
   fi
   DEVICE="${INFER_DEVICE:-ROCm0}"
+  # ── STUDIO_FLAGS 守卫 (2026-10-21) ──────────────────────────────────────
+  # 只允许**追加式**调优旗标。CTX 与 flash-attn 由本 wrapper 拥有:
+  #   · 重复 `-c` 是 llama.cpp 的硬失败面;
+  #   · 同一参数两处真值 (conf 的 CTX vs STUDIO_FLAGS 里的 --ctx-size) 会让"实际生效值"不可判。
+  # 命中即响亮失败 —— 不静默丢弃 (否则用户以为调参生效、实际没有)。
+  case " ${STUDIO_FLAGS:-} " in
+    *" -c "*|*" --ctx-size "*|*" -c="*|*" --ctx-size="*|*" -fa "*|*" --flash-attn "*|*" --flash-attn="*)
+      log "ERR: STUDIO_FLAGS 含禁用项 (-c/--ctx-size/-fa/--flash-attn 由 wrapper 拥有): ${STUDIO_FLAGS}"
+      exit 1 ;;
+  esac
   cd /home/scott-lau
   UN_LOG="/home/scott-lau/.unsloth/run-${ALIAS}.log"
   nohup "$HOME/.local/bin/unsloth" studio run --model "$MODEL_PATH" \
     --port "${PORT_NUM}" --api-only \
     --flash-attn on --no-context-shift -c "${CTX:-32768}" --device "$DEVICE" --kv-unified \
-    --cache-type-k q8_0 --cache-type-v q8_0 \
+    --cache-type-k q8_0 --cache-type-v q8_0 ${STUDIO_FLAGS:-} \
     > "$UN_LOG" 2>&1 &
   log "unsloth launched pid=$! log=$UN_LOG"
   # unsloth 可能改写 --port (占用则自动+1); 从日志解析实际端口

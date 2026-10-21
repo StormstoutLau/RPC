@@ -141,6 +141,35 @@ def main() -> int:
     if not hasattr(R, "classify_engine_band"):
         fails.append("缺 classify_engine_band ⇒ 口径未集中，O-143 的两半会再次分叉")
 
+    # ★★ O-164（2026-10-21，先验红）：`_engine_api_ports()` 自称"真值表驱动"，但函数内
+    #   **未 import yaml** ⇒ NameError 被 except 吞掉 ⇒ 恒返回 ("8080",)。
+    #   判据：用**独立解析**同一份 ports.yaml（purpose 含「推理引擎」的端口）与函数返回值比对。
+    #   修复前：真值 = {8080, 8731}，函数 = {8080} ⇒ 本项红；修复后绿。
+    try:
+        import yaml as _yaml
+        _doc = _yaml.safe_load((ROOT / "inventory" / "ports.yaml").read_text(encoding="utf-8")) or {}
+        _exp = set()
+
+        def _walk(o):
+            if isinstance(o, dict):
+                if "port" in o and "推理引擎" in str(o.get("purpose", "")):
+                    _exp.add(str(o["port"]))
+                for _v in o.values():
+                    _walk(_v)
+            elif isinstance(o, list):
+                for _v in o:
+                    _walk(_v)
+
+        _walk(_doc)
+        _got = set(R._engine_api_ports())
+        if _got != _exp:
+            fails.append(f"O-164：_engine_api_ports() 未读真值表 —— 实际 {sorted(_got)} "
+                         f"/ 应为 {sorted(_exp)}")
+        if "8080" not in _got:
+            fails.append(f"O-164：引擎 API 端口缺 fail-safe 的 8080（实际 {sorted(_got)}）")
+    except Exception as _e:                       # 校验自身失败也要可见（不静默）
+        fails.append(f"O-164 校验自身失败: {type(_e).__name__}: {_e}")
+
     def _verdict(probe):
         orig = R._health_probe
         R._health_probe = probe

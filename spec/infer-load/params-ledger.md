@@ -71,15 +71,17 @@ upstream: null
 > `max_tokens_cap=65536`、`prompt_cache.mode=2`；发布 `127.0.0.1:8080->8731` + `8731->8731`。
 > `/v1/chat/completions` 与 `/v1/messages` 均 200；**超 cap 实测**：`/v1/messages` 传 `max_tokens=100000` → **HTTP 200**
 > （0.18.1 起静默钳制，`0.17.4` 无此行为 —— 这是升级镜像的功能性理由）。
-> ★ 回退实测：`load qwen3.8-flash-next --backend unsloth` 可用，但**回落 studio 默认 `--parallel 4`**
-> （`STUDIO_FLAGS` 固化仍未做）⇒ 上表 PARALLEL/BATCH/UBATCH/CACHE_REUSE 三行的"★ 未固化"**继续有效**。
+> ★ 回退实测：`load qwen3.8-flash-next --backend unsloth` 可用。**2026-10-21 晚已固化**：
+> `infer-load` 新增 `STUDIO_FLAGS`（conf 键，仅 unsloth 路径追加；禁 `-c/--ctx-size/-fa/--flash-attn`，
+> 命中即 `exit 1`），B 站 conf 已落 `--parallel 1 -b 4096 -ub 1024 --cache-reuse 256`
+> ⇒ 回退加载后 cmdline 实测含这四项（studio 把 `-b/-ub` 归一成短旗标）。⚠ A/C 未落（无实测依据）。
 
 | 字段          | 值                                                                                                                  | 依据                                                                                   |
 | ----------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
-| CTX         | **262144**（★ 引擎实测生效；**conf 仍为 262144 但缺其余旗标，未固化**）                                                          | ✅ 2026-10-21 二次实测：**深度推理输出预算**是约束，不是 KV —— 单轮 xhigh 实测 25,174 tok（`math_derive`，finish=stop）/ **≥32,000 tok**（`audit_check`，finish=length）。131072 配 MAXC=120000 ⇒ 余量 11,072 ⇒ **必截断**。262144 实测代价仅 **GTT 69.28→73.38 GB（+4.1 GB）**，8k/32k 吞吐**无损**（32k 冷 106.93 vs 106.54 s；热 decode 15.1 vs 14.9 t/s） |
-| **PARALLEL** | **1**（★ 未固化）                                                                                                       | ✅ 2026-10-21 A/B **决定性**：`--parallel 4` ⇒ 4 slot 各自独立 KV ⇒ 前缀缓存反复失效 ⇒ claude code 每轮 85–96 s；改 1 后**热轮 6.3 s（≈13×）** |
-| **BATCH / UBATCH** | **4096 / 1024**（★ 未固化）                                                                                          | ✅ 2026-10-21 A/B：8k 冷 prefill 63.2 s → 24.3 s（≈2.6×）；32k 248.6 s → 117.2 s（≈2.1×）                      |
-| **CACHE\_REUSE** | **256**（★ 未固化）                                                                                                  | ✅ 同上（与 PARALLEL=1 叠加）；**部分前缀**位移时也可复用                                                             |
+| CTX         | **262144**（★ 引擎实测生效；conf 已含 CTX + STUDIO_FLAGS，**B 站已固化**）                                                          | ✅ 2026-10-21 二次实测：**深度推理输出预算**是约束，不是 KV —— 单轮 xhigh 实测 25,174 tok（`math_derive`，finish=stop）/ **≥32,000 tok**（`audit_check`，finish=length）。131072 配 MAXC=120000 ⇒ 余量 11,072 ⇒ **必截断**。262144 实测代价仅 **GTT 69.28→73.38 GB（+4.1 GB）**，8k/32k 吞吐**无损**（32k 冷 106.93 vs 106.54 s；热 decode 15.1 vs 14.9 t/s） |
+| **PARALLEL** | **1**（✅ B 站已固化：`STUDIO_FLAGS`）                                                                                                       | ✅ 2026-10-21 A/B **决定性**：`--parallel 4` ⇒ 4 slot 各自独立 KV ⇒ 前缀缓存反复失效 ⇒ claude code 每轮 85–96 s；改 1 后**热轮 6.3 s（≈13×）** |
+| **BATCH / UBATCH** | **4096 / 1024**（✅ B 站已固化：`STUDIO_FLAGS`）                                                                                          | ✅ 2026-10-21 A/B：8k 冷 prefill 63.2 s → 24.3 s（≈2.6×）；32k 248.6 s → 117.2 s（≈2.1×）                      |
+| **CACHE\_REUSE** | **256**（✅ B 站已固化：`STUDIO_FLAGS`）                                                                                                  | ✅ 同上（与 PARALLEL=1 叠加）；**部分前缀**位移时也可复用                                                             |
 | **深度推理画像**（★ 2026-10-21 实测，决定 CTX） | 单轮 xhigh 输出 **25,174 tok**（`math_derive`，finish=stop，decode 14.3 t/s）/ **≥32,000 tok**（`audit_check`，撞 cap，finish=length）；审计每轮 prompt ~19k | ✅ 探针 `max_tokens=32000` 直测；★ 该模型的 `reasoning_effort` 模板默认 **xhigh**（halogen `/health` 与 studio 模板两侧一致），故"输出预算"是本模型的第一约束 |
 | **深度/长度 吞吐曲线**（B 站单流，同文本，冷/热） | llama.cpp：8k **24.22 / 2.18 s**（decode 17.5）· 32k **106.54 / 3.22 s**（14.9）· 65k **265.73 / 4.06 s**（10.8）· 84k **446.38 / 10.98 s**（8.3） | ✅ 2026-10-21 探针（每档独立盐值杜绝跨档前缀复用）；⇒ **decode 随深度单调衰减**，prefill 402→187 t/s；**无历史所称"5.5–6.1 t/s 塌缩"**（那是 HIP + `--parallel 4` 时代读数） |
 | **halogen 对照**（同权重 `UD-IQ4_XS`、同文本、B 站） | halogen：8k **5.96 / 1.06 s**（decode 27.5）· 32k **19.17 / 1.06 s**（27.3）· 65k **37.27 / 1.08 s**（27.0）；深度推理整轮 **695.3 s / 42.0 t/s**（29,206 tok） | ✅ 2026-10-21 补跑（`containers up` 统一入口、镜像 `0.17.4`、4 slots/pool 524288/slot_ctx 262144、MTP draft 已加载）：冷 prefill **5.6–7.1×**、热轮 **2–3.8×**、decode **1.6–3.3×**；★ **decode 不随深度衰减**，故深度推理场景整轮 **11.6 min vs llama.cpp 29.3 min（2.5×）**。⚠ 口径：两引擎 tokenizer 不同（同文本 6,926 vs 9,020 tok）⇒ **只可比墙钟，不可比 t/s 绝对值** |

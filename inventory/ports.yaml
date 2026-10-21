@@ -153,7 +153,7 @@ managed:
 
   - port: 8731
     proto: http
-    purpose: halogen 引擎 API (第三方 OCI 推理引擎, 三站**测试性**)
+    purpose: halogen 推理引擎 API (默认引擎的原生面; 8080 是它的客户端面)
     scope: [A, B, C]
     bind: 127.0.0.1
     owner: "docker (halogen-flash-server)"
@@ -170,6 +170,10 @@ managed:
       且反向「有监听未登记」**无** status/mode 豁免）⇒ B/C 监听 8731 时 scope 必须覆盖其站。
       mode/status 双标 ⇒ 未监听不算故障（豁免本表"声明在用却没监听"的反向对账）。
       ⚠ 容器**未起时**本端口不监听属正常。
+      ★ 2026-10-21（ADR-0014 D7 落地后）：qwen3.8-flash-next 的**默认引擎** = halogen ⇒
+      本口从"测试性"升为**默认引擎的原生 API 面**（客户端仍走 8080 发布面）。
+      `ops/rpc_check.py` 的 `_engine_api_ports()` 现按真值表把 **8080 与 8731 都**纳入
+      「引擎 API 端口」的占用者判定（`O-164` 修复后）；8731 的宿主占用者是 `docker-proxy`。
 
   - port: 8730
     proto: http

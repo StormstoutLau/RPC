@@ -26,6 +26,8 @@
   · **加载/卸载窗口跳过**: 与 cluster-watchdog 同一条判据 (防 Loading 期误判)。
   · **卸载走 infer-unload** (而不是 systemctl stop): 它是本集群唯一的正规卸载路径, 会一并
     停掉全部 RPC worker —— 否则 master 卸了、worker 还常驻 (2026-09-15 实测过的残留)。
+    ★ 2026-10-21: 容器化引擎 (halogen) **先 `docker rm -f`** 再 infer-unload —— 后者看不见容器,
+    否则 GTT 不释放且 `find_engine` 仍见 flash_serve ⇒ 误报 unload-failed。
   · **动作必须留证据**: 每次判定都打印 pid/Δtoken/idle/阈值, 卸载前后各留一行, 并写进
     `state.json` 的 `last_action` ⇒ `cluster.py ttl status` 能直接回答"谁在什么时候被卸了、为什么"。
 """
@@ -46,6 +48,10 @@ DEFAULT_TTL_S = 1800          # 空闲 30 分钟 (llama-swap 的 ttl 同义: 秒
 # 参与"活跃判定"的累计计数器 —— 任一增长即视为发生了真实推理
 ACT_KEYS = ("prompt_tokens_total", "tokens_predicted_total", "prompt_tokens_cached_total")
 LOADING_PAT = "infer-load|infer-unload|load-mem-gate"
+# ★ 2026-10-21: 容器化引擎 (ADR-0014 D7 之后 halogen 是 qwen3.8-flash-next 的默认引擎)。
+#   与 ops/cluster_const.py 的 CONTAINER_MODELS 同源 —— 本脚本站上独立运行, 无法 import 仓库模块。
+CONTAINER_NAMES = ("halogen",)
+ENGINE_COMMS = ("llama-server", "flash_serve")   # flash_serve = halogen 的推理进程 (宿主可见)
 
 
 def log(msg: str) -> None:
@@ -87,11 +93,33 @@ def find_engine():
         return None
     for line in out.splitlines()[1:]:
         f = line.split(None, 2)
-        if len(f) < 3 or f[1] != "llama-server":
+        if len(f) < 3 or f[1] not in ENGINE_COMMS:
             continue
+        if f[1] == "flash_serve":
+            # 容器内引擎: cmdline 的 `--port 8730` 是**容器内**端口, 宿主发布面是 8080。
+            # /metrics 必须打宿主口, 否则 TTL 永远读不到计数器 (判据缺失 ⇒ 不动作 = 永不卸载)。
+            return int(f[0]), 8080
         m = re.search(r"--port\s+(\d+)", f[2])
         return int(f[0]), (int(m.group(1)) if m else 8080)
     return None
+
+
+def reclaim_containers() -> str:
+    """`docker rm -f` 已登记容器（幂等）。返回被回收的名字或 `none`。
+
+    ★ 为什么必须在 `infer-unload` **之前**: infer-unload 只杀进程, 看不见 docker 容器
+    ⇒ 容器继续持 ~90 GB GTT, 且 `find_engine` 仍能看见 flash_serve ⇒ 会被误报 unload-failed。
+    """
+    done = []
+    for name in CONTAINER_NAMES:
+        try:
+            r = subprocess.run(["docker", "rm", "-f", name],
+                               capture_output=True, text=True, timeout=60)
+            if r.returncode == 0:
+                done.append(name)
+        except Exception:
+            pass
+    return ",".join(done) or "none"
 
 
 def curl(url: str, timeout: int = 5) -> str:
@@ -297,6 +325,9 @@ def run(dry_run: bool) -> int:
         return 0
 
     gtt0 = gtt_gib()
+    # ★ 容器先回收, 再走 infer-unload (见 reclaim_containers 的理由)。
+    removed = reclaim_containers()
+    log(f"容器回收: {removed}")
     unload = shutil.which("infer-unload") or "/usr/local/bin/infer-unload"
     log(f"TTL 到期 (idle {idle}s ≥ {ttl_s}s, Δtok={delta}) → 执行 {unload}")
     t0 = time.time()

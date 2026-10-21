@@ -142,7 +142,8 @@ upstream: [ADR-0004]
   · **镜像升 0.18.11**（0.18.1 起 `/v1/messages` 才钳制超 `max_tokens_cap` 的请求）。
   · **B 站实证**：`/health` = ok / `context=262144` / `kv_pool_positions=524288`（无 `LOWERING THE POOL`）/
     `model=halogen-qwen3.8-flash-next`；chat 与 messages 200；`max_tokens=100000` 的 messages 请求 → **200**（钳制生效）；
-    回退 `--backend unsloth` 可用（回到 studio 默认 `--parallel 4`，因 `STUDIO_FLAGS` 固化尚未做）。
+    回退 `--backend unsloth` 可用；配套的 **`STUDIO_FLAGS`** 已落（B 站 conf → 回退 cmdline 实测
+    `--parallel 1 -b 4096 -ub 1024 --cache-reuse 256`；禁 `-c/-fa`，命中即 `exit 1`）。
   · A/C 两站按同一配方复验（见「未实测登记」处置状态）。
 - ⚠ 与 **D1「测试性 ≠ 常驻」** 的关系：D7 是**升格**，D1 是**引入形态**。D7 生效后，三站 halogen 从「测试性」变为「Qwen3.8-Flash-Next 的默认执行框架」。
 
@@ -298,15 +299,16 @@ prompt set = **上游 `tools/eval-prompts.json`**（10 例：code/proof/proc/cha
    ⇒ 待用户在「(i) 回写 D4 为数字 GID / (ii) 保留组名但登记例外」间裁定。
 8. ~~**D7「默认执行框架 = halogen」落地未做**~~ **→ 已落（2026-10-21 · E1）**：代码面见 D7 的「代码层已落地」段；
    **三站**均以 0.18.11 起容器并 `/health` = ok（B 首跑 + A/C 复验，`context=262144` / `kv_pool_positions=524288`）。
-   ⚠ **仍开放**：`STUDIO_FLAGS` 固化（用户排在 halogen 之后）⇒ 回退到 unsloth 仍是 `--parallel 4`。
+   ⚠ **仍开放（部分）**：`STUDIO_FLAGS` 只在 **B 站**落值（调优 A/B 在 B 站做的）；A/C 保持默认
+   —— 按「无实测不写死」纪律，待各自实测后再落。
 9. **★ 共享权重目录落物未清理**（**新登记**）：`down` 后 `qwen38-flash-next-mtp.hgn` / `tokenizer/` / `.cache/`（root 属主）
    仍留在 `UD-IQ4_XS/`；**未**定是否保留（复起加速）或删除。
 10. ~~**B/C 复用 A 配方仍阻断**~~ **→ 已解（2026-10-11）**：用户裁定 **(a)** ⇒ 经 `containers install` 补 daemon + `containers up` 真部署，
     B/C `/health` = ok、冒烟同档（见 §V6.1）。⚠ **仍开放**：B/C 侧既有容器/负载与本引擎的**资源竞争未测**（与 #6 同类）；
     `8730/8731` 的 `ports.yaml` **scope 已同步 `[A, B, C]`**（见 D8 后续）。
-11. **★ 空闲 TTL 不回收容器**（**新登记** 2026-10-21）：`cluster-ttl` 到期只执行 `infer-unload`，
-    不会 `docker rm -f halogen` ⇒ 若开启 TTL，容器的 ~90 GB 不会随空闲释放。
-    **当前三站 `TTL_ENABLED=关` ⇒ 无现网影响**；开启前须先补这一步（站上件改动，另裁）。
+11. ~~**空闲 TTL 不回收容器**~~ **→ 已修（2026-10-21 · E1）**：`cluster-ttl` 先 `docker rm -f halogen`
+    再 `infer-unload`；`find_engine` 纳入 `flash_serve`（容器内引擎）并把 `/metrics` 打到宿主发布口 8080。
+    三站部署同 md5；B 站 `--status` 实测 `引擎 pid=… :8080`（不再误判"无引擎"）。TTL 仍**默认关**。
 
 ---
 

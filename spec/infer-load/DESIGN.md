@@ -25,7 +25,14 @@ THREADS=16
 N_CPU_MOE=8
 RPC_TARGET=10.10.10.1:50052   # 空 = 单机
 EXTRA_FLAGS=-fa on
+# ★ 仅 unsloth 路径追加的调优旗标 (2026-10-21)。禁 -c/--ctx-size/-fa/--flash-attn
+#   (CTX 与 flash-attn 由 wrapper 拥有; 命中即 infer-load exit 1)。
+STUDIO_FLAGS="--parallel 1 -b 4096 -ub 1024 --cache-reuse 256"
 ```
+> ★ **`EXTRA_FLAGS` vs `STUDIO_FLAGS`（2026-10-21 实测口径）**：`EXTRA_FLAGS` **只被 systemd 路径消费**
+> （`llama-serve-instance`），**unsloth 启动行不读它**；unsloth 的追加旗标走 `STUDIO_FLAGS`
+> （`infer-load` 的 unsloth 分支 `... ${STUDIO_FLAGS:-}`）。★ 禁项只约束 `STUDIO_FLAGS`
+> （`-c`/`--ctx-size`/`-fa`/`--flash-attn` 已由 unsloth 启动行固定）；`EXTRA_FLAGS` 的 `-fa on` 是模板常态。
 A 站同路径 conf 只用 alias（LLAMA_CACHE=/data/rpccache/<alias>），由 infer-load scp 同步。
 
 ## CLI 语义
