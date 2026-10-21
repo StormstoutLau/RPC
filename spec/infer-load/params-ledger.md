@@ -56,16 +56,28 @@ upstream: null
 | 冷缓存注记                | claude code 首条消息 prefill \~70-110s                                                                                                                                                                                                                 | ✅ 实测：22.6k 系统提示（plain 格式）@ \~300 t/s；llama-server 重启后 slot 缓存清空必现；同会话后续秒级（slot 前缀复用）                                                                                                                                                                                                                               |
 | KV 量化（2026-09-04 追加） | `--cache-type-k q8_0 --cache-type-v q8_0`（A/B 两站现役，均经 unsloth infer-load 加载）                                                                                                                                                                       | ✅ §8.11 A/B：KV est 4.5→3.5G（-22%），decode 持平（A 44.3 / B 42.8 tok/s），正确性不受影响；MoE 下 KV 占比小不伤速度，**infer-load 默认后端已内置该参数**                                                                                                                                                                                              |
 
-### 1.3 qwen3.8-flash-next（B 站，已删模型待回归）
+### 1.3 qwen3.8-flash-next（B 站；★ 2026-10-21 已回归 + 吞吐调优实测）
+
+> ★ **2026-10-21 更正三处**：① 标题原为「已删模型待回归」—— **模型已回归**（`infer-list` = `qwen3.8-flash-next ABC 88G unsloth ✓`，08:50 起引擎实跑）；
+> ② **conf 与实跑不一致**：conf 仍是 `CTX=262144 / EXTRA_FLAGS="-fa on  --metrics"`，而引擎现为**手工**起的调优旗标；
+> ③ ★★ **CTX 档位推翻重定（当日二次实测）**：`131072` **不够**深度推理场景 —— 实测单轮 xhigh 输出 **25,174 tok**、极端任务 **≥32,000 tok（撞 cap）**，
+> 而 `131072 − MAXC 120000` 只剩 **11,072 tok** 输出余量 ⇒ **必然截断**。改判 `CTX=262144`（引擎已按此值实跑）。
+> ⇒ ★ **仍未固化**（重启 `cluster.py load` 即回 studio 默认 `--parallel 4 -c 262144`），下表按"实测生效值"记，**并标注固化状态**。
 
 | 字段          | 值                                                                                                                  | 依据                                                                                   |
 | ----------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
-| CTX         | 262144                                                                                                             | ✅ results-ledger 冒烟 ctx 262144 tg 15.7 t/s（262k 满档未单独压测，原生 1M 内）                     |
+| CTX         | **262144**（★ 引擎实测生效；**conf 仍为 262144 但缺其余旗标，未固化**）                                                          | ✅ 2026-10-21 二次实测：**深度推理输出预算**是约束，不是 KV —— 单轮 xhigh 实测 25,174 tok（`math_derive`，finish=stop）/ **≥32,000 tok**（`audit_check`，finish=length）。131072 配 MAXC=120000 ⇒ 余量 11,072 ⇒ **必截断**。262144 实测代价仅 **GTT 69.28→73.38 GB（+4.1 GB）**，8k/32k 吞吐**无损**（32k 冷 106.93 vs 106.54 s；热 decode 15.1 vs 14.9 t/s） |
+| **PARALLEL** | **1**（★ 未固化）                                                                                                       | ✅ 2026-10-21 A/B **决定性**：`--parallel 4` ⇒ 4 slot 各自独立 KV ⇒ 前缀缓存反复失效 ⇒ claude code 每轮 85–96 s；改 1 后**热轮 6.3 s（≈13×）** |
+| **BATCH / UBATCH** | **4096 / 1024**（★ 未固化）                                                                                          | ✅ 2026-10-21 A/B：8k 冷 prefill 63.2 s → 24.3 s（≈2.6×）；32k 248.6 s → 117.2 s（≈2.1×）                      |
+| **CACHE\_REUSE** | **256**（★ 未固化）                                                                                                  | ✅ 同上（与 PARALLEL=1 叠加）；**部分前缀**位移时也可复用                                                             |
+| **深度推理画像**（★ 2026-10-21 实测，决定 CTX） | 单轮 xhigh 输出 **25,174 tok**（`math_derive`，finish=stop，decode 14.3 t/s）/ **≥32,000 tok**（`audit_check`，撞 cap，finish=length）；审计每轮 prompt ~19k | ✅ 探针 `max_tokens=32000` 直测；★ 该模型的 `reasoning_effort` 模板默认 **xhigh**（halogen `/health` 与 studio 模板两侧一致），故"输出预算"是本模型的第一约束 |
+| **深度/长度 吞吐曲线**（B 站单流，同文本，冷/热） | llama.cpp：8k **24.22 / 2.18 s**（decode 17.5）· 32k **106.54 / 3.22 s**（14.9）· 65k **265.73 / 4.06 s**（10.8）· 84k **446.38 / 10.98 s**（8.3） | ✅ 2026-10-21 探针（每档独立盐值杜绝跨档前缀复用）；⇒ **decode 随深度单调衰减**，prefill 402→187 t/s；**无历史所称"5.5–6.1 t/s 塌缩"**（那是 HIP + `--parallel 4` 时代读数） |
+| **halogen 对照**（同权重 `UD-IQ4_XS`、同文本、B 站） | halogen：8k **5.96 / 1.06 s**（decode 27.5）· 32k **19.17 / 1.06 s**（27.3）· 65k **37.27 / 1.08 s**（27.0）；深度推理整轮 **695.3 s / 42.0 t/s**（29,206 tok） | ✅ 2026-10-21 补跑（`containers up` 统一入口、镜像 `0.17.4`、4 slots/pool 524288/slot_ctx 262144、MTP draft 已加载）：冷 prefill **5.6–7.1×**、热轮 **2–3.8×**、decode **1.6–3.3×**；★ **decode 不随深度衰减**，故深度推理场景整轮 **11.6 min vs llama.cpp 29.3 min（2.5×）**。⚠ 口径：两引擎 tokenizer 不同（同文本 6,926 vs 9,020 tok）⇒ **只可比墙钟，不可比 t/s 绝对值** |
 | THREADS     | 16                                                                                                                 | 无实测依据（模板默认）                                                                          |
 | N\_CPU\_MOE | 8                                                                                                                  | 无实测依据（模板默认）                                                                          |
 | RPC\_TARGET | auto                                                                                                               | 无实测依据（auto 语义=B5i wrapper 自动判定，未记录判定结果）                                              |
 | **质量表现**    | **冒烟 5/5 通过；G1 深度全场最佳（SDF 分解式 m=logβ−(1/ψ)Δc+(1/ψ−γ)v 全场唯一）**；A3 优秀（椭圆族 τ 不变性显式识别）；C2 及格（量纲瑕疵 sum(v)=10000≠X0=100） | ✅ results-ledger 冒烟首测（2026-08-31，domain\_matrix，出题实测）——深度上限参照模型即本款（G1 分解式为六模型横评深度锚点） |
-| 备注          | 模型文件已删（模型下架清理批次）                                                                                                   | conf 保留作回归位                                                                          |
+| 备注          | ★ **模型已回归**（原记"模型文件已删"已作废，2026-10-21 实测 `infer-list` 见该档 88G ✓）                                                       | 2026-10-21 复核；conf 保留且已实际服务                                                                            |
 
 ### 1.4 glm-5.3-flash（B 站，待测）
 
@@ -133,6 +145,8 @@ upstream: null
 | X1 | gpt-oss + ngram-simple 投机解码 | 25.2/22.6/24.8 t/s vs 裸 AR 50.3 t/s（**-52%**） | gpt-oss 思考型输出低 n-gram 重复，draft 命中率低而验证开销照付——**禁用**   | results-ledger（gpt-oss 节）  |
 | X2 | nemotron 双机 RPC（vs 单机）      | decode 17.3 vs 20.3 t/s（**-17.3%**）           | 80G 模型单机可容时 RPC 是延迟税（每 token \~38.7 次跨链命令）——**单机优先** | results-ledger（nemotron 节） |
 | X3 | m27-q4ks thinking 禁用后预算控制   | 6 次尝试零产出（nothink 6144/12288/16384 均 length）   | 无 reasoning 分离架构的模型，禁思考只改输出形态不解决预算失控——**按模型分型而非题型**  | results-ledger（m27 节）      |
+| X4 | **`--parallel 4`（studio 默认）跑 claude code 多轮会话** | 每轮 **85–96 s**；同引擎改 `--parallel 1` 后**热轮 6.3 s**（同 prompt、同机、同权重） | ★ **4 个 slot 各自独立 KV ⇒ 前缀缓存反复失效**；单会话场景**禁用默认 4**，用 `--parallel 1`（多会话才退 2） | params-ledger §1.3（2026-10-21 A/B） |
+| X5 | **`-c 131072` 配 `MAXC=120000` 跑深度推理（xhigh）** | 输出余量仅 **11,072 tok**，而实测单轮就要 **25,174 / ≥32,000 tok** ⇒ 长会话下**必然截断**（`--no-context-shift` 不救） | ★ **ctx 的约束是"输出预算"不是 KV**（本模型 KV 仅 ~13 KB/tok，12 层全注意力）；深度推理场景**必须 ≥262144**（原生上限），并按"n_ctx − 预期输出"反推 MAXC | params-ledger §1.3（2026-10-21 二次实测） |
 
 ## 3. 缺口区（显式声明未调优，未来调优时的起点）
 
@@ -140,9 +154,11 @@ upstream: null
 | -- | ---------------------------------------- | ---------------------------------------------------------- | ------------------------------ |
 | G1 | THREADS=16 全实例统一，从未扫描（8/16/32 对比）        | Strix Halo 16 核（Zen5），llama.cpp CPU 层与 GPU 卸载的线程分工未知       | 低（GPU 推理下 CPU threads 多为辅助角色）  |
 | G2 | N\_CPU\_MOE 0 vs 8 无对比实测                 | gpt-oss（0）与其余（8）的选择无依据；MoE CPU 卸载对 395 的收益未量化              | 中（nemotron mamba+MoE 混合架构可能有感） |
-| G3 | batch/ubatch 走默认值                        | prefill 吞吐与 GTT 峰值的权衡未探索（96.5k needle prefill 158 t/s 已够用） | 低                              |
-| G4 | CTX 32k 档（gpt-oss/glm/deepseek/fable）无压测 | 32k→128k 的 KV 增量与吞吐代价未知（gpt-oss 原生 128k）                   | 中（若 4-agent 集群需要长上下文）          |
+| G3 | ~~batch/ubatch 走默认值~~ **★ 已探索（2026-10-21）** | ✅ qwen3.8-flash-next @B：`4096/1024` ⇒ 8k 冷 63.2→24.3 s、32k 248.6→117.2 s；★ 但**同批**也改了 `--parallel`/`-c`，**未做 batch 单独归因** ⇒ 严格说 G3 = **已试、未分离** | 低（其余模型仍默认） |
+| G4 | CTX 32k 档（gpt-oss/glm/deepseek/fable）无压测 | ✅ **qwen3.8-flash-next 已测到 84k 深度**（2026-10-21 二次实测：prefill 402→187 t/s、decode 17.5→8.3 t/s，**无塌缩**）；**其余四款仍无** | 中（若 4-agent 集群需要长上下文）          |
 | G5 | `-fa on` 无 off 对比                        | flash attention 在 Vulkan 后端的收益未单独量化                        | 低                              |
+| G6 | **halogen 未纳入默认路径**（ADR-0014 D7 裁定已下、代码层未落地） | 实测深度推理 **2.5×**、prefill **5.6–7.1×** ⇒ 该场景走 llama.cpp 是**明知更慢仍用**；但切换=换引擎拓扑，会作废既有已验链路（`model_path`/`build_info`/工具面） | 高（若审计/长生成成为常态）              |
+| G7 | **`reasoning_effort` 未做质量-速度权衡**（模板默认 `xhigh`） | 单轮 25–32k thinking 是**唯一最大成本项**；降到 `high/medium` 可能省 2–3× 而质量损失未知 | 中（需配质量 A/B，不能只看速度）            |
 
 ## 4. 修改历史
 
@@ -160,5 +176,7 @@ upstream: null
 | 2026-09-03 | D6 验收修复批回填：wrapper 四项修复实机复验（P1a sanitized scrubber A8b 零明文 / P1b 任务卡正文传输 469 字符到达 / P2-1 queue\_s=2 run\_s=31 / P2-2 退出码 5 + PS5.1 NativeCommandError 根因）；A14 证据修正（自证通过注记，规格符合性待重跑）                                                                 | D6 验收"有条件通过"→"通过"（2026-09-03 16:30）；CHECKLIST §2.7/§7.2/§9 全回填                                                                        |
 | 2026-09-04 | §1.2 gpt-oss 增 KV 量化行（q8\_0 A/B：KV 4.5→3.5G，decode 持平）；§1.8 增 A 站 gpt-oss 端点迁移行（8080→8087 unsloth，opencode 实测通过；claude 兼容解额定案（modelOverrides 消 unrecognized\_model + 真实 unsloth key 消 401，实测 CLAUDE-STABLE-OK rc=0）；unsloth-a-station.md 增 §8.11 实测 | cache-type-k/v q8\_0 实测 + CLI 端点同步（openode 主通道已通，claude 另案）                                                                           |
 | 2026-09-04 | §1.2 KV 行改两站（A/B 均 unsloth 加载）；§1.8 增 infer-load 默认 unsloth 改造行 + A/B 两站端点统一 :8080 行；手册 v1.7（加载路径表/后端判定表/版本头）                                                                                                                                       | 用户要求"B 站同步设置 + 单模型加载管理默认使用 unsloth"——两站 infer-load/unload/list 改造（默认 unsloth，KV q8\_0，systemd 回退保留），opencode/claude 端点统指 :8080，全部实测通过 |
-| 2026-09-04 | **§1.7 网关进程下线**：litellm 已 `pkill`，端口 4000 释放（RSS 0.3GB 收回）；§1.7 加下线状态行，表保留为历史存档                                                                                                                                                                     | ADR-0002 方案 C 收尾——三重证据闭环（B 站无 ESTABLISHED 客户端 + B 站无 :4000 引用 + 主控站无 :4000 引用）确认网关为孤儿遗留进程，无消费者，可安全下线                                  |
+| 2026-09-04 | **§1.7 网关进程下线**：litellm 已 `pkill`，端口 4000 释放（RSS 0.3GB 收回）；§1.7 加下线状态行，表保留为历史存档 | ADR-0002 方案 C 收尾——三重证据闭环（B 站无 ESTABLISHED 客户端 + B 站无 :4000 引用 + 主控站无 :4000 引用）确认网关为孤儿遗留进程，无消费者，可安全下线 |
+| 2026-10-21 | **§1.3 重写**（标题"已删模型待回归"更正为"已回归 + 吞吐调优实测"；参数表新增 `PARALLEL=1` / `BATCH-UBATCH=4096/1024` / `CACHE_REUSE=256`，`CTX` 记 131072 并标"未固化"）；**§2 新增 X4**（`--parallel 4` 为负收益配置）；**§3 闭合 G3（已试、未分离）/ 部分闭合 G4**（32k 档实测） | 用户令"测试提高吞吐的方案"：A/B 实测（8k 冷 63.2→24.3 s · 32k 248.6→117.2 s · **claude 热轮 85–96 s → 6.3 s**）；★ 台账铁律要求"改 conf 必须同步本台账"，本次为**手工起引擎、conf 未改** ⇒ 已如实标注未固化 |
+| 2026-10-21（二次） | **§1.3 CTX 由 131072 改判 262144**（附深度推理画像 / 深度吞吐曲线 / halogen 对照三行）；**§2 新增 X5**（131072+MAXC 120000 跑 xhigh 必截断）；**§3 G4 闭合到 84k / 新增 G6（halogen 未纳默认）/ G7（reasoning_effort 未权衡）** | 用户令"halogen A/B 补跑 + 是否需调大 ctx 满足深度推理"：探针实测单轮 xhigh **25,174 tok（stop）/ ≥32,000 tok（length）** ⇒ 输出预算是第一约束；halogen 同文本 prefill **5.6–7.1×**、深度推理整轮 **11.6 vs 29.3 min（2.5×）**；262144 代价仅 +4.1 GB GTT、吞吐无损 |
 
