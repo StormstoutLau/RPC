@@ -57,11 +57,33 @@ def _connect(st: str, timeout: int = SSH_TIMEOUT) -> paramiko.SSHClient:
         不显式给 ⇒ "认证阶段卡住"要等 30s 而不是我们的 `SSH_TIMEOUT`, 与 ConnectTimeout 的意图相悖。
     注意差异: paramiko **不会**像 OpenSSH 那样弹口令阻塞等 stdin(它无 BatchMode 选项, 也**没有**
     "挂死"这一形态, 认证失败是抛异常) ⇒ 这一侧要补的只是"把卡住的上界压到 SSH_TIMEOUT"。
+
+    ★ 2026-10-21 安全评审 HIGH-1 修复：原实现是 `AutoAddPolicy()` 且**从不**加载 known_hosts
+      ⇒ 每一跳都无条件信任对端（同 LAN 内 ARP 欺骗/冒充站 IP 即中招），而主控 `~/.ssh/known_hosts`
+      里三站的指纹**本来就是齐的**，等于"有账本却从不翻"。
+      现改为 `load_system_host_keys()` + `RejectPolicy()`：未知主机**直接拒绝**，不再静默写入。
+      首次入网（换站/换 IP）时按错误提示做一次 enroll，**不新增并列脚本**（ADR-0004 D2）:
+          ssh-keyscan -t ed25519 <host> >> ~/.ssh/known_hosts
+      ⚠ 可用 `RPC_KNOWN_HOSTS` 指定额外的 known_hosts（仓库外文件，便于隔离试验）。
     """
     cli = paramiko.SSHClient()
-    cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    cli.connect(resolve_host(st), username=STATIONS[st]["user"],
-                timeout=timeout, banner_timeout=timeout, auth_timeout=timeout)
+    try:
+        cli.load_system_host_keys()
+    except OSError:
+        pass                      # 无 known_hosts 时不让它崩；下一步 RejectPolicy 会给出明确错误
+    extra = os.environ.get("RPC_KNOWN_HOSTS")
+    if extra and os.path.isfile(extra):
+        cli.load_host_keys(extra)
+    cli.set_missing_host_key_policy(paramiko.RejectPolicy())
+    try:
+        cli.connect(resolve_host(st), username=STATIONS[st]["user"],
+                    timeout=timeout, banner_timeout=timeout, auth_timeout=timeout)
+    except paramiko.SSHException as e:
+        cli.close()
+        raise paramiko.SSHException(
+            f"{e} —— 主键校验失败或主机未登记；确认对端指纹后执行: "
+            f"ssh-keyscan -t ed25519 {resolve_host(st)} >> ~/.ssh/known_hosts"
+        ) from e
     return cli
 
 

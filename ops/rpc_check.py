@@ -41,7 +41,22 @@ ROOT = Path(__file__).resolve().parent.parent
 #   且**不要**为"对齐"去改：两者**作用域不同** —— 本处扫**仓库跟踪文件**（问"仓库里有没有真钥匙"），
 #   那边扫**待出网 prompt**（问"出网字节里有没有敏感形态"）。裁定与理由见
 #   docs/security/2026-09-21_scrubber规则扩充裁定与影响面.md §4 行 3。
-SECRET_RE = re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}")
+#
+# ★ 2026-10-21 扩形态（安全评审触发）：原正则**只认 `sk-` 前缀**，而仓库里实际躺着
+#   Beszel 账号口令与 SSH 口令（非 sk- 形态）⇒ 门禁长期全绿不是因为干净，是因为看不见。
+#   现扩到四族：`sk-` / 口令赋值（**仅带引号的字面量**）/ 私钥块头 / 常见云厂商 key 前缀。
+#   ⚠ 值分支**刻意只认带引号的字面量**：放开"不带引号"会误伤 `if decision == "pass":`
+#     与 `PASS: derived-view` 这类正常文本（2026-10-21 实测）⇒ 该形态登记为盲区，
+#     见 tests/test_rpc_check_secret_forms.py 的残留盲区说明。
+SECRET_RE = re.compile(
+    r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}"
+    r"|[\"']?\b(?:pass|passwd|password|pwd)\b[\"']?\s*[:=]\s*"
+    r"(?:\"(?=[^\"]*[A-Za-z0-9])[^\"\s]{4,}\"|'(?=[^']*[A-Za-z0-9])[^'\s]{4,}')"
+    r"|-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"
+    r"|(?<![A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}"
+    r"|(?<![A-Za-z0-9])(?:ghp|gho|ghs|ghr)_[A-Za-z0-9]{30,}"
+    r"|(?<![A-Za-z0-9])(?:glpat|xox[baprs]|sk_live|AIza)[A-Za-z0-9_\-]{10,}",
+    re.IGNORECASE)
 
 # 白名单: 需要"故意保留样串"的文件。每条必须写明原因, 且每次运行都会计数打印,
 # 不允许变成静默放行。
@@ -118,16 +133,19 @@ def allow_unhit(allow_keys, hit_keys):
 
 
 def check_secrets(ctx):
-    """扫描跟踪文件中的明文密钥形态。"""
+    """扫描跟踪文件中的明文密钥形态。
+
+    ★ 2026-10-21：删掉 `if "sk-" not in text: continue` 的**整文件短路**。
+      原短路让"不含 sk- 的文件"连正则都不跑 —— 扩形态后它会让新增的四族全部失效
+      （实测：Beszel 口令所在文件无一含 `sk-`）。范围本来就是 git 跟踪文件（~1000 个），
+      全量跑正则的成本可忽略。
+    """
     hits, allowed, scanned, skipped_bin = [], [], 0, 0
     for rel, path in _iter_source_files():
         if _is_binary(path):
             skipped_bin += 1
             continue
         text = _read_text(path)
-        if "sk-" not in text:
-            scanned += 1
-            continue
         scanned += 1
         for i, line in enumerate(text.splitlines(), 1):
             for m in SECRET_RE.finditer(line):

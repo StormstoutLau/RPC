@@ -74,7 +74,7 @@ scott-lau-GTR-Pro.local 192.168.1.15
 **操作**: 用 SSH_ASKPASS 传密码
 ```powershell
 # 创建 askpass 脚本
-"@echo ***" | Set-Content -Path $env:TEMP\sshaskpass.bat
+"@echo <PASSWORD>" | Set-Content -Path $env:TEMP\sshaskpass.bat
 $env:SSH_ASKPASS = "$env:TEMP\sshaskpass.bat"
 $env:SSH_ASKPASS_REQUIRE = "force"
 ssh scott@scott-lau-GTR-Pro.local "echo OK"
@@ -131,7 +131,7 @@ stdin, stdout, stderr = client.exec_command(cmd)
 **执行**:
 ```powershell
 & "C:\Users\Peng\AppData\Local\Programs\Python\Python312\python.exe" `
-  f:\Cpp_Hub\scripts\ssh_setup.py scott-lau-GTR-Pro.local scott-lau ***
+  f:\Cpp_Hub\scripts\ssh_setup.py scott-lau-GTR-Pro.local scott-lau <PASSWORD>
 ```
 
 **输出**:
@@ -595,7 +595,7 @@ ssh scott-lau@scott-lau-GTR-Pro.local "curl -sS --max-time 10 -x http://127.0.0.
 # ❌ curl: (7) Failed to connect to 127.0.0.1 port 7890 after 0 ms: Couldn't connect to server
 
 # 4. 检查 mihomo 服务
-ssh scott-lau@scott-lau-GTR-Pro.local "echo '***' | sudo -S ls /root/clashctl/bin/"
+ssh scott-lau@scott-lau-GTR-Pro.local "echo '<PASSWORD>' | sudo -S ls /root/clashctl/bin/"
 # ❌ ls: 无法访问 '/root/clashctl/bin/': 没有那个文件或目录
 # ❌ systemctl status mihomo → Unit mihomo.service could not be found
 ```
