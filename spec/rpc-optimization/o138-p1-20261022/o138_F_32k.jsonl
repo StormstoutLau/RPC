@@ -1,0 +1,1 @@
+﻿RESULT {"run": 1, "words": 26000, "salt": "035be58d044aaf16", "wall_s": 78.4, "prompt_n": 32118, "prompt_ms": 77658.958, "prompt_tps": 413.577529587765, "predicted_n": 16, "predicted_ms": 584.039, "predicted_tps": 25.683216360551263, "cache_n": 0, "finish": "length"}

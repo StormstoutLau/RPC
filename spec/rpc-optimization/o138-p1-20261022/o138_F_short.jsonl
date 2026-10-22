@@ -1,0 +1,7 @@
+﻿ 140173 28370624   93 /opt/llama.cpp/llama-server -m /data/models/gguf/lmstudio-community/Qwen3.8-Flash-Next-GGUF/UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf -c 262144 -t 16 --n-cpu-moe 0 -fa on --metrics --host 127.0.0.1 --port 8080
+               总计        已用        空闲        共享   缓冲/缓存        可用
+内存：         121Gi        96Gi       5.6Gi        18Mi        20Gi        25Gi
+交换：         8.0Gi       423Mi       7.6Gi
+RESULT {"run": 1, "words": 420, "salt": "17961824e2cf50f3", "wall_s": 6.06, "prompt_n": 569, "prompt_ms": 1437.535, "prompt_tps": 395.8164496864424, "predicted_n": 128, "predicted_ms": 4604.717, "predicted_tps": 27.580413736609657, "cache_n": 0, "finish": "length"}
+RESULT {"run": 2, "words": 420, "salt": "995cd75bf792dd8d", "wall_s": 6.098, "prompt_n": 569, "prompt_ms": 1406.326, "prompt_tps": 404.6003558207699, "predicted_n": 128, "predicted_ms": 4602.026, "predicted_tps": 27.596541175560503, "cache_n": 0, "finish": "length"}
+RESULT {"run": 3, "words": 420, "salt": "98554e364a5c65cf", "wall_s": 6.077, "prompt_n": 549, "prompt_ms": 1368.565, "prompt_tps": 401.1501097865282, "predicted_n": 128, "predicted_ms": 4618.719, "predicted_tps": 27.49680160234905, "cache_n": 0, "finish": "length"}

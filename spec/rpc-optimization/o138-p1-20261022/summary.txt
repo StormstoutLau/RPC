@@ -4,3 +4,4 @@ B ncmoe8/fa-on/8k            short: n=3 decode 23.62 t/s (prefill 362.6, prompt_
 C ncmoe0/KVq8/fa-on          short: n=3 decode 27.54 t/s (prefill 401.7, prompt_n 554) | long: n=3 decode 26.87 t/s (prefill 506.3, prompt_n 4087)
 D ncmoe0/fa-off              short: n=3 decode 27.18 t/s (prefill 388.7, prompt_n 560) | long: n=3 decode 25.32 t/s (prefill 479.9, prompt_n 4127)
 E ncmoe8/fa-on/262k          short: n=3 decode 23.56 t/s (prefill 365.9, prompt_n 573) | long: n=3 decode 23.39 t/s (prefill 461.8, prompt_n 4112)
+F ncmoe0/fa-on/262k          short: n=3 decode 27.56 t/s (prefill 400.5, prompt_n 562) | long: n=3 decode 26.75 t/s (prefill 506.4, prompt_n 4091)

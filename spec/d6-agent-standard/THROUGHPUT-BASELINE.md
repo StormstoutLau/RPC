@@ -17,7 +17,7 @@ decode / prefill 单位 = t/s（token per second）。`-c`=引擎上下文；KV=
 | `deepseek-v4-flash-0731` | DeepSeek V4 Flash 146G | Q4(UD-Q4_XL) | Vulkan/RPC | **三站 RPC 分布式** | — | A+B+C | — | **~7.9** | 中 | 2026-09-01 | RPC 层分布；长 prompt 分片有劣化@Qwen | 手册实测定案 |
 | `qwen3.8-flash-next` | Qwen3.8-Flash-Next 125B MoE | UD-IQ4_XS+ | **Vulkan(/opt) · 23b0202a** | 单站 | f16 | C | **~380（0.5k）/ ~497（4k）** | **27.55（0.5k）/ 26.85（4k）** | **低（0.5k→4k −2.5%）** | 2026-10-22 | `llama-server` 单机 · `max_tokens=128` · 随机 prompt · serial；`ncmoe=0 -fa on` | [O-138 P1 实测](../rpc-optimization/o138-p1-20261022/) |
 
-> ★ **2026-10-22 O-138 P1 更新**：上行为 **Vulkan 直测**（`ncmoe=0 -fa on`，CTX=8192）；**生产默认引擎 = halogen 0.18.13**（不在本表口径）。原 HIP 行（**19–20 / 5.5–6.1**）为**已弃后端**历史参照。生产 conf `N_CPU_MOE=8` 的 Vulkan 读数为 **23.56 / 23.39**（−13%）；KV `q8_0` 无差异；`-fa off` 长 ctx −5.7%。
+> ★ **2026-10-22 O-138 P1 更新**：上行为 **Vulkan 直测**（`ncmoe=0 -fa on`，CTX=262144）；**生产默认引擎 = halogen 0.18.13**（不在本表口径）。原 HIP 行（**19–20 / 5.5–6.1**）为**已弃后端**历史参照。★ **2026-10-22 收尾：C 站 fallback 已由 `N_CPU_MOE=8` 改为 `0`**（短/4k 27.56/26.75、32k prefill 413.6 t/s、内存余量 22 GiB）；旧 8 档 23.56/23.39（−13%）保留作历史对照。KV `q8_0` 无差异；`-fa off` 长 ctx −5.7%。
 
 ## 2. 缺失档（待实测补齐）
 
