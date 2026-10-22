@@ -974,7 +974,26 @@ ggml_backend_rpc_start_server()                                                 
 | **C** | 0 | 8192 | `-fa on -ctk q8_0 -ctv q8_0` | 27.54 | 26.87 |
 | **D** | 0 | 8192 | `-fa off` | 27.18 | 25.32 |
 | **E 生产原配置** | 8 | 262144 | `-fa on` | 23.56 | 23.39 |
+| **F fallback 新配置** | 0 | 262144 | `-fa on` | **27.56** | **26.75** |
 
-**结论**: ① **Vulkan 短/长 ctx decode = 27.55 / 26.85 t/s**，远高于已弃 HIP 的 19–20 / 5.5–6.1，且 **4k 未见塌缩**（−2.5%）；② 生产 `N_CPU_MOE=8` 相对 `ncmoe=0` **损失约 13%**（23.6 vs 27.6）；③ **KV `q8_0` 无差异**（27.54 / 26.87）；④ **`-fa off` 使长 ctx −5.7%**、短 ctx −1.3%；⑤ **`--override-tensor` 未测**（`ncmoe` 覆盖同一 CPU-offload 轴，且无已验证的逐 tensor pattern）。
-**射程**: 仅 C 站、4k 上限、serial、`enable_thinking=false`；未测 8k/32k、并发、MTP。
+**结论**: ① **Vulkan 短/长 ctx decode = 27.55 / 26.85 t/s**，远高于已弃 HIP 的 19–20 / 5.5–6.1，且 **4k 未见塌缩**（−2.5%）；② 生产 `N_CPU_MOE=8` 相对 `ncmoe=0` **损失约 13%**（23.6 vs 27.6）；③ **KV `q8_0` 无差异**（27.54 / 26.87）；④ **`-fa off` 使长 ctx −5.7%**、短 ctx −1.3%；⑤ **`--override-tensor` 未测**（`ncmoe` 覆盖同一 CPU-offload 轴，且无已验证的逐 tensor pattern）；⑥ **F（`N_CPU_MOE=0 @ 262144`）通过**：加载 84s，32k prompt 预填充 **413.6 t/s**、decode **25.68 t/s**、内存余量 **22 GiB** ⇒ **C 站 fallback conf 已由 8 改为 0**（+17.0% / +14.4%）。
+**射程**: 仅 C 站、短/4k/32k 预填充、serial、`enable_thinking=false`；未测 262k 满上下文、并发、MTP。
 **证据落点**: [o138-p1-20261022](./o138-p1-20261022/)（probe/set_conf/raw JSONL/summary/arms）· [THROUGHPUT-BASELINE §1/§2](../d6-agent-standard/THROUGHPUT-BASELINE.md) 已同步。
+
+---
+
+## Phase 15: EV-11 — GLM-5.3-Flash MTP A/B（2026-10-22, E1）
+
+> **被验条目**: [TRACKER EV-11](../upstream-tracker/TRACKER.md) · **证据落点**: [ev11-mtp-20261022](./ev11-mtp-20261022/)（probe/baseline/mtp/one_worker_*/summary/arms/mtp_output）。
+> **测试台**: `glm-5.3-flash` · `GLM-5.3-Flash-UD-IQ4_XS.gguf`（147G）· 变体引擎 `/opt/llama.cpp-glm5next-20260928` · **B head + A/C (2w) 或 A only (1w)** · `CTX=32768` / `-t 16` / `--n-cpu-moe 0` / `-fa on` · 固定英文技术 prompt、`max_tokens=128`、`temperature=0`、4 runs。
+
+| 臂 | 拓扑 | `EXTRA_FLAGS` | decode |
+|---|---|---|---|
+| baseline | A+C 2 workers | `-fa on` | **11.222 t/s** |
+| MTP | A+C 2 workers | `-fa on --spec-type draft-mtp` | **18.575 t/s** |
+| baseline | A 1 worker | `-fa on` | **12.053 t/s** |
+| MTP | A 1 worker | `-fa on --spec-type draft-mtp` | **19.336 t/s** |
+
+**结论**: ① **MTP 可用且收益大** —— 2w decode **11.222 → 18.575 t/s（+65.5%）**，草稿接受 **340/495 = 68.7%**；② **2 个 worker 确实拖慢** —— 1w baseline **12.053**（+7.4%）、1w+MTP **19.336**（+4.1%）⇒ **最佳 = 单 worker + MTP**；`RPC_TARGET=auto` 把 A/C 都纳入是容量默认，不是速度选择；③ 现役 GGUF **含** `blk.45.nextn.*` MTP 头（1412 tensors），引擎在无 `--spec-type` 时把这些张量当 unused 忽略、开启后使用；④ 主线 `23b0202a` 已含 `glm5-next` + `glm5_next9graph_mtp`，但**仍拒载 `glm5next`**；`unsloth/GLM-5.3-Flash-GGUF` 无 `glm5-next` 现成档 ⇒ **换 arch 对 MTP 不是必需**，且无 ready artifact。⇒ **结论：不切 arch；GLM 用单 worker（A）+ `--spec-type draft-mtp`**（2026-10-22 已按此固化，见收尾；输出一致性/质量回归仍待补）。
+**射程**: 单 prompt / 128 tok / temp=0 / 4 runs；**输出一致性未完成对照**（直接 `systemctl restart` 基线的路径不稳定，已停止该分支）；未测长 ctx / 并发 / 质量回归 / 主线 `glm5-next` 加载。
+**收尾（2026-10-22 晚更新）**: **已固化** GLM 默认 = **单 worker A + MTP**（conf `RPC_TARGET=10.10.10.1:50052`、`EXTRA_FLAGS="-fa on --spec-type draft-mtp"`，sha256 `a7149ab8…`；旧基线备份 `glm-5.3-flash.env.bak-singleworker-20261022`）。统一入口新增 `load <rpc模型> --worker A|C`（head 固定 B，按次覆盖，不改 conf）；DS 默认同为单 worker A。★ `--worker C` 端到端实测通过：head `--rpc 10.10.11.3:50052`、A inactive / C active、decode **18.93 t/s**（vs A 19.40，−2.4%）、draft 340/495 ⇒ 已恢复默认 A。⚠ 输出一致性/质量回归仍未做。

@@ -1,0 +1,31 @@
+# EV-11 spike — GLM-5.3-Flash MTP A/B (2026-10-22)
+
+- Model: `glm-5.3-flash` · `GLM-5.3-Flash-UD-IQ4_XS.gguf` (147G, B 站盘).
+- Engine: `/opt/llama.cpp-glm5next-20260928` (variant, not mainline).
+- Topology: B head + workers `10.10.10.1:50052` (A) / `10.10.11.3:50052` (C), `-sm layer`.
+- Conf: `CTX=32768`, `-t 16`, `--n-cpu-moe 0`, `-fa on`.
+- Probe: fixed English technical prompt, `max_tokens=128`, `temperature=0`, 4 runs; `timings.predicted_per_second`.
+- Arms:
+  - baseline: `EXTRA_FLAGS="-fa on "`
+  - MTP: `EXTRA_FLAGS="-fa on --spec-type draft-mtp"`
+- Raw: `baseline.jsonl`, `mtp.jsonl`; `summary.txt` = `analysis.py` output.
+- `mtp_output.txt` = one MTP output sample (128 tok, reasoning_content). Baseline text diff not completed (direct head restart without rpc-nodes reload was unstable); MTP path is target-verified speculative decoding, but this residual check is recorded honestly.
+- After the spike: GLM conf restored to baseline (`sha256 6cdb3528…`); GLM unloaded; qwen3.8-flash-next halogen 0.18.13 restored on A/B/C.
+- Not tested: output-equivalence diff, long-context, concurrency, quality regression, mainline `glm5-next` load.
+
+## Result
+
+| topology | flags | decode |
+|---|---|---|
+| 2 workers (A+C) | `-fa on` | **11.222 t/s** |
+| 2 workers (A+C) | `-fa on --spec-type draft-mtp` | **18.575 t/s** |
+| 1 worker (A) | `-fa on` | **12.053 t/s** |
+| 1 worker (A) | `-fa on --spec-type draft-mtp` | **19.336 t/s** |
+
+- MTP gain (2w): **+65.5%**; draft acceptance **340/495 = 68.7%**.
+- Single worker vs 2 workers: baseline **+7.4%**, MTP **+4.1%** ⇒ **2 workers drag decode**; best arm = **1 worker + MTP (19.34 t/s)**.
+- The GGUF contains `blk.45.nextn.*` MTP tensors (1412 tensors); the engine ignores them without `--spec-type draft-mtp` and uses them with it.
+- Mainline `23b0202a` supports `glm5-next` + `glm5_next9graph_mtp`, but still rejects the current `glm5next` arch; switching arch is unnecessary for MTP.
+- `RPC_TARGET=auto` includes both A and C workers; single worker is **not** the current conf (original `auto` / no MTP restored after the test).
+- **2026-10-22 晚后续**：conf 已**固化**为单 worker A + MTP（`RPC_TARGET=10.10.10.1:50052`、`EXTRA_FLAGS="-fa on --spec-type draft-mtp"`，sha256 `a7149ab8…`）；统一入口 `load <rpc模型> --worker A|C` 可按次改派（不改 conf）。固化后默认加载复测：**19.40 t/s 均值**（19.76/19.37/18.87/19.59），draft **340/495 = 68.7%**。
+- **2026-10-22 `--worker C` 端到端实测**：head B + worker C（`--rpc 10.10.11.3:50052`，A 站 rpc-server inactive，C active；cmdline 同样含 `--spec-type draft-mtp`）。decode **18.93 t/s 均值**（19.26/18.92/18.49/19.04），draft **340/495 = 68.7%** ⇒ 比 worker A **低约 2.4%**；A 仍是默认。测试后已恢复默认单 worker A。

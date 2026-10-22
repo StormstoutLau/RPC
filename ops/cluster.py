@@ -5,7 +5,7 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
 
 用法:
     python ops/cluster.py status [--html] [--frames]
-    python ops/cluster.py load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] [--engine <变体名|绝对路径>]
+    python ops/cluster.py load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] [--engine <变体名|绝对路径>] [--worker A|C]
     python ops/cluster.py frames
     python ops/cluster.py unload
     python ops/cluster.py estimate <alias> [--station A|B|C] [--ctx N] [--parallel N] [--ctk q8_0] [--ctv q8_0]  # 事前预估 (内存/耗时)
@@ -50,6 +50,12 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
              对 ds4 (DwarfStar): 单机按普通 `infer-load --backend ds4` 路径;
                **双机走 PP (DS4_PP_MODELS, 值 = (coordinator 站, worker 站))** —— ds4 在 ROCm 不支持 TP,
                且**必须先起 worker、后起 coordinator** (见 _load_ds4_pp)。
+            --worker 单 worker 指派 (仅 RPC 双机类, 2026-10-22): head 固定**权重所在站 B**,
+              worker 由用户选 A|C (映射 = cluster_const.RPC_WORKER_IPS)。落实为
+              `infer-load --rpc-target <ip:port>` **仅本次加载**覆盖 conf, 不改 conf。
+              未给 --worker ⇒ 沿用 conf 的 RPC_TARGET (GLM/DS 已固化单 worker)。
+              worker 必须同时在 `rpc-nodes --all` 声明与存活清单中, 否则响亮中止。
+              例: load glm-5.3-flash --worker C
     frames   三站框架级运行状态一览 (llama-server/unsloth/vllm/litellm/opencode), 恒 exit 0
     unload   三站并行幂等卸载
     estimate 事前预估 (P1-1): 给定 alias 预估加载后的内存/耗时, 不实际加载 (只读)。
@@ -140,7 +146,7 @@ import paramiko
 # 改常量请改 ops/cluster_const.py —— 单一真值在那里。
 from cluster_const import (  # noqa: E402
     STATIONS, STATION_PORT, ROUTE, STATION_ROUTES, BACKENDS,
-    DEFAULT_STATION, RPC_MODELS, DS4_PP_MODELS, CONTAINER_MODELS,
+    DEFAULT_STATION, RPC_MODELS, RPC_WORKER_IPS, DS4_PP_MODELS, CONTAINER_MODELS,
     HTML_OUT, SSH_TIMEOUT, PANELS,
 )
 
@@ -806,13 +812,35 @@ def _engine_ok(engine: str) -> bool:
     return bool(engine) and all(c in _ENGINE_CHARS for c in engine)
 
 
-def _build_infer_load_cmd(matched: str, backend: str, engine: str = None) -> str:
+def _build_infer_load_cmd(matched: str, backend: str, engine: str = None,
+                          rpc_target: str = None) -> str:
     """拼装远端 infer-load 命令。backend 来自白名单校验(枚举), engine 来自 _engine_ok(), 均无注入风险。
-    engine(引擎变体) 见 infer-load 的 --engine 说明: 名 -> /opt/llama.cpp-<名>/, 或绝对路径。"""
+    engine(引擎变体) 见 infer-load 的 --engine 说明: 名 -> /opt/llama.cpp-<名>/, 或绝对路径。
+    rpc_target: 仅 RPC 类使用；worker 站 letter 经 RPC_WORKER_IPS 映射后传入（已在调用方校验）。"""
     cmd = f"infer-load '{matched}'" + (f" --backend {backend}" if backend else "")
     if engine:
         cmd += f" --engine '{engine}'"
+    if rpc_target:
+        cmd += f" --rpc-target '{rpc_target}'"
     return cmd
+
+
+def _conf_rpc_target(station: str, alias: str) -> str:
+    """读 head 站实例 conf 的 RPC_TARGET，**仅供预启动选择 worker**（2026-10-22）。
+
+    为什么需要: `_load_rpc` 在 infer-load 之前先 `rpc-nodes --start` 做前置探活。原先不带
+    过滤 ⇒ **未使用的节点也会被起**（实测默认单 worker A 时 C 仍 active），与"1 head + 1 worker"
+    的固化语义不符。无 `--worker` 时应以 conf 的 RPC_TARGET 为准。
+
+    只认**单个 ip:port**；`auto` / 空 / 多节点列表（含空格或逗号）⇒ 返回空 = 起全部声明节点
+    （保留旧的多 worker 语义，不在这里重新解释 auto）。读失败同样返回空，不阻断加载 ——
+    真正的目标校验仍由 infer-load 与存活探针完成。
+    """
+    ok, out = ssh_run(station, f"sed -n 's/^RPC_TARGET=//p' /etc/llama-instances/{alias}.env | tail -1")
+    t = (out or "").strip().strip('"')
+    if not ok or not t or t == "auto" or " " in t or "," in t:
+        return ""
+    return t
 
 
 # ── 容器化模型 (halogen) 编排 ─────────────────────────────
@@ -955,12 +983,15 @@ def _load_container_model(alias: str, station: str) -> int:
     return 0
 
 
-def cmd_load(alias: str, backend: str = None, engine: str = None) -> int:
+def cmd_load(alias: str, backend: str = None, engine: str = None, worker: str = None) -> int:
     if backend is not None and backend not in BACKENDS:
         print(f"[cluster] 非法 --backend '{backend}'. 可选: {', '.join(sorted(BACKENDS))} (exit 1)")
         return 1
     if engine is not None and not _engine_ok(engine):
         print(f"[cluster] 非法 --engine '{engine}' (仅允许 字母/数字/./_/-; 例: glm5next-20260928) (exit 1)")
+        return 1
+    if worker is not None and worker not in RPC_WORKER_IPS:
+        print(f"[cluster] 非法 --worker '{worker}'. 可选: {', '.join(sorted(RPC_WORKER_IPS))} (exit 1)")
         return 1
     try:
         station, matched, is_rpc, how = resolve_alias(alias)
@@ -971,6 +1002,10 @@ def cmd_load(alias: str, backend: str = None, engine: str = None) -> int:
         print(f"  按站路由名 : {', '.join(sorted(STATION_ROUTES))}")
         print(f"  其余别名按默认站 {DEFAULT_STATION} 处理")
         return 2
+    # --worker 只对 RPC 双机类有意义 (head 固定权重站 B, worker 由用户指派 A|C)。
+    if worker and not is_rpc:
+        print(f"[cluster] --worker 仅适用于 RPC 双机类模型 ({', '.join(sorted(RPC_MODELS))}) (exit 1)")
+        return 1
     # 容器化模型 (halogen, CONTAINER_MODELS): 不走 infer-load ⇒ 必须在 **C 站分支之前**分派。
     # 显式 `--backend unsloth` 等其它后端时**不**分派 —— 保留既有回退路径 (load ... --backend unsloth)。
     if matched in CONTAINER_MODELS and backend in (None, CONTAINER_MODELS[matched]["backend"]):
@@ -993,10 +1028,13 @@ def cmd_load(alias: str, backend: str = None, engine: str = None) -> int:
     # 否则走 RPC 编排 (见 _load_rpc) —— 2026-09-15 落地方案 v2 P0-3, 原为"打印手动步骤 exit 2"。
     if is_rpc:
         if backend and backend != "llama-rpc":
+            if worker:
+                print(f"[cluster] --worker '{worker}' 与 --backend {backend} (强制单机) 矛盾 (exit 1)")
+                return 1
             station = station or DEFAULT_STATION
             print(f"[cluster] '{matched}' 为 RPC 双机类, --backend {backend} 视为强制单机加载 (退化为 {station} 站单机)。")
         else:
-            return _load_rpc(matched, station or DEFAULT_STATION, engine)
+            return _load_rpc(matched, station or DEFAULT_STATION, engine, worker)
     # ds4 双机 PP: 别名在 DS4_PP_MODELS 且显式 --backend ds4 ⇒ 走双机编排 (值 = (coordinator 站, worker 站))。
     # 单机 ds4 (别名不在表里, 或未显式指定 backend) 落到下面的普通路径 (`infer-load --backend ds4`)。
     if backend == "ds4" and matched in DS4_PP_MODELS:
@@ -1036,7 +1074,7 @@ def cmd_load(alias: str, backend: str = None, engine: str = None) -> int:
     return 0
 
 
-def _load_rpc(alias: str, station: str, engine: str = None) -> int:
+def _load_rpc(alias: str, station: str, engine: str = None, worker: str = None) -> int:
     """RPC 双机类加载编排 (2026-09-15, 方案 v2 P0-3)。
 
     把原先"打印手动步骤并 exit 2"升级为**一条命令端到端**。零件全部复用既有资产:
@@ -1053,19 +1091,45 @@ def _load_rpc(alias: str, station: str, engine: str = None) -> int:
       入口正是本函数, 于是 `load glm-5.3-flash --engine glm5next-20260928` 会在 head 侧
       `unknown model architecture: 'glm5next'` 失败。worker 侧同版引擎由 conf 键
       LLAMA_RPC_SERVER_BIN + `rpc-nodes --start` 透传 (见 ops/rpc-nodes)。
+
+    worker = 2026-10-22 单 worker 形态: **head 固定权重所在站 B**, worker 由用户按
+      `--worker A|C` 指派 (映射见 cluster_const.RPC_WORKER_IPS), 最终以
+      `infer-load --rpc-target <ip:port>` 覆盖 conf 的 RPC_TARGET —— **不改 conf**。
+      未给 --worker ⇒ 沿用 conf 的 RPC_TARGET (GLM/DS 已固化单 worker, 见 params-ledger)。
+      目标必须同时出现在 `rpc-nodes --all` 声明与存活探测中: 显式 RPC_TARGET 不像 `auto`
+      那样可静默退化, 死 worker 会让 llama-server 加载中途失败且难读。
     """
     if station != "B":
         print(f"[cluster] RPC 类由 B 站(master)发起 (nodes.env/ rpc-nodes 均在其上), 已忽略指定的 {station} 站。")
         station = "B"
+    rpc_target = RPC_WORKER_IPS.get(worker) if worker else None
+    if worker and not rpc_target:
+        print(f"[cluster] 非法 --worker '{worker}'. 可选: {', '.join(sorted(RPC_WORKER_IPS))} (exit 1)")
+        return 1
+    if worker:
+        print(f"[cluster] worker 指派: {worker} -> {rpc_target} (head 固定 {station} 站, 本次不改 conf)")
+    else:
+        # 无 --worker ⇒ 以 conf 的 RPC_TARGET 为准（单 worker 时预启动也只起它）。
+        rpc_target = _conf_rpc_target(station, alias) or None
     print(f"[cluster] == RPC 双机类加载编排: {alias} @ {station} 站 (master) ==")
     if engine:
         print(f"[cluster] 引擎变体: {engine} (head 与 worker 必须同版, 由 conf + rpc-nodes 透传)")
+
+    # ★ 2026-10-22 修「8080 假绿」：RPC 加载原先只做 `infer-unload`（systemd 路径），
+    #   **不回收 docker 容器**。若 A/B/C 上仍有 halogen 容器（如 qwen3.8）持着 8080，
+    #   远端 `infer-load` 的 READY 判定会命中容器 ⇒ **GLM 没起来也会报 READY**（实测撞到）。
+    #   ⇒ 先回收三站所有已登记容器；无容器时 `_container_cleanup_cmd` 立即返回，不等待。
+    for st in sorted(STATIONS):
+        _reclaim_containers(st)
 
     print("[cluster] [1/4] 卸载本站现存实例 (幂等, 释放 GTT) ...")
     ssh_stream(station, "infer-unload")
 
     print("[cluster] [2/4] 启动 RPC 工作节点 (rpc-nodes --start, 含等端口 LISTEN) ...")
-    ok, out = ssh_run(station, f"rpc-nodes --start '{alias}'", timeout=240)
+    # 2026-10-22: 有 --worker 时把目标作为 rpc-nodes 的第三参数（节点过滤）——
+    #   预启动也只起被选节点，避免"未选节点缺单元/离线"拖垮整条加载。
+    start_cmd = f"rpc-nodes --start '{alias}'" + (f" '{rpc_target}'" if rpc_target else "")
+    ok, out = ssh_run(station, start_cmd, timeout=240)
     if out.strip():
         print(out.strip()[-1200:])
     if not ok:
@@ -1082,8 +1146,19 @@ def _load_rpc(alias: str, station: str, engine: str = None) -> int:
     if not alive.strip():
         print("[cluster] 无存活 RPC 节点 → 中止 (否则 llama-server 会因 --rpc 空而退化为单机)。")
         return 1
+    if rpc_target:
+        decl_set = decl.replace(",", " ").split()
+        alive_set = alive.replace(",", " ").split()
+        if rpc_target not in decl_set:
+            print(f"[cluster] --worker {worker} 目标 {rpc_target} 不在 nodes.env 声明清单 "
+                  f"({decl.strip() or '空'}) → 中止 (节点真值以 B 站 nodes.env 为准)。")
+            return 1
+        if rpc_target not in alive_set:
+            print(f"[cluster] --worker {worker} 目标 {rpc_target} 不在存活清单 "
+                  f"({alive.strip() or '空'}) → 中止 (显式 worker 不会像 auto 那样静默退化)。")
+            return 1
 
-    print("[cluster] [4/4] 加载权重 (conf RPC_TARGET=auto 展开为上式清单) ...")
+    print(f"[cluster] [4/4] 加载权重 (RPC_TARGET={rpc_target or 'conf 值'}) ...")
     # ★★ 2026-09-28 修: 这里原为 `_build_infer_load_cmd(alias, None)` —— **backend 漏传**。
     #   后果(实测复现): 远端收到 `infer-load '<alias>'`(不带 --backend) ⇒ infer-load 落到
     #   默认 BACKEND=unsloth ⇒ **studio 单机加载**, 把"双机 RPC"变成"单机全量持有" ⇒
@@ -1092,7 +1167,7 @@ def _load_rpc(alias: str, station: str, engine: str = None) -> int:
     #   `backend == "llama-rpc"` 仍走 _load_rpc, 而本行恒传 None ⇒ 无论用户怎么传都落到 unsloth。
     #   ⇒ 这便是"RPC 类模型只能手工起"的真因, 不是能力缺失。
     #   兄弟函数 _load_ds4_pp 传的是 "ds4"(见下方), 本处漏传属**不一致**, 非设计。
-    rc = ssh_stream(station, _build_infer_load_cmd(alias, "llama-rpc", engine))
+    rc = ssh_stream(station, _build_infer_load_cmd(alias, "llama-rpc", engine, rpc_target))
     if rc != 0:
         print(f"[cluster] 加载失败 (rc={rc}) → 可用 journalctl -u 'llama-server@*' 排查。")
         return 1
@@ -5932,7 +6007,7 @@ def main() -> int:
         return cmd_status("--html" in args[1:], "--frames" in args[1:], "--all" in args[1:])
     if sub == "load":
         tail = args[1:]
-        rest, backend, engine, i = [], None, None, 0
+        rest, backend, engine, worker, i = [], None, None, None, 0
         while i < len(tail):
             if tail[i] == "--backend" and i + 1 < len(tail):
                 backend = tail[i + 1]   # 提取值并跳过, 避免污染 alias 前缀
@@ -5942,12 +6017,17 @@ def main() -> int:
                 engine = tail[i + 1]    # 引擎变体: 名 -> /opt/llama.cpp-<名>/; 或绝对路径
                 i += 2
                 continue
+            if tail[i] == "--worker" and i + 1 < len(tail):
+                worker = tail[i + 1]    # 单 worker 指派 (A|C); head 固定权重站 B
+                i += 2
+                continue
             rest.append(tail[i])
             i += 1
         if not rest:
-            print("用法: cluster.py load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] [--engine <变体名|绝对路径>]")
+            print("用法: cluster.py load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] "
+                  "[--engine <变体名|绝对路径>] [--worker A|C]")
             return 1
-        return cmd_load(" ".join(rest), backend, engine)
+        return cmd_load(" ".join(rest), backend, engine, worker)
     if sub == "frames":
         return cmd_frames()
     if sub == "unload":

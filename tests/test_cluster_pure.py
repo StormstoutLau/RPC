@@ -262,6 +262,62 @@ chk("R1-①(旧件四件已删): 门面上不再有 EGRESS_DAILY_FILE/_egress_da
 chk("R1-⑨(FREE_QUOTA_PAID 已删): 门面上不再有历史档位常量（档位真值源 = 服务端 free_limit）",
     not hasattr(C, "FREE_QUOTA_PAID"), "仍可达: FREE_QUOTA_PAID")
 
+# ── RPC 加载前回收 halogen 容器：防「8080 仍由容器持有 ⇒ 健康检查假绿」────────
+# 现场（2026-10-22）：`load glm-5.3-flash` 时 A/B/C 的 qwen halogen 容器未回收，
+# 8080 仍由容器服务 ⇒ 远端 infer-load/健康检查命中 qwen，GLM 实际未起却报 READY。
+def _rpc_reclaim_probe(worker=None, conf_target=""):
+    calls, built, runs = [], [], []
+    saved = (C._reclaim_containers, C.ssh_stream, C.ssh_run,
+             C._build_infer_load_cmd, C._conf_rpc_target)
+    try:
+        C._reclaim_containers = lambda st: calls.append(st) or True
+        C.ssh_stream = lambda *a, **k: 0
+        C.ssh_run = lambda st, cmd, **k: runs.append(cmd) or (True, "10.10.10.1:50052 10.10.11.3:50052")
+        C._build_infer_load_cmd = lambda *a, **k: built.append((a, k)) or "true"
+        C._conf_rpc_target = lambda st, al: conf_target
+        rc = C._load_rpc("glm-5.3-flash", "B", None, worker)
+    finally:
+        (C._reclaim_containers, C.ssh_stream, C.ssh_run,
+         C._build_infer_load_cmd, C._conf_rpc_target) = saved
+    return rc, calls, built, runs
+
+
+_rc_rpc, _reclaim_calls, _built, _runs = _rpc_reclaim_probe()
+chk("RPC load: 先回收 A/B/C 三站 halogen 容器（防 8080 假绿）",
+    _rc_rpc == 0 and _reclaim_calls == ["A", "B", "C"],
+    f"rc={_rc_rpc} calls={_reclaim_calls}")
+chk("RPC load: conf 无单 worker 目标时不传 --rpc-target（保留 auto/多节点语义）",
+    _rc_rpc == 0 and _built and _built[-1][0][3] is None
+    and "rpc-nodes --start 'glm-5.3-flash'" in _runs,
+    f"built={_built} runs={_runs}")
+
+# 2026-10-22 单 worker 指派：head 固定 B，worker 由用户选 A|C。
+_rc_w, _calls_w, _built_w, _runs_w = _rpc_reclaim_probe(worker="C")
+chk("RPC load --worker C: 映射 10.10.11.3:50052 并透传 --rpc-target",
+    _rc_w == 0 and _calls_w == ["A", "B", "C"] and _built_w
+    and _built_w[-1][0][3] == "10.10.11.3:50052"
+    and "rpc-nodes --start 'glm-5.3-flash' '10.10.11.3:50052'" in _runs_w,
+    f"rc={_rc_w} built={_built_w} runs={_runs_w}")
+_rc_wa, _calls_wa, _built_wa, _runs_wa = _rpc_reclaim_probe(worker="A")
+chk("RPC load --worker A: 映射 10.10.10.1:50052",
+    _rc_wa == 0 and _built_wa and _built_wa[-1][0][3] == "10.10.10.1:50052",
+    f"rc={_rc_wa} built={_built_wa}")
+
+# 无 --worker 时从 conf 读出的单 worker 目标也应约束预启动与 infer-load。
+_rc_c, _calls_c, _built_c, _runs_c = _rpc_reclaim_probe(conf_target="10.10.10.1:50052")
+chk("RPC load 默认: conf 单 worker A ⇒ 预启动与 --rpc-target 都只带 A",
+    _rc_c == 0 and _built_c and _built_c[-1][0][3] == "10.10.10.1:50052"
+    and "rpc-nodes --start 'glm-5.3-flash' '10.10.10.1:50052'" in _runs_c,
+    f"rc={_rc_c} built={_built_c} runs={_runs_c}")
+
+# 非法/越界指派必须响亮拒绝（不静默退化）。
+chk("load --worker B: 非法 worker 拒绝（head 固定 B，B 不能当 worker）",
+    C.cmd_load("glm-5.3-flash", None, None, "B") == 1, "应 rc=1")
+chk("load --worker 非 RPC 模型: 拒绝",
+    C.cmd_load("gpt-oss-120b", None, None, "A") == 1, "应 rc=1")
+chk("load --worker + 强制单机后端: 拒绝（矛盾组合）",
+    C.cmd_load("glm-5.3-flash", "unsloth", None, "A") == 1, "应 rc=1")
+
 
 def _est_str(p):
     return str(_est(p)) if _est else "<缺 _egress_station_today>"

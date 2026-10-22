@@ -36,8 +36,8 @@ projects:
 - id: Auto_Prover
   root: F:\Auto_Prover
   reachable: true
-  files: 10
-  hits: 17
+  files: 11
+  hits: 18
 - id: Textbook
   root: D:\Textbook
   reachable: true
@@ -62,7 +62,7 @@ projects:
   root: F:\Full_Weather
   reachable: true
   files: 7
-  hits: 20
+  hits: 21
 - id: Macro_Data
   root: E:\Macro_Data
   reachable: true

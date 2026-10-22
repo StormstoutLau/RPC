@@ -20,9 +20,15 @@
 ## 两站一致性
 
 修改后核对：`md5sum /usr/local/bin/<file>`（两站必须一致）。
-**当前（2026-10-21，站上件 · 三站一致）**：infer-load **`582fd068...`**、infer-unload `a9f8f3f0...`、
+**当前（2026-10-22，站上件 · 三站一致）**：infer-load **`28ce417c...`**、infer-unload `a9f8f3f0...`、
 llama-serve-instance `e8c20ede...`、**rpc-serve-instance `24a3e592...`**、infer-list `74033ef1...`、
 **cluster-ttl `89af1078...`**。
+（2026-10-22 `infer-load` 改动 `582fd068…` → `28ce417c…`：新增 **`--rpc-target <ip:port>`**（仅 llama-rpc；
+仅本次加载覆盖 conf 的 RPC_TARGET，并经 `/run` 覆盖层让 systemd 单元同样生效；值有字符白名单）；GTT 等待改为等**实际 worker**
+（auto 仍等 A）；RPC 节点启动改为**只起本次 worker**（传 rpc-nodes 第三参数）。
+同批 `ops/rpc-nodes` 改动 `30b1a71d…` → `e3b75914…`（A/B 两站）：`--start <alias> [<ip:port>]` 第三参数
+= 节点过滤（不匹配则 skip；过滤器不在 RPC_NODES 内 ⇒ exit 3）；`--start` 改为输出**本次已起**节点
+（原先 `exec "$0"` 会重探全部，过滤时会误报未用节点）。）
 （2026-10-21 `infer-load` 改动 `2dd2f6cf…` → `582fd068…`：新增 `STUDIO_FLAGS`（conf 键 + unsloth 启动行追加
 + 禁 `-c/--ctx-size/-fa/--flash-attn` 的守卫）；`cluster-ttl` 改动：容器先 `docker rm -f` + `flash_serve` 识别。
 两张 `.bak-studioflags-20261021` / `.bak-halogen-20261021` 留在三站 `/usr/local/bin`。）

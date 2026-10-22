@@ -2,7 +2,8 @@
 # rpc-nodes — B5q-1: 集群 RPC 节点声明式清单 (spec/cluster-bench DESIGN §3)
 # 用法: rpc-nodes            输出存活节点逗号 join (供 --rpc); ≥1 存活 exit 0, 全不可达 exit 2
 #       rpc-nodes --all      输出声明清单 (不探测)
-#       rpc-nodes --start <alias>  各节点 ssh systemctl start rpc-server@<alias> 并等端口
+#       rpc-nodes --start <alias> [<ip:port>]  各节点 ssh systemctl start rpc-server@<alias> 并等端口
+#                            可选第三参数 = **只起该节点** (2026-10-22 单 worker 指派; 缺省 = 全部声明节点)
 #       rpc-nodes --stop <alias>   各节点 systemctl stop
 # 测试缝隙: NODES_ENV / RPC_SSH / RPC_PROBE_TIMEOUT (tests/b5q/test_rpc_nodes.sh)
 set -u
@@ -16,8 +17,17 @@ source "$NODES_ENV"
 
 MODE="${1:-}"
 ALIAS="${2:-}"
+FILTER="${3:-}"
 
 probe_one() { timeout -k 5 "$PROBE_TIMEOUT" bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null; }
+
+# 2026-10-22: 过滤匹配用 `case`，不用 `[ ... != *"$node"* ]` —— 后者在 bash 里对
+#   "带引号片段的单词"**不做通配**（实测 127.0.0.1:25052 被判 NOMATCH），会静默少起节点。
+node_selected() { # node_selected <node> — FILTER 为空 ⇒ 全选
+  [ -z "$FILTER" ] && return 0
+  case " $FILTER " in *" $1 "*) return 0 ;; esac
+  return 1
+}
 
 wait_port() { # wait_port <ip> <port> <tries>
   local i
@@ -35,6 +45,12 @@ case "$MODE" in
     ;;
   --start)
     [ -n "$ALIAS" ] || { echo "FATAL: --start 需 <alias>" >&2; exit 3; }
+    # 过滤器必须精确命中声明项 —— 否则循环一个都不起却 exit 0，调用方会误以为 worker 就绪。
+    if [ -n "$FILTER" ]; then
+      _hit=""
+      for node in $RPC_NODES; do [ "$node" = "$FILTER" ] && _hit=1; done
+      [ -n "$_hit" ] || { echo "FATAL: --start 过滤器 '${FILTER}' 不在 RPC_NODES (${RPC_NODES})" >&2; exit 3; }
+    fi
     # ── 引擎变体透传 (2026-09-29, GLM-5.3-Flash) ────────────────────────────────
     # 为什么由本脚本做: worker 的推理引擎**必须与 head 同版**(RPC 版本不匹配即握手失败),
     #   而"本实例用哪个引擎"的单一真值是 **head 站的实例 conf**(键 `LLAMA_RPC_SERVER_BIN`,
@@ -57,6 +73,13 @@ case "$MODE" in
     fi
     for node in $RPC_NODES; do
       ip="${node%%:*}"
+      # 2026-10-22: 单 worker 指派 —— 只起被选中的节点。为什么过滤而不是"起了不用":
+      #   ① 未选节点上的 rpc-server 若因缺单元/离线而失败，会拖垮整个加载（exit 4）；
+      #   ② infer-load 的 [5] 传入本次 RPC_TARGET 作为过滤器，保证"起的 = 用的"。
+      if ! node_selected "$node"; then
+        echo "[rpc-nodes] skip ${node} (未在本次 --rpc-target 中)" >&2
+        continue
+      fi
       echo "[rpc-nodes] start rpc-server@${ALIAS} @ ${node}" >&2
       # 覆盖层必须**先落地再 restart** —— systemd 只在启动时读 EnvironmentFile。
       if [ -n "$RPC_BIN" ]; then
@@ -73,8 +96,16 @@ case "$MODE" in
       "$RPC_SSH" "$ip" "sudo systemctl restart rpc-server@${ALIAS}" >&2 || exit 4
       wait_port "$ip" "${node##*:}" || { echo "FATAL: ${node} 端口未就绪" >&2; exit 4; }
     done
-    # start 成功 → 输出存活列表 (与默认模式一致, 供调用方直接用作 --rpc 值)
-    exec "$0"
+    # start 成功 → 输出本次**已起**节点列表 (与默认模式一致, 供调用方直接用作 --rpc 值)。
+    # 2026-10-22: 有 FILTER 时不能再 `exec "$0"` 重探全部节点 —— 否则会把未起/未用的节点
+    #   也报成"就绪"，与本次实际 --rpc 不一致。已过 wait_port 的节点即为存活，直接输出。
+    STARTED=""
+    for node in $RPC_NODES; do
+      node_selected "$node" || continue
+      STARTED="${STARTED}${node},"
+    done
+    echo "${STARTED%,}"
+    exit 0
     ;;
   --stop)
     [ -n "$ALIAS" ] || { echo "FATAL: --stop 需 <alias>" >&2; exit 3; }

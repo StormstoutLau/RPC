@@ -1,7 +1,9 @@
 #!/bin/bash
-# infer-load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] [--engine <变体名|绝对路径>] [--port N] [--ctx N] [--threads N]
+# infer-load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] [--engine <变体名|绝对路径>] [--rpc-target <ip:port>] [--port N] [--ctx N] [--threads N]
 #   --engine: 引擎**变体**(与 backend 正交), 落实例 conf 的 LLAMA_SERVER_BIN, 由 llama-serve-instance 既有钩子消费。
 #             名 -> /opt/llama.cpp-<名>/llama-server (例: --engine glm5next-20260928); 也接受绝对路径。
+#   --rpc-target (2026-10-22): 仅 llama-rpc; **仅本次加载**覆盖 conf 的 RPC_TARGET (worker 指派),
+#             不落 conf —— head 固定权重站 B, worker A|C 由调用方 (cluster.py --worker) 决定。
 # 默认后端 = unsloth (unsloth studio run 加载)
 #   引擎真身 (2026-09-17 实测订正): studio 自带 ~/.unsloth/llama.cpp/llama-server
 #     -> ~/.unsloth/llama.cpp/build/bin/llama-server (HIP/ROCm, 0.3.0-dev b10715 / commit 92cedc867)
@@ -15,18 +17,19 @@
 set -uo pipefail
 AWORK="scott-lau@scott-lau-NEX.local"
 
-PREFIX=""; BACKEND=""; PORT=""; CTX=""; THREADS=""; CLI_ENGINE=""
+PREFIX=""; BACKEND=""; PORT=""; CTX=""; THREADS=""; CLI_ENGINE=""; CLI_RPC_TARGET=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --backend) BACKEND="$2"; shift 2 ;;
     --engine|-e) CLI_ENGINE="$2"; shift 2 ;;
+    --rpc-target) CLI_RPC_TARGET="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
     --ctx) CTX="$2"; shift 2 ;;
     --threads) THREADS="$2"; shift 2 ;;
     *) PREFIX="$1"; shift ;;
   esac
 done
-[ -n "$PREFIX" ] || { echo "用法: infer-load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] [--engine <变体名|绝对路径>] [--port N]"; exit 1; }
+[ -n "$PREFIX" ] || { echo "用法: infer-load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] [--engine <变体名|绝对路径>] [--rpc-target <ip:port>] [--port N]"; exit 1; }
 
 log() { echo "[infer-load] $(date '+%H:%M:%S') $*"; }
 
@@ -225,6 +228,31 @@ if [ -n "$CLI_BACKEND" ]; then
       ;;
   esac
 fi
+
+# ---- [2b-2] 显式 --rpc-target: 单 worker 指派 (2026-10-22) ----
+# 语义: **仅本次加载**把 conf 的 RPC_TARGET（可能是 auto / 旧 worker）替换为用户指定的
+#   <ip:port>。不落 conf —— 节点指派是"每次加载的决定", conf 只承载默认值。
+# 为什么必须写 /run 覆盖层: 真正执行的是 systemd 单元 llama-server@<alias>，单元会重新
+#   source conf（见 [2c] 同一教训）；只改本进程 shell 变量对单元无效。
+if [ -n "${CLI_RPC_TARGET:-}" ]; then
+  # 字符白名单: 该值会写进 /run 覆盖层并被 systemd 单元 source ⇒ 换行/引号/空格都会破坏它。
+  case "${CLI_RPC_TARGET}" in
+    *[!0-9A-Za-z.:,_-]*)
+      log "ERROR: --rpc-target 含非法字符: '${CLI_RPC_TARGET}' (允许 字母/数字/.:,_-) —— 拒绝加载。"
+      exit 1
+      ;;
+  esac
+  case "${BACKEND:-}" in
+    llama-rpc)
+      RPC_TARGET="${CLI_RPC_TARGET}"
+      log "显式 --rpc-target: RPC_TARGET=${RPC_TARGET} (仅本次加载)"
+      ;;
+    *)
+      log "ERROR: --rpc-target 仅适用于 llama-rpc 后端 (当前 BACKEND=${BACKEND:-未设定}) —— 拒绝加载。"
+      exit 1
+      ;;
+  esac
+fi
 [ -n "$PORT" ] && PORT_NUM="$PORT" || PORT_NUM="${PORT:-8080}"
 
 # ---- [2c] 运行时覆盖层: 让"显式后端"对 systemd 单元路径也生效 (2026-09-15 修) ----
@@ -236,11 +264,13 @@ fi
 #  我上一版"单机无 --rpc"的验证是**假通过** —— 当时 RPC 节点恰好没起, 单元静默回退了。)
 # 办法: 把最终决定写进 /run 下的覆盖文件, 由 wrapper 在 source conf **之后**再 source 一遍。
 # 放 /run (tmpfs): 重启自清, 不动 /etc 下的配置。
-# 未显式指定后端 ⇒ 删除该文件, 回归 conf 语义 (避免上一次的覆盖变成陈旧状态)。
+# 未显式指定后端/目标 ⇒ 删除该文件, 回归 conf 语义 (避免上一次的覆盖变成陈旧状态)。
 RUN_OVERRIDE="/run/llama-instances/${ALIAS}.env"
 if [ "$BACKEND" = "ds4" ]; then
   :   # ds4 无 systemd 单元 llama-server@<alias>, 该 /run 覆盖对它无意义 ⇒ 不写 (见 [2] 的同名分家)
-elif [ -n "$CLI_BACKEND" ]; then
+elif [ -n "$CLI_BACKEND$CLI_RPC_TARGET" ]; then
+  # ★ 2026-10-22: --rpc-target 单独给出也必须写覆盖 —— 否则本进程 [5] 起了指定 worker,
+  #   单元却仍按 conf 的 RPC_TARGET 起另一个 worker（"名义 A、实际 C"）。
   sudo install -d -m 0755 /run/llama-instances
   printf 'RPC_TARGET=%s\n' "${RPC_TARGET:-}" | sudo tee "$RUN_OVERRIDE" >/dev/null
   sudo chmod 644 "$RUN_OVERRIDE"
@@ -285,9 +315,18 @@ wait_gtt() {
 }
 wait_gtt "B" ""
 if [ -n "${RPC_TARGET:-}" ]; then
-  wait_gtt "A" "$AWORK"
+  # ★ 2026-10-22: 等**本次实际 worker** 的 GTT，而非恒等 A —— 单 worker 指派到 C 时，
+  #   等 A 是错的（C 上的旧引擎仍占着显存，rpc-server 会在加载中途 OOM）。
+  #   auto 保留旧语义（多 worker 形态，A 是既有代表）；显式值取 <ip>:<port> 的 ip，
+  #   与 cluster.py 的 LAN IPv4 同一地址真值（ADR-0006）。
+  if [ "$RPC_TARGET" = "auto" ]; then
+    wait_gtt "A" "$AWORK"
+  else
+    W_IP="${RPC_TARGET%%:*}"
+    wait_gtt "worker(${W_IP})" "scott-lau@${W_IP}"
+  fi
 else
-  log "A GTT 跳过 (单机模式: RPC_TARGET 空, A 站资源与本加载无关)"
+  log "worker GTT 跳过 (单机模式: RPC_TARGET 空, worker 站资源与本加载无关)"
 fi
 
 # ---- [4] vLLM 路径 (回退) ----
@@ -419,18 +458,21 @@ fi
 #
 # 真因② **没等端口**: master 侧 `RPC_TARGET=auto` 的展开是**单次探测、无重试**,
 #   端口若还没监听, /dev/tcp 连接被**立即拒绝**(不是等 2s 超时) → 同样落空回退。
-#   ⇒ 用 `rpc-nodes --start`: 它自带 `wait_port`(15×2s), 且按 nodes.env 声明启动**全部**
-#   节点 (A + C), 即文档中的"1 master + 2 worker"。
+#   ⇒ 用 `rpc-nodes --start`: 它自带 `wait_port`(15×2s); 未显式指定 worker 时按 nodes.env
+#   声明启动**全部**节点 (A + C, 即旧文档的"1 master + 2 worker"); 显式 RPC_TARGET 时只起该 worker。
 #
 # 另外: 拿不到节点时**不再静默回退**, 而是响亮失败 (exit 7) —— 静默回退正是这类错误
 # 长期不可见的根源 (P2-4 路径对比的两条路径就因此都跑成了单机)。
 if [ -n "${RPC_TARGET:-}" ]; then
   RPCCMD="$(command -v rpc-nodes || echo /usr/local/bin/rpc-nodes)"
-  log "起 RPC 节点 (${RPCCMD} --start ${ALIAS}, 服务用户身份 + 自带等端口)..."
+  # 2026-10-22: 显式 RPC_TARGET ⇒ 只起该 worker（起 = 用）。auto 保持旧语义（起全部声明节点）。
+  RPC_FILTER=""
+  [ "$RPC_TARGET" = "auto" ] || RPC_FILTER="$RPC_TARGET"
+  log "起 RPC 节点 (${RPCCMD} --start ${ALIAS} ${RPC_FILTER:+(仅 ${RPC_FILTER})}, 服务用户身份 + 自带等端口)..."
   if [ "$(id -u)" = "0" ]; then
-    RPC_ALIVE="$(sudo -u "${RPC_USER:-scott-lau}" "$RPCCMD" --start "${ALIAS}")"
+    RPC_ALIVE="$(sudo -u "${RPC_USER:-scott-lau}" "$RPCCMD" --start "${ALIAS}" ${RPC_FILTER:+"$RPC_FILTER"})"
   else
-    RPC_ALIVE="$("$RPCCMD" --start "${ALIAS}")"
+    RPC_ALIVE="$("$RPCCMD" --start "${ALIAS}" ${RPC_FILTER:+"$RPC_FILTER"})"
   fi || {
     log "ERROR: RPC 节点未能就绪 —— 拒绝静默回退单机"
     log "       排查: (a) 是否以服务用户身份 ssh (root 无节点密钥)"

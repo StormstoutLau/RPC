@@ -88,6 +88,15 @@ DEFAULT_STATION = "B"
 # qwen3.8-flash-next 已移出 (2026-09-15): 它是单机量化加载模型, 用 STATION_ROUTES 的
 # qwen3.8-flash-next-b 走 B 站本地加载, 不再经 RPC 双机通道。
 RPC_MODELS = {"deepseek-v4-flash-0731", "gpt-oss-120b-fable-5-distilled", "glm-5.3-flash"}
+# ── RPC worker 站字母 -> ring 地址（**CLI 便利映射**；节点真值 = B 站 nodes.env）──────────
+# 2026-10-22：RPC 加载默认 = **1 head + 1 worker**（head 固定为权重所在站 B），
+#   `cluster.py load <rpc模型> --worker A|C` 让用户在加载时指派 worker，不改 conf。
+# ⚠ 这是**便利映射**，不是第二真值：加载前由 `rpc-nodes --all` 的声明清单校验；
+#   若 nodes.env 改了 ring 地址，这里必须同步（否则 --worker 会被校验拒绝，响亮失败）。
+RPC_WORKER_IPS = {
+    "A": "10.10.10.1:50052",
+    "C": "10.10.11.3:50052",
+}
 # ★ glm-5.3-flash 入表 (2026-09-29): 146.1 GiB 单文件 > 单站 124 GiB ⇒ **必须**双机层切分
 #   (`-sm layer`), 与 V4-Flash 同形态。★ 但它比另两个多一条前置: `glm5next` **未进主线**
 #   ⇒ head 与 worker **两端都要** `/opt/llama.cpp-glm5next-20260928` 变体引擎,
