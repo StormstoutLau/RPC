@@ -1,0 +1,2 @@
+﻿RESULT {"wall_s": 16.281, "prompt_n": 32230, "prompt_ms": 16202.1, "prompt_tps": 1989.248, "cache_n": 0, "predicted_n": 1, "mode": "prefill", "words": 26000, "run": 1, "salt": "caeb91a54a4965aa"}
+RESULT {"wall_s": 15.909, "prompt_n": 31985, "prompt_ms": 15841.3, "prompt_tps": 2019.089, "cache_n": 0, "predicted_n": 1, "mode": "prefill", "words": 26000, "run": 2, "salt": "cdeace398ce81b97"}

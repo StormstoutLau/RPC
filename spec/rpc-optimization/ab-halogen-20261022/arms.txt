@@ -1,0 +1,20 @@
+# halogen image A/B — 2026-10-22
+
+- Station: **C** (192.168.10.37), container `halogen`
+- Recipe: `CONTAINER_MODELS["qwen3.8-flash-next"]` (same volume/device/group/ipc/env), except the image ref per arm.
+- Probe: `probe.py` (runs on station, POSTs `127.0.0.1:8080/v1/chat/completions`).
+  - prefill: `--words 6500 --runs 3` (~8k tokens) / `--words 26000 --runs 3` (~32k tokens); `max_tokens=1`, `temperature=0`, `enable_thinking=false`, unique salt per run.
+  - fairness: `--words 26000 --runs 2`; short request = 1024-token streaming reply, long request = ~32k-token prefill.
+- Arms:
+  - `0.18.11` = `ghcr.nju.edu.cn/peonist-ai/halogen-flash-server:0.18.11@sha256:a5797467d2bff173e0c661d9700292bd55eac305faff68c86261ae35385ad6ad`
+  - `0.18.12` = `...:0.18.12@sha256:b6403f1d07e22b719fb23d131d16d1ea27650da414dfaff734cfdd4fe18b9ba2`
+  - `0.18.13` = `...:0.18.13@sha256:2e98dc53ed4a43b5600b11a80852eedfa573f4ffc3f10c64da01245f2a3217fc`
+  - `0.18.13-flags-off` = 0.18.13 + `HALOGEN_ADMIT_SPLICE_MS=0` + `HALOGEN_ADMIT_NEST=0`
+  - `0.18.11-recheck` = 0.18.11 again at the end (drift control)
+- Container lifecycle: `arm.ps1` / `arm_control.ps1` (down → wait port 8080 free → up → wait `/health` ok).
+- Raw outputs: `ab_*.jsonl` (one `RESULT {...}` line per run); `summary.txt` = `analysis.py` output.
+- After the test, C was restored to the pinned 0.18.13 production container via `cluster.py load qwen3.8-flash-next-c`.
+
+## Result in one line
+
+0.18.12 prefill speedup **not reproduced** (cold 8k/32k, within noise); 0.18.13 splice/nest **reproducible**: short TTFT 15.77→0.80 s, stream max gap 15.96→0.85 s, at the cost of +8.9% long-prompt prefill under concurrency.

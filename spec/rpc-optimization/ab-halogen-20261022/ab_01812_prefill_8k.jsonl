@@ -1,0 +1,3 @@
+﻿RESULT {"wall_s": 4.312, "prompt_n": 8058, "prompt_ms": 4265.4, "prompt_tps": 1889.155, "cache_n": 0, "predicted_n": 1, "mode": "prefill", "words": 6500, "run": 1, "salt": "2444088a51021c05"}
+RESULT {"wall_s": 4.151, "prompt_n": 8063, "prompt_ms": 4130.6, "prompt_tps": 1952.017, "cache_n": 0, "predicted_n": 1, "mode": "prefill", "words": 6500, "run": 2, "salt": "1188cfa951723039"}
+RESULT {"wall_s": 4.14, "prompt_n": 8069, "prompt_ms": 4118.7, "prompt_tps": 1959.113, "cache_n": 0, "predicted_n": 1, "mode": "prefill", "words": 6500, "run": 3, "salt": "9a419701a4e09a80"}

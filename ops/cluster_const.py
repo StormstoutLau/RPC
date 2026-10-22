@@ -109,9 +109,13 @@ DS4_PP_MODELS = {"glm53-q4": ("B", "C")}   # 值 = (coordinator 站, worker 站)
 # 计划与执行同源 (ADR-0012 D2), 不在别处另拼一份 docker run。
 #
 # ★ 只登记**经本仓实测**的字段 (ADR-0014 §V6/§V6.1):
-#   · image: 0.18.11 —— 升级是**功能性**前置, 非顺手: 0.18.1 起 `/v1/messages` 才把超
-#     `max_tokens_cap`(65536) 的请求钳制 (docs/claude-code.md), 而 qwen3.8-flash-next 的
-#     默认消费者就是 claude code。0.17.4 无此钳制 (实测: 审计类任务撞 32k cap 返回 length)。
+#   · image: 0.18.13 (2026-10-22 升级) —— 升级理由: 实测 0.18.13 的 splice/nest 显著改善
+#     并发公平性 (短请求 TTFT 15.77→0.80 s、流式中断 15.96→0.85 s; 代价长 prompt prefill
+#     +8.9%); 0.18.12 的「prompts 更快」在冷 8k/32k 未复现 (噪声内); ★ 两版均**未改
+#     Flash checkpoint**、temp=0 逐字节一致 (上游 CHANGELOG + 本仓 A/B), 故升级风险低。
+#     0.18.1 起 `/v1/messages` 才把超 `max_tokens_cap`
+#     (65536) 的请求钳制 (docs/claude-code.md), 而 qwen3.8-flash-next 的默认消费者就是
+#     claude code。0.17.4 无此钳制 (实测: 审计类任务撞 32k cap 返回 length)。
 #   · group_add: **数字 GID** 44/992 —— 组名会 rc=125 (docker 按**容器内** /etc/group 解析,
 #     容器里没有 video/render); 与 ADR-0014 未实测登记 #7 的实测修正一致。
 #   · volume 用 **rw** (不写 :ro): `HALOGEN_DOWNLOAD` 要往该目录写 MTP head (1.4 GiB) + tokenizer。
@@ -127,8 +131,8 @@ CONTAINER_MODELS = {
         # ★ 2026-10-22 (ADR-0014 #2 裁定【甲】): 按 **digest 钉死** —— tag 保留可读性, digest 才是真值。
         #   三站 `RepoDigests`/`Id` 已实测逐字一致; 更新制品 = 显式改这里的 digest (Docker 官方语义)。
         #   漂移检查 = `rpc_check --only engine` (三站在跑容器的 RepoDigests vs 本串)。
-        "image": "ghcr.nju.edu.cn/peonist-ai/halogen-flash-server:0.18.11"
-                 "@sha256:a5797467d2bff173e0c661d9700292bd55eac305faff68c86261ae35385ad6ad",
+        "image": "ghcr.nju.edu.cn/peonist-ai/halogen-flash-server:0.18.13"
+                 "@sha256:2e98dc53ed4a43b5600b11a80852eedfa573f4ffc3f10c64da01245f2a3217fc",
         "models_dir": "/data/models/gguf/lmstudio-community/Qwen3.8-Flash-Next-GGUF/UD-IQ4_XS",
         "volume": ["/data/models/gguf/lmstudio-community/Qwen3.8-Flash-Next-GGUF/UD-IQ4_XS:/models"],
         "checkpoint": "/models/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf",

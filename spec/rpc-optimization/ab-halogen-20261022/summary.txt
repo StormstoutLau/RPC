@@ -1,0 +1,23 @@
+﻿== PREFILL ==
+0.18.11          8k   prompt_n 8056      prompt_ms 4182      tps 1926.7
+0.18.11          32k  prompt_n 32210     prompt_ms 16109     tps 1999.4
+0.18.12          8k   prompt_n 8063      prompt_ms 4172      tps 1933.4
+0.18.12          32k  prompt_n 32036     prompt_ms 15933     tps 2010.6
+0.18.13          8k   prompt_n 8072      prompt_ms 4140      tps 1950.2
+0.18.13          32k  prompt_n 32163     prompt_ms 15983     tps 2012.3
+0.18.11-recheck  8k   prompt_n 8108      prompt_ms 4207      tps 1927.7
+0.18.11-recheck  32k  prompt_n 32108     prompt_ms 16022     tps 2004.2
+
+== FAIRNESS ==
+0.18.11            nest: short_ttft mean 15.769 (min 15.643, max 15.895, n=2) | long_prefill_ms mean 15999.550 (min 15934.800, max 16064.300, n=2)
+                         short_max_gap mean 0.082 (min 0.081, max 0.082, n=2)
+0.18.11            splice: max_gap_after_long_start mean 15.963 (min 15.918, max 16.009, n=2) | long_prefill_ms mean 15906.150 (min 15860.600, max 15951.700, n=2)
+0.18.12            nest: short_ttft mean 15.712 (min 15.523, max 15.900, n=2) | long_prefill_ms mean 15962.000 (min 15948.500, max 15975.500, n=2)
+                         short_max_gap mean 0.082 (min 0.081, max 0.082, n=2)
+0.18.12            splice: max_gap_after_long_start mean 16.038 (min 15.978, max 16.097, n=2) | long_prefill_ms mean 15981.550 (min 15922.800, max 16040.300, n=2)
+0.18.13            nest: short_ttft mean 0.795 (min 0.620, max 0.971, n=2) | long_prefill_ms mean 17419.350 (min 17267.600, max 17571.100, n=2)
+                         short_max_gap mean 0.841 (min 0.840, max 0.843, n=2)
+0.18.13            splice: max_gap_after_long_start mean 0.848 (min 0.845, max 0.851, n=2) | long_prefill_ms mean 17382.900 (min 17341.000, max 17424.800, n=2)
+0.18.13-flags-off  nest: short_ttft mean 15.777 (min 15.535, max 16.020, n=2) | long_prefill_ms mean 16016.950 (min 15960.600, max 16073.300, n=2)
+                         short_max_gap mean 0.124 (min 0.081, max 0.167, n=2)
+0.18.13-flags-off  splice: max_gap_after_long_start mean 16.042 (min 15.995, max 16.089, n=2) | long_prefill_ms mean 15984.400 (min 15937.700, max 16031.100, n=2)

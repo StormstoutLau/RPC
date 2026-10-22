@@ -4,10 +4,10 @@
 
 id: ADR-0014
 type: adr
-version: 2.1
+version: 2.2
 status: accepted
 date: 2026-10-10
-updated: 2026-10-11
+updated: 2026-10-22
 depends: [ADR-0004, ADR-0012]
 upstream: [ADR-0004]
 
@@ -17,7 +17,7 @@ upstream: [ADR-0004]
 > 用于给 **Qwen3.8-Flash-Next** 做本地加速，**三站 · 测试性** —— A 站首发，B/C 于 v2.1 复用落地）；
 > ② 把 `ADR-0012` 的容器管理能力**从「只读」扩到「写动作」**（`pull` / `up` / `down`）——
 > 仍走**唯一管理面** `ops/cluster.py`，**默认 `--plan`、`--go` 才动手**，**不新增并列脚本**。
-> **创建日期**: 2026-10-10 ｜ **修订**: 2026-10-11（**v2.0**：A 站真部署落地 + D7/D8 新增；**v2.1**：B/C 复用落地真部署 + D7 前置解 + ports.yaml scope 同步）
+> **创建日期**: 2026-10-10 ｜ **修订**: 2026-10-22（**v2.0**：A 站真部署落地 + D7/D8 新增；**v2.1**：B/C 复用落地真部署 + D7 前置解 + ports.yaml scope 同步；**v2.2**：digest pin 实施 + 未实测登记 #2/#6/#7/#9 闭环 + 镜像升 0.18.13）
 > **状态**: accepted（**立项 + A/B/C 三站真部署已落地**；`containers` 子命令见 §验证 · V6/V6.1 见 §验证）
 > **适用**: 三站 halogen 测试性部署的准入、端口真值、安全边界；`cluster.py containers` 写动作的授权边界
 > ★ 本 ADR **不**改变宿主 `dockerd` / `containerd` 的系统服务归属，**不**为 halogen 的**生产可靠性**背书。
@@ -282,6 +282,30 @@ prompt set = **上游 `tools/eval-prompts.json`**（10 例：code/proof/proc/cha
 
 ---
 
+## §V6.2 实证 —— 镜像升 0.18.13（2026-10-22 · E1）
+
+**结论**：三站 `0.18.11` → **`0.18.13`** 升级完成；`/health` 三项一致、同一 greedy 请求输出一致、`engine` 门禁 PASS。
+
+- **制品**：`ghcr.nju.edu.cn/peonist-ai/halogen-flash-server:0.18.13@sha256:2e98dc53…`（0.18.12 = `b6403f1d…`；0.18.11 = `a5797467…`）。`CONTAINER_MODELS.image` 已改到新 pin。
+- **理由（上游 CHANGELOG，E1 实读）**：0.18.12 称「prompts 每个长度都更快」+ `HALOGEN_CACHE_STAGE=2`（★ **本集群冷 8k/32k 未复现**，见下）；0.18.13 流式拼接 / 短请求嵌套默认开（`HALOGEN_ADMIT_SPLICE_MS=500` / `HALOGEN_ADMIT_NEST=1`）+ NPU 故障不再拖垮容器（★ **本集群公平性收益已复现**，见下）。两版均**未改 Flash checkpoint**、temp=0 逐字节一致于前一版。
+- **执行**：三站 `docker pull` 新 digest（后台，4.56 GB）→ `cluster.py load qwen3.8-flash-next`（B）/ `…-a`（A）/ `…-c`（C）逐站重建（`_load_container_model`：`docker rm -f` → `docker run` → `/health` 轮询）。全程只经统一入口。
+- **验证**：三站 `Config.Image` / `RepoDigests` 均 = 新 pin；`/health` = `status:ok`、`version={"api":"0.18.13","engine":"0.18.13","match":true}`、`context=262144`、`kv_pool_positions=524288`、`prompt_cache.mode=2`、`drafter_weights_loaded=true`；同一 greedy 请求（`enable_thinking=false`）三站均返回 `PONG`、`usage=18/3` 一致；`py -3 ops\rpc_check.py --only engine` **PASS**（含 digest 漂移判定）。
+- **回滚**：把 `CONTAINER_MODELS.image` 改回 `…:0.18.11@sha256:a5797467…` 后逐站 `load` 重建（镜像仍在站上，秒级）。
+- **定量 A/B（2026-10-22 · C 站单站 · E1）**：同一 checkpoint / 同一容器配方 / 同一请求体；每臂冷启后测 8k/32k 冷 prefill（`max_tokens=1`、唯一盐值、`cache_n=0`）×3，并发公平性各 ×2。短请求 = 1024 token 流式；长请求 = ≈32k token、`max_tokens=1`。测试臂启停用 `cluster.py containers down/up --go`（同一 `containers_plan` 生成器，配方照抄 `CONTAINER_MODELS`；臂间只换 image，对照臂额外加两个 env）；测后 C 已用 `load qwen3.8-flash-next-c` 恢复 0.18.13。
+
+  | 臂 | 8k prefill | 32k prefill | 短请求 TTFT（长 prompt 在读） | 流式最大中断（长 prompt 在读） | 并发时长 prompt prefill |
+  |---|---|---|---|---|---|
+  | 0.18.11 | 1926.7 t/s / 4182 ms | 1999.4 t/s / 16109 ms | 15.77 s | 15.96 s | 16.00 s |
+  | 0.18.12 | 1933.4 / 4172 | 2010.6 / 15933 | 15.71 s | 16.04 s | 15.96 s |
+  | 0.18.13 | 1950.2 / 4140 | 2012.3 / 15983 | **0.80 s** | **0.85 s** | 17.42 s |
+  | 0.18.13 + `SPLICE_MS=0` + `NEST=0` | — | — | 15.78 s | 16.04 s | 16.02 s |
+  | 0.18.11 末次复测 | 1927.7 / 4207 | 2004.2 / 16022 | — | — | — |
+
+  **结论**：① **0.18.12 的 prefill 提速在冷 8k/32k 长 prompt 上未复现**（+0.3% / +0.6%，与 0.18.11 末次复测的 +0.05% / +0.24% 同量级 ⇒ **噪声**）；② **0.18.13 的并发公平性可复现且量级大**：短请求 TTFT **15.77 → 0.80 s（≈19.8×）**、流式最大中断 **15.96 → 0.85 s（≈18.8×）**；**关闭 splice/nest 后回到 15.78 / 16.04 s** ⇒ **归因成立**；③ **代价**：并发时**长 prompt 的 prefill 从 16.00 s 增到 17.42 s（+8.9%）**（与上游"5–7% 更晚"同向，本测略高）；④ 单流冷 prefill 三臂无实质差异（≤1.2%，含漂移）。
+  ⚠ **射程**：仅 **C 站**、Qwen3.8-Flash-Next、**冷 8k/32k 长 prompt**、`enable_thinking=false`；**短 prompt / cache-on 首请求 / >2 并发**未测。原始 JSONL / probe / analysis 已入库：[spec/rpc-optimization/ab-halogen-20261022](../spec/rpc-optimization/ab-halogen-20261022/)。
+
+---
+
 ## 未实测登记（不静默）
 
 1. ~~**`containers` 子命令与真部署分两批**~~ **→ 已实测（2026-10-11 · A 站）**：V6 对象即本轮真部署，全程只经统一入口。
@@ -291,6 +315,7 @@ prompt set = **上游 `tools/eval-prompts.json`**（10 例：code/proof/proc/cha
    镜像存在性检查照常通过）。漂移检查已接入 `rpc_check --only engine`：**先验红**（临时把 pin 改成
    `sha256:000…` ⇒ 三站 FAIL 并逐站点名）→ 恢复真值后 **PASS**。
    详见 [闭环调研 §2.1](../docs/research/2026-10-22_ADR-0014开放项闭环调研.md)。
+   ★ **2026-10-22 晚已按同一机制升到 0.18.13**（新 digest `2e98dc53…`），三站重建 + `/health` + `engine` 门禁 PASS，见 **§V6.2**。
 3. ~~**A 站 IOMMU = 默认开，halogen 在该内核/驱动组合下是否可用未实测**~~ **→ 已实测**：A 站（内核 6.17.0-40-generic）**可用**，冒烟通过。
 4. ~~**`--group-add video/render` 的实际效果未验**~~ **→ 部分实测**：容器内 GPU **可见且推理成功**；
    ⚠ 但生效值是**数字 GID**（44/992），**非** D4 字面的组名 —— 见 #7。
@@ -329,3 +354,4 @@ prompt set = **上游 `tools/eval-prompts.json`**（10 例：code/proof/proc/cha
 | 1.0 | 2026-10-10 | 立项：D1–D6（halogen 引入 A 站测试性 / 容器写动作扩权 / 端口真值 / 安全边界 / 失效回退 / 供应链边界）；替代方案甲–己。承 `ADR-0004` · `ADR-0012`。 |
 | 2.0 | 2026-10-11 | **A 站真部署落地**（V6 由「未做」→「已做」，新增 §V6 实证：镜像 digest/体积、BYO GGUF + 专用 head/tokenizer、内存/端口、冒烟短/长 ctx、**三处实测修正**、副作用）；新增 **D7**（Qwen3.8-Flash-Next 默认执行框架 = halogen，裁定已下/落地未做）与 **D8**（B/C 复用 —— 实测「有 CLI、无 daemon」阻断，备选 a/b/c）；未实测登记重排（#1–#5 标已实测、新增 #7–#10）。 |
 | 2.1 | 2026-10-11 | **B/C 复用落地真部署**（D8(a)：`containers install` 补 daemon + `containers up` 照抄 A 配方；B/C `/health` ok、冒烟同档，新增 **§V6.1 实证**）；**D7 前置解**（三站均可跑 halogen ⇒ 默认框架前提已满足，代码层仍待确认）；`8730/8731` 的 `inventory/ports.yaml` **scope `[A]`→`[A, B, C]`**；未实测登记 #10 标已解。 |
+| 2.2 | 2026-10-22 | **digest pin 实施 + 开放项闭环 + 镜像升 0.18.13**：`CONTAINER_MODELS.image` 由 tag 改为 `tag@sha256`（0.18.11 → 0.18.13），`rpc_check --only engine` 加 digest 漂移判定；#2/#6/#7/#9 闭环（#9 用户裁定保留）；**三站 0.18.13 真升级**（新增 **§V6.2 实证**：三站 `Config.Image`/`RepoDigests` = 新 pin、`version.api=engine=0.18.13`、greedy 冒烟三站一致、`engine` PASS）。 |
