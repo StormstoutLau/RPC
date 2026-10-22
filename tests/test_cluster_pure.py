@@ -259,6 +259,8 @@ _GONE = ("EGRESS_DAILY_FILE", "_egress_daily", "_egress_bump", "_egress_save")
 _still = [n for n in _GONE if hasattr(C, n)]
 chk("R1-①(旧件四件已删): 门面上不再有 EGRESS_DAILY_FILE/_egress_daily/_egress_bump/_egress_save（防死件复活）",
     (not _still), f"仍可达: {_still}")
+chk("R1-⑨(FREE_QUOTA_PAID 已删): 门面上不再有历史档位常量（档位真值源 = 服务端 free_limit）",
+    not hasattr(C, "FREE_QUOTA_PAID"), "仍可达: FREE_QUOTA_PAID")
 
 
 def _est_str(p):

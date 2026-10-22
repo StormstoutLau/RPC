@@ -546,7 +546,7 @@ from cluster_secrets import (  # noqa: E402
 # probe_egress_station 均不变。实现改 ops/cluster_egress.py。
 from cluster_egress import (  # noqa: E402
     EGRESS_SEP, EGRESS_STATION_FILE, EGRESS_URL, FREE_ALERT_RATIO, FREE_QUOTA_FREE,
-    FREE_QUOTA_PAID, OR_BORROW_AT, OR_BORROW_FILE, OR_POOL_DIR,
+    OR_BORROW_AT, OR_BORROW_FILE, OR_POOL_DIR,
     # ★ 2026-10-20 R1 裁【丙】（用户令「继续执行 R1 实施面，清理旧件四件」）：
     #   旧的主控侧单计数器四件 —— `EGRESS_DAILY_FILE` / `_egress_daily` / `_egress_bump` / `_egress_save`
     #   —— **已随该件一并删除** ⇒ **不再重导出**（本地计数面单件承载 = 派发侧 `ops/.egress_station.json`）。

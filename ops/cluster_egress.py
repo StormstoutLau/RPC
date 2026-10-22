@@ -90,7 +90,7 @@ def _egress_cmd(keyexpr: str) -> str:
 # ★ 2026-10-20 就地收窄(E2 实测; 与 ADR-0003 L194 的 2026-10-20 更正同源): 原写"**429/失败仍计入每日配额**"
 #   ⇒ 实测**只对 429 成立** —— 连打 20 次全 **400**(客户端) 后该账户 used **纹丝未动**(5→5)
 #     ⇒ **400 类客户端错误【不】计**; ⚠ 429 那半本轮**未测到**(20 次全 200) ⇒ 保留原样: 不冒认、也不否认。
-FREE_QUOTA_PAID = 1000   # 历史档位值；★ **不再是主口径**（档位真值源 = 服务端 `free_limit`，见 R4）
+
 FREE_QUOTA_FREE = 50     # ★ 现役用途 = `_free_quota()` 的 **fail-closed 兜底档**（判不了 ⇒ 取保守）
 FREE_ALERT_RATIO = 0.8
 EGRESS_STATION_FILE = Path(__file__).resolve().parent.parent / "ops" / ".egress_station.json"
