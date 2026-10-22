@@ -1,0 +1,6 @@
+﻿A ncmoe0/fa-on/8k            short: n=3 decode 27.55 t/s (prefill 379.1, prompt_n 567) | long: n=3 decode 26.85 t/s (prefill 496.9, prompt_n 4104)
+A-recheck ncmoe0/fa-on       short: n=2 decode 27.52 t/s (prefill 401.1, prompt_n 562) | long: n=2 decode 26.77 t/s (prefill 492.9, prompt_n 4132)
+B ncmoe8/fa-on/8k            short: n=3 decode 23.62 t/s (prefill 362.6, prompt_n 560) | long: n=3 decode 23.46 t/s (prefill 456.7, prompt_n 4139)
+C ncmoe0/KVq8/fa-on          short: n=3 decode 27.54 t/s (prefill 401.7, prompt_n 554) | long: n=3 decode 26.87 t/s (prefill 506.3, prompt_n 4087)
+D ncmoe0/fa-off              short: n=3 decode 27.18 t/s (prefill 388.7, prompt_n 560) | long: n=3 decode 25.32 t/s (prefill 479.9, prompt_n 4127)
+E ncmoe8/fa-on/262k          short: n=3 decode 23.56 t/s (prefill 365.9, prompt_n 573) | long: n=3 decode 23.39 t/s (prefill 461.8, prompt_n 4112)

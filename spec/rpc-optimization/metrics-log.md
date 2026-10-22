@@ -938,3 +938,43 @@ ggml_backend_rpc_start_server()                                                 
 **结论**: ① **0.18.12 的 prefill 提速未复现** —— 冷 8k/32k 仅 +0.3% / +0.6%，与 0.18.11 末次复测漂移（+0.05% / +0.24%）同量级 ⇒ **噪声**；② **0.18.13 的并发公平性可复现且量级大** —— 短请求 TTFT **15.77→0.80 s（≈19.8×）**、流式最大中断 **15.96→0.85 s（≈18.8×）**，关闭 splice/nest 后回到 **15.78/16.04 s** ⇒ **归因成立**；③ **代价** —— 并发时长 prompt prefill **16.00→17.42 s（+8.9%）**；④ 单流冷 prefill 三臂无实质差异（≤1.2%）。
 **射程**: 仅 C 站、冷 8k/32k、`enable_thinking=false`；短 prompt / cache-on 首请求 / >2 并发未测。
 **证据落点**: [ab-halogen-20261022](./ab-halogen-20261022/)（probe/analysis/raw JSONL/summary）· 正文 = [ADR-0014 §V6.2](../../adr/ADR-0014-halogen引擎引入与容器写动作扩权.md#v62-实证--镜像升-01813-2026-10-22--e1)。
+
+---
+
+## Phase 13: EV-14 影子引擎 `e197cef4` 在 `-sm layer` 档的 A/B（2026-10-22, E1）—— 净收益 ≈ 0
+
+> **被验条目**: [TRACKER §1.5 EV-14](../upstream-tracker/TRACKER.md)；现役 `master-23b0202a`（10-12）→ 上游 HEAD **`e197cef4`**（10-22T07:06Z，**261 提交**）。
+> **方法**: codeload tarball → B 站构建（Vulkan+RPC Release）→ **129 个 ELF** `patchelf --set-rpath '$ORIGIN'` → MANIFEST **79/79** → 分发 A/C（`md5sum -c` **79/79 ×2**）→ conf 快照 → `cluster.py load deepseek-v4-flash-0731 --backend llama-rpc --engine master-e197cef4`（head=B / worker=A，**不切 symlink**）→ 测量 → 恢复 conf → 无 `--engine` 重载现役 → 复测。
+
+| 指标 | 现役 `23b0202a` | 影子 `e197cef4` | Δ |
+|---|---|---|---|
+| 加载（至 READY） | 372 s | 382 s | +2.7%（单样本） |
+| **prefill ×7**（随机 prompt，≈2.59k tok） | **268.10**（260.3–287.1） | **268.62**（260.1–289.4） | **+0.2%**（噪声） |
+| **decode ×3**（512 tok） | **13.920**（13.907–13.935） | **13.901**（13.893–13.907） | **−0.14%**（噪声） |
+| 固定输出 ×5 | `AB_PONG_1..5` · pred_n 37/36/39/36/36 | 同 | **逐条一致** |
+| `GGML_ASSERT` / 崩溃 | 0 | 0 | 一致 |
+
+**判读**: ① **净收益 ≈ 0** —— `e197cef4` 的 261 提交（含 `#27703` / `#29741`+`#30468` / `#29533` / `#30514` / `#29677` / `#30481` / `#30480`+`#30613` / `#30861` / `#30823`）在本形态（`-sm layer` + V4-Flash MXFP4）**未兑现可测收益**；② **prefill 绝对值与 Phase 9 不可比**（prompt 长度/内容不同：本轮 ≈2.59k tok，Phase 9 为另一套随机 prompt），**只做同轮两臂对照**；③ **`#30547` 已 Closed completed（10-16）**，且本形态 `--n-cpu-moe 0` 本就不命中；④ ⇒ **维持现役 `23b0202a` + `-sm layer`，不排升级窗口**。
+**生产影响 = 零**：conf 恢复（sha256 `2c57b008…`，与快照逐字一致）· 三站影子目录 `/opt/llama.cpp-master-e197cef4` 已删 · 三站 halogen 0.18.13 已恢复 · `engine` / `backend` 门禁 PASS。
+**证据落点**: [ab-ev14-20261022](./ab-ev14-20261022/)（probe/analysis/raw JSONL/summary/arms）· 台账回写 = [TRACKER §1.5 EV-14](../upstream-tracker/TRACKER.md)。
+
+---
+
+## Phase 14: O-138 P1 — Qwen3.8-Flash-Next Vulkan decode 直测（2026-10-22, E1）
+
+> **被验条目**: [O-138](../d6-agent-standard/OPEN-ISSUES.md)；承载文档 = [Qwen3.8 系列加速调研 §11.2a](../../docs/research/2026-10-01_Qwen3.8系列本地推理加速调研.md)。
+> **测试台**: **C 站单机 Vulkan**（`/opt/llama.cpp` → `master-23b0202a`）· `qwen3.8-flash-next` UD-IQ4_XS · serial decode 128 tok · 随机 prompt（唯一盐值）· `timings.predicted_per_second`。
+> **档位**: short ≈560 tok（`--words 420`）· long ≈4.1k tok（`--words 3300`）。
+
+| 臂 | `N_CPU_MOE` | `CTX` | flags | short decode | long decode |
+|---|---|---|---|---|---|
+| **A** | 0 | 8192 | `-fa on` | **27.55 t/s** | **26.85 t/s** |
+| A-recheck | 0 | 8192 | `-fa on` | 27.52 | 26.77 |
+| **B** | 8 | 8192 | `-fa on` | 23.62 | 23.46 |
+| **C** | 0 | 8192 | `-fa on -ctk q8_0 -ctv q8_0` | 27.54 | 26.87 |
+| **D** | 0 | 8192 | `-fa off` | 27.18 | 25.32 |
+| **E 生产原配置** | 8 | 262144 | `-fa on` | 23.56 | 23.39 |
+
+**结论**: ① **Vulkan 短/长 ctx decode = 27.55 / 26.85 t/s**，远高于已弃 HIP 的 19–20 / 5.5–6.1，且 **4k 未见塌缩**（−2.5%）；② 生产 `N_CPU_MOE=8` 相对 `ncmoe=0` **损失约 13%**（23.6 vs 27.6）；③ **KV `q8_0` 无差异**（27.54 / 26.87）；④ **`-fa off` 使长 ctx −5.7%**、短 ctx −1.3%；⑤ **`--override-tensor` 未测**（`ncmoe` 覆盖同一 CPU-offload 轴，且无已验证的逐 tensor pattern）。
+**射程**: 仅 C 站、4k 上限、serial、`enable_thinking=false`；未测 8k/32k、并发、MTP。
+**证据落点**: [o138-p1-20261022](./o138-p1-20261022/)（probe/set_conf/raw JSONL/summary/arms）· [THROUGHPUT-BASELINE §1/§2](../d6-agent-standard/THROUGHPUT-BASELINE.md) 已同步。

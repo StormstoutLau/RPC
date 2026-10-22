@@ -311,6 +311,18 @@ for _p in (_p1, _p3, _p4, _p5, _p6, _p7):
         pass
 
 
+# ── _container_cleanup_cmd: 无容器时不得误报 PORT8080_STILL_BUSY ──────────
+# 现场（2026-10-22 C 站）：`docker rm -f <不存在>` 也返回 0 ⇒ 旧写法把它当成
+# "确实删到了容器"，随后等 8080 空满 480s，打印 `PORT8080_STILL_BUSY` —— 假阳性。
+_cmd = C._container_cleanup_cmd()
+chk("cleanup: 先探容器存在再删（docker container inspect 在 docker rm 之前）",
+    "docker container inspect" in _cmd
+    and _cmd.index("docker container inspect") < _cmd.index("docker rm -f"),
+    _cmd[:200])
+chk("cleanup: 不再用 `docker rm -f … && { 等 8080 }` 的无条件等待形状",
+    "docker rm -f halogen >/dev/null 2>&1 &&" not in _cmd,
+    _cmd[:200])
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAILED -> {fails}")
 sys.exit(1 if fails else 0)

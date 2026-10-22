@@ -1,0 +1,20 @@
+# O-138 P1 — Qwen3.8-Flash-Next Vulkan decode direct measurement (2026-10-22)
+
+- Station: **C** (192.168.10.37), engine `/opt/llama.cpp` → `master-23b0202a` (Vulkan), single-machine.
+- Model: `qwen3.8-flash-next` · `Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf` (88G).
+- Method: `cluster.py load qwen3.8-flash-next-c --backend llama-single`; serial decode, `max_tokens=128`, `temperature=0`, random prompt with unique salt; `timings.predicted_per_second`.
+- Contexts: **short ≈560–575 tok** (`--words 420`) · **long ≈4.1k tok** (`--words 3300`).
+- Arms (conf edits via `set_conf.py`; all `-t 16`):
+  - **A** `N_CPU_MOE=0`, `CTX=8192`, `-fa on --metrics`
+  - **A-recheck** same as A, after the sweep (drift control)
+  - **B** `N_CPU_MOE=8`, `CTX=8192`, `-fa on --metrics`
+  - **C** `N_CPU_MOE=0`, `CTX=8192`, `-fa on -ctk q8_0 -ctv q8_0 --metrics`
+  - **D** `N_CPU_MOE=0`, `CTX=8192`, `-fa off --metrics`
+  - **E** production shape: `N_CPU_MOE=8`, `CTX=262144`, `-fa on --metrics`
+- Raw outputs: `o138_*.jsonl`; `summary.txt` = `analysis.py` output.
+- After the sweep: conf restored from `/tmp/q38fn.env.bak-o138` (sha256 `cadba26b…`), C restored to halogen 0.18.13.
+- Not tested: `--override-tensor` (ncmoe covers the same CPU-offload axis; no verified per-tensor pattern for this GGUF).
+
+## Result in one line
+
+Vulkan decode **27.55 / 26.85 t/s** (short / 4k) with `ncmoe=0`, far above the retired HIP 19–20 / 5.5–6.1; production `ncmoe=8` costs **≈13%**; KV `q8_0` no change; `-fa off` hurts long ctx by **5.7%**.

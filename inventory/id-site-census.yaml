@@ -36,8 +36,8 @@ projects:
 - id: Auto_Prover
   root: F:\Auto_Prover
   reachable: true
-  files: 7
-  hits: 8
+  files: 9
+  hits: 13
 - id: Textbook
   root: D:\Textbook
   reachable: true

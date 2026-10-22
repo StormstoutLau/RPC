@@ -15,7 +15,9 @@ decode / prefill 单位 = t/s（token per second）。`-c`=引擎上下文；KV=
 | `nemotron-120B` | Nemotron 120B | — | HIP vs Vulkan | 单站 | — | A | — | **HIP 20.5 / Vulkan 23.2** | 中 | 2026-09-08 | 同条件后端对比 | 手册实测定案 |
 | `MiniMax-M2.7` | MiniMax M2.7 121G | UD-IQ4_XS | Vulkan(ROCm0) | 单机 | q4_0 | C | — | **21.5**（decode）/**22.1**（含 prompt） | 高（短题峰值 23-25，长 CoT 压 20-21） | 2026-09-11 | 用户测试题 16 题实跑（tmp/res_m27；117936 tok / 5490s） | 实测（用户测试题批量） |
 | `deepseek-v4-flash-0731` | DeepSeek V4 Flash 146G | Q4(UD-Q4_XL) | Vulkan/RPC | **三站 RPC 分布式** | — | A+B+C | — | **~7.9** | 中 | 2026-09-01 | RPC 层分布；长 prompt 分片有劣化@Qwen | 手册实测定案 |
-| `qwen3.8-flash-next` | Qwen3.8-Flash-Next 125B MoE | UD-IQ4_XS+ | Vulkan(C 站) | 单站 | f16 | C | — | 短 ctx **19–20**；>1K ctx **5.5–6.1** | **高（长 ctx 塌缩）** | HIP 实测 | HIP MoE bug→弃 HIP；Vulkan 待复测 | 手册 §8 / llama.cpp#27856 |
+| `qwen3.8-flash-next` | Qwen3.8-Flash-Next 125B MoE | UD-IQ4_XS+ | **Vulkan(/opt) · 23b0202a** | 单站 | f16 | C | **~380（0.5k）/ ~497（4k）** | **27.55（0.5k）/ 26.85（4k）** | **低（0.5k→4k −2.5%）** | 2026-10-22 | `llama-server` 单机 · `max_tokens=128` · 随机 prompt · serial；`ncmoe=0 -fa on` | [O-138 P1 实测](../rpc-optimization/o138-p1-20261022/) |
+
+> ★ **2026-10-22 O-138 P1 更新**：上行为 **Vulkan 直测**（`ncmoe=0 -fa on`，CTX=8192）；**生产默认引擎 = halogen 0.18.13**（不在本表口径）。原 HIP 行（**19–20 / 5.5–6.1**）为**已弃后端**历史参照。生产 conf `N_CPU_MOE=8` 的 Vulkan 读数为 **23.56 / 23.39**（−13%）；KV `q8_0` 无差异；`-fa off` 长 ctx −5.7%。
 
 ## 2. 缺失档（待实测补齐）
 
@@ -27,7 +29,7 @@ O-25 关闭判据①=「至少覆盖现役各模型档」。以下为现役但**
 | `nemotron-120B` Vulkan/HIP | prefill | 同上模板换模型 |
 | `MiniMax-M2.7` 单机 Vulkan | pp/tg 分离基准（用户测试题为混合长 CoT 口径，非纯 tg128） | `llama-bench -m MiniMax-M2.7-Q4_K_S.gguf -t 16 -b 512 -fa on -p 512 -n 128`；已有用户测试题批量 22.1 t/s 作间接锚 |
 | `deepseek-v4-flash-0731` | prefill | RPC 三站 `--rpc ... --n-cpu-moe 8 -p 512` |
-| `qwen3.8-flash-next` Vulkan | decode 直测（HIP 数据仅为弃用参照） | C 站 Vulkan 短+长 ctx 各跑一档 |
+| ~~`qwen3.8-flash-next` Vulkan~~ | ✅ **已补（2026-10-22，O-138 P1）** | 见 §1 行 + [o138-p1-20261022](../rpc-optimization/o138-p1-20261022/) |
 
 ## 3. 派生口径
 

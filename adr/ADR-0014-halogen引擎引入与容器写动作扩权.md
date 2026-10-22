@@ -290,7 +290,7 @@ prompt set = **上游 `tools/eval-prompts.json`**（10 例：code/proof/proc/cha
 - **理由（上游 CHANGELOG，E1 实读）**：0.18.12 称「prompts 每个长度都更快」+ `HALOGEN_CACHE_STAGE=2`（★ **本集群冷 8k/32k 未复现**，见下）；0.18.13 流式拼接 / 短请求嵌套默认开（`HALOGEN_ADMIT_SPLICE_MS=500` / `HALOGEN_ADMIT_NEST=1`）+ NPU 故障不再拖垮容器（★ **本集群公平性收益已复现**，见下）。两版均**未改 Flash checkpoint**、temp=0 逐字节一致于前一版。
 - **执行**：三站 `docker pull` 新 digest（后台，4.56 GB）→ `cluster.py load qwen3.8-flash-next`（B）/ `…-a`（A）/ `…-c`（C）逐站重建（`_load_container_model`：`docker rm -f` → `docker run` → `/health` 轮询）。全程只经统一入口。
 - **验证**：三站 `Config.Image` / `RepoDigests` 均 = 新 pin；`/health` = `status:ok`、`version={"api":"0.18.13","engine":"0.18.13","match":true}`、`context=262144`、`kv_pool_positions=524288`、`prompt_cache.mode=2`、`drafter_weights_loaded=true`；同一 greedy 请求（`enable_thinking=false`）三站均返回 `PONG`、`usage=18/3` 一致；`py -3 ops\rpc_check.py --only engine` **PASS**（含 digest 漂移判定）。
-- **回滚**：把 `CONTAINER_MODELS.image` 改回 `…:0.18.11@sha256:a5797467…` 后逐站 `load` 重建（镜像仍在站上，秒级）。
+- **回滚**：把 `CONTAINER_MODELS.image` 改回 `…:0.18.11@sha256:a5797467…` 后逐站 `load` 重建（★ **2026-10-22 已按用户指示清理 0.18.11 / 0.18.12 镜像** ⇒ 回滚前须先 `docker pull` 该 digest（约 4.56 GB），再逐站 `load`）。
 - **定量 A/B（2026-10-22 · C 站单站 · E1）**：同一 checkpoint / 同一容器配方 / 同一请求体；每臂冷启后测 8k/32k 冷 prefill（`max_tokens=1`、唯一盐值、`cache_n=0`）×3，并发公平性各 ×2。短请求 = 1024 token 流式；长请求 = ≈32k token、`max_tokens=1`。测试臂启停用 `cluster.py containers down/up --go`（同一 `containers_plan` 生成器，配方照抄 `CONTAINER_MODELS`；臂间只换 image，对照臂额外加两个 env）；测后 C 已用 `load qwen3.8-flash-next-c` 恢复 0.18.13。
 
   | 臂 | 8k prefill | 32k prefill | 短请求 TTFT（长 prompt 在读） | 流式最大中断（长 prompt 在读） | 并发时长 prompt prefill |

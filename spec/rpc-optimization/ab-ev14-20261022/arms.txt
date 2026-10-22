@@ -1,0 +1,16 @@
+# EV-14 llama.cpp shadow A/B — 2026-10-22
+
+- 目的：验证上游 `e197cef4`（2026-10-22T07:06Z，`23b0202a` 之后 261 提交）是否值得切换。
+- 拓扑：B 站 head + A 站 worker（`RPC_TARGET=10.10.10.1:50052`）；C worker 启动但未进入 `--rpc`。
+- 模型：`deepseek-v4-flash-0731` · `DeepSeek-V4-Flash-0731-MXFP4.gguf` · `-c 32768 -t 16 --n-cpu-moe 0 -fa on` · `-sm layer`（默认）。
+- 影子引擎：`/opt/llama.cpp-master-e197cef4`（codeload tarball → B 站构建 → 129 个 ELF `patchelf $ORIGIN` → MANIFEST 79/79 → 分发 A/C）。
+  - ⚠ MANIFEST / `llama-cli --version` 的 `commit` 字段为 **unknown** —— codeload tarball 无 `.git` 元数据；来源由下载 URL 固定为 `e197cef4554d466e0becac20e453a355daba8e5d`。
+- 现役引擎：`/opt/llama.cpp` → `llama.cpp-master-23b0202a`。
+- 测量脚本：`probe.py`（B 站 `127.0.0.1:8080`）。
+  - prefill：随机 prompt ×7，`max_tokens=1`，`cache_n=0`；prompt ≈2.59k tok。
+  - decode：固定 prompt，`max_tokens=512`，temperature 0，×3。
+  - 固定输出：`AB_PONG_1..5`，`max_tokens=64`，temperature 0。
+- 加载：影子 382 s（18:11:20→18:17:42）；现役 372 s（18:30:24→18:36:36）。
+- `GGML_ASSERT`：B/A/C 日志均 0。
+- 结论：prefill +0.2%、decode −0.14%、加载 +2.7%（单样本），**净收益 ≈ 0** ⇒ 维持 `23b0202a`。
+- 收尾：恢复 conf（sha256 `2c57b008…`）→ 卸载 → 重载现役 → 三站 halogen 恢复 → 删除三站 `/opt/llama.cpp-master-e197cef4`。

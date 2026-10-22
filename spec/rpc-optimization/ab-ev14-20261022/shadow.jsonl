@@ -1,0 +1,15 @@
+﻿RESULT {"mode": "prefill", "run": 1, "words": 2000, "salt": "f12ccdc1b5f32505", "wall_s": 9.076, "prompt_n": 2541, "prompt_ms": 9051.391, "prompt_tps": 280.7303319456645, "cache_n": 0, "predicted_n": 1}
+RESULT {"mode": "prefill", "run": 2, "words": 2000, "salt": "07a0625a5895cb68", "wall_s": 9.863, "prompt_n": 2585, "prompt_ms": 9790.045, "prompt_tps": 264.0437301360719, "cache_n": 0, "predicted_n": 1}
+RESULT {"mode": "prefill", "run": 3, "words": 2000, "salt": "6d48f72d397181f7", "wall_s": 10.069, "prompt_n": 2600, "prompt_ms": 9995.795, "prompt_tps": 260.1093759926049, "cache_n": 0, "predicted_n": 1}
+RESULT {"mode": "prefill", "run": 4, "words": 2000, "salt": "ca00470c7144e925", "wall_s": 8.927, "prompt_n": 2562, "prompt_ms": 8853.782, "prompt_tps": 289.3678656194607, "cache_n": 0, "predicted_n": 1}
+RESULT {"mode": "prefill", "run": 5, "words": 2000, "salt": "e12772ba458a08ac", "wall_s": 9.915, "prompt_n": 2588, "prompt_ms": 9845.751, "prompt_tps": 262.85450444562326, "cache_n": 0, "predicted_n": 1}
+RESULT {"mode": "prefill", "run": 6, "words": 2000, "salt": "7ff2e07c58aed3c0", "wall_s": 10.117, "prompt_n": 2629, "prompt_ms": 10048.459, "prompt_tps": 261.63215673169384, "cache_n": 0, "predicted_n": 1}
+RESULT {"mode": "prefill", "run": 7, "words": 2000, "salt": "dd4d008f0e84a222", "wall_s": 9.957, "prompt_n": 2586, "prompt_ms": 9884.478, "prompt_tps": 261.6223132875606, "cache_n": 0, "predicted_n": 1}
+RESULT {"mode": "decode", "run": 1, "wall_s": 37.465, "prompt_n": 23, "predicted_n": 512, "predicted_ms": 36782.399, "predicted_tps": 13.892514188647674, "finish": "length"}
+RESULT {"mode": "decode", "run": 2, "wall_s": 36.955, "prompt_n": 4, "predicted_n": 512, "predicted_ms": 36745.236, "predicted_tps": 13.906564649632404, "finish": "length"}
+RESULT {"mode": "decode", "run": 3, "wall_s": 36.922, "prompt_n": 4, "predicted_n": 512, "predicted_ms": 36753.414, "predicted_tps": 13.903470300745397, "finish": "length"}
+RESULT {"mode": "fixed", "run": 1, "content": "AB_PONG_1", "finish": "stop", "predicted_n": 37, "wall_s": 3.026}
+RESULT {"mode": "fixed", "run": 2, "content": "AB_PONG_2", "finish": "stop", "predicted_n": 36, "wall_s": 2.7}
+RESULT {"mode": "fixed", "run": 3, "content": "AB_PONG_3", "finish": "stop", "predicted_n": 39, "wall_s": 2.904}
+RESULT {"mode": "fixed", "run": 4, "content": "AB_PONG_4", "finish": "stop", "predicted_n": 36, "wall_s": 2.701}
+RESULT {"mode": "fixed", "run": 5, "content": "AB_PONG_5", "finish": "stop", "predicted_n": 36, "wall_s": 2.712}

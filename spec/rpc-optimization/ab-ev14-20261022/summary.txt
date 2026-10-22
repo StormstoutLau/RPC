@@ -1,0 +1,12 @@
+﻿== shadow e197cef4 ==
+prefill_tps        mean 268.623  min 260.109  max 289.368  n=7
+prefill_prompt_n   mean 2584.429  min 2541.000  max 2629.000  n=7
+decode_tps         mean 13.901  min 13.893  max 13.907  n=3
+fixed: [('AB_PONG_1', 37, 'stop'), ('AB_PONG_2', 36, 'stop'), ('AB_PONG_3', 39, 'stop'), ('AB_PONG_4', 36, 'stop'), ('AB_PONG_5', 36, 'stop')]
+
+== baseline 23b0202a ==
+prefill_tps        mean 268.095  min 260.305  max 287.143  n=7
+prefill_prompt_n   mean 2586.714  min 2547.000  max 2620.000  n=7
+decode_tps         mean 13.920  min 13.907  max 13.935  n=3
+fixed: [('AB_PONG_1', 37, 'stop'), ('AB_PONG_2', 36, 'stop'), ('AB_PONG_3', 39, 'stop'), ('AB_PONG_4', 36, 'stop'), ('AB_PONG_5', 36, 'stop')]
+

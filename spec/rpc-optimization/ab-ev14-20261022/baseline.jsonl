@@ -1,0 +1,15 @@
+﻿RESULT {"mode": "prefill", "run": 1, "words": 2000, "salt": "eeb76d5bb1e751d9", "wall_s": 9.046, "prompt_n": 2547, "prompt_ms": 9020.433, "prompt_tps": 282.35895106144017, "cache_n": 0, "predicted_n": 1}
+RESULT {"mode": "prefill", "run": 2, "words": 2000, "salt": "8862905b74970766", "wall_s": 10.067, "prompt_n": 2620, "prompt_ms": 9993.599, "prompt_tps": 262.16781361749656, "cache_n": 0, "predicted_n": 1}
+RESULT {"mode": "prefill", "run": 3, "words": 2000, "salt": "499db43101577f0a", "wall_s": 9.964, "prompt_n": 2589, "prompt_ms": 9892.324, "prompt_tps": 261.71807555029534, "cache_n": 0, "predicted_n": 1}
+RESULT {"mode": "prefill", "run": 4, "words": 2000, "salt": "a369a83956d758ad", "wall_s": 10.043, "prompt_n": 2603, "prompt_ms": 9969.536, "prompt_tps": 261.09540102969686, "cache_n": 0, "predicted_n": 1}
+RESULT {"mode": "prefill", "run": 5, "words": 2000, "salt": "2bd5a23f1d3e8dc3", "wall_s": 9.965, "prompt_n": 2591, "prompt_ms": 9893.959, "prompt_tps": 261.87696957304956, "cache_n": 0, "predicted_n": 1}
+RESULT {"mode": "prefill", "run": 6, "words": 2000, "salt": "669778f374f50386", "wall_s": 10.037, "prompt_n": 2594, "prompt_ms": 9965.252, "prompt_tps": 260.3045060977886, "cache_n": 0, "predicted_n": 1}
+RESULT {"mode": "prefill", "run": 7, "words": 2000, "salt": "0c002ca9a2696cf3", "wall_s": 8.996, "prompt_n": 2563, "prompt_ms": 8925.872, "prompt_tps": 287.1428136096955, "cache_n": 0, "predicted_n": 1}
+RESULT {"mode": "decode", "run": 1, "wall_s": 37.426, "prompt_n": 23, "predicted_n": 512, "predicted_ms": 36742.773, "predicted_tps": 13.907496856592724, "finish": "length"}
+RESULT {"mode": "decode", "run": 2, "wall_s": 36.877, "prompt_n": 4, "predicted_n": 512, "predicted_ms": 36670.914, "predicted_tps": 13.934749485655036, "finish": "length"}
+RESULT {"mode": "decode", "run": 3, "wall_s": 36.927, "prompt_n": 4, "predicted_n": 512, "predicted_ms": 36717.627, "predicted_tps": 13.917021380493896, "finish": "length"}
+RESULT {"mode": "fixed", "run": 1, "content": "AB_PONG_1", "finish": "stop", "predicted_n": 37, "wall_s": 3.089}
+RESULT {"mode": "fixed", "run": 2, "content": "AB_PONG_2", "finish": "stop", "predicted_n": 36, "wall_s": 2.711}
+RESULT {"mode": "fixed", "run": 3, "content": "AB_PONG_3", "finish": "stop", "predicted_n": 39, "wall_s": 2.898}
+RESULT {"mode": "fixed", "run": 4, "content": "AB_PONG_4", "finish": "stop", "predicted_n": 36, "wall_s": 2.725}
+RESULT {"mode": "fixed", "run": 5, "content": "AB_PONG_5", "finish": "stop", "predicted_n": 36, "wall_s": 2.695}

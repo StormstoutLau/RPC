@@ -822,8 +822,9 @@ def _container_cleanup_cmd() -> str:
     ★ 2026-10-22 C 站实测：`docker rm -f` 返回 0 后，容器会**立刻**从 `docker ps -a` 消失，
     但 docker-proxy/网络命名空间仍占着 8080 数分钟（C 站一次 ~4m18s）。只发 rm 不等 ⇒
     随后 studio 端口检测看到 8080 仍被占 ⇒ 自动落到 **8081**（客户端零迁移前提被破坏）。
-    ⇒ 等待信号 = **8080 真的没人监听**（`ss -ltn`）；且只在**确实删到容器**时才等
-    （没有容器时 rm 失败，直接跳过 —— 避免与 studio 自己占用的 8080 互锁）。
+    ⇒ 等待信号 = **8080 真的没人监听**（`ss -ltn`）；且只在**确实有容器**时才等
+    （★ C 站实测 `docker rm -f` 对**不存在的名字**也返回 0 ⇒ 必须先用 `docker container inspect`
+    探存在；没有容器就直接跳过 —— 避免与 studio 自己占用的 8080 互锁，也避免假 `PORT8080_STILL_BUSY`）。
     """
     names = sorted({s["name"] for s in CONTAINER_MODELS.values()})
     if not names:
@@ -832,11 +833,13 @@ def _container_cleanup_cmd() -> str:
     for n in names:
         # `docker rm -f` 返回 0 ≠ 端口已释放：容器会立刻从 `docker ps -a` 消失，但
         # docker-proxy/网络命名空间的清理可能还要数分钟（C 站实测 ~4m18s）。唯一可靠信号
-        # 是 8080 真的没人监听。仅当**确实删到了容器**时才等，避免与 studio 占用互锁。
+        # 是 8080 真的没人监听。★ 但 `docker rm -f` 对**不存在的名字**也返回 0（C 站实测）
+        # ⇒ 先 `docker container inspect` 探存在；仅当容器确实存在时才等，避免假阳性。
         parts.append(
-            f"docker rm -f {n} >/dev/null 2>&1 && {{ "
+            f"if docker container inspect {n} >/dev/null 2>&1; then "
+            f"docker rm -f {n} >/dev/null 2>&1; "
             f"for _ in $(seq 1 240); do ss -ltn 2>/dev/null | grep -q ':8080 ' || break; sleep 2; done; "
-            f"ss -ltn 2>/dev/null | grep -q ':8080 ' && echo 'PORT8080_STILL_BUSY'; }} || true")
+            f"ss -ltn 2>/dev/null | grep -q ':8080 ' && echo 'PORT8080_STILL_BUSY'; fi")
     return "; ".join(parts)
 
 
