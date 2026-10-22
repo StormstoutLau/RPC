@@ -124,7 +124,11 @@ CONTAINER_MODELS = {
     "qwen3.8-flash-next": {
         "backend": "halogen",
         "name": "halogen",
-        "image": "ghcr.nju.edu.cn/peonist-ai/halogen-flash-server:0.18.11",
+        # ★ 2026-10-22 (ADR-0014 #2 裁定【甲】): 按 **digest 钉死** —— tag 保留可读性, digest 才是真值。
+        #   三站 `RepoDigests`/`Id` 已实测逐字一致; 更新制品 = 显式改这里的 digest (Docker 官方语义)。
+        #   漂移检查 = `rpc_check --only engine` (三站在跑容器的 RepoDigests vs 本串)。
+        "image": "ghcr.nju.edu.cn/peonist-ai/halogen-flash-server:0.18.11"
+                 "@sha256:a5797467d2bff173e0c661d9700292bd55eac305faff68c86261ae35385ad6ad",
         "models_dir": "/data/models/gguf/lmstudio-community/Qwen3.8-Flash-Next-GGUF/UD-IQ4_XS",
         "volume": ["/data/models/gguf/lmstudio-community/Qwen3.8-Flash-Next-GGUF/UD-IQ4_XS:/models"],
         "checkpoint": "/models/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf",

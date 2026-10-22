@@ -6005,7 +6005,13 @@ _HEALTH_CMD = (
     "printf ' load1=%s' \"$(cut -d' ' -f1 /proc/loadavg)\"; "
     "printf ' loadgate=%s\\n' \"$(command -v load-gate >/dev/null 2>&1 && echo yes || echo no)\"; "
     "echo '===BINMD5==='; for f in " + " ".join(STATION_BINS) + "; do "
-    "printf '%s=%s\\n' \"$f\" \"$(md5sum /usr/local/bin/$f 2>/dev/null | cut -d' ' -f1)\"; done"
+    "printf '%s=%s\\n' \"$f\" \"$(md5sum /usr/local/bin/$f 2>/dev/null | cut -d' ' -f1)\"; done; "
+    # ★ 2026-10-22 (ADR-0014 #2 甲): 容器镜像 digest 漂移检查取数 —— 仅列**在跑**容器。
+    #   输出 `name|Config.Image|RepoDigests`；无 docker/无容器 ⇒ 节为空（不判）。
+    "echo '===IMG==='; for c in $(docker ps --format '{{.Names}}' 2>/dev/null); do "
+    "i=$(docker inspect --format '{{.Config.Image}}' \"$c\" 2>/dev/null); "
+    "d=$(docker inspect --format '{{.RepoDigests}}' \"$i\" 2>/dev/null); "
+    "printf '%s|%s|%s\\n' \"$c\" \"$i\" \"$d\"; done"
 )
 
 _HEALTH_CACHE = {}
@@ -6020,7 +6026,8 @@ def _health_probe(st: str) -> dict:
     if st in _HEALTH_CACHE:
         return _HEALTH_CACHE[st]
     d = {"station": st, "reachable": False, "addr": {}, "link": {}, "route": {},
-         "ping": {}, "rss_mb": None, "listen": [], "occupant": {}, "occupant_cmd": {}, "mem": {}, "binmd5": {}, "raw": ""}
+         "ping": {}, "rss_mb": None, "listen": [], "occupant": {}, "occupant_cmd": {},
+         "mem": {}, "binmd5": {}, "containers": [], "raw": ""}
     sys.path.insert(0, str(ROOT / "ops"))
     try:
         import cluster
@@ -6085,6 +6092,11 @@ def _health_probe(st: str) -> dict:
         if "=" in line:
             k, _, v = line.strip().partition("=")
             d["binmd5"][k] = v.strip()
+    # 在跑容器: name|image|RepoDigests (2026-10-22, ADR-0014 #2 甲)
+    for line in sec.get("IMG", []):
+        p = line.strip().split("|", 2)
+        if len(p) == 3 and p[0]:
+            d["containers"].append({"name": p[0], "image": p[1], "digests": p[2]})
     _HEALTH_CACHE[st] = d
     return d
 
@@ -6520,6 +6532,25 @@ def check_engine(ctx):
             detail.append(f"{st} 站**残留**: {why}")
         elif band == "WARN":
             warn.append(f"{st} 站{why}")
+
+    # ★ 2026-10-22 (ADR-0014 #2 甲): 容器镜像 **digest 漂移** —— 只判**在跑**的已登记容器。
+    #   pin 的真值 = `CONTAINER_MODELS[alias].image` 里的 `@sha256:…`；tag 可重推，digest 才是制品身份。
+    #   未运行 ⇒ 不判（零自加载方针：容器按需启停）。取不到 digest ⇒ 报"取不到"，不静默通过。
+    try:
+        sys.path.insert(0, str(ROOT / "ops"))
+        from cluster_const import CONTAINER_MODELS as _CM
+    except Exception:
+        _CM = {}
+    _pins = {s["name"]: s["image"].split("@", 1)[1]
+             for s in _CM.values() if "@sha256:" in s.get("image", "")}
+    for st in reach:
+        for c in live[st].get("containers") or []:
+            pin = _pins.get(c["name"])
+            if not pin:
+                continue
+            if pin not in (c.get("digests") or ""):
+                detail.append(f"{st} 站容器 {c['name']} 镜像 digest 与 pin 不符: "
+                              f"期望 {pin} / 实际 {c.get('digests') or '取不到'}")
 
     _ages = [live[s].get("etimes_min_s") for s in reach
              if isinstance(live[s].get("etimes_min_s"), int)

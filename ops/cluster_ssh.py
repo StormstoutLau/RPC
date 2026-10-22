@@ -145,13 +145,17 @@ def probe_station(st: str, with_list: bool = True) -> dict:
         f"ss -ltn 2>/dev/null | grep -c ':{port}'; "
         "printf '|MODEL|'; "
         "ps -eo args 2>/dev/null | grep -E 'studio run|llama-server|lmstudio|lms ' "
-        "| grep -v grep | grep -oE '(--model[ =][^ ]+| -m [^ ]+)' | head -1"))
+        "| grep -v grep | grep -oE '(--model[ =][^ ]+| -m [^ ]+)' | head -1; "
+        # ★ 2026-10-22: 容器化引擎 (halogen) 的进程 cmdline 没有 --model (用 --checkpoint),
+        #   旧探测只能回 "(未加载)"。引擎自己的 /health 带 model 字段 ⇒ 作为第二真值源。
+        f"printf '|HEALTH|'; curl -s -m5 http://127.0.0.1:{port}/health 2>/dev/null"))
 
     if not ok:
         result["llama"] = "UNREACHABLE"
         return result
     result["reachable"] = True
-    listen_part, _, mod_part = out.partition("|MODEL|")
+    listen_part, _, rest = out.partition("|MODEL|")
+    mod_part, _, health_part = rest.partition("|HEALTH|")
     listening = (listen_part.strip().splitlines()[-1] if listen_part.strip() else "0").strip()
     mod = (mod_part or "").strip()
     # READY 判定 (2026-09-15 修): 不能只看 STATION_PORT(8080) —— 部分模型的 conf 用
@@ -169,7 +173,9 @@ def probe_station(st: str, with_list: bool = True) -> dict:
         name = re.sub(r"-\d{5}-of-\d{5}$", "", name)  # 分片号剥离
         result["loaded"] = name or "(未加载)"
     else:
-        result["loaded"] = "(未加载)"
+        # 第二真值源: 引擎 /health 的 model 字段 (halogen / studio 等不带 --model 的形态)。
+        m = re.search(r'"model"\s*:\s*"([^"]+)"', health_part or "")
+        result["loaded"] = m.group(1) if m else "(未加载)"
     if not with_list:
         result["list"] = "(skipped)"
         return result
