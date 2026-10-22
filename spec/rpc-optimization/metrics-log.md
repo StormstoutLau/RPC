@@ -994,6 +994,25 @@ ggml_backend_rpc_start_server()                                                 
 | baseline | A 1 worker | `-fa on` | **12.053 t/s** |
 | MTP | A 1 worker | `-fa on --spec-type draft-mtp` | **19.336 t/s** |
 
-**结论**: ① **MTP 可用且收益大** —— 2w decode **11.222 → 18.575 t/s（+65.5%）**，草稿接受 **340/495 = 68.7%**；② **2 个 worker 确实拖慢** —— 1w baseline **12.053**（+7.4%）、1w+MTP **19.336**（+4.1%）⇒ **最佳 = 单 worker + MTP**；`RPC_TARGET=auto` 把 A/C 都纳入是容量默认，不是速度选择；③ 现役 GGUF **含** `blk.45.nextn.*` MTP 头（1412 tensors），引擎在无 `--spec-type` 时把这些张量当 unused 忽略、开启后使用；④ 主线 `23b0202a` 已含 `glm5-next` + `glm5_next9graph_mtp`，但**仍拒载 `glm5next`**；`unsloth/GLM-5.3-Flash-GGUF` 无 `glm5-next` 现成档 ⇒ **换 arch 对 MTP 不是必需**，且无 ready artifact。⇒ **结论：不切 arch；GLM 用单 worker（A）+ `--spec-type draft-mtp`**（2026-10-22 已按此固化，见收尾；输出一致性/质量回归仍待补）。
-**射程**: 单 prompt / 128 tok / temp=0 / 4 runs；**输出一致性未完成对照**（直接 `systemctl restart` 基线的路径不稳定，已停止该分支）；未测长 ctx / 并发 / 质量回归 / 主线 `glm5-next` 加载。
-**收尾（2026-10-22 晚更新）**: **已固化** GLM 默认 = **单 worker A + MTP**（conf `RPC_TARGET=10.10.10.1:50052`、`EXTRA_FLAGS="-fa on --spec-type draft-mtp"`，sha256 `a7149ab8…`；旧基线备份 `glm-5.3-flash.env.bak-singleworker-20261022`）。统一入口新增 `load <rpc模型> --worker A|C`（head 固定 B，按次覆盖，不改 conf）；DS 默认同为单 worker A。★ `--worker C` 端到端实测通过：head `--rpc 10.10.11.3:50052`、A inactive / C active、decode **18.93 t/s**（vs A 19.40，−2.4%）、draft 340/495 ⇒ 已恢复默认 A。⚠ 输出一致性/质量回归仍未做。
+**结论**: ① **MTP 可用且收益大** —— 2w decode **11.222 → 18.575 t/s（+65.5%）**，草稿接受 **340/495 = 68.7%**；② **2 个 worker 确实拖慢** —— 1w baseline **12.053**（+7.4%）、1w+MTP **19.336**（+4.1%）⇒ **最佳 = 单 worker + MTP**；`RPC_TARGET=auto` 把 A/C 都纳入是容量默认，不是速度选择；③ 现役 GGUF **含** `blk.45.nextn.*` MTP 头（1412 tensors），引擎在无 `--spec-type` 时把这些张量当 unused 忽略、开启后使用；④ 主线 `23b0202a` 已含 `glm5-next` + `glm5_next9graph_mtp`，但**仍拒载 `glm5next`**；`unsloth/GLM-5.3-Flash-GGUF` 无 `glm5-next` 现成档 ⇒ **换 arch 对 MTP 不是必需**，且无 ready artifact。⇒ **结论：不切 arch；GLM 用单 worker（A）+ `--spec-type draft-mtp`**（2026-10-22 已按此固化，见收尾；输出一致性/质量回归由 **Phase 16** 补：5 题语义 5/5 一致）。
+**射程**: 单 prompt / 128 tok / temp=0 / 4 runs；**输出一致性/质量回归由 Phase 16 单独做**（本轮只测吞吐）；未测长 ctx / 并发 / 主线 `glm5-next` 加载。
+**收尾（2026-10-22 晚更新）**: **已固化** GLM 默认 = **单 worker A + MTP**（conf `RPC_TARGET=10.10.10.1:50052`、`EXTRA_FLAGS="-fa on --spec-type draft-mtp"`，sha256 `a7149ab8…`；旧基线备份 `glm-5.3-flash.env.bak-singleworker-20261022`）。统一入口新增 `load <rpc模型> --worker A|C`（head 固定 B，按次覆盖，不改 conf）；DS 默认同为单 worker A。★ `--worker C` 端到端实测通过：head `--rpc 10.10.11.3:50052`、A inactive / C active、decode **18.93 t/s**（vs A 19.40，−2.4%）、draft 340/495 ⇒ 已恢复默认 A。★ 输出一致性/质量回归见 Phase 16。
+
+---
+
+## Phase 16: GLM MTP 质量 + 确定性（2026-10-23, E1）
+
+> **被验条目**: EV-11 残留「输出一致性/质量回归」· **证据落点**: [glm-mtp-quality-20261023](./glm-mtp-quality-20261023/)（on/off 各 2 runs · `verify.txt` · `arms.txt` · `runner.py`）。
+> **测试台**: `glm-5.3-flash`（147G UD-IQ4_XS）· 变体引擎 `glm5next-20260928` · B head + A worker · `CTX=32768` / `-t 16` / `--n-cpu-moe 0` / `-fa on`。
+> **题源**: domain_matrix 冒烟 5 题（A3/B2 数值 + C2 代码 + A1/G1 rubric）；`temperature=0`、`seed=42`、`reasoning_effort=low`；每臂 2 runs；判分只看 `content`。
+
+| 题 | ON tps | OFF tps | ON draft acc | 语义签名（两臂 × 两遍） |
+|---|---|---|---|---|
+| dmx-a3 | 19.01 | 12.04 | 0.681 | 0.7071 / 0.7071 / same |
+| dmx-b2 | 20.50 | 12.12 | 0.788 | -0.1575 / rho |
+| dmx-c2 | 20.28 | 11.99 | 0.758 | n=100 · min=98.352740 · sum=100 · no NaN |
+| dmx-a1 | 14.29 | 12.02 | 0.426 | 小分母 + 夹层 + 分子/分母独立 |
+| dmx-g1 | 13.89 | 11.99 | 0.401 | ψ 管长期、γ 管短期 + ψ=1/γ 退化 |
+
+**结论**: ① **未发现 MTP 质量退化** —— 5 题语义签名 ON r1↔r2、OFF r1↔r2、ON↔OFF 均 **5/5 一致**；数值精确、C2 执行结果一致、rubric 锚点全中。② **逐字复现不成立** —— 同臂 r1/r2 也有 4/5 文本不同（首个差异位 0–164），故质量比较必须用语义签名。③ **吞吐**：ON 均值 **17.59**、OFF **12.03**（**+46.2%**）；长生成 C2 **20.28 vs 11.99（+69.2%）**，与 Phase 15 同向。④ **max effort 预算风险（非 MTP）**：默认 effort 下 C2 用 8192 tok 仍未结束思考（content=0）、G1 在 4096 截断 ⇒ 长代码/证明题需给足 `max_tokens` 或降 effort。
+**射程**: 5 题 / low effort / 单 worker A / 无并发 / 未测长 ctx；rubric 为锚点机检 + 人工复核，未用独立判官模型。

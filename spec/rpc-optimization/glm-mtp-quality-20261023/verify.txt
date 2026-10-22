@@ -1,0 +1,70 @@
+
+== MTP ON ==
+dmx-a1   finish=stop  content=  512 reason=    0 tps=14.29 draft_acc=0.426
+         sig={'small_denom': True, 'tranche': True, 'independent': True}
+dmx-a3   finish=stop  content=  204 reason=   54 tps=19.01 draft_acc=0.681
+         A3 GAUSS=0.7071067812 T=0.7071067812 REL=same
+dmx-b2   finish=stop  content=   64 reason=    0 tps=20.5 draft_acc=0.788
+         B2 SLOPE=-0.1575 DRIVER=rho
+dmx-c2   finish=stop  content=  982 reason=  953 tps=20.28 draft_acc=0.758
+         code_chars=968
+dmx-g1   finish=stop  content=  470 reason=    0 tps=13.89 draft_acc=0.401
+         sig={'separate': True, 'degenerate': True, 'discount_trap': False}
+
+== MTP OFF ==
+dmx-a1   finish=stop  content=  309 reason=    0 tps=12.02 draft_acc=None
+         sig={'small_denom': True, 'tranche': True, 'independent': True}
+dmx-a3   finish=stop  content=  195 reason=   74 tps=12.04 draft_acc=None
+         A3 GAUSS=0.7071 T=0.7071 REL=same
+dmx-b2   finish=stop  content=   64 reason=    0 tps=12.12 draft_acc=None
+         B2 SLOPE=-0.1575 DRIVER=rho
+dmx-c2   finish=stop  content=  777 reason= 1048 tps=11.99 draft_acc=None
+         code_chars=763
+dmx-g1   finish=stop  content=  730 reason=    0 tps=11.99 draft_acc=None
+         sig={'separate': True, 'degenerate': True, 'discount_trap': False}
+
+-- ON r1 vs r2 --
+dmx-a1   identical=False first_diff=31 len=512/388
+dmx-a3   identical=False first_diff=115 len=204/200
+dmx-b2   identical=True first_diff=-1 len=64/64
+dmx-c2   identical=False first_diff=107 len=982/805
+dmx-g1   identical=False first_diff=164 len=470/564
+
+-- OFF r1 vs r2 --
+dmx-a1   identical=False first_diff=0 len=309/410
+dmx-a3   identical=False first_diff=1 len=195/221
+dmx-b2   identical=True first_diff=-1 len=64/64
+dmx-c2   identical=False first_diff=133 len=777/1019
+dmx-g1   identical=False first_diff=76 len=730/592
+
+-- ON r1 vs OFF r1 --
+dmx-a1   identical=False first_diff=0 len=512/309
+dmx-a3   identical=False first_diff=11 len=204/195
+dmx-b2   identical=True first_diff=-1 len=64/64
+dmx-c2   identical=False first_diff=107 len=982/777
+dmx-g1   identical=False first_diff=28 len=470/730
+
+== 语义签名: ON r1 vs ON r2 ==
+dmx-a1   same=True
+dmx-a3   same=True
+dmx-b2   same=True
+dmx-c2   same=True
+dmx-g1   same=True
+
+== 语义签名: OFF r1 vs OFF r2 ==
+dmx-a1   same=True
+dmx-a3   same=True
+dmx-b2   same=True
+dmx-c2   same=True
+dmx-g1   same=True
+
+== 语义签名: ON r1 vs OFF r1 ==
+dmx-a1   same=True
+dmx-a3   same=True
+dmx-b2   same=True
+dmx-c2   same=True
+dmx-g1   same=True
+
+-- C2 executable --
+ON : {"n": 100, "min": 98.35274010795271, "sum_x": 100.0, "has_nan": false}
+OFF: {"n": 100, "min": 98.35274010795271, "sum_x": 100.0, "has_nan": false}

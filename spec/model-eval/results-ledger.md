@@ -601,3 +601,30 @@ a3 通过 (0.70710678/same, 108.5s) / b2 通过 (-0.1575/rho, 34.1s) / a1 良好
 - 跑批脚本 `d:\RPC\tmp\nm35_dm20.py` / 判分摘要 `d:\RPC\tmp\digest.py` / C2 规范参数复算 `d:\RPC\tmp\c2_nm35.py`（**ADR-0004：一次性脚本落 `tmp/`**）
 - 加载/卸载: `cluster.py load nvidia-nemotron-3.5-super-vl-120b-a12b --backend llama-single`（READY ~46s）→ 跑批 → `cluster.py unload`（三站 20:34 GTT 回收）
 
+## 冒烟 5 题: glm-5.3-flash (2026-10-23, B head + A worker) — MTP on/off 质量 + 确定性
+
+**模型/形态**: `GLM-5.3-Flash-UD-IQ4_XS`（147G）· 变体引擎 `/opt/llama.cpp-glm5next-20260928` · 单 worker A（`--rpc 10.10.10.1:50052`）· ctx 32768 · `-fa on` · `reasoning_effort=low` · temperature=0 / seed=42
+**题源**: `spec/model-eval/questions/domain_matrix.md` 冒烟 5 题（A3/B2 数值 + C2 代码 + A1/G1 rubric）；与 `archive/root-scripts/b6_smoke_run.py` 同题同口径
+**设计**: 唯一变量 = `--spec-type draft-mtp`；每臂 2 runs ⇒ 可区分 MTP 差异与同配置文本漂移。判分只看 `content`（reasoning 分离）。
+**证据**: [glm-mtp-quality-20261023](../rpc-optimization/glm-mtp-quality-20261023/)（on/off 各 2 runs + `verify.txt` + `arms.txt`）
+
+### 判分（锚点 + 人工复核）
+
+| 题 | 型 | 评级 | 证据要点 |
+|---|---|---|---|
+| dmx-a3 | 数值 | **通过** | `GAUSS_RHO=T_RHO=0.7071, RELATION=same`（两臂、两遍全一致）|
+| dmx-b2 | 数值 | **通过** | `SLOPE=-0.1575, SIGN_DRIVER=rho`（全一致）|
+| dmx-c2 | 代码 | **通过** | numpy 执行：`n=100 · min=98.352740 · sum=100.0 · no NaN`；目标含二次影响 + 库存项、终期清仓显式；两臂执行结果一致 |
+| dmx-a1 | 概念 | **通过** | 小分母机制（Φ→0 而 Φ′ 有限）+ 夹层例子 + 分子/分母独立 |
+| dmx-g1 | 概念 | **通过** | IES(ψ) 管长期增长、γ 管短期波动；ψ=1/γ（ψγ=1）退化 CRRA |
+
+**汇总: 5/5 通过 · 语义签名 ON r1↔r2 / OFF r1↔r2 / ON↔OFF 均 5/5 一致 · 幻觉标志 0**
+
+### 关键结论
+
+1. **未发现 MTP 质量退化**：数值精确、代码执行结果一致、rubric 锚点全中；跨臂语义签名 5/5 相同。
+2. **逐字复现不成立**：同臂 r1 vs r2 有 4/5 文本不同（首个差异位 0–164）⇒ 质量比较必须用语义签名，不能逐字 diff。
+3. **吞吐**：ON 五题均值 **17.59 t/s**、OFF **12.03 t/s**（**+46.2%**）；长生成 C2 **20.28 vs 11.99（+69.2%）**，draft 接受率 0.401–0.788。
+4. **max effort 预算风险（非 MTP）**：默认 `reasoning_effort=max` 时 C2 在 8192 tok 仍未结束思考（content=0）、G1 在 4096 截断 ⇒ 长代码/证明题需显式给足 `max_tokens` 或降 effort。旁证 `maxeffort_single_r1.jsonl`。
+
+**射程**: 单 prompt × 5 题 / low effort / 单 worker A / 无并发 / 未测长上下文；rubric 为锚点机检 + 人工复核，未用独立判官模型。

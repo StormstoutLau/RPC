@@ -1,0 +1,37 @@
+# GLM-5.3-Flash MTP 质量 + 一致性（2026-10-23 · E1）
+
+- 目的：MTP 已固化为生产默认，但此前只测吞吐；本实验补「输出质量是否退化」与「同配置确定性」。
+- 测试台：B head + A worker（`--rpc 10.10.10.1:50052`）· 变体引擎 `/opt/llama.cpp-glm5next-20260928` · `CTX=32768` / `-t 16` / `--n-cpu-moe 0` / `-fa on`。
+- 唯一变量：conf 的 `--spec-type draft-mtp`（on = 生产默认；off = 临时改 conf，测后已恢复）。
+- 题源：`spec/model-eval/questions/domain_matrix.md` 冒烟 5 题（A3/B2 数值 + C2 代码 + A1/G1 rubric）。
+- 口径：`temperature=0`、`seed=42`、`reasoning_effort=low`、每臂 2 runs；`content` 与 `reasoning_content` 分开保存，判分只看 `content`。
+- 选 low effort 的原因：默认 max effort 下 C2/G1 在 4096/8192 预算内只产出 reasoning（content=0，见 `maxeffort_single_r1.jsonl`）⇒ 无法在合理成本内完成 5 题质量对照。max-effort 结果仅作旁证，不参与 MTP 判定。
+
+## 结果（每臂 r1；r2 见 jsonl）
+
+| 题 | ON tps | ON draft acc | OFF tps | ON 语义 | OFF 语义 |
+|---|---|---|---|---|---|
+| dmx-a3（数值） | 19.01 | 0.681 | 12.04 | 0.7071 / 0.7071 / same | 0.7071 / 0.7071 / same |
+| dmx-b2（数值） | 20.50 | 0.788 | 12.12 | -0.1575 / rho | -0.1575 / rho |
+| dmx-c2（代码） | 20.28 | 0.758 | 11.99 | n=100 · min=98.352740 · sum=100 · no NaN | 同左 |
+| dmx-a1（rubric） | 14.29 | 0.426 | 12.02 | 小分母 + 夹层 + 分子/分母独立 | 同左 |
+| dmx-g1（rubric） | 13.89 | 0.401 | 11.99 | IES/gamma 分离 + ψ=1/γ 退化 | 同左 |
+
+- **语义签名一致：ON r1 vs ON r2 5/5 · OFF r1 vs OFF r2 5/5 · ON r1 vs OFF r1 5/5**。
+- **文本全等不是有效判据**：同一臂 r1 vs r2 也有 4/5 文本不同（首个差异位 0–164，长度差可达 124 字符）⇒ 差异来自 reasoning/排版漂移，不是答案变化。逐条见 `verify.txt`。
+- **decode**：ON 五题均值 **17.59 t/s**、OFF **12.03 t/s**（**+46.2%**）；长生成 C2 **20.28 vs 11.99（+69.2%）**，与 EV-11 的 +65.5% 同向。短题受固定开销影响，单题增益 19%–70%。
+- **C2 可执行性**：两臂产出的代码均通过 numpy 执行，结果逐项一致（`min` 1e-8 级差异来自代码写法，非答案差异）。
+
+## 结论
+
+1. **未发现 MTP 引起的质量退化**：5 题语义签名在臂内、跨臂均一致；数值精确、代码执行一致、rubric 锚点全中。
+2. **同配置文本非确定性存在**：`seed=42` + temp=0 仍不能让 reasoning/排版逐字复现 ⇒ 后续比较一律用「语义签名」，不用逐字 diff。
+3. **max effort 的预算风险（非 MTP）**：默认 `reasoning_effort=max` 下，C2 用 8192 tok 仍未结束思考（content=0，finish=length），G1 亦在 4096 截断 ⇒ 生产客户端跑长代码/证明题需显式给足 `max_tokens`，或设 `reasoning_effort=low/high`。
+
+## 未测
+
+- 长上下文（8k/32k prompt）下的 MTP 接受率与质量；并发；独立判官模型打分（本实验 rubric 为锚点机检 + 人工复核）；默认 max effort 的完整 5 题质量基线。
+
+## 环境复原
+
+测试后 conf 已恢复 `sha256 a7149ab8…`（`EXTRA_FLAGS="-fa on --spec-type draft-mtp"`）并重载；GLM 以单 worker A + MTP 运行。
