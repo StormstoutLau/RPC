@@ -628,3 +628,15 @@ a3 通过 (0.70710678/same, 108.5s) / b2 通过 (-0.1575/rho, 34.1s) / a1 良好
 4. **max effort 预算风险（非 MTP）**：默认 `reasoning_effort=max` 时 C2 在 8192 tok 仍未结束思考（content=0）、G1 在 4096 截断 ⇒ 长代码/证明题需显式给足 `max_tokens` 或降 effort。旁证 `maxeffort_single_r1.jsonl`。
 
 **射程**: 单 prompt × 5 题 / low effort / 单 worker A / 无并发 / 未测长上下文；rubric 为锚点机检 + 人工复核，未用独立判官模型。
+
+### reasoning_effort 质量-成本曲线（2026-10-23 补充）
+
+固定预算（A3/B2/A1/G1 = 4096，C2 = 8192）；low/high 各 2 runs，max 2 runs；明细 `effort_curve.txt`。
+
+| 档 | 语义通过 | 完成 | 平均 completion tokens / 5 题 | 相对 low |
+|---|---|---|---|---|
+| **low** | **10/10** | 10/10 | **1,645** | 1.0× |
+| **high** | **10/10** | 10/10 | **3,483** | 2.1× |
+| **max**（模板默认） | 6/10 | 6/10 | **≥15,327**（截断下界） | ≥9.3× |
+
+**结论**: low/high 在 5 题上质量不可区分（均 10/10），low 成本最低；max 在固定预算下 4 个样本截断（C2 两跑 8192、A1/G1 各一跑 4096），只完成 6/10。⇒ **默认 low · high 按需 · max 须显式 ≥16k `max_tokens`**。⚠ low 在更难/长程任务上的深度未测，不能外推为“全局等价于 max”。

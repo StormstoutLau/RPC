@@ -179,7 +179,7 @@ upstream: null
 | G4 | CTX 32k 档（gpt-oss/glm/deepseek/fable）无压测 | ✅ **qwen3.8-flash-next 已测到 84k 深度**（2026-10-21 二次实测：prefill 402→187 t/s、decode 17.5→8.3 t/s，**无塌缩**）；**其余四款仍无** | 中（若 4-agent 集群需要长上下文）          |
 | G5 | `-fa on` 无 off 对比                        | flash attention 在 Vulkan 后端的收益未单独量化                        | 低                              |
 | G6 | **halogen 未纳入默认路径**（ADR-0014 D7 裁定已下、代码层未落地） | 实测深度推理 **2.5×**、prefill **5.6–7.1×** ⇒ 该场景走 llama.cpp 是**明知更慢仍用**；但切换=换引擎拓扑，会作废既有已验链路（`model_path`/`build_info`/工具面） | 高（若审计/长生成成为常态）              |
-| G7 | **`reasoning_effort` 未做质量-速度权衡**（模板默认 `xhigh`） | 单轮 25–32k thinking 是**唯一最大成本项**；降到 `high/medium` 可能省 2–3× 而质量损失未知 | 中（需配质量 A/B，不能只看速度）            |
+| G7 | **`reasoning_effort` 质量-速度权衡**（GLM 模板默认 `max`；qwen halogen 默认 `xhigh`） | ★ **GLM 已测（2026-10-23, E1）**：5 题冒烟 low/high 均 **10/10 通过**；high 平均 completion tokens **2.1× low**；max 在固定预算下仅 **6/10 完成**（C2 两跑 8192 截断、A1/G1 各一跑 4096 截断）⇒ **默认 low · high 按需 · max 须显式 ≥16k `max_tokens`**。⚠ 仅 5 题冒烟、更难/长程任务未测；qwen halogen 的 xhigh 权衡仍未测 | 高（GLM 已是生产默认；已给出可执行默认档） |
 
 ## 4. 修改历史
 
@@ -200,3 +200,4 @@ upstream: null
 | 2026-09-04 | **§1.7 网关进程下线**：litellm 已 `pkill`，端口 4000 释放（RSS 0.3GB 收回）；§1.7 加下线状态行，表保留为历史存档 | ADR-0002 方案 C 收尾——三重证据闭环（B 站无 ESTABLISHED 客户端 + B 站无 :4000 引用 + 主控站无 :4000 引用）确认网关为孤儿遗留进程，无消费者，可安全下线 |
 | 2026-10-21 | **§1.3 重写**（标题"已删模型待回归"更正为"已回归 + 吞吐调优实测"；参数表新增 `PARALLEL=1` / `BATCH-UBATCH=4096/1024` / `CACHE_REUSE=256`，`CTX` 记 131072 并标"未固化"）；**§2 新增 X4**（`--parallel 4` 为负收益配置）；**§3 闭合 G3（已试、未分离）/ 部分闭合 G4**（32k 档实测） | 用户令"测试提高吞吐的方案"：A/B 实测（8k 冷 63.2→24.3 s · 32k 248.6→117.2 s · **claude 热轮 85–96 s → 6.3 s**）；★ 台账铁律要求"改 conf 必须同步本台账"，本次为**手工起引擎、conf 未改** ⇒ 已如实标注未固化 |
 | 2026-10-21（二次） | **§1.3 CTX 由 131072 改判 262144**（附深度推理画像 / 深度吞吐曲线 / halogen 对照三行）；**§2 新增 X5**（131072+MAXC 120000 跑 xhigh 必截断）；**§3 G4 闭合到 84k / 新增 G6（halogen 未纳默认）/ G7（reasoning_effort 未权衡）** | 用户令"halogen A/B 补跑 + 是否需调大 ctx 满足深度推理"：探针实测单轮 xhigh **25,174 tok（stop）/ ≥32,000 tok（length）** ⇒ 输出预算是第一约束；halogen 同文本 prefill **5.6–7.1×**、深度推理整轮 **11.6 vs 29.3 min（2.5×）**；262144 代价仅 +4.1 GB GTT、吞吐无损 |
+| 2026-10-23 | **§3 G7 填实**：GLM 5 题 reasoning_effort 曲线（low/high 各 2 runs、max 2 runs）low/high 均 10/10 通过；high 成本 2.1× low；max 固定预算下 6/10 完成（C2 8192 截断、A1/G1 各一跑 4096 截断）⇒ 默认 low · high 按需 · max 须 ≥16k max_tokens | 承接 2026-10-23 MTP 质量回归时发现的 max-effort 预算风险；证据 [glm-mtp-quality-20261023](../rpc-optimization/glm-mtp-quality-20261023/) |

@@ -1016,3 +1016,19 @@ ggml_backend_rpc_start_server()                                                 
 
 **结论**: ① **未发现 MTP 质量退化** —— 5 题语义签名 ON r1↔r2、OFF r1↔r2、ON↔OFF 均 **5/5 一致**；数值精确、C2 执行结果一致、rubric 锚点全中。② **逐字复现不成立** —— 同臂 r1/r2 也有 4/5 文本不同（首个差异位 0–164），故质量比较必须用语义签名。③ **吞吐**：ON 均值 **17.59**、OFF **12.03**（**+46.2%**）；长生成 C2 **20.28 vs 11.99（+69.2%）**，与 Phase 15 同向。④ **max effort 预算风险（非 MTP）**：默认 effort 下 C2 用 8192 tok 仍未结束思考（content=0）、G1 在 4096 截断 ⇒ 长代码/证明题需给足 `max_tokens` 或降 effort。
 **射程**: 5 题 / low effort / 单 worker A / 无并发 / 未测长 ctx；rubric 为锚点机检 + 人工复核，未用独立判官模型。
+
+---
+
+## Phase 17: GLM reasoning_effort 质量-成本曲线（2026-10-23, E1）
+
+> **被验条目**: params-ledger **G7**（`reasoning_effort` 未做质量-速度权衡）· **证据**: [glm-mtp-quality-20261023](./glm-mtp-quality-20261023/)（`effort_curve.txt` + high/max 原始 jsonl）。
+> **口径**: 同 Phase 16 的 5 题与 MTP-on 配置；**固定预算**（A3/B2/A1/G1 = 4096，C2 = 8192）；low/high 各 2 runs，max 2 runs；temp=0 / seed=42。
+
+| 档 | 语义通过 | 完成 | 平均 completion tokens / 5 题 | 相对 low |
+|---|---|---|---|---|
+| **low** | **10/10** | 10/10 | **1,645** | 1.0× |
+| **high** | **10/10** | 10/10 | **3,483** | 2.1× |
+| **max**（默认） | 6/10 | 6/10 | **≥15,327**（截断下界） | ≥9.3× |
+
+**结论**: ① **low 与 high 在 5 题上均为 10/10 通过，low 成本最低**；high 多出的 2.1× token 未带来本套件可测质量增益。② **max 在固定预算下仅 6/10 完成**：C2 两跑均 8192 用尽（content=0），A1/G1 各一跑 4096 截断；G1 另一跑 2733 tok 完成且答案正确 ⇒ max 是**预算不稳定的高成本档**，不宜作默认。③ **建议**：agent/常规任务默认 `low`；需更详细推理用 `high`；长代码/证明题用 `max` 时显式给 `max_tokens ≥16k`。
+**射程**: 5 题冒烟 / 单 worker A / 无并发；**low 在更难/长程任务上的深度未测**，不能外推为“low 全局等价于 max”。

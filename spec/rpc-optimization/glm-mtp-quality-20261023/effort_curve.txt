@@ -1,0 +1,60 @@
+
+== dmx-a1 ==
+  low   glm_low_on_r1.jsonl        finish=stop   content=  512 reason=     0 ctok=   319 elapsed=  26.112s tps=14.29 pass=True
+  low   glm_low_on_r2.jsonl        finish=stop   content=  388 reason=     0 ctok=   258 elapsed=  19.154s tps=13.88 pass=True
+  high  glm_high_r1.jsonl          finish=stop   content=  431 reason=   776 ctok=   512 elapsed=  40.019s tps=14.16 pass=True
+  high  glm_high_r2.jsonl          finish=stop   content=  383 reason=   529 ctok=   406 elapsed=  30.817s tps=15.04 pass=True
+  max   maxeffort_single_r1.jsonl  finish=stop   content=  368 reason=  4257 ctok=  1589 elapsed= 102.058s tps=16.19 pass=True
+  max   glm_max_r2.jsonl           finish=length content=    0 reason= 10260 ctok=  4096 elapsed= 245.451s tps=16.96 pass=False
+  -- arm summary --
+  low   pass=2/2 complete=2/2 mean_ctok=288
+  high  pass=2/2 complete=2/2 mean_ctok=459
+  max   pass=1/2 complete=1/2 mean_ctok=2842
+
+== dmx-a3 ==
+  low   glm_low_on_r1.jsonl        finish=stop   content=  204 reason=    54 ctok=   146 elapsed=  11.546s tps=19.01 pass=True
+  low   glm_low_on_r2.jsonl        finish=stop   content=  200 reason=    54 ctok=   143 elapsed=   7.655s tps=20.22 pass=True
+  high  glm_high_r1.jsonl          finish=stop   content=  518 reason=   134 ctok=   330 elapsed=  19.905s tps=20.45 pass=True
+  high  glm_high_r2.jsonl          finish=stop   content=  519 reason=   135 ctok=   336 elapsed=  17.896s tps=19.42 pass=True
+  max   maxeffort_single_r1.jsonl  finish=stop   content=  585 reason=  1007 ctok=   632 elapsed=  34.353s tps=18.67 pass=True
+  max   glm_max_r2.jsonl           finish=stop   content=  606 reason=   544 ctok=   546 elapsed=  31.981s tps=19.4 pass=True
+  -- arm summary --
+  low   pass=2/2 complete=2/2 mean_ctok=144
+  high  pass=2/2 complete=2/2 mean_ctok=333
+  max   pass=2/2 complete=2/2 mean_ctok=589
+
+== dmx-b2 ==
+  low   glm_low_on_r1.jsonl        finish=stop   content=   64 reason=     0 ctok=    37 elapsed=   5.608s tps=20.5 pass=True
+  low   glm_low_on_r2.jsonl        finish=stop   content=   64 reason=     0 ctok=    37 elapsed=   2.368s tps=20.58 pass=True
+  high  glm_high_r1.jsonl          finish=stop   content=  168 reason=    24 ctok=   124 elapsed=  10.703s tps=18.1 pass=True
+  high  glm_high_r2.jsonl          finish=stop   content=  298 reason=    37 ctok=   214 elapsed=  12.037s tps=18.68 pass=True
+  max   maxeffort_single_r1.jsonl  finish=stop   content=  283 reason=   420 ctok=   299 elapsed=   18.87s tps=19.89 pass=True
+  max   glm_max_r2.jsonl           finish=stop   content=  217 reason=   389 ctok=   280 elapsed=  18.991s tps=18.48 pass=True
+  -- arm summary --
+  low   pass=2/2 complete=2/2 mean_ctok=37
+  high  pass=2/2 complete=2/2 mean_ctok=169
+  max   pass=2/2 complete=2/2 mean_ctok=290
+
+== dmx-c2 ==
+  low   glm_low_on_r1.jsonl        finish=stop   content=  982 reason=   953 ctok=   858 elapsed=  46.486s tps=20.28 pass=True
+  low   glm_low_on_r2.jsonl        finish=stop   content=  805 reason=  1426 ctok=   905 elapsed=  53.863s tps=18.22 pass=True
+  high  glm_high_r1.jsonl          finish=stop   content= 2026 reason=  4035 ctok=  2483 elapsed= 143.729s tps=17.8 pass=True
+  high  glm_high_r2.jsonl          finish=stop   content= 1632 reason=  2829 ctok=  1800 elapsed=  101.89s tps=18.42 pass=True
+  max   maxeffort_single_r1.jsonl  finish=length content=    0 reason= 25412 ctok=  8192 elapsed= 526.264s tps=15.69 pass=False
+  max   glm_max_r2.jsonl           finish=length content=    0 reason= 24728 ctok=  8192 elapsed= 519.953s tps=15.88 pass=False
+  -- arm summary --
+  low   pass=2/2 complete=2/2 mean_ctok=882
+  high  pass=2/2 complete=2/2 mean_ctok=2142
+  max   pass=0/2 complete=0/2 mean_ctok=8192
+
+== dmx-g1 ==
+  low   glm_low_on_r1.jsonl        finish=stop   content=  470 reason=     0 ctok=   273 elapsed=  22.743s tps=13.89 pass=True
+  low   glm_low_on_r2.jsonl        finish=stop   content=  564 reason=     0 ctok=   315 elapsed=  23.399s tps=13.79 pass=True
+  high  glm_high_r1.jsonl          finish=stop   content=  499 reason=   252 ctok=   372 elapsed=   28.86s tps=14.45 pass=True
+  high  glm_high_r2.jsonl          finish=stop   content=  543 reason=   231 ctok=   389 elapsed=  29.736s tps=14.6 pass=True
+  max   maxeffort_single_r1.jsonl  finish=length content=    0 reason= 12877 ctok=  4096 elapsed= 264.816s tps=15.65 pass=False
+  max   glm_max_r2.jsonl           finish=stop   content=  724 reason=  6923 ctok=  2733 elapsed= 162.994s tps=17.1 pass=True
+  -- arm summary --
+  low   pass=2/2 complete=2/2 mean_ctok=294
+  high  pass=2/2 complete=2/2 mean_ctok=380
+  max   pass=1/2 complete=1/2 mean_ctok=3414

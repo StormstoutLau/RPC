@@ -152,7 +152,8 @@ def answer_sig(qid, run):
                 "degenerate": bool(re.search(
                     r"(psi\s*[*·]?\s*gamma\s*=\s*1|1\s*/\s*psi\s*=\s*gamma|gamma\s*=\s*1\s*/\s*psi"
                     r"|ψ\s*[·*]?\s*γ\s*=\s*1|ψ\s*=\s*1\s*/\s*γ|ψ\s*=\s*\\frac\{1\}\{\\gamma\}"
-                    r"|互为倒数)", c, re.I)),
+                    r"|gamma\s*[*·]?\s*psi\s*=\s*1|γ\s*[·*]?\s*ψ\s*=\s*1|互为倒数"
+                    r"|\\?gamma\s*\\?psi\s*=\s*1|\\?psi\s*\\?gamma\s*=\s*1)", c, re.I)),
                 "discount_trap": ("折现率不同" in c)}
     if qid == "dmx-c2":
         code = extract_code(run)
