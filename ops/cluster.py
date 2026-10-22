@@ -780,6 +780,10 @@ def _cmd_load_c(alias: str, backend: str = None, engine: str = None) -> int:
     仍用 conf 旧引擎，日志**无**「引擎变体已落 conf」行 —— 对 GLM（C 站 + `--engine glm5next-*`）
     是潜在同族风险面。改走 `_build_infer_load_cmd` 统一拼装（与 A/B 同一构造器，避免再分叉）。"""
     print(f"[cluster] C 站 (seaviv) 加载 {alias} ...")
+    # ★ 2026-10-22 实测：C 站分支在 cmd_load 里**先于**通用路径 return ⇒ 必须在此单独回收容器。
+    #   漏掉它的表现（C 站连续复现）：halogen 容器继续占 8080/GTT ⇒ 新 studio 落到 **8081**，
+    #   两个引擎同抢 ~90 GB ⇒ 容器随后 OOM `Exited (1)`。
+    _reclaim_containers("C")
     cmd = _build_infer_load_cmd(alias, backend, engine)
     rc = ssh_stream("C", cmd)
     if rc != 0:
@@ -813,15 +817,41 @@ def _build_infer_load_cmd(matched: str, backend: str, engine: str = None) -> str
 
 # ── 容器化模型 (halogen) 编排 ─────────────────────────────
 def _container_cleanup_cmd() -> str:
-    """站内**全部**已登记容器的一次性回收命令 (幂等)。供 unload 与启动前互斥共用。"""
+    """站内**全部**已登记容器的一次性回收命令 (幂等)。供 unload 与启动前互斥共用。
+
+    ★ 2026-10-22 C 站实测：`docker rm -f` 返回 0 后，容器会**立刻**从 `docker ps -a` 消失，
+    但 docker-proxy/网络命名空间仍占着 8080 数分钟（C 站一次 ~4m18s）。只发 rm 不等 ⇒
+    随后 studio 端口检测看到 8080 仍被占 ⇒ 自动落到 **8081**（客户端零迁移前提被破坏）。
+    ⇒ 等待信号 = **8080 真的没人监听**（`ss -ltn`）；且只在**确实删到容器**时才等
+    （没有容器时 rm 失败，直接跳过 —— 避免与 studio 自己占用的 8080 互锁）。
+    """
     names = sorted({s["name"] for s in CONTAINER_MODELS.values()})
-    return "; ".join(f"docker rm -f {n} 2>/dev/null || true" for n in names) or "true"
+    if not names:
+        return "true"
+    parts = []
+    for n in names:
+        # `docker rm -f` 返回 0 ≠ 端口已释放：容器会立刻从 `docker ps -a` 消失，但
+        # docker-proxy/网络命名空间的清理可能还要数分钟（C 站实测 ~4m18s）。唯一可靠信号
+        # 是 8080 真的没人监听。仅当**确实删到了容器**时才等，避免与 studio 占用互锁。
+        parts.append(
+            f"docker rm -f {n} >/dev/null 2>&1 && {{ "
+            f"for _ in $(seq 1 240); do ss -ltn 2>/dev/null | grep -q ':8080 ' || break; sleep 2; done; "
+            f"ss -ltn 2>/dev/null | grep -q ':8080 ' && echo 'PORT8080_STILL_BUSY'; }} || true")
+    return "; ".join(parts)
 
 
 def _reclaim_containers(station: str) -> bool:
     """回收站上已登记的容器。**必须先于 `infer-unload`** —— 反之 infer-unload 的
-    wait_gtt 会因容器仍持 ~90 GB GTT 每站白等满 180 s (90×2s) 才 WARN 退出。"""
-    ok, out = ssh_run(station, _container_cleanup_cmd())
+    wait_gtt 会因容器仍持 ~90 GB GTT 每站白等满 180 s (90×2s) 才 WARN 退出。
+
+    ★ timeout=540（2026-10-22 C 站实测）：`docker rm -f` 后 8080 的真实释放可能达 ~4m18s；
+    命令内部轮询上限 480 s，这里再留余量。超时仍未释放 ⇒ 打印 `PORT8080_STILL_BUSY`（可见），
+    不静默让 studio 落到 8081。
+    """
+    ok, out = ssh_run(station, _container_cleanup_cmd(), timeout=540)
+    if "PORT8080_STILL_BUSY" in (out or ""):
+        print(f"[cluster] {station} 站容器已删, 但 8080 在 480s 内未释放 —— 先排查占用者再加载"
+              f" (studio 可能落到 8081)")
     if not ok:
         print(f"[cluster] {station} 站容器回收失败: {out} (继续 —— 同名容器会在 docker run 处响亮失败)")
     return ok

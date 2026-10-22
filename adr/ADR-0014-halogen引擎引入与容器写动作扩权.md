@@ -299,8 +299,9 @@ prompt set = **上游 `tools/eval-prompts.json`**（10 例：code/proof/proc/cha
    ⇒ 待用户在「(i) 回写 D4 为数字 GID / (ii) 保留组名但登记例外」间裁定。
 8. ~~**D7「默认执行框架 = halogen」落地未做**~~ **→ 已落（2026-10-21 · E1）**：代码面见 D7 的「代码层已落地」段；
    **三站**均以 0.18.11 起容器并 `/health` = ok（B 首跑 + A/C 复验，`context=262144` / `kv_pool_positions=524288`）。
-   ⚠ **仍开放（部分）**：`STUDIO_FLAGS` 只在 **B 站**落值（调优 A/B 在 B 站做的）；A/C 保持默认
-   —— 按「无实测不写死」纪律，待各自实测后再落。
+   ✅ **A/C 已于 2026-10-22 补齐 A/B 并落值**：同文本 8k/32k、`max_tokens=1` 只计 prefill ——
+   A 冷 **33.88→28.15 s**（1.20×）/ 32k **129.73→103.40 s**（1.25×）；C 8k **42.79→31.93 s**（1.34×）/
+   32k **143.54→100.09 s**（1.43×）；热轮 0.21–0.47 s 基本不变。⇒ 三站 conf 均含 `STUDIO_FLAGS`。
 9. **★ 共享权重目录落物未清理**（**新登记**）：`down` 后 `qwen38-flash-next-mtp.hgn` / `tokenizer/` / `.cache/`（root 属主）
    仍留在 `UD-IQ4_XS/`；**未**定是否保留（复起加速）或删除。
 10. ~~**B/C 复用 A 配方仍阻断**~~ **→ 已解（2026-10-11）**：用户裁定 **(a)** ⇒ 经 `containers install` 补 daemon + `containers up` 真部署，
