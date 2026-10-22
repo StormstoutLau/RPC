@@ -265,14 +265,25 @@ chk("R1-⑨(FREE_QUOTA_PAID 已删): 门面上不再有历史档位常量（档�
 # ── RPC 加载前回收 halogen 容器：防「8080 仍由容器持有 ⇒ 健康检查假绿」────────
 # 现场（2026-10-22）：`load glm-5.3-flash` 时 A/B/C 的 qwen halogen 容器未回收，
 # 8080 仍由容器服务 ⇒ 远端 infer-load/健康检查命中 qwen，GLM 实际未起却报 READY。
-def _rpc_reclaim_probe(worker=None, conf_target=""):
+def _rpc_reclaim_probe(worker=None, conf_target="",
+                       alive="10.10.10.1:50052 10.10.11.3:50052",
+                       decl="10.10.10.1:50052 10.10.11.3:50052"):
     calls, built, runs = [], [], []
     saved = (C._reclaim_containers, C.ssh_stream, C.ssh_run,
              C._build_infer_load_cmd, C._conf_rpc_target)
     try:
         C._reclaim_containers = lambda st: calls.append(st) or True
         C.ssh_stream = lambda *a, **k: 0
-        C.ssh_run = lambda st, cmd, **k: runs.append(cmd) or (True, "10.10.10.1:50052 10.10.11.3:50052")
+
+        def _ssh_run(st, cmd, **k):
+            runs.append(cmd)
+            if cmd.startswith("rpc-nodes --all"):
+                return True, decl
+            if cmd.startswith("rpc-nodes "):
+                return True, alive
+            return True, alive
+
+        C.ssh_run = _ssh_run
         C._build_infer_load_cmd = lambda *a, **k: built.append((a, k)) or "true"
         C._conf_rpc_target = lambda st, al: conf_target
         rc = C._load_rpc("glm-5.3-flash", "B", None, worker)
@@ -309,6 +320,16 @@ chk("RPC load 默认: conf 单 worker A ⇒ 预启动与 --rpc-target 都只带 
     _rc_c == 0 and _built_c and _built_c[-1][0][3] == "10.10.10.1:50052"
     and "rpc-nodes --start 'glm-5.3-flash' '10.10.10.1:50052'" in _runs_c,
     f"rc={_rc_c} built={_built_c} runs={_runs_c}")
+
+# 2026-10-23: 显式 worker 的失败面 —— 死节点 / 未声明节点必须在加载前中止。
+_rc_dead, _, _built_dead, _ = _rpc_reclaim_probe(
+    worker="C", alive="10.10.10.1:50052")
+chk("RPC load --worker C: 目标不在存活清单 ⇒ 加载前中止",
+    _rc_dead == 1 and not _built_dead, f"rc={_rc_dead} built={_built_dead}")
+_rc_undecl, _, _built_undecl, _ = _rpc_reclaim_probe(
+    worker="C", decl="10.10.10.1:50052")
+chk("RPC load --worker C: 目标不在 nodes.env 声明 ⇒ 加载前中止",
+    _rc_undecl == 1 and not _built_undecl, f"rc={_rc_undecl} built={_built_undecl}")
 
 # 非法/越界指派必须响亮拒绝（不静默退化）。
 chk("load --worker B: 非法 worker 拒绝（head 固定 B，B 不能当 worker）",
