@@ -12,6 +12,13 @@ evidence-budget:
 accept:
   - test -f out/p0-tail-ok.txt
   - grep -qx 'P0_TAIL_OK' out/p0-tail-ok.txt
+evidence-manifest:
+  version: 1
+  subjects:
+    - name: p0-tail
+      path: p0-tail-ok.txt
+      state: out/p0-tail-ok.txt
+      digest: sha256
 ---
 > **P0 尾款确认真跑**：验证 TC/RR 的 `open` 桶清空 ——
 > `evidence_budget` 由本卡**声明**（D2）· 无 golden ⇒ `golden.checksum` 不适用（D1）·

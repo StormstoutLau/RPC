@@ -11,6 +11,13 @@ accept:
 decompose:
   - subject=路由层 | 用一句话说明「路由层」在这个抽象系统里的职责，写入 out/shard-written.txt
   - subject=缓存层 | needs=路由层 | 用一句话说明「缓存层」与路由层的关系，写入 out/shard-written.txt
+evidence-manifest:
+  version: 1
+  subjects:
+    - name: shard-written
+      path: shard-written.txt
+      state: out/shard-written.txt
+      digest: sha256
 ---
 > **`needs=` 探针（正向 · 方案 `a` 的"真跑层"）** —— 片2 `needs=路由层`（**引用可达**）。
 > **期望读数**：`SPLIT_NEEDS: n=2 with_needs=1 status=ok` · `SPLIT_DONE` ·

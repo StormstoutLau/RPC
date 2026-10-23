@@ -3312,6 +3312,10 @@ Assert-True "g167①(结构): 主路 accept 体含 STALE_PRODUCT 前置判据" (
 Assert-True "g167②(结构): 备路本地/站上 accept 含 STALE_PRODUCT" (
     ($qFn[0].Extent.Text -match 'STALE_PRODUCT') -and ($content -match 'STALE_PRODUCT'))
 
+# O-168 丙 (2026-10-24): 站上 claude 本地模式 ctx 不足 ⇒ fail-fast（不烧 300s、不 resume）。
+Assert-True "g168①(结构): 站上 claude 本地模式含 ctx fail-fast" ($content -match 'claude-local-ctx-too-small')
+Assert-True "g168②(结构): rc=14 fail-fast 不触发 resume" ($qFn[0].Extent.Text -match '\$rc -ne 14')
+
 # 行为：脚本生成器（纯函数）—— 用 Git Bash 真跑，覆盖 PWD/rc/篡改。
 $gBash = Resolve-LocalBash
 $nasAst = @($fns) | Where-Object { $_.Name -eq 'New-StationAcceptScript' } | Select-Object -First 1

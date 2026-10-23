@@ -9,6 +9,13 @@ timeout_s: 300
 accept:
   - test -f out/smoke.txt
   - grep -q SMOKE_OK out/smoke.txt
+evidence-manifest:
+  version: 1
+  subjects:
+    - name: smoke
+      path: smoke.txt
+      state: out/smoke.txt
+      digest: sha256
 ---
 ## 任务描述
 

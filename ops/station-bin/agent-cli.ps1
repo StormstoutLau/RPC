@@ -4933,7 +4933,8 @@ mkdir -p "$stWorkDir/.attach/$nm2"
     # O-24 P0-① resume loop (本地等价): 失败 <=3 次续接, 每次独立预算 continueTimeout; O-46 加退避
     $contAttempt = 0
     $contB64 = "Q29udGludWUgdGhlIHVuZmluaXNoZWQgdGFzayBmcm9tIHdoZXJlIGl0IHN0b3BwZWQuIFJlLXJlYWQgbmVlZGVkIGZpbGVzLCBjb21wbGV0ZSB3aGF0IHdhcyBsZWZ0LCB0aGVuIHZlcmlmeSBwZXIgb3JpZ2luYWwgY3JpdGVyaWEu"
-    while ($rc -ne 0 -and $contAttempt -lt 3) {
+    # O-168 丙 (2026-10-24): rc=14 = 站上本地引擎 ctx 不足的 fail-fast ⇒ 不 resume（重试不会变）。
+    while ($rc -ne 0 -and $rc -ne 14 -and $contAttempt -lt 3) {
         $contAttempt++
         # O-46 退避: stderr 命中上游 503/504/过载 → 长退避(30s)尊重 provider 冷却; 否则短退避(5s)
         $errText = if (Test-Path $errTxt) { Get-Content $errTxt -Raw -ErrorAction SilentlyContinue } else { '' }
@@ -5769,6 +5770,16 @@ else
  "apiKeyHelper":"/bin/cat $KEYF","model":"main","modelOverrides":{"main":"main"}}
 JSON
   echo "P3_STATION: mode=local engine_ctx=$CTX max_context_tokens=$MAXC base_url=http://127.0.0.1:8080 cwd=$WORK"
+  # O-168 丙 (2026-10-24): claude CLI 的固定请求面 ≈33k ⇒ 引擎 ctx 不足时 **fail-fast**
+  #   （原行为: 发 400 后 resume 重试到 300s 才收 124 —— 白等；且 agent-output 为空）。
+  #   阈值 49152 = 33k + 余量；64k 引擎（MAXC=61440）可过。引擎侧真正修复见 O-168 甲。
+  if [ "$CTX" -lt 49152 ]; then
+    rm -f "$SET"
+    : > "/tmp/${PFX}_err.txt"
+    echo "P3_STATION_ERR: claude-local-ctx-too-small ENGINE_CTX=$CTX < 49152 (raise station engine ctx or use opencode; O-168)" > "/tmp/${PFX}_out.txt"
+    echo "P3_STATION_ERR: claude-local-ctx-too-small ENGINE_CTX=$CTX < 49152 (raise station engine ctx or use opencode; O-168)"
+    exit 14
+  fi
 fi
 # W3 步 2 (2026-09-22): **不再 `cd "$HOME"`** —— 改到**执行点目录**(站上为该次 run 建的工作区)，
 #   否则卡里以相对路径引用的附件(`.attach/<name>`)与项目文件**都解析不到**。

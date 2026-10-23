@@ -9,6 +9,13 @@ timeout_s: 300
 accept:
   - test -f out/probe-tools.md
   - grep -q '^PROBE_DONE' out/probe-tools.md
+evidence-manifest:
+  version: 1
+  subjects:
+    - name: probe-tools
+      path: probe-tools.md
+      state: out/probe-tools.md
+      digest: sha256
 ---
 ## 任务描述
 
