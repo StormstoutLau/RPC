@@ -48,6 +48,13 @@ foreach ($c in $script:Candidates) {
 }
 $ErrorActionPreference = $prevEap
 
+# ★ 2026-10-23（实测假红止损）: 候选可能是 **py.exe 启动器**（不是解释器本身）—— 它"无选项 + 给脚本"
+#   时会**读脚本 shebang**（本仓脚本首行 `#!/usr/bin/env python3`）⇒ 本机落到 uv 3.11.15
+#   （**无 paramiko**）⇒ `py-tests` 13 条 + `mirror`/`id-storage` 假红（实测 41/54 · 36/7/6）。
+#   ⇒ 凡"用 `$script:Py` 跑脚本"的地方都**必须**显式带 `-3`（`py -3` 不读 shebang，= 探测时的同一解释器）。
+#   ★ **判定只此一处**：生成 hook 与 `check` 两个调用面共用本变量（避免两处各写一份正则而漂移）。
+$script:PyIsLauncher = ($script:Py -match '(?i)[\\/]py\.exe$')
+
 function Show-Usage {
     Write-Host @'
 rpc 统一入口 (P0)
@@ -80,7 +87,7 @@ function Install-HookEntry {
     #   误报不可判、id-storage 把"探测失败"误判成"角色不实"。而上面的 paramiko 探测用的是
     #   `py -c`（**不读 shebang**，= 启动器默认 3.x）⇒ `-3` 与探测到的是**同一个解释器**，结论可迁移。
     #   直接路径的 python.exe 不带该参数（它不是启动器，没有 shebang 选择行为）。
-    $pyOpt = if ($script:Py -match '(?i)[\\/]py\.exe$') { ' -3' } else { '' }
+    $pyOpt = if ($script:PyIsLauncher) { ' -3' } else { '' }
     $lines = @(
         '#!/bin/sh',
         "# rpc 统一校验门禁 ($Name) — 由 ops/rpc.ps1 install-hooks 生成, 请勿手改",
@@ -133,7 +140,10 @@ switch ($Command.ToLower()) {
             Write-Host "  [提示] 选中解释器无 paramiko: $script:Py" -ForegroundColor Yellow
             Write-Host "         stations(三站配置比对)断言将降级为 WARN" -ForegroundColor Yellow
         }
-        $argv = @((Join-Path $PSScriptRoot 'rpc_check.py'))
+        # ★ 2026-10-23: 启动器必须显式 `-3`（判据见上方 `$script:PyIsLauncher` 处；两个调用面共用）。
+        $argv = @()
+        if ($script:PyIsLauncher) { $argv += '-3' }
+        $argv += (Join-Path $PSScriptRoot 'rpc_check.py')
         if ($Quick) { $argv += '--quick' }
         if ($Only) { $argv += @('--only', $Only) }
         if ($List) { $argv += '--list' }

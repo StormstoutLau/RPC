@@ -3266,6 +3266,18 @@ Assert-True "evm-pull⑧(行为·白名单接线): 非 out/ 前缀 ⇒ rejected=
     ($r8.pulled -eq 0) -and ($r8.rejected -eq 1) -and
     -not (Test-Path -LiteralPath (Join-Path (Join-Path $p8 'rd') 'x.txt')))
 
+# ══ 备路 `RunReport.attempt` 接线（2026-10-23 · 与 state/glob 缺口**同族**）══════════════
+# 缺口事实: 主路传 `-Attempt`（`.meta` 的 `RESUME_ATTEMPTS`+1），备路**没传** ⇒ 每次备路 run 的
+#   `RunReport.attempt` 恒 `$null` ⇒ 真跑日志 `D7_RUNREPORT_GAPS open=[attempt]`。
+#   `decisions` 属 boundary、`evidence`/`artifact.digest` 已有真值 ⇒ **RUNREPORT 的 open 桶只剩它**
+#   （D7 #7/#8 的转硬拒门槛 = 「`open` 桶清空」）。
+# 判据 = **结构**：全仓两处 `New-RunReport` 调用**都必须**传 `-Attempt`（缺一即红）。
+$rrCalls = @($ast.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.CommandAst] -and ($n.GetCommandName() -eq 'New-RunReport') }, $true))
+$rrNoAttempt = @($rrCalls | Where-Object { $_.Extent.Text -notmatch '-Attempt' })
+Assert-True "d7-attempt①(结构): 全部 New-RunReport 调用都传 -Attempt（共 $($rrCalls.Count) 处；缺 $($rrNoAttempt.Count) 处）" (
+    ($rrCalls.Count -eq 2) -and ($rrNoAttempt.Count -eq 0))
+
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
 exit $(if ($fail -eq 0) { 0 } else { 1 })

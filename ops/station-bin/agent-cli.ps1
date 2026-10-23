@@ -1695,7 +1695,9 @@ $Script:D7_GAP_CLASS = [ordered]@{
     'golden.checksum' = 'open'       # ★ 可清但有代价：`$g`/`$goldenActive` 在 P0 之后才算（见契约 §1.6）
     # RunReport
     'decisions'       = 'boundary'   # ★ §1.5：八字段内部结构 = 射程边界（不判不补）
-    'attempt'         = 'open'       # 本仓无 attempt 计数
+    'attempt'         = 'open'       # ★ 2026-10-23（与 state/glob 同族）：两路**均已接线** —— 主路 ← `.meta`
+                                     #   的 `RESUME_ATTEMPTS`+1；备路 ← `CONT_ATTEMPT`+1 ⇒ **新 run 不再**
+                                     #   **产生该 gap**；存量 / `.meta` 缺读数仍按 `open` 计（不伪造真值）。
     'evidence'        = 'open'       # 锚点在审计报告侧 ⇒ 要接线到 run 产出侧
     'artifact.digest' = 'open'
     # Verdict
@@ -5017,7 +5019,11 @@ mkdir -p "$stWorkDir/.attach/$nm2"
             # ── ★★ B 段（2026-10-01）：**P3 回收**（claude 备路同一处置）──────────────────────
             # ★ 与主路**共用同一实现**（`New-RunReport` + 共享汇报壳）⇒ 不复制第二份判据/映射。
             # ★ 顺序承重（同主路）：P3 报数**在写盘之前**，否则 `RUNREPORT.*` 赶不上这次写盘。
-            $d7rr = New-RunReport -Run $run -RunDir $runDir
+            # ★★ 2026-10-23（与 state/glob 同族）：`-Attempt` **必须传** —— 本路的真值 = `$contAttempt + 1`
+            #   （`$contAttempt` 计**续跑次数**，首跑 = 0 ⇒ 尝试数 = 1，与契约 §1.6 的映射同义）。
+            #   此前漏传 ⇒ `attempt=$null` ⇒ 每次备路 run 都报 `D7_RUNREPORT_GAPS open=[attempt]`
+            #   ⇒ RUNREPORT 的 open 桶**按构造永不清空**（D7 #7/#8 的转硬拒门槛）。
+            $d7rr = New-RunReport -Run $run -RunDir $runDir -Attempt ($contAttempt + 1)
             Write-D7Report -Kind 'RunReport' -Obj $d7rr['report'] -Gaps $d7rr['gaps'] -Tag 'RUNREPORT' -Card $card `
                            -GuardSink $d7t | Out-Null
             # ★ task 侧报数落点（与主路**同一处置**；备路还带着 P0 传来的 `CONTRACT.*`）
