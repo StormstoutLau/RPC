@@ -342,16 +342,37 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
     runDir 实况只有 `agent-output.txt` / `accept-output.txt` / `card.md` ⇒ **失败路径上 P3 采集未完成**。
     ★ 所以那 11 件**不是卡声明**（卡只声明 `v4-evidence`）—— 是框架基线自动注入。
   - **1 条** = `glob-probe`（run `202610081856215133`）：实际走 **claude 备路**（`cli=claude`）——
-    accept 通过，但 `glob-probe.txt` 未落 ⇒ ★ **claude 路不做 `state`/glob 采集**（能力边界，**待追**）。
+    accept 通过，但 `glob-probe.txt` 未落 ⇒ ★ **claude 路不做 `state`/glob 采集**（能力边界 ——
+    **已于 2026-10-23 落地，见下「★ 落地」段**）。
   - **1 条** = `review-fallback-probe`（run `202610130248216879`）：`missing-product.md` **故意不写**（探针设计）。
 - **口径（已落 2026-10-23）**：`agent_audit` 新增第三态 **`failed-run-by-design`**（与 O-61 `locked-out-by-design` 同族）——
   `status=failed`（无 `status` 的旧记录退回 `exit_code ∉ {0,3}`）的 run，其 **`missing-artifact` 不计入缺口**，
   单列 `totals.failed_run_absent` + coverage 行；**只覆盖 missing-artifact**，`collect-not-executed` 口径未动。
   ★ 正向对照：`completed` run 缺件**仍**记 missing-artifact（`tests/test_agent_audit_failed_run.py` A5）。
 - **读数**：gap 表 144 → **37**；待接受 **90 → 2**（随后 `audit --accept`，水印 57 → **59**）。
-- ⚠ **未做 / 边界（如实）**：① **claude 路的 `state`/glob 采集未实现**（本段即登记；要修须另裁，且属能力实现不是口径）；
-  ② `collect-not-executed` 的 4 条存量仍按原口径（已在水印内）；③ 该口径**不会**让"成功 run 丢件"逃逸；
-  ④ 本口径只**沉默同 key 的存量**（水印单调），**失败 run 不再新增**同形态 key。
+- ⚠ **未做 / 边界（如实）**：① ~~**claude 路的 `state`/glob 采集未实现**~~ ⇒ **已落（2026-10-23）**，
+  见下「★ 落地」段（边界 5 条如实登记）；② `collect-not-executed` 的 4 条存量仍按原口径（已在水印内）；
+  ③ 该口径**不会**让"成功 run 丢件"逃逸；④ 本口径只**沉默同 key 的存量**（水印单调），**失败 run 不再新增**同形态 key。
+- **★ 落地（2026-10-23 · 备路 `state`/glob 采集）**：
+  - **实现（唯一实现点）**：产物拉回本体抽成 `Invoke-EvmStatePull`（`ops/station-bin/agent-cli.ps1`）——
+    主路原内联块**移入**该函数、备路两处**调用**它（**不复制**）。语义逐字保留：字符集白名单
+    （`Test-EvmStatePull`）→ `.run-marker` 窗口三态（窗口内恰 1 / 窗口 0 且候选恰 1 / 其余拒）→
+    解析名复校验 → 落盘。两面只换枚举手段：`-HostName` 非空 = ssh 枚举 + scp；空 = 本地面
+    （`Get-ChildItem` + `Copy-Item`，大小写敏感 + 跳点开头文件，对齐 bash glob）。
+  - **接线**：备路在**首次 spawn 前**建 `.run-marker`（站上 = 远端脚本；本地 = `<projRoot>/.run-marker`），
+    在 collect 段末尾（`.agent-run.json` 与归档件之后）调拉回 —— 与主路**同序**。
+  - **判据**：`_fm_golden_test.ps1` **644 pass**（新增 `evm-pull①–⑧`：三面 = 共享函数存在 / 两路各恰一处
+    接线 / 本地面行为三态真跑 + 白名单接线）；**先验红**已执行（函数未落地时夹具 `throw … not found`）。
+  - **真跑证据（claude 路 · 主控本地）**：run `dogfood/202610231300033396`（`-Cli claude -Model claude`，
+    `exec_host==arbiter_host==DESKTOP-BR5R8EV`）日志逐字
+    `EVM_STATE_GLOB: subject 'glob-probe' out/*.txt -> out/glob-probe.txt` + `EVM_STATE: pulled=1 rejected=0`；
+    runDir 实有 `glob-probe.txt`（14 字节，内容 `GLOB_PROBE_OK`）。`audit`：待接受新增 **0**（总数仍 37）。
+  - ⚠ **边界（如实）**：① 存量 run `202610081856215133` 的 runDir **不回填**（runDir 是不可回改的证据单元；
+    其 gap 已在水印内，不因本修消失）；② 失败 run 的远端产物清理（O-46）仍**只在主路** —— 本修只补"拉回"；
+    ③ 本地面 `.run-marker` 是**共享面写入**（无附件只读 run 允许并发）⇒ 并发时窗口可能互相覆盖，
+    最坏 = **拒绝**（fail-closed），不会把别人的产物错配进来；④ 站上 claude 变体（`$stWorkDir`）的**拉回路径
+    未真跑**（本次卡走本地路）—— 该分支与主路共用同一远端枚举/拷贝实现 + 静态接线断言，但**端到端仍属未验**；
+    ⑤ 不覆盖 `collect` 型 subject（本仓原本就"不执行 collect 命令"的红线未动）。
 
 #### O-30：站上环境与卡面约束（三条）
 

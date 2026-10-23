@@ -27,7 +27,10 @@ Invoke-Expression $fn.Extent.Text   # 定义函数到当前会话
 # 它们是**纯函数**(只吃 $accept/$goldenActive/卡 subjects, 不碰站、不碰文件系统)
 # ⇒ 可离线单测; 这正是"派发路径改动"能被验证而不用每次都真派发的关键。
 # O-15/AUDIT (2026-09-21): 追加提取 claude 按路基线(Get-ClaudeFrameworkSubjects) 与 fallback 判定 (Test-FallbackEligible)。
-foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-EvmStatePull', 'Test-FallbackEligible', 'Test-CtxOverflowError', 'Resolve-CtxOverflowCode', 'Resolve-ClaudeStationCandidates', 'Get-SensitivityBackendReject', 'Get-BackendEgress', 'Get-JudgeEgress', 'Get-JudgeComplianceReject', 'Get-AttachEgressReject', 'Get-ScrubRules', 'Invoke-Scrubber', 'Get-ScrubBlockReason', 'Resolve-ReviewPrompt', 'Resolve-ClaudeBudget', 'Resolve-LocalBash', 'Invoke-LocalBashCmd', 'Resolve-ExitCode', 'Test-GateSummaryOk', 'Resolve-GateCommand',
+foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge-EvidenceSubjects', 'Test-EvmStatePull',
+# 2026-10-23 (O-29 同族②): 产物拉回的**执行体**（唯一实现点）—— 主路/备路共用 ⇒ 必须能被离线真跑（本地面）。
+'Invoke-EvmStatePull',
+'Test-FallbackEligible', 'Test-CtxOverflowError', 'Resolve-CtxOverflowCode', 'Resolve-ClaudeStationCandidates', 'Get-SensitivityBackendReject', 'Get-BackendEgress', 'Get-JudgeEgress', 'Get-JudgeComplianceReject', 'Get-AttachEgressReject', 'Get-ScrubRules', 'Invoke-Scrubber', 'Get-ScrubBlockReason', 'Resolve-ReviewPrompt', 'Resolve-ClaudeBudget', 'Resolve-LocalBash', 'Invoke-LocalBashCmd', 'Resolve-ExitCode', 'Test-GateSummaryOk', 'Resolve-GateCommand',
 # O-92 (2026-09-26): 双盲重推导 —— 三个**纯函数** + `Read-ReviewResource`（`Build-BlindPrompt` 依赖它）。
 # ⚠ 把 `Read-ReviewResource` 也提取进来 ⇒ 本夹具读的是**真模板文件**
 #   ⇒ "盲判模板里不得有 `{{PRODUCT}}`"这条能变成**行为断言**（真跑一遍看输出），而不是扫文本。
@@ -3173,6 +3176,95 @@ Assert-True "PROJ③: 载入块**晚于** `$Script:REPO_ROOT`（否则 Join-Path
     ($content.IndexOf('$Script:PROJECTS = @{}') -ge 0) -and
     ($content.IndexOf('--list-projects') -gt $content.IndexOf('$Script:REPO_ROOT')) -and
     $content.Contains('$Script:PROJECTS_ERR'))
+
+# ══ 备路 state/glob 采集（2026-10-23 · O-29 同族第二实例 `dogfood/202610081856215133`）══════
+# 缺口事实: 该 run（卡 glob-probe.md, cli=claude, 主控本地）exit 0 且 accept 通过, 但卡声明的
+#   `state: out/*.txt` **一次都没执行** —— claude 路压根不接 collect 段的 state 拉回 ⇒ 产物留在
+#   工作区、runDir 缺件（**静默丢件**: exit/accept 全绿）。
+# 判据三面（缺一不可）:
+#   ① 共享函数存在（主路/备路 = **唯一实现点**; 禁止把主路段复制一份到备路）
+#   ② 两路**各恰一处**接线（防"函数在、没人用"）
+#   ③ 本地面**行为**三态（窗口内恰 1 / 窗口 0 且候选恰 1 / 其余拒）—— 真跑, 不扫文本。
+$pullAst = @($fns) | Where-Object { $_.Name -eq 'Invoke-EvmStatePull' } | Select-Object -First 1
+Assert-True "evm-pull①: 共享函数 Invoke-EvmStatePull 存在（唯一实现点）" ([bool]$pullAst)
+$pullCallMain = @($itFn[0].FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.CommandAst] -and ($n.GetCommandName() -eq 'Invoke-EvmStatePull') }, $true))
+$pullCallClaude = @($qFn[0].FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.CommandAst] -and ($n.GetCommandName() -eq 'Invoke-EvmStatePull') }, $true))
+Assert-True "evm-pull②: 主路/备路**各**恰一处调 Invoke-EvmStatePull（实测 $($pullCallMain.Count)+$($pullCallClaude.Count)）" (
+    ($pullCallMain.Count -eq 1) -and ($pullCallClaude.Count -eq 1))
+Assert-True "evm-pull③: 主路段**不再内联**远端枚举（`==CAND==` 已抽走 ⇒ 无第二份实现）" (
+    -not ($itFn[0].Extent.Text -match '==CAND=='))
+
+# ③ 行为：本地面三态（真建目录、真写件、真调用；判据 = 落盘件与计数）
+$pullTmp = Join-Path $env:TEMP 'agent-cli-evm-pull-test'
+Remove-Item -LiteralPath $pullTmp -Recurse -Force -ErrorAction SilentlyContinue
+$pullNow = Get-Date
+function New-PullCase([string]$sub) {
+    $root = Join-Path $pullTmp $sub
+    New-Item -ItemType Directory -Path (Join-Path $root 'out') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $root 'rd') -Force | Out-Null
+    return $root
+}
+function Add-PullFile([string]$root, [string]$name, [string]$body, [int]$minutes) {
+    $p = Join-Path $root "out/$name"
+    [IO.File]::WriteAllText($p, $body)
+    (Get-Item -LiteralPath $p).LastWriteTime = $pullNow.AddMinutes($minutes)
+}
+function Add-PullMarker([string]$root, [int]$minutes) {
+    $p = Join-Path $root '.run-marker'
+    [IO.File]::WriteAllText($p, '')
+    (Get-Item -LiteralPath $p).LastWriteTime = $pullNow.AddMinutes($minutes)
+}
+$pullSubj = @(@{ name = 'glob-probe'; path = 'glob-probe.txt'; state = 'out/*.txt' })
+
+# ④ 窗口内恰 1（旧件也在候选里）⇒ 取窗口那件，落盘名按 path（不是通配原文）
+$p4 = New-PullCase 'win1'
+Add-PullFile $p4 'old.txt' 'OLD' -10
+Add-PullMarker $p4 -5
+Add-PullFile $p4 'new.txt' 'NEW' -1
+$r4 = Invoke-EvmStatePull -Subjects $pullSubj -RunDir (Join-Path $p4 'rd') -WorkRoot $p4
+$rd4 = Join-Path (Join-Path $p4 'rd') 'glob-probe.txt'
+Assert-True "evm-pull④(行为·窗口内恰 1): pulled=1 且以 path 落盘、内容 = 窗口那件" (
+    ($r4.pulled -eq 1) -and ($r4.rejected -eq 0) -and (Test-Path -LiteralPath $rd4) -and
+    ([IO.File]::ReadAllText($rd4) -eq 'NEW'))
+
+# ⑤ 窗口内 0 且候选恰 1 ⇒ 退回旧语义（不制造回归）
+$p5 = New-PullCase 'win0cand1'
+Add-PullFile $p5 'only.txt' 'ONLY' -10
+Add-PullMarker $p5 -5
+$r5 = Invoke-EvmStatePull -Subjects $pullSubj -RunDir (Join-Path $p5 'rd') -WorkRoot $p5
+$rd5 = Join-Path (Join-Path $p5 'rd') 'glob-probe.txt'
+Assert-True "evm-pull⑤(行为·窗口 0 且候选恰 1): 取唯一候选（旧语义保留）" (
+    ($r5.pulled -eq 1) -and (Test-Path -LiteralPath $rd5) -and ([IO.File]::ReadAllText($rd5) -eq 'ONLY'))
+
+# ⑥ 窗口内 0 且候选 2 ⇒ 拒（不猜）
+$p6 = New-PullCase 'win0cand2'
+Add-PullFile $p6 'a.txt' 'A' -10
+Add-PullFile $p6 'b.txt' 'B' -10
+Add-PullMarker $p6 -5
+$r6 = Invoke-EvmStatePull -Subjects $pullSubj -RunDir (Join-Path $p6 'rd') -WorkRoot $p6
+Assert-True "evm-pull⑥(行为·窗口 0 候选 2): rejected=1 且**不落盘**" (
+    ($r6.pulled -eq 0) -and ($r6.rejected -eq 1) -and
+    -not (Test-Path -LiteralPath (Join-Path (Join-Path $p6 'rd') 'glob-probe.txt')))
+
+# ⑦ 窗口内 2 ⇒ 拒（不猜）
+$p7 = New-PullCase 'win2'
+Add-PullMarker $p7 -5
+Add-PullFile $p7 'a.txt' 'A' -1
+Add-PullFile $p7 'b.txt' 'B' -1
+$r7 = Invoke-EvmStatePull -Subjects $pullSubj -RunDir (Join-Path $p7 'rd') -WorkRoot $p7
+Assert-True "evm-pull⑦(行为·窗口内 2): rejected=1 且**不落盘**" (
+    ($r7.pulled -eq 0) -and ($r7.rejected -eq 1) -and
+    -not (Test-Path -LiteralPath (Join-Path (Join-Path $p7 'rd') 'glob-probe.txt')))
+
+# ⑧ 白名单在**执行体**里也生效（不是只有纯函数有）—— 非 out/ 前缀 ⇒ 拒，不落盘
+$p8 = New-PullCase 'charset'
+Add-PullFile $p8 'x.txt' 'X' -1
+$r8 = Invoke-EvmStatePull -Subjects @(@{ name='bad'; path='x.txt'; state='tmp/x.txt' }) -RunDir (Join-Path $p8 'rd') -WorkRoot $p8
+Assert-True "evm-pull⑧(行为·白名单接线): 非 out/ 前缀 ⇒ rejected=1 且不落盘" (
+    ($r8.pulled -eq 0) -and ($r8.rejected -eq 1) -and
+    -not (Test-Path -LiteralPath (Join-Path (Join-Path $p8 'rd') 'x.txt')))
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"

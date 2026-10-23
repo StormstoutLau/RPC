@@ -1991,6 +1991,122 @@ function Test-EvmStatePull([string]$state, [string]$path) {
     return [ordered]@{ ok = $true; reason = 'ok'; glob = $isGlob }
 }
 
+function Invoke-EvmStatePull {
+    # O-40/A-1 (2026-09-24): **产物拉回** —— 卡声明的 `state`(执行点相对工作区路径) 白名单回收到 runDir。
+    #   path = runDir 落盘名(A-① 语义); state = 源位置; 有 state 的 subject 才触发拉取。
+    #   ★ 安全(ADR-0007 红线, 记录见 OPEN-ISSUES O-45): **不执行** collect 命令, 只做受限拷贝/拉取;
+    #     白名单收敛在 `Test-EvmStatePull` **此一处**(校验不过 ⇒ WARN + 不落盘, 不静默)。
+    # ★★ 2026-10-23 (O-29 同族第二实例): 本函数是**主路与 claude 备路共用的唯一实现点**。
+    #   起因(实测): run `dogfood/202610081856215133`(card=glob-probe.md, cli=claude, 主控本地) exit 0、
+    #   accept 通过, 但 manifest 的 `state: out/*.txt` **一次都没执行** ⇒ 产物留在工作区、runDir 缺件。
+    #   为什么抽成函数而**不是**在备路复制一份: 同一判据/同一收敛点写两份 ⇒ 迟早漂移(本仓头号形态)。
+    # 两种源面: `$HostName` 非空 = 远端(ssh 枚举 + scp); 空 = **本地面**(= claude 本地备路, 执行点 = projRoot)。
+    #   ⚠ 两面的**唯一性规则必须同一套**(窗口三态 + 字符集白名单) —— 只是枚举手段不同。
+    param(
+        $Subjects,
+        [string]$RunDir,
+        [string]$WorkRoot,
+        [string]$HostName = '',
+        [string]$RemoteUser = ''
+    )
+    $pulled = 0; $rejected = 0
+    # 远端目标串(与主路历史形态逐字一致: 无 user 时就是裸 host; 备路站上有 user)
+    $rt = if ($RemoteUser) { "$RemoteUser@$HostName" } else { $HostName }
+    foreach ($evmSub in @($Subjects)) {
+        if ($null -eq $evmSub) { continue }
+        $st = ([string]$evmSub['state']).Trim()
+        if (-not $st) { continue }
+        $rp = ([string]$evmSub['path']).Trim()
+        $evmT = Test-EvmStatePull -state $st -path $rp
+        if (-not $evmT.ok) {
+            Write-Host "EVM_STATE_REJECT: subject '$($evmSub['name'])' state=[$st] path=[$rp] 原因=$($evmT.reason)"; $rejected++; continue
+        }
+        if ($evmT.glob) {
+            # O-52 (2026-09-24): 产物名**事先不可知** ⇒ 先枚举后**唯一确定**才收（**不猜**）。
+            #   pattern 已过 `Test-EvmStatePull` 的**字符集白名单**（无引号/无元字符）⇒ 它只作**通配词**，
+            #   **不构成拼接执行**（这是"仍不执行用户命令"的落点）。
+            #   ★ **防注入靠字符集白名单，不靠引号** —— pattern 已过 `^out/[A-Za-z0-9._*?-]+$`
+            #     （空格/`;`/`$`/反引号/引号/`&`/`|`/重定向/换行 **全部被排除**），
+            #     且以 `out/` 开头 ⇒ 不会被当成选项、也无需引号。
+            #   ⚠⚠ **不能加引号**：引号会把 `*` 变成**字面量** ⇒ 永远 0 匹配
+            #     （O-52 复跑实测：`ls: 无法访问 'out/*.txt': 没有那个文件或目录`）。
+            #     "为了安全的引号"与"通配展开"在此**互相排斥** ⇒ 安全必须由白名单承担。
+            #   ★ 另：必须在工作区里跑 —— `scp` 用**绝对**路径（`$WorkRoot/$st`）故 CWD 无所谓，
+            #     但这里是**相对** pattern（`out/*.txt`）⇒ **不 cd 就会在 $HOME 里找**。
+            # ★ O-52② **运行窗口隔离**（2026-09-24 补）：`out/` 是**累积**的（实测 dogfood 工作区有 4 个
+            #   `.txt`）⇒ 只看"候选恰好 1"在真实工作区**几乎必然拒绝**。故引入 `.run-marker` 窗口
+            #   （body 在 agent 前 `: > $W/.run-marker`）。规则三态、**不猜**：
+            #     · 窗口内恰好 1 → 取它（脏工作区的正解）；
+            #     · 窗口内 0 **且**候选恰好 1 → 取它（产物由 `mv`/`cp -p` 而来、mtime 早于 marker
+            #       ⇒ 实测落在窗口外；此时**无歧义** ⇒ 退回旧语义，**不制造回归**）；
+            #     · 其余 → 拒。⚠ marker 缺失时 `-nt` 恒真 ⇒ 窗口==候选 ⇒ **退化为旧行为**（不更宽）。
+            #   ⚠ 仍**不给 pattern 加引号**（`for f in $st` 必须由 shell 展开通配；安全由字符集白名单承担）。
+            if ($HostName) {
+                $gcmd = 'cd {0} && echo ==CAND==; for f in {1}; do [ -f $f ] && echo $f; done; echo ==WIN==; for f in {1}; do [ -f $f ] && [ $f -nt .run-marker ] && echo $f; done' -f $WorkRoot, $st
+                $gout = @(ssh -o BatchMode=yes -o ConnectTimeout=10 $HostName $gcmd 2>$null |
+                          ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+                $gCand = @(); $gWin = @(); $gSect = ''
+                foreach ($gl in $gout) {
+                    if ($gl -eq '==CAND==') { $gSect = 'cand'; continue }
+                    if ($gl -eq '==WIN==') { $gSect = 'win'; continue }
+                    if ($gSect -eq 'cand') { $gCand += $gl } elseif ($gSect -eq 'win') { $gWin += $gl }
+                }
+            } else {
+                # 本地面: 用**同一套规则**枚举(大小写敏感 + 不匹配点开头 = 对齐 bash glob 语义)。
+                #   ⚠ 只枚举 `out/` 一层 —— `Test-EvmStatePull` 的字符集白名单**禁 `/`** ⇒ 通配只可能落在这一层。
+                $outDir = Join-Path $WorkRoot 'out'
+                $allF = @()
+                if (Test-Path -LiteralPath $outDir -PathType Container) {
+                    $allF = @(Get-ChildItem -LiteralPath $outDir -File -ErrorAction SilentlyContinue |
+                              Where-Object { -not $_.Name.StartsWith('.') })
+                }
+                $wp = New-Object System.Management.Automation.WildcardPattern($st, [System.Management.Automation.WildcardOptions]::None)
+                $gCand = @($allF | Where-Object { $wp.IsMatch("out/$($_.Name)") } | ForEach-Object { "out/$($_.Name)" })
+                $mkPath = Join-Path $WorkRoot '.run-marker'
+                if (Test-Path -LiteralPath $mkPath) {
+                    $mkTime = (Get-Item -LiteralPath $mkPath).LastWriteTime
+                    $gWin = @($allF | Where-Object { $_.LastWriteTime -gt $mkTime -and $wp.IsMatch("out/$($_.Name)") } |
+                               ForEach-Object { "out/$($_.Name)" })
+                } else {
+                    # marker 缺失 ⇒ `-nt` 恒真 ⇒ 窗口==候选（与远端面**同一退化语义**）
+                    $gWin = $gCand
+                }
+            }
+            if ($gWin.Count -eq 1) { $resolved = $gWin[0] }
+            elseif ($gWin.Count -eq 0 -and $gCand.Count -eq 1) { $resolved = $gCand[0] }
+            else {
+                Write-Host "EVM_STATE_REJECT: subject '$($evmSub['name'])' state=[$st] 产物非唯一（窗口内 $($gWin.Count) 个 / 候选 $($gCand.Count) 个，要求恰 1）"
+                $rejected++; continue
+            }
+            # ★ **解析出的名字来自文件系统 ⇒ 按不可信输入重新校验一遍**
+            #   （防站上放了带 shell 元字符的文件名 —— 它随后要进 scp 的命令行）
+            $resolved = "$resolved".Trim()
+            $evmT2 = Test-EvmStatePull -state $resolved -path $rp
+            if (-not $evmT2.ok -or $evmT2.glob) {
+                Write-Host "EVM_STATE_REJECT: subject '$($evmSub['name'])' 解析名=[$resolved] 复校验不过 原因=$($evmT2.reason)"
+                $rejected++; continue
+            }
+            Write-Host "EVM_STATE_GLOB: subject '$($evmSub['name'])' $st -> $resolved"
+            $st = $resolved
+        }
+        $stDst = Join-Path $RunDir $rp
+        if ($HostName) {
+            scp -q -o BatchMode=yes -o ConnectTimeout=10 "${rt}:$WorkRoot/$st" "$stDst" 2>$null
+        } else {
+            Copy-Item -LiteralPath (Join-Path $WorkRoot $st) -Destination $stDst -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path -LiteralPath $stDst) { $pulled++ }
+        else {
+            $where = if ($HostName) { "远端 $WorkRoot/$st" } else { "本地 $WorkRoot/$st" }
+            Write-Host "EVM_STATE_MISS: subject '$($evmSub['name'])' $where 不存在或拉取失败"
+        }
+    }
+    if (($pulled + $rejected) -gt 0) {
+        Write-Host "EVM_STATE: pulled=$pulled rejected=$rejected"
+    }
+    return [ordered]@{ pulled = $pulled; rejected = $rejected }
+}
+
 function Merge-EvidenceSubjects($cardSubjects, $accept, [bool]$goldenActive, $baselineFn = $null) {
     # baselineFn(2026-09-21): 可选**按路基线函数**(脚本块, 签名 (accept, goldenActive))。
     #   缺省 = 主路 Get-FrameworkSubjects; claude 备路传入 Get-ClaudeFrameworkSubjects(归档件集不同)。
@@ -3790,71 +3906,11 @@ exit `$FINAL_RC
             if (Test-Path $phSrc) { Move-Item $phSrc (Join-Path $runDir 'd7-phases.txt') -Force | Out-Null }
             # O-40/A-1 (2026-09-24): **产物拉回** —— 卡声明的 `state`(站上相对工作区路径) 白名单 scp 到 runDir。
             #   path = runDir 落盘名(A-① 语义); state = 站上源位置; 有 state 的 subject 才触发远端拉取。
-            #   ★ 安全(ADR-0007 红线, 记录见 OPEN-ISSUES O-45): **不执行** collect 命令, 只做受限 scp;
-            #     白名单收敛在**此一处**(校验不过 ⇒ WARN + 不落盘, 不静默)。
-            $evmStatePulled = 0; $evmStateRejected = 0
-            foreach ($evmSub in @($fm['evidence-manifest']['subjects'])) {
-                $st = ([string]$evmSub['state']).Trim()
-                if (-not $st) { continue }
-                $rp = ([string]$evmSub['path']).Trim()
-                $evmT = Test-EvmStatePull -state $st -path $rp
-                if (-not $evmT.ok) {
-                    Write-Host "EVM_STATE_REJECT: subject '$($evmSub['name'])' state=[$st] path=[$rp] 原因=$($evmT.reason)"; $evmStateRejected++; continue
-                }
-                if ($evmT.glob) {
-                    # O-52 (2026-09-24): 产物名**事先不可知** ⇒ **远端枚举**后**唯一确定**才收（**不猜**）。
-                    #   pattern 已过 `Test-EvmStatePull` 的**字符集白名单**（无引号/无元字符）⇒ 它只作 `for` 的
-                    #   **通配词**，**不构成拼接执行**（这是"仍不执行用户命令"的落点）。
-                    #   ★ **防注入靠字符集白名单，不靠引号** —— pattern 已过 `^out/[A-Za-z0-9._*?-]+$`
-                    #     （空格/`;`/`$`/反引号/引号/`&`/`|`/重定向/换行 **全部被排除**），
-                    #     且以 `out/` 开头 ⇒ 不会被当成选项、也无需引号。
-                    #   ⚠⚠ **不能加引号**：引号会把 `*` 变成**字面量** ⇒ 永远 0 匹配
-                    #     （O-52 复跑实测：`ls: 无法访问 'out/*.txt': 没有那个文件或目录`）。
-                    #     "为了安全的引号"与"通配展开"在此**互相排斥** ⇒ 安全必须由白名单承担。
-                    #   ★ 另：必须在工作区里跑 —— `scp` 用**绝对**路径（`$W/$st`）故 CWD 无所谓，
-                    #     但这里是**相对** pattern（`out/*.txt`）⇒ **不 cd 就会在 $HOME 里找**。
-                    # ★ O-52② **运行窗口隔离**（2026-09-24 补）：`out/` 是**累积**的（实测 dogfood 工作区有 4 个
-                    #   `.txt`）⇒ 只看"候选恰好 1"在真实工作区**几乎必然拒绝**。故引入 `.run-marker` 窗口
-                    #   （body 在 agent 前 `: > $W/.run-marker`）。规则三态、**不猜**：
-                    #     · 窗口内恰好 1 → 取它（脏工作区的正解）；
-                    #     · 窗口内 0 **且**候选恰好 1 → 取它（产物由 `mv`/`cp -p` 而来、mtime 早于 marker
-                    #       ⇒ 实测落在窗口外；此时**无歧义** ⇒ 退回旧语义，**不制造回归**）；
-                    #     · 其余 → 拒。⚠ marker 缺失时 `-nt` 恒真 ⇒ 窗口==候选 ⇒ **退化为旧行为**（不更宽）。
-                    #   ⚠ 仍**不给 pattern 加引号**（`for f in $st` 必须由 shell 展开通配；安全由字符集白名单承担）。
-                    $gcmd = 'cd {0} && echo ==CAND==; for f in {1}; do [ -f $f ] && echo $f; done; echo ==WIN==; for f in {1}; do [ -f $f ] && [ $f -nt .run-marker ] && echo $f; done' -f $W, $st
-                    $gout = @(ssh -o BatchMode=yes -o ConnectTimeout=10 $hostName $gcmd 2>$null |
-                              ForEach-Object { "$_".Trim() } | Where-Object { $_ })
-                    $gCand = @(); $gWin = @(); $gSect = ''
-                    foreach ($gl in $gout) {
-                        if ($gl -eq '==CAND==') { $gSect = 'cand'; continue }
-                        if ($gl -eq '==WIN==') { $gSect = 'win'; continue }
-                        if ($gSect -eq 'cand') { $gCand += $gl } elseif ($gSect -eq 'win') { $gWin += $gl }
-                    }
-                    if ($gWin.Count -eq 1) { $resolved = $gWin[0] }
-                    elseif ($gWin.Count -eq 0 -and $gCand.Count -eq 1) { $resolved = $gCand[0] }
-                    else {
-                        Write-Host "EVM_STATE_REJECT: subject '$($evmSub['name'])' state=[$st] 产物非唯一（窗口内 $($gWin.Count) 个 / 候选 $($gCand.Count) 个，要求恰 1）"
-                        $evmStateRejected++; continue
-                    }
-                    # ★ **解析出的名字来自站上文件系统 ⇒ 按不可信输入重新校验一遍**
-                    #   （防站上放了带 shell 元字符的文件名 —— 它随后要进 scp 的命令行）
-                    $resolved = "$resolved".Trim()
-                    $evmT2 = Test-EvmStatePull -state $resolved -path $rp
-                    if (-not $evmT2.ok -or $evmT2.glob) {
-                        Write-Host "EVM_STATE_REJECT: subject '$($evmSub['name'])' 解析名=[$resolved] 复校验不过 原因=$($evmT2.reason)"
-                        $evmStateRejected++; continue
-                    }
-                    Write-Host "EVM_STATE_GLOB: subject '$($evmSub['name'])' $st -> $resolved"
-                    $st = $resolved
-                }
-                $stDst = Join-Path $runDir $rp
-                scp -q -o BatchMode=yes -o ConnectTimeout=10 "${hostName}:$W/$st" "$stDst" 2>$null
-                if (Test-Path $stDst) { $evmStatePulled++ }
-                else { Write-Host "EVM_STATE_MISS: subject '$($evmSub['name'])' 远端 $W/$st 不存在或拉取失败" }
-            }
-            if (($evmStatePulled + $evmStateRejected) -gt 0) {
-                Write-Host "EVM_STATE: pulled=$evmStatePulled rejected=$evmStateRejected"
-            }
+            # ★★ 2026-10-23 (O-29 同族②): 判据本体已抽到 `Invoke-EvmStatePull`（**唯一实现点**）——
+            #   本路与 claude 备路共用同一套「字符集白名单 + `.run-marker` 窗口三态 + 解析名复校验」。
+            #   ⚠ 此段**不得**再内联第二份枚举/唯一性/拷贝逻辑（那正是本次修掉的"备路整段缺失"成因）。
+            Invoke-EvmStatePull -Subjects $fm['evidence-manifest']['subjects'] -RunDir $runDir `
+                                -WorkRoot $W -HostName $hostName | Out-Null
             # D4a: 合批暂存目录(5 个小件已 Move 走)一并清掉, 不留 TEMP 残留
             if (Test-Path $evDir) { Remove-Item $evDir -Recurse -Force -ErrorAction SilentlyContinue | Out-Null }
             # O-46 缓解② (2026-09-24, **核心防御**): 失败 run 归档成功 → 主动清理远端残留**声明产物**。
@@ -4809,6 +4865,17 @@ mkdir -p "$stWorkDir/.attach/$nm2"
     #   `-ModelId` 只在 or 模式需要(写进 settings 的 ANTHROPIC_MODEL); local 模式由引擎别名 `main` 管。
     $stMode = if ($backendLocal) { 'local' } else { 'or' }
     $stModelId = if ($backendLocal) { '' } else { $id }
+    # ★★ O-29 同族② (2026-10-23): `.run-marker` **窗口起点** —— claude 路此前**从不创建**它
+    #   （主路是在 body 里 `: > "$W/.run-marker"`），而产物拉回的 glob 唯一性判据以它为窗口。
+    #   不建 ⇒ marker 缺失 ⇒ 窗口==候选：`out/` 是**累积**的，真实工作区几乎必然"候选 >1 ⇒ 拒"
+    #   （或退化成旧语义后丢件 —— 实测 run `dogfood/202610081856215133`）。
+    #   ⚠ 必须在**首次 spawn 之前**创建；resume 共用同一窗口（与主路同语义）。
+    if ($useStation) {
+        Invoke-RemoteScript -HostName $stHost -LocalName 'agent-cli-claude-run-marker.sh' `
+            -ScriptBody ("set -eu`n: > `"$stWorkDir/.run-marker`"`n") | Out-Null
+    } else {
+        [IO.File]::WriteAllText((Join-Path $projRoot '.run-marker'), '', $utf8NoBom)
+    }
     if ($useStation) {
         $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('-p "" --model "' + $stModelAlias + '"' + $pmArg) -stdin $promptIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $timeout -WorkDir $stWorkDir -Mode $stMode -ModelId $stModelId
     } else {
@@ -4981,6 +5048,13 @@ mkdir -p "$stWorkDir/.attach/$nm2"
             #   把声明改成条件等于把"这次失败没留下 stderr"这件事一起藏掉。
             if (-not (Test-Path $errTxt)) { [IO.File]::WriteAllText($errTxt, '', (New-Object System.Text.UTF8Encoding $false)) }
             if (Test-Path $errTxt) { Copy-Item $errTxt (Join-Path $runDir 'stderr.txt') -Force | Out-Null }
+            # ★★ O-29 同族② (2026-10-23): 备路**此前完全不接** `state` 拉回 ⇒ 卡声明 `state: out/*.txt`
+            #   的产物**静默丢件**（run `dogfood/202610081856215133`: exit 0 + accept 通过，runDir 仍缺件）。
+            #   与主路**共用唯一实现点** `Invoke-EvmStatePull`（不复制枚举/唯一性/拷贝逻辑）。
+            #   本路工作根 = 站上工作区（站上变体）或主控 projRoot（本地 spawn = 本卡实测那一路）。
+            $evmRoot = if ($useStation) { $stWorkDir } else { $projRoot }
+            Invoke-EvmStatePull -Subjects $fm['evidence-manifest']['subjects'] -RunDir $runDir `
+                                -WorkRoot $evmRoot -HostName $stHost -RemoteUser $stUser | Out-Null
         } catch { $collectOk = $false; Write-Host "COLLECT_FAIL: $($_.Exception.Message)" }
     }
     # ADR-0005 D4a/D4c (2026-09-16): **归档成功才清理** scratch(本路原为 Copy-Item, scratch 此前永不
