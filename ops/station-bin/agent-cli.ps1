@@ -1993,6 +1993,26 @@ function Test-EvmStatePull([string]$state, [string]$path) {
     return [ordered]@{ ok = $true; reason = 'ok'; glob = $isGlob }
 }
 
+function Get-DeclaredProductPaths {
+    # O-167 (2026-10-23): 从卡面 `evidence-manifest.subjects` 取**产物相对路径**（`out/<path>`）。
+    #   只认 `state` 以 `out/` 开头的 subject（= 卡声明的产物；基线/输入不在此列）。
+    #   唯一实现点：主路/备路共用这一份路径计算；判定面各自按传输方式执行（不复制本函数）。
+    [CmdletBinding()]
+    param($Subjects)
+    $paths = @()
+    foreach ($sub in @($Subjects)) {
+        if ($null -eq $sub) { continue }
+        $st = "$($sub['state'])".Trim()
+        $pp = "$($sub['path'])".Trim()
+        if (-not $st -or -not $pp) { continue }
+        if ($st -notmatch '^out/') { continue }
+        if ($pp -match '\.\.' -or $pp -match '^[/\\]') { continue }   # fail-closed：不许越出 out/
+        if ($pp -notmatch '^out/') { $pp = "out/$pp" }
+        if ($paths -notcontains $pp) { $paths += $pp }
+    }
+    return $paths
+}
+
 function Invoke-EvmStatePull {
     # O-40/A-1 (2026-09-24): **产物拉回** —— 卡声明的 `state`(执行点相对工作区路径) 白名单回收到 runDir。
     #   path = runDir 落盘名(A-① 语义); state = 源位置; 有 state 的 subject 才触发拉取。
@@ -3052,6 +3072,9 @@ mkdir -p "`$STAGE/attach/$name"
     if ($accept.Count -gt 0 -and $accept[0]) { $accept = @($accept | Where-Object { $_.Trim() }) } else { $accept = @() }
     $acceptB64 = ''
     if ($accept.Count -gt 0) { $acceptB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($accept -join "`n"))) }
+    # O-167 (2026-10-23): 卡声明产物路径（陈旧件判据的唯一路径来源；主路/备路共用）。
+    $productPaths = @(Get-DeclaredProductPaths $fm['evidence-manifest']['subjects'])
+    $productB64 = if ($productPaths.Count -gt 0) { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($productPaths -join "`n"))) } else { '' }
 
     # 5) fused remote script: orphan->flock->state->opencode(stdin)->state->output (R14)
     $W = "$Script:WORKSPACE_ROOT/$proj"
@@ -3427,11 +3450,25 @@ echo "EXEC_TRACE_LINES=`$(wc -l < "`$W/out/.executor-trace.txt`$EV_SUF" 2>/dev/n
 # default line: ACCEPT_GOLDEN_OK always present in .meta (derived-requirement, IMPLEMENTATION §9.2)
 GOLDEN_ACTIVE=0; ACCEPT_GOLDEN_OK=1
 ACCEPT_B64="$acceptB64"
+PRODUCTS_B64="$productB64"
 ACCEPT_OK=1
 $goldenBlock
 if [ -n "`$ACCEPT_B64" ]; then
   echo "`$ACCEPT_B64" | base64 -d > "`$W/out/.accept-cmds.txt`$EV_SUF"
   : > "`$W/out/.accept-output.txt`$EV_SUF"
+  if [ -n "`$PRODUCTS_B64" ]; then
+    echo "`$PRODUCTS_B64" | base64 -d > "`$W/out/.declared-products.txt`$EV_SUF"
+    while IFS= read -r p || [ -n "`$p" ]; do
+      [ -z "`$p" ] && continue
+      if [ ! -f "`$W/`$p" ]; then
+        echo "STALE_PRODUCT: `$p (missing)" >> "`$W/out/.accept-output.txt`$EV_SUF"
+        ACCEPT_OK=0
+      elif [ "`$W/`$p" -ot "`$W/.run-marker" ]; then
+        echo "STALE_PRODUCT: `$p (older than .run-marker)" >> "`$W/out/.accept-output.txt`$EV_SUF"
+        ACCEPT_OK=0
+      fi
+    done < "`$W/out/.declared-products.txt`$EV_SUF"
+  fi
   i=0
   while IFS= read -r c || [ -n "`$c" ]; do
     [ -z "`$c" ] && continue
@@ -4823,9 +4860,8 @@ mkdir -p "$stWorkDir/.attach/$nm2"
             Write-Host "GOLDEN_SOURCE_MISSING: $($g.source)"; return 2 }
         $goldenBase = [IO.Path]::GetFileName($gSrc)
         $goldenSha = (Get-FileHash -Algorithm SHA256 $gSrc).Hash.ToLower()
-        $goldenLocal = Join-Path $scratch '.golden'
-        New-Item -ItemType Directory -Path $goldenLocal -Force | Out-Null
-        Copy-Item $gSrc (Join-Path $goldenLocal $goldenBase) -Force
+        # O-166 (2026-10-23): **不在 spawn 前落盘** —— golden 在 agent 结束后注入到
+        #   `$judgeRoot/.golden`（见下方 golden gate），避免 agent 读到判据后 gaming。
         Write-Host "GOLDEN_ACTIVE base=$goldenBase sha=$goldenSha"
     }
 
@@ -4867,6 +4903,14 @@ mkdir -p "$stWorkDir/.attach/$nm2"
     #   `-ModelId` 只在 or 模式需要(写进 settings 的 ANTHROPIC_MODEL); local 模式由引擎别名 `main` 管。
     $stMode = if ($backendLocal) { 'local' } else { 'or' }
     $stModelId = if ($backendLocal) { '' } else { $id }
+    # ══ O-165/O-166 (2026-10-23): 判定根 = 执行点（**唯一实现点**）══════════════════════
+    #   accept / accept-golden / `.run-marker` / state-pull 全部派生自 `$judgeRoot`；
+    #   ⚠ 禁止在各处再写 `if ($useStation) { $stWorkDir }`（同一事实两处表达 = 本仓头号形态）。
+    $judgeRoot  = if ($useStation) { $stWorkDir } else { $projRoot }
+    $judgeWhere = if ($useStation) { "station-bash host=$stHost cwd=$judgeRoot" } else { "bash-local cwd=$judgeRoot" }
+    # O-167 (2026-10-23): 卡声明产物路径（陈旧件判据的唯一路径来源；与主路共用 Get-DeclaredProductPaths）。
+    $productPaths = @(Get-DeclaredProductPaths $fm['evidence-manifest']['subjects'])
+    $productB64 = if ($productPaths.Count -gt 0) { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($productPaths -join "`n"))) } else { '' }
     # ★★ O-29 同族② (2026-10-23): `.run-marker` **窗口起点** —— claude 路此前**从不创建**它
     #   （主路是在 body 里 `: > "$W/.run-marker"`），而产物拉回的 glob 唯一性判据以它为窗口。
     #   不建 ⇒ marker 缺失 ⇒ 窗口==候选：`out/` 是**累积**的，真实工作区几乎必然"候选 >1 ⇒ 拒"
@@ -4874,9 +4918,9 @@ mkdir -p "$stWorkDir/.attach/$nm2"
     #   ⚠ 必须在**首次 spawn 之前**创建；resume 共用同一窗口（与主路同语义）。
     if ($useStation) {
         Invoke-RemoteScript -HostName $stHost -LocalName 'agent-cli-claude-run-marker.sh' `
-            -ScriptBody ("set -eu`n: > `"$stWorkDir/.run-marker`"`n") | Out-Null
+            -ScriptBody ("set -eu`n: > `"$judgeRoot/.run-marker`"`n") | Out-Null
     } else {
-        [IO.File]::WriteAllText((Join-Path $projRoot '.run-marker'), '', $utf8NoBom)
+        [IO.File]::WriteAllText((Join-Path $judgeRoot '.run-marker'), '', $utf8NoBom)
     }
     if ($useStation) {
         $rcov = Invoke-ClaudeFly-Station -hostName $stHost -remoteUser $stUser -argStr ('-p "" --model "' + $stModelAlias + '"' + $pmArg) -stdin $promptIn -stdout $outTxt -stderr $errTxt -scratch $scratch -budgetS $timeout -WorkDir $stWorkDir -Mode $stMode -ModelId $stModelId
@@ -4910,37 +4954,122 @@ mkdir -p "$stWorkDir/.attach/$nm2"
     if ($rc -eq 124 -or $rc -eq 137) { $rc = 6 }   # `timeout` 哨兵 -> 6 (含 `-k` KILL 的 137; 镜像远程 DESIGN §9.5)
 
     # ---- golden gate (先于 accept, inv 2/5) ----
+    # O-165/O-166 (2026-10-23): 注入/判据**同根** = `$judgeRoot`（本地 copy / 站上 scp）；
+    #   注入时机 = agent 结束**之后**（防 agent 读 golden）；本地判完清理。
     $acceptGoldenOk = 1
     if ($goldenActive) {
-        $gCopy = Join-Path $scratch '.golden'
-        $gFile = Join-Path $gCopy $goldenBase
-        $h = (Get-FileHash -Algorithm SHA256 $gFile).Hash.ToLower()
-        if ($h -ne $goldenSha) {
-            Write-Host "GOLDEN_TAMPERED"; $acceptGoldenOk = 0
+        $gDir = Join-Path $judgeRoot '.golden'
+        if (-not $useStation) {
+            [IO.File]::WriteAllText($accGoldTxt, "ACCEPT_GOLDEN_MODE=$judgeWhere`nJUDGE_ROOT=$judgeRoot`n", $utf8NoBom)
+            try {
+                Remove-Item -LiteralPath $gDir -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
+                New-Item -ItemType Directory -Path $gDir -Force | Out-Null
+                Copy-Item $gSrc (Join-Path $gDir $goldenBase) -Force
+                $gFile = Join-Path $gDir $goldenBase
+                if (-not (Test-Path -LiteralPath $gFile)) {
+                    Write-Host "GOLDEN_MISS"; Add-Content $accGoldTxt "GOLDEN_MISS"; $acceptGoldenOk = 0
+                } else {
+                    $h = (Get-FileHash -Algorithm SHA256 $gFile).Hash.ToLower()
+                    if ($h -ne $goldenSha) {
+                        Write-Host "GOLDEN_TAMPERED"; Add-Content $accGoldTxt "GOLDEN_TAMPERED"; $acceptGoldenOk = 0
+                    } else {
+                        $garc = Invoke-LocalBashCmd -bashPath $bashPath -cmd $g.cmd -cwd $judgeRoot -logFile $accGoldTxt
+                        Add-Content $accGoldTxt "--- GOLDEN_RC=$garc"
+                        if ($garc -ne 0) {
+                            Write-Host "GOLDEN_FAIL rc=$garc"; Add-Content $accGoldTxt "GOLDEN_FAIL rc=$garc"; $acceptGoldenOk = 0
+                        }
+                    }
+                }
+            } catch {
+                Write-Host "GOLDEN_EXEC_FAIL: $($_.Exception.Message)"
+                Add-Content $accGoldTxt "GOLDEN_EXEC_FAIL: $($_.Exception.Message)"; $acceptGoldenOk = 0
+            } finally {
+                Remove-Item -LiteralPath $gDir -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
+            }
         } else {
-            # O-15/AUDIT (2026-09-21): 与 accept **同语义** —— 本地 Git Bash, cwd=projRoot。
-            #   原为 PowerShell `Invoke-Expression`(与 accept 同一个 bug, 故一并修:
-            #   "只修一半的修复看起来是完整的")。输出落 `accept-golden-output.txt` ⇒ 备路首次
-            #   也有黄金门**输出证据**(此前该件在备路恒不存在)。
-            $garc = Invoke-LocalBashCmd -bashPath $bashPath -cmd $g.cmd -cwd $projRoot -logFile $accGoldTxt
-            if ($garc -ne 0) { $acceptGoldenOk = 0 }
+            $gOutName = ".accept-golden-output.$ts.txt"
+            try {
+                $prep = "set -eu`nrm -rf `"$judgeRoot/.golden`"`nmkdir -p `"$judgeRoot/.golden`" `"$judgeRoot/out`"`n"
+                Invoke-RemoteScript -HostName $stHost -LocalName "agent-cli-claude-golden-prep-$ts.sh" -ScriptBody $prep | Out-Null
+                $rtG = if ($stUser) { "$stUser@$stHost" } else { $stHost }
+                scp -q -o BatchMode=yes -o ConnectTimeout=10 $gSrc.Path "${rtG}:$judgeRoot/.golden/$goldenBase" 2>$null
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "GOLDEN_PUSH_FAIL"
+                    [IO.File]::WriteAllText($accGoldTxt, "ACCEPT_GOLDEN_MODE=$judgeWhere`nGOLDEN_PUSH_FAIL`n", $utf8NoBom)
+                    $acceptGoldenOk = 0
+                } else {
+                    $gScript = New-StationGoldenScript -JudgeRoot $judgeRoot -RunStamp $ts -GoldenSha $goldenSha -GoldenBase $goldenBase `
+                                -GoldenCmdB64 ([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($g.cmd)))
+                    $grc = Invoke-RemoteScript -HostName $stHost -LocalName "agent-cli-claude-golden-$ts.sh" -ScriptBody $gScript
+                    scp -q -o BatchMode=yes -o ConnectTimeout=10 "${rtG}:$judgeRoot/out/$gOutName" $accGoldTxt 2>$null
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Host "GOLDEN_OUTPUT_PULL_FAIL"
+                        [IO.File]::WriteAllText($accGoldTxt, "ACCEPT_GOLDEN_MODE=$judgeWhere`nGOLDEN_OUTPUT_PULL_FAIL`n", $utf8NoBom)
+                        $acceptGoldenOk = 0
+                    } else {
+                        Add-Content $accGoldTxt "ACCEPT_GOLDEN_MODE=$judgeWhere"
+                        if ($grc -ne 0) { $acceptGoldenOk = 0 }
+                    }
+                }
+            } catch {
+                Write-Host "GOLDEN_EXEC_FAIL: $($_.Exception.Message)"
+                [IO.File]::WriteAllText($accGoldTxt, "ACCEPT_GOLDEN_MODE=$judgeWhere`nGOLDEN_EXEC_FAIL: $($_.Exception.Message)`n", $utf8NoBom)
+                $acceptGoldenOk = 0
+            }
         }
+        if (-not $useStation) { Add-Content $accGoldTxt "ACCEPT_GOLDEN_OK=$acceptGoldenOk" }
         if ($acceptGoldenOk -eq 1) { Write-Host "ACCEPT_GOLDEN_OK=1" } else { Write-Host "ACCEPT_GOLDEN_OK=0" }
     }
     # ---- accept gate (A14) ----
-    # O-15/AUDIT (2026-09-21): 用**本地 Git Bash**跑(**bash 语义**, 与主路一致; 见 Resolve-LocalBash)。
+    # O-165 (2026-10-23): 判据根 = `$judgeRoot`（本地 Git Bash / 站上 bash，与执行点同根）。
     #   输出逐行落 `accept-output.txt`(与主路契约一致) —— 备路此前用 `*> $null` **丢弃输出**,
     #   只留 rc, 出 bug 无从复核。
     $acceptOk = 1
     if ($accept.Count -gt 0) {
-        Write-Host "ACCEPT_MODE=bash-local ($bashPath, cwd=$projRoot)"
-        $i = 0
-        foreach ($c in $accept) {
-            $i++
-            Add-Content $accTxt "=== ACCEPT_CMD[$i] >>> $c"
-            $arc = Invoke-LocalBashCmd -bashPath $bashPath -cmd $c -cwd $projRoot -logFile $accTxt
-            if ($arc -ne 0) { $acceptOk = 0 }
-            Add-Content $accTxt "--- ACCEPT_RC[$i]=$arc"
+        if ($useStation) {
+            $acceptB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($accept -join "`n")))
+            $accScript = New-StationAcceptScript -JudgeRoot $judgeRoot -RunStamp $ts -AcceptB64 $acceptB64 -ProductB64 $productB64
+            $aOutName = ".accept-output.$ts.txt"
+            try {
+                $acrc = Invoke-RemoteScript -HostName $stHost -LocalName "agent-cli-claude-accept-$ts.sh" -ScriptBody $accScript
+                $rtA = if ($stUser) { "$stUser@$stHost" } else { $stHost }
+                scp -q -o BatchMode=yes -o ConnectTimeout=10 "${rtA}:$judgeRoot/out/$aOutName" $accTxt 2>$null
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "ACCEPT_OUTPUT_PULL_FAIL"
+                    [IO.File]::WriteAllText($accTxt, "ACCEPT_MODE=$judgeWhere`nACCEPT_OUTPUT_PULL_FAIL`nACCEPT_OK=0`n", $utf8NoBom)
+                    $acceptOk = 0
+                } else {
+                    Add-Content $accTxt "ACCEPT_MODE=$judgeWhere"
+                    if ($acrc -ne 0) { $acceptOk = 0 }
+                }
+            } catch {
+                Write-Host "ACCEPT_EXEC_FAIL: $($_.Exception.Message)"
+                [IO.File]::WriteAllText($accTxt, "ACCEPT_MODE=$judgeWhere`nACCEPT_EXEC_FAIL: $($_.Exception.Message)`nACCEPT_OK=0`n", $utf8NoBom)
+                $acceptOk = 0
+            }
+        } else {
+            Write-Host "ACCEPT_MODE=$judgeWhere"
+            [IO.File]::WriteAllText($accTxt, "ACCEPT_MODE=$judgeWhere`nJUDGE_ROOT=$judgeRoot`n", $utf8NoBom)
+            if ($productPaths.Count -gt 0) {
+                $mk = Get-Item -LiteralPath (Join-Path $judgeRoot '.run-marker') -ErrorAction SilentlyContinue
+                foreach ($p in $productPaths) {
+                    $fp = Join-Path $judgeRoot ($p -replace '/','\')
+                    if (-not (Test-Path -LiteralPath $fp)) {
+                        Add-Content $accTxt "STALE_PRODUCT: $p (missing)"; $acceptOk = 0
+                    } elseif ($mk -and ((Get-Item -LiteralPath $fp).LastWriteTime -lt $mk.LastWriteTime)) {
+                        Add-Content $accTxt "STALE_PRODUCT: $p (older than .run-marker)"; $acceptOk = 0
+                    }
+                }
+            }
+            $i = 0
+            foreach ($c in $accept) {
+                $i++
+                Add-Content $accTxt "=== ACCEPT_CMD[$i] >>> $c"
+                $arc = Invoke-LocalBashCmd -bashPath $bashPath -cmd $c -cwd $judgeRoot -logFile $accTxt
+                if ($arc -ne 0) { $acceptOk = 0 }
+                Add-Content $accTxt "--- ACCEPT_RC[$i]=$arc"
+            }
+            Add-Content $accTxt "ACCEPT_OK=$acceptOk"
         }
         Write-Host "ACCEPT_OK=$acceptOk"
     }
@@ -5058,9 +5187,9 @@ mkdir -p "$stWorkDir/.attach/$nm2"
             #   的产物**静默丢件**（run `dogfood/202610081856215133`: exit 0 + accept 通过，runDir 仍缺件）。
             #   与主路**共用唯一实现点** `Invoke-EvmStatePull`（不复制枚举/唯一性/拷贝逻辑）。
             #   本路工作根 = 站上工作区（站上变体）或主控 projRoot（本地 spawn = 本卡实测那一路）。
-            $evmRoot = if ($useStation) { $stWorkDir } else { $projRoot }
+            # O-165/O-166 (2026-10-23): 判据根 = 执行点（唯一实现点 `$judgeRoot`）。
             Invoke-EvmStatePull -Subjects $fm['evidence-manifest']['subjects'] -RunDir $runDir `
-                                -WorkRoot $evmRoot -HostName $stHost -RemoteUser $stUser | Out-Null
+                                -WorkRoot $judgeRoot -HostName $stHost -RemoteUser $stUser | Out-Null
         } catch { $collectOk = $false; Write-Host "COLLECT_FAIL: $($_.Exception.Message)" }
     }
     # ADR-0005 D4a/D4c (2026-09-16): **归档成功才清理** scratch(本路原为 Copy-Item, scratch 此前永不
@@ -5129,6 +5258,89 @@ function Invoke-LocalBashCmd {
     catch { $rc = 1 }
     finally { Pop-Location }
     return $rc
+}
+
+function New-StationAcceptScript {
+    # O-165 (2026-10-23): 站上 accept 的**执行体**（纯函数：只产脚本文本，不碰网络）。
+    #   ⚠ 单引号 here-string + 占位替换 ⇒ 不让 PS 展开 bash 的 `$`（防双重转义）；唯一调用方 =
+    #      Invoke-Task-Claude 的站上 accept 分支。
+    [CmdletBinding()]
+    param([string]$JudgeRoot, [string]$RunStamp, [string]$AcceptB64, [string]$ProductB64)
+    if (-not $ProductB64) { $ProductB64 = '' }
+    $tpl = @'
+set -u
+mkdir -p "__JUDGE_ROOT__/out"
+OUT="__JUDGE_ROOT__/out/.accept-output.__RUN__.txt"
+: > "$OUT"
+cd "__JUDGE_ROOT__" || { echo "JUDGE_ROOT_MISS" >> "$OUT"; echo "ACCEPT_OK=0" >> "$OUT"; exit 90; }
+echo "PWD=$(pwd)" >> "$OUT"
+echo "=== ACCEPT_BEGIN ===" >> "$OUT"
+echo "__ACCEPT_B64__" | base64 -d > "out/.accept-cmds.__RUN__.txt"
+ACCEPT_OK=1
+if [ -n "__PRODUCTS_B64__" ]; then
+  echo "__PRODUCTS_B64__" | base64 -d > "out/.declared-products.__RUN__.txt"
+  while IFS= read -r p || [ -n "$p" ]; do
+    [ -z "$p" ] && continue
+    if [ ! -f "$p" ]; then
+      echo "STALE_PRODUCT: $p (missing)" >> "$OUT"
+      ACCEPT_OK=0
+    elif [ "$p" -ot ".run-marker" ]; then
+      echo "STALE_PRODUCT: $p (older than .run-marker)" >> "$OUT"
+      ACCEPT_OK=0
+    fi
+  done < "out/.declared-products.__RUN__.txt"
+fi
+i=0
+while IFS= read -r c || [ -n "$c" ]; do
+  [ -z "$c" ] && continue
+  i=$((i+1))
+  echo "=== ACCEPT_CMD[$i] >>> $c" >> "$OUT"
+  ( eval "$c" ) >> "$OUT" 2>&1
+  arc=$?
+  echo "--- ACCEPT_RC[$i]=$arc" >> "$OUT"
+  [ "$arc" -ne 0 ] && ACCEPT_OK=0
+done < "out/.accept-cmds.__RUN__.txt"
+echo "ACCEPT_OK=$ACCEPT_OK" >> "$OUT"
+[ "$ACCEPT_OK" -eq 1 ]
+'@
+    return $tpl.Replace('__JUDGE_ROOT__', $JudgeRoot).Replace('__RUN__', $RunStamp).
+                Replace('__ACCEPT_B64__', $AcceptB64).Replace('__PRODUCTS_B64__', $ProductB64)
+}
+
+function New-StationGoldenScript {
+    # O-166 (2026-10-23): 站上 golden 的**执行体**（纯函数：只产脚本文本，不碰网络）。
+    #   sha256sum -c 复用主路防篡改语义；命令走 base64（避免引号/`$` 注入）。
+    [CmdletBinding()]
+    param([string]$JudgeRoot, [string]$RunStamp, [string]$GoldenSha, [string]$GoldenBase, [string]$GoldenCmdB64)
+    $tpl = @'
+set -u
+mkdir -p "__JUDGE_ROOT__/out"
+OUT="__JUDGE_ROOT__/out/.accept-golden-output.__RUN__.txt"
+: > "$OUT"
+cd "__JUDGE_ROOT__" || { echo "JUDGE_ROOT_MISS" >> "$OUT"; echo "ACCEPT_GOLDEN_OK=0" >> "$OUT"; exit 90; }
+echo "PWD=$(pwd)" >> "$OUT"
+[ -f ".golden/__GOLDEN_BASE__" ] || { echo "GOLDEN_MISS" >> "$OUT"; echo "ACCEPT_GOLDEN_OK=0" >> "$OUT"; exit 93; }
+echo "__GOLDEN_SHA__  .golden/__GOLDEN_BASE__" | sha256sum -c >/dev/null 2>&1
+if [ $? -ne 0 ]; then
+  echo "GOLDEN_TAMPERED" >> "$OUT"
+  echo "ACCEPT_GOLDEN_OK=0" >> "$OUT"
+  exit 91
+fi
+echo "__GOLDEN_CMD_B64__" | base64 -d > "out/.golden-cmd.__RUN__.txt"
+echo "=== GOLDEN_CMD >>> $(cat out/.golden-cmd.__RUN__.txt)" >> "$OUT"
+( eval "$(cat out/.golden-cmd.__RUN__.txt)" ) >> "$OUT" 2>&1
+GOLDEN_RC=$?
+echo "--- GOLDEN_RC=$GOLDEN_RC" >> "$OUT"
+if [ "$GOLDEN_RC" -ne 0 ]; then
+  echo "GOLDEN_FAIL rc=$GOLDEN_RC" >> "$OUT"
+  echo "ACCEPT_GOLDEN_OK=0" >> "$OUT"
+  exit 92
+fi
+echo "ACCEPT_GOLDEN_OK=1" >> "$OUT"
+'@
+    return $tpl.Replace('__JUDGE_ROOT__', $JudgeRoot).Replace('__RUN__', $RunStamp).
+                Replace('__GOLDEN_SHA__', $GoldenSha).Replace('__GOLDEN_BASE__', $GoldenBase).
+                Replace('__GOLDEN_CMD_B64__', $GoldenCmdB64)
 }
 
 function Invoke-ClaudeFly {

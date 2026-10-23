@@ -3278,6 +3278,93 @@ $rrNoAttempt = @($rrCalls | Where-Object { $_.Extent.Text -notmatch '-Attempt' }
 Assert-True "d7-attempt①(结构): 全部 New-RunReport 调用都传 -Attempt（共 $($rrCalls.Count) 处；缺 $($rrNoAttempt.Count) 处）" (
     ($rrCalls.Count -eq 2) -and ($rrNoAttempt.Count -eq 0))
 
+# ══ 备路判定根 / golden 注入（2026-10-23 · O-165 / O-166）════════════════════════
+# 缺口: 站上 accept 判主控旧件（O-165）; golden 注入 scratch 而判据 cwd=projRoot（O-166）。
+# 判据 = 结构六 + 行为二（脚本生成器可离线真跑 ⇒ 不扫文本）。
+$judgeRootAssigns = @($ast.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+    $n.Left.Extent.Text -eq '$judgeRoot' }, $true))
+Assert-True "g165①(结构): `$judgeRoot` 恰好一处赋值（实测 $($judgeRootAssigns.Count)）" ($judgeRootAssigns.Count -eq 1)
+
+$localBashCalls = @($ast.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.CommandAst] -and ($n.GetCommandName() -eq 'Invoke-LocalBashCmd') }, $true))
+$badCwd = @($localBashCalls | Where-Object { $_.Extent.Text -notmatch '-cwd\s+\$judgeRoot' })
+Assert-True "g165②(结构): 全部 Invoke-LocalBashCmd 用 -cwd `$judgeRoot（共 $($localBashCalls.Count) 处；非 judgeRoot $($badCwd.Count) 处）" (
+    ($localBashCalls.Count -ge 2) -and ($badCwd.Count -eq 0))
+
+$accStation = @($qFn[0].FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.CommandAst] -and ($n.GetCommandName() -eq 'New-StationAcceptScript') }, $true))
+Assert-True "g165③(结构): 备路站上有 accept 脚本生成点（防只改本地支）" ($accStation.Count -eq 1)
+
+Assert-True "g166①(结构): golden 不再注入 scratch（`Join-Path `$scratch '.golden' 已消失）" (
+    -not $qFn[0].Extent.Text.Contains("Join-Path `$scratch '.golden'"))
+
+$gStation = @($qFn[0].FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.CommandAst] -and ($n.GetCommandName() -eq 'New-StationGoldenScript') }, $true))
+Assert-True "g166②(结构): 备路站上有 golden 脚本生成点" ($gStation.Count -eq 1)
+
+Assert-True "g166③(结构): 本地 golden 失败输出含 GOLDEN_FAIL rc=" (
+    $qFn[0].Extent.Text -match 'GOLDEN_FAIL rc=')
+
+# O-167 (2026-10-23): accept 的**产物新鲜度**前置判据（防陈旧同名件假绿）。
+#   先验红 = 真实 run `202610232318032793`（agent rc=1、station 旧件 10-08 仍判绿）—— 修复前无本判据。
+Assert-True "g167①(结构): 主路 accept 体含 STALE_PRODUCT 前置判据" ($itFn[0].Extent.Text -match 'STALE_PRODUCT')
+Assert-True "g167②(结构): 备路本地/站上 accept 含 STALE_PRODUCT" (
+    ($qFn[0].Extent.Text -match 'STALE_PRODUCT') -and ($content -match 'STALE_PRODUCT'))
+
+# 行为：脚本生成器（纯函数）—— 用 Git Bash 真跑，覆盖 PWD/rc/篡改。
+$gBash = Resolve-LocalBash
+$nasAst = @($fns) | Where-Object { $_.Name -eq 'New-StationAcceptScript' } | Select-Object -First 1
+$ngsAst = @($fns) | Where-Object { $_.Name -eq 'New-StationGoldenScript' } | Select-Object -First 1
+if ($nasAst) { Invoke-Expression $nasAst.Extent.Text }
+if ($ngsAst) { Invoke-Expression $ngsAst.Extent.Text }
+
+$gTmp = Join-Path $env:TEMP 'agent-cli-g165-test'
+Remove-Item -LiteralPath $gTmp -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path (Join-Path $gTmp 'out') -Force | Out-Null
+[IO.File]::WriteAllText((Join-Path $gTmp 'out/x.txt'), 'X')
+$gTmpBash = $gTmp -replace '\\','/'
+$accB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('test -f out/x.txt'))
+$accScriptPath = Join-Path $gTmp 'accept.sh'
+$accScript = if ($nasAst) { New-StationAcceptScript -JudgeRoot $gTmpBash -RunStamp 'g165' -AcceptB64 $accB64 } else { '' }
+[IO.File]::WriteAllText($accScriptPath, ($accScript -replace "`r`n", "`n"), [Text.UTF8Encoding]::new($false))
+$accSyn = if ($nasAst) { & $gBash -n $accScriptPath 2>&1 | Out-Null; $LASTEXITCODE } else { 1 }
+$accRc = if ($nasAst) { & $gBash $accScriptPath 2>&1 | Out-Null; $LASTEXITCODE } else { 1 }
+$accOutFile = Join-Path $gTmp 'out/.accept-output.g165.txt'
+$accOut = if (Test-Path $accOutFile) { [IO.File]::ReadAllText($accOutFile) } else { '' }
+Assert-True "g165-4(行为): 站上 accept 脚本可解析/通过/落 PWD + ACCEPT_OK=1" (
+    [bool]$nasAst -and ($accSyn -eq 0) -and ($accRc -eq 0) -and
+    ($accOut -match 'PWD=') -and ($accOut -match 'ACCEPT_OK=1'))
+Remove-Item -LiteralPath (Join-Path $gTmp 'out/x.txt') -Force
+$accRc2 = if ($nasAst) { & $gBash $accScriptPath 2>&1 | Out-Null; $LASTEXITCODE } else { 1 }
+$accOut2 = if (Test-Path $accOutFile) { [IO.File]::ReadAllText($accOutFile) } else { '' }
+Assert-True "g165-5(行为): 缺产物 ⇒ rc=1 + ACCEPT_OK=0（失败闭合）" (
+    [bool]$nasAst -and ($accRc2 -eq 1) -and ($accOut2 -match 'ACCEPT_OK=0'))
+
+$gRoot = Join-Path $env:TEMP 'agent-cli-g166-test'
+Remove-Item -LiteralPath $gRoot -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path (Join-Path $gRoot '.golden'),(Join-Path $gRoot 'out') -Force | Out-Null
+$gSrcFile = 'd:\RPC\ops\station-bin\golden\smoke_dispatch_golden.sh'
+Copy-Item -LiteralPath $gSrcFile -Destination (Join-Path $gRoot '.golden/smoke_dispatch_golden.sh') -Force
+$gSha = (Get-FileHash -Algorithm SHA256 (Join-Path $gRoot '.golden/smoke_dispatch_golden.sh')).Hash.ToLower()
+$gCmdB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('bash .golden/smoke_dispatch_golden.sh'))
+$gRootBash = $gRoot -replace '\\','/'
+$gScriptPath = Join-Path $gRoot 'golden.sh'
+$gScript = if ($ngsAst) { New-StationGoldenScript -JudgeRoot $gRootBash -RunStamp 'g166' -GoldenSha $gSha -GoldenBase 'smoke_dispatch_golden.sh' -GoldenCmdB64 $gCmdB64 } else { '' }
+[IO.File]::WriteAllText($gScriptPath, ($gScript -replace "`r`n", "`n"), [Text.UTF8Encoding]::new($false))
+$gSyn = if ($ngsAst) { & $gBash -n $gScriptPath 2>&1 | Out-Null; $LASTEXITCODE } else { 1 }
+$gRc = if ($ngsAst) { & $gBash $gScriptPath 2>&1 | Out-Null; $LASTEXITCODE } else { 1 }
+$gOutFile = Join-Path $gRoot 'out/.accept-golden-output.g166.txt'
+$gOut = if (Test-Path $gOutFile) { [IO.File]::ReadAllText($gOutFile) } else { '' }
+Assert-True "g166-4(行为): 站上 golden 脚本在 judgeRoot 通过（PWD + SMOKE_GOLDEN_OK + ACCEPT_GOLDEN_OK=1）" (
+    [bool]$ngsAst -and ($gSyn -eq 0) -and ($gRc -eq 0) -and
+    ($gOut -match 'PWD=') -and ($gOut -match 'SMOKE_GOLDEN_OK') -and ($gOut -match 'ACCEPT_GOLDEN_OK=1'))
+Add-Content -LiteralPath (Join-Path $gRoot '.golden/smoke_dispatch_golden.sh') -Value '# tamper'
+$gRc2 = if ($ngsAst) { & $gBash $gScriptPath 2>&1 | Out-Null; $LASTEXITCODE } else { 1 }
+$gOut2 = if (Test-Path $gOutFile) { [IO.File]::ReadAllText($gOutFile) } else { '' }
+Assert-True "g166-5(行为): 篡改 ⇒ rc=91 + GOLDEN_TAMPERED + ACCEPT_GOLDEN_OK=0" (
+    [bool]$ngsAst -and ($gRc2 -eq 91) -and ($gOut2 -match 'GOLDEN_TAMPERED') -and ($gOut2 -match 'ACCEPT_GOLDEN_OK=0'))
+
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
 exit $(if ($fail -eq 0) { 0 } else { 1 })
