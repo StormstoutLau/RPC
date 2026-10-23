@@ -3316,6 +3316,20 @@ Assert-True "g167②(结构): 备路本地/站上 accept 含 STALE_PRODUCT" (
 Assert-True "g168①(结构): 站上 claude 本地模式含 ctx fail-fast" ($content -match 'claude-local-ctx-too-small')
 Assert-True "g168②(结构): rc=14 fail-fast 不触发 resume" ($qFn[0].Extent.Text -match '\$rc -ne 14')
 
+# O-170 (2026-10-24): glob subject 的产物新鲜度按**窗口**（state 通配），不是固定 path。
+#   先验红 = 卡面 task 允许自由文件名、accept 却固定 out/glob-probe.txt（见台账 O-170）。
+$gdpAst = @($fns) | Where-Object { $_.Name -eq 'Get-DeclaredProductPaths' } | Select-Object -First 1
+if ($gdpAst) { Invoke-Expression $gdpAst.Extent.Text }
+$g170Prods = if ($gdpAst) { @(Get-DeclaredProductPaths @(
+    @{ name='glob-probe'; path='glob-probe.txt'; state='out/*.txt' },
+    @{ name='v4'; path='v4-evidence.txt'; state='out/v4-evidence.txt' })) } else { @() }
+Assert-True "g170①(行为): glob subject ⇒ glob=1/src=out/*.txt；非 glob ⇒ glob=0/src=out/v4-evidence.txt" (
+    $g170Prods.Count -eq 2 -and [bool]$g170Prods[0].glob -and $g170Prods[0].src -eq 'out/*.txt' -and
+    -not [bool]$g170Prods[1].glob -and $g170Prods[1].src -eq 'out/v4-evidence.txt')
+$gCard170 = [IO.File]::ReadAllText('d:\RPC\spec\d6-agent-standard\dogfood-cards\glob-probe.md')
+Assert-True "g170④(结构): glob-probe 卡 accept 用窗口（find ... -newer .run-marker）" (
+    ($gCard170 -match 'find out -maxdepth 1.*-name') -and ($gCard170 -match '-newer \.run-marker'))
+
 # 行为：脚本生成器（纯函数）—— 用 Git Bash 真跑，覆盖 PWD/rc/篡改。
 $gBash = Resolve-LocalBash
 $nasAst = @($fns) | Where-Object { $_.Name -eq 'New-StationAcceptScript' } | Select-Object -First 1
@@ -3344,6 +3358,32 @@ $accRc2 = if ($nasAst) { & $gBash $accScriptPath 2>&1 | Out-Null; $LASTEXITCODE 
 $accOut2 = if (Test-Path $accOutFile) { [IO.File]::ReadAllText($accOutFile) } else { '' }
 Assert-True "g165-5(行为): 缺产物 ⇒ rc=1 + ACCEPT_OK=0（失败闭合）" (
     [bool]$nasAst -and ($accRc2 -eq 1) -and ($accOut2 -match 'ACCEPT_OK=0'))
+
+# O-170 行为：站上 accept 的 glob 窗口（旧件 + 新件 ⇒ 恰 1；删新件 ⇒ STALE）。
+$gTmp170 = Join-Path $env:TEMP 'agent-cli-g170-test'
+Remove-Item -LiteralPath $gTmp170 -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path (Join-Path $gTmp170 'out') -Force | Out-Null
+[IO.File]::WriteAllText((Join-Path $gTmp170 '.run-marker'), '')
+[IO.File]::WriteAllText((Join-Path $gTmp170 'out/glob-probe.txt'), 'GLOB_PROBE_OK')
+(Get-Item -LiteralPath (Join-Path $gTmp170 'out/glob-probe.txt')).LastWriteTime = (Get-Date).AddMinutes(-10)
+[IO.File]::WriteAllText((Join-Path $gTmp170 'out/note-1.txt'), 'GLOB_PROBE_OK')
+[IO.File]::WriteAllText((Join-Path $gTmp170 'out/report.json'), '{}')
+$gTmp170Bash = $gTmp170 -replace '\\','/'
+$prod170B64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("1`tout/*.txt`tglob-probe.txt`n0`tout/report.json`treport.json"))
+$acc170B64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('true'))
+$g170ScriptPath = Join-Path $gTmp170 'accept.sh'
+$g170Script = if ($nasAst) { New-StationAcceptScript -JudgeRoot $gTmp170Bash -RunStamp 'g170' -AcceptB64 $acc170B64 -ProductB64 $prod170B64 } else { '' }
+[IO.File]::WriteAllText($g170ScriptPath, ($g170Script -replace "`r`n", "`n"), [Text.UTF8Encoding]::new($false))
+$g170Rc = if ($nasAst) { & $gBash $g170ScriptPath 2>&1 | Out-Null; $LASTEXITCODE } else { 1 }
+$g170OutFile = Join-Path $gTmp170 'out/.accept-output.g170.txt'
+$g170Out = if (Test-Path $g170OutFile) { [IO.File]::ReadAllText($g170OutFile) } else { '' }
+Assert-True "g170②(行为): glob 窗口（旧件+新件）⇒ 恰 1 ⇒ ACCEPT_OK=1" (
+    [bool]$nasAst -and ($g170Rc -eq 0) -and ($g170Out -match 'ACCEPT_OK=1') -and ($g170Out -notmatch 'STALE_PRODUCT'))
+Remove-Item -LiteralPath (Join-Path $gTmp170 'out/note-1.txt') -Force
+$g170Rc2 = if ($nasAst) { & $gBash $g170ScriptPath 2>&1 | Out-Null; $LASTEXITCODE } else { 1 }
+$g170Out2 = if (Test-Path $g170OutFile) { [IO.File]::ReadAllText($g170OutFile) } else { '' }
+Assert-True "g170③(行为): glob 窗口 0 ⇒ STALE_PRODUCT + ACCEPT_OK=0" (
+    [bool]$nasAst -and ($g170Rc2 -eq 1) -and ($g170Out2 -match 'STALE_PRODUCT') -and ($g170Out2 -match 'ACCEPT_OK=0'))
 
 $gRoot = Join-Path $env:TEMP 'agent-cli-g166-test'
 Remove-Item -LiteralPath $gRoot -Recurse -Force -ErrorAction SilentlyContinue

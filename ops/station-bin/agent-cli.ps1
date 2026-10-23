@@ -1994,12 +1994,14 @@ function Test-EvmStatePull([string]$state, [string]$path) {
 }
 
 function Get-DeclaredProductPaths {
-    # O-167 (2026-10-23): 从卡面 `evidence-manifest.subjects` 取**产物相对路径**（`out/<path>`）。
-    #   只认 `state` 以 `out/` 开头的 subject（= 卡声明的产物；基线/输入不在此列）。
-    #   唯一实现点：主路/备路共用这一份路径计算；判定面各自按传输方式执行（不复制本函数）。
+    # O-167/O-170 (2026-10-24): 从卡面 `evidence-manifest.subjects` 取**产物描述**：
+    #   path = runDir 落盘名；state = 卡面源声明；glob = 源是否通配；src = 检查用源路径。
+    #   ⚠ 对 glob subject（如 `state: out/*.txt`），`path` 是 **runDir 拷贝名**，不是源名
+    #     ⇒ 新鲜度必须按 **窗口**（src 通配 + 新于 .run-marker）判，不能把 path 当源（O-170）。
+    #   唯一实现点：主路/备路共用这一份解析；判定面各自按传输方式执行（不复制本函数）。
     [CmdletBinding()]
     param($Subjects)
-    $paths = @()
+    $out = @()
     foreach ($sub in @($Subjects)) {
         if ($null -eq $sub) { continue }
         $st = "$($sub['state'])".Trim()
@@ -2007,10 +2009,13 @@ function Get-DeclaredProductPaths {
         if (-not $st -or -not $pp) { continue }
         if ($st -notmatch '^out/') { continue }
         if ($pp -match '\.\.' -or $pp -match '^[/\\]') { continue }   # fail-closed：不许越出 out/
-        if ($pp -notmatch '^out/') { $pp = "out/$pp" }
-        if ($paths -notcontains $pp) { $paths += $pp }
+        $glob = ($st -match '[*?]')
+        $src = if ($glob) { $st } else { if ($pp -match '^out/') { $pp } else { "out/$pp" } }
+        $key = "$glob|$src|$pp"
+        $exists = @($out | Where-Object { "$($_.glob)|$($_.src)|$($_.path)" -eq $key }).Count
+        if ($exists -eq 0) { $out += [ordered]@{ path = $pp; state = $st; glob = [bool]$glob; src = $src } }
     }
-    return $paths
+    return $out
 }
 
 function Invoke-EvmStatePull {
@@ -3074,7 +3079,7 @@ mkdir -p "`$STAGE/attach/$name"
     if ($accept.Count -gt 0) { $acceptB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($accept -join "`n"))) }
     # O-167 (2026-10-23): 卡声明产物路径（陈旧件判据的唯一路径来源；主路/备路共用）。
     $productPaths = @(Get-DeclaredProductPaths $fm['evidence-manifest']['subjects'])
-    $productB64 = if ($productPaths.Count -gt 0) { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($productPaths -join "`n"))) } else { '' }
+    $productB64 = if ($productPaths.Count -gt 0) { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((($productPaths | ForEach-Object { "$([int]$_.glob)`t$($_.src)`t$($_.path)" }) -join "`n"))) } else { '' }
 
     # 5) fused remote script: orphan->flock->state->opencode(stdin)->state->output (R14)
     $W = "$Script:WORKSPACE_ROOT/$proj"
@@ -3458,14 +3463,19 @@ if [ -n "`$ACCEPT_B64" ]; then
   : > "`$W/out/.accept-output.txt`$EV_SUF"
   if [ -n "`$PRODUCTS_B64" ]; then
     echo "`$PRODUCTS_B64" | base64 -d > "`$W/out/.declared-products.txt`$EV_SUF"
-    while IFS= read -r p || [ -n "`$p" ]; do
-      [ -z "`$p" ] && continue
-      if [ ! -f "`$W/`$p" ]; then
-        echo "STALE_PRODUCT: `$p (missing)" >> "`$W/out/.accept-output.txt`$EV_SUF"
-        ACCEPT_OK=0
-      elif [ "`$W/`$p" -ot "`$W/.run-marker" ]; then
-        echo "STALE_PRODUCT: `$p (older than .run-marker)" >> "`$W/out/.accept-output.txt`$EV_SUF"
-        ACCEPT_OK=0
+    while IFS=`$'\t' read -r g src pp || [ -n "`$g" ]; do
+      [ -z "`$g" ] && continue
+      if [ "`$g" = "1" ]; then
+        n=`$(find "`$W/out" -maxdepth 1 -type f -name "`$(basename "`$src")" ! -name '.*' -newer "`$W/.run-marker" 2>/dev/null | wc -l)
+        [ "`$n" -eq 1 ] || { echo "STALE_PRODUCT: `$src (window count=`$n, require 1)" >> "`$W/out/.accept-output.txt`$EV_SUF"; ACCEPT_OK=0; }
+      else
+        if [ ! -f "`$W/`$src" ]; then
+          echo "STALE_PRODUCT: `$src (missing)" >> "`$W/out/.accept-output.txt`$EV_SUF"
+          ACCEPT_OK=0
+        elif [ "`$W/`$src" -ot "`$W/.run-marker" ]; then
+          echo "STALE_PRODUCT: `$src (older than .run-marker)" >> "`$W/out/.accept-output.txt`$EV_SUF"
+          ACCEPT_OK=0
+        fi
       fi
     done < "`$W/out/.declared-products.txt`$EV_SUF"
   fi
@@ -4910,7 +4920,7 @@ mkdir -p "$stWorkDir/.attach/$nm2"
     $judgeWhere = if ($useStation) { "station-bash host=$stHost cwd=$judgeRoot" } else { "bash-local cwd=$judgeRoot" }
     # O-167 (2026-10-23): 卡声明产物路径（陈旧件判据的唯一路径来源；与主路共用 Get-DeclaredProductPaths）。
     $productPaths = @(Get-DeclaredProductPaths $fm['evidence-manifest']['subjects'])
-    $productB64 = if ($productPaths.Count -gt 0) { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($productPaths -join "`n"))) } else { '' }
+    $productB64 = if ($productPaths.Count -gt 0) { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((($productPaths | ForEach-Object { "$([int]$_.glob)`t$($_.src)`t$($_.path)" }) -join "`n"))) } else { '' }
     # ★★ O-29 同族② (2026-10-23): `.run-marker` **窗口起点** —— claude 路此前**从不创建**它
     #   （主路是在 body 里 `: > "$W/.run-marker"`），而产物拉回的 glob 唯一性判据以它为窗口。
     #   不建 ⇒ marker 缺失 ⇒ 窗口==候选：`out/` 是**累积**的，真实工作区几乎必然"候选 >1 ⇒ 拒"
@@ -5053,12 +5063,21 @@ mkdir -p "$stWorkDir/.attach/$nm2"
             [IO.File]::WriteAllText($accTxt, "ACCEPT_MODE=$judgeWhere`nJUDGE_ROOT=$judgeRoot`n", $utf8NoBom)
             if ($productPaths.Count -gt 0) {
                 $mk = Get-Item -LiteralPath (Join-Path $judgeRoot '.run-marker') -ErrorAction SilentlyContinue
-                foreach ($p in $productPaths) {
-                    $fp = Join-Path $judgeRoot ($p -replace '/','\')
-                    if (-not (Test-Path -LiteralPath $fp)) {
-                        Add-Content $accTxt "STALE_PRODUCT: $p (missing)"; $acceptOk = 0
-                    } elseif ($mk -and ((Get-Item -LiteralPath $fp).LastWriteTime -lt $mk.LastWriteTime)) {
-                        Add-Content $accTxt "STALE_PRODUCT: $p (older than .run-marker)"; $acceptOk = 0
+                $mkTime = if ($mk) { $mk.LastWriteTime } else { [datetime]::MinValue }
+                foreach ($pr in $productPaths) {
+                    if ($pr.glob) {
+                        $pat = Split-Path $pr.src -Leaf
+                        $wp = New-Object System.Management.Automation.WildcardPattern($pat, [System.Management.Automation.WildcardOptions]::None)
+                        $n = @(Get-ChildItem -LiteralPath (Join-Path $judgeRoot 'out') -File -ErrorAction SilentlyContinue |
+                               Where-Object { -not $_.Name.StartsWith('.') -and $_.LastWriteTime -ge $mkTime -and $wp.IsMatch($_.Name) }).Count
+                        if ($n -ne 1) { Add-Content $accTxt "STALE_PRODUCT: $($pr.src) (window count=$n, require 1)"; $acceptOk = 0 }
+                    } else {
+                        $fp = Join-Path $judgeRoot ($pr.src -replace '/','\')
+                        if (-not (Test-Path -LiteralPath $fp)) {
+                            Add-Content $accTxt "STALE_PRODUCT: $($pr.src) (missing)"; $acceptOk = 0
+                        } elseif ($mk -and ((Get-Item -LiteralPath $fp).LastWriteTime -lt $mk.LastWriteTime)) {
+                            Add-Content $accTxt "STALE_PRODUCT: $($pr.src) (older than .run-marker)"; $acceptOk = 0
+                        }
                     }
                 }
             }
@@ -5280,14 +5299,19 @@ echo "__ACCEPT_B64__" | base64 -d > "out/.accept-cmds.__RUN__.txt"
 ACCEPT_OK=1
 if [ -n "__PRODUCTS_B64__" ]; then
   echo "__PRODUCTS_B64__" | base64 -d > "out/.declared-products.__RUN__.txt"
-  while IFS= read -r p || [ -n "$p" ]; do
-    [ -z "$p" ] && continue
-    if [ ! -f "$p" ]; then
-      echo "STALE_PRODUCT: $p (missing)" >> "$OUT"
-      ACCEPT_OK=0
-    elif [ "$p" -ot ".run-marker" ]; then
-      echo "STALE_PRODUCT: $p (older than .run-marker)" >> "$OUT"
-      ACCEPT_OK=0
+  while IFS=$'\t' read -r g src pp || [ -n "$g" ]; do
+    [ -z "$g" ] && continue
+    if [ "$g" = "1" ]; then
+      n=$(find out -maxdepth 1 -type f -name "$(basename "$src")" ! -name '.*' -newer .run-marker 2>/dev/null | wc -l)
+      [ "$n" -eq 1 ] || { echo "STALE_PRODUCT: $src (window count=$n, require 1)" >> "$OUT"; ACCEPT_OK=0; }
+    else
+      if [ ! -f "$src" ]; then
+        echo "STALE_PRODUCT: $src (missing)" >> "$OUT"
+        ACCEPT_OK=0
+      elif [ "$src" -ot ".run-marker" ]; then
+        echo "STALE_PRODUCT: $src (older than .run-marker)" >> "$OUT"
+        ACCEPT_OK=0
+      fi
     fi
   done < "out/.declared-products.__RUN__.txt"
 fi

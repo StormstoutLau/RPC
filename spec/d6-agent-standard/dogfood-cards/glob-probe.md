@@ -7,8 +7,8 @@ sensitivity: public
 readonly: false
 timeout_s: 300
 accept:
-  - test -f out/glob-probe.txt
-  - grep -q GLOB_PROBE_OK out/glob-probe.txt
+  - find out -maxdepth 1 -type f -name '*.txt' ! -name '.*' -newer .run-marker | wc -l | grep -qx ' *1'
+  - find out -maxdepth 1 -type f -name '*.txt' ! -name '.*' -newer .run-marker | head -1 | xargs -r grep -q GLOB_PROBE_OK
 evidence-manifest:
   version: 1
   subjects:
