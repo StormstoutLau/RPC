@@ -173,7 +173,10 @@ finally:
 #   ⇒ 又回到"判据因噪声被整体忽略"。第三态与 `ephemeral` 同族: 缺席有正当理由、单列、不计入可离线复算。
 _src = (ROOT / "ops" / "cluster.py").read_text(encoding="utf-8")
 chk("O61-1 判据源 = `.agent-run.json` 的 exit_code == 3",
-    'locked_out = (j.get("exit_code") == 3)' in _src)
+    # ★ 2026-10-23: 实现侧把 exit_code **只解析一次**（`_ec`），供 `locked_out` 与
+    #   `failed-run-by-design`（同族第三态）共用 ⇒ 原字面 `j.get("exit_code") == 3` 不再成立。
+    #   **语义未变**（仍是 exit_code == 3）；按门禁纪律改**断言**而非回退代码。
+    'int(j.get("exit_code"))' in _src and 'locked_out = (_ec == 3)' in _src)
 chk("O61-2 第三态名存在且用在 missing-artifact 的**前置分支**",
     '"locked-out-by-design"' in _src and
     _src.index('"locked-out-by-design"') < _src.index('_gap_key("missing-artifact"'))

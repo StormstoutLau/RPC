@@ -332,6 +332,27 @@ upstream: \[d6-agent-standard-CHECKLIST, d6-agent-standard-DESIGN]
   本条是**反向情形**（subject 声明了、文件不在）⇒ **接受是权宜；正解是让框架支持"无 golden 卡"**，
   否则**非 golden 卡会持续污染该审计**（且需人工每次 `--accept`）。
 
+#### O-29 同族第二实例（2026-10-23）：**失败 run** 持续产生可重放 gap（口径已改）
+
+- **证据（逐条归因，非推测）**：evidence 报「新增 90 条」；**90 = 88 + 1 + 1**：
+  - **88 条** = 8 次**同一张**失败探针卡（`v4-attach-golden-probe.md` · `exit_code=1` / `status=failed` ·
+    `accept.passed=true` 但 `accept_golden.passed=false`）× **11 个框架基线 subject**
+    （`judgment-record` / `prompt` / `progress-trace` / `session-meta` / `attach-manifest` / `workspace-diff` /
+    `executor-trace` / `accept-cmds` / `golden-cmd` / `accept-golden-output` / `v4-evidence`）。
+    runDir 实况只有 `agent-output.txt` / `accept-output.txt` / `card.md` ⇒ **失败路径上 P3 采集未完成**。
+    ★ 所以那 11 件**不是卡声明**（卡只声明 `v4-evidence`）—— 是框架基线自动注入。
+  - **1 条** = `glob-probe`（run `202610081856215133`）：实际走 **claude 备路**（`cli=claude`）——
+    accept 通过，但 `glob-probe.txt` 未落 ⇒ ★ **claude 路不做 `state`/glob 采集**（能力边界，**待追**）。
+  - **1 条** = `review-fallback-probe`（run `202610130248216879`）：`missing-product.md` **故意不写**（探针设计）。
+- **口径（已落 2026-10-23）**：`agent_audit` 新增第三态 **`failed-run-by-design`**（与 O-61 `locked-out-by-design` 同族）——
+  `status=failed`（无 `status` 的旧记录退回 `exit_code ∉ {0,3}`）的 run，其 **`missing-artifact` 不计入缺口**，
+  单列 `totals.failed_run_absent` + coverage 行；**只覆盖 missing-artifact**，`collect-not-executed` 口径未动。
+  ★ 正向对照：`completed` run 缺件**仍**记 missing-artifact（`tests/test_agent_audit_failed_run.py` A5）。
+- **读数**：gap 表 144 → **37**；待接受 **90 → 2**（随后 `audit --accept`，水印 57 → **59**）。
+- ⚠ **未做 / 边界（如实）**：① **claude 路的 `state`/glob 采集未实现**（本段即登记；要修须另裁，且属能力实现不是口径）；
+  ② `collect-not-executed` 的 4 条存量仍按原口径（已在水印内）；③ 该口径**不会**让"成功 run 丢件"逃逸；
+  ④ 本口径只**沉默同 key 的存量**（水印单调），**失败 run 不再新增**同形态 key。
+
 #### O-30：站上环境与卡面约束（三条）
 
 | 子项 | 实测 | 影响 |

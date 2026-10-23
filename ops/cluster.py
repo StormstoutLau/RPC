@@ -4025,6 +4025,9 @@ def agent_audit(limit: int = 0, save: bool = False) -> dict:
       **ephemeral** → 卡声明 `ephemeral: true` 且归档件不在 ⇒ **`artifact-ephemeral-by-design`**：
                   "产物在站上临时目录、设计上就不进 runDir"（Cpp_Hub 型任务：工作目录在站上 `/tmp`）
                   ⇒ **不是缺口**，但**也不计入可离线复算**（单列，否则覆盖率会虚高）
+      **失败 run** → `status=failed` ⇒ 该 run **本身未完成**，框架件天然不产出 ⇒
+                  **`failed-run-by-design`**（2026-10-23；与 `exit 3` 的 `locked-out-by-design` 同族）
+                  ⇒ **不是缺口**，单列且**不计入可离线复算**（否则每次失败 run 会灌 11 条噪声）
       其他       → runDir 里存在但**未被任何 subject 的 path 覆盖**的非隐藏件 ⇒ `undeclared-evidence`
     """
     roots, _note = _agent_proj_roots()
@@ -4035,6 +4038,7 @@ def agent_audit(limit: int = 0, save: bool = False) -> dict:
     n_sub = n_offline = n_collect = n_undecl = n_runs_v2 = n_ephemeral = 0
     n_acc_ok = n_acc_bad = n_acc_skip = 0     # O-57: `accept-cmds` 归属核对三态
     n_locked = 0                              # O-61: `exit 3`(锁占用) ⇒ 缺件属"设计性缺席"
+    n_failed_absent = 0                       # 2026-10-23: `status=failed` ⇒ 缺件属"失败 run 缺席"
     for ts, proj, run_dir in runs:
         label = f"{proj}/{ts}"
         jp = run_dir / ".agent-run.json"
@@ -4052,7 +4056,19 @@ def agent_audit(limit: int = 0, save: bool = False) -> dict:
         #   ⇒ 给**第三态** `locked-out-by-design`(与 `ephemeral` 同族: 缺席有正当理由, 不报 missing-artifact,
         #   单列且**不计入可离线复算**, 否则覆盖率虚高)。
         #   判据源 = `.agent-run.json` 的 `exit_code`(派发时写入, 与 runDir 同级)。
-        locked_out = (j.get("exit_code") == 3)
+        try:
+            _ec = int(j.get("exit_code"))
+        except (TypeError, ValueError):
+            _ec = None
+        locked_out = (_ec == 3)
+        # ★ 2026-10-23：**失败 run 缺席**（与 O-61 同族的第三态）——
+        #   实证触发：evidence 报 90 条新增 gap，其中 88 条 = 8 次同一失败探针卡（exit 1 / status failed）
+        #   × 11 个**框架基线** subject。失败路径上这些件天然不产出；若按 missing-artifact 记，
+        #   每次失败 run 都会再灌 11 条 ⇒ 水印只能沉默存量、判据会被噪声整体忽略。
+        #   口径（写窄，不扩读）：**只认 `status=failed`**；无 `status` 的旧记录退回 exit_code（非 0/3 ⇒ 失败）。
+        #   正向对照（tests/test_agent_audit_failed_run.py A5）：completed run 缺件**仍**记 missing-artifact。
+        _status = str(j.get("status") or "")
+        run_failed = (_status == "failed") or ((not _status) and (_ec is not None and _ec not in (0, 3)))
         per = _run_digest(run_dir, recipe) or {}
         files = per.get("files") or {}
         subjects, covered = [], set()
@@ -4088,6 +4104,9 @@ def agent_audit(limit: int = 0, save: bool = False) -> dict:
                 if locked_out:
                     rdy = "locked-out-by-design"
                     n_locked += 1
+                elif run_failed:
+                    rdy = "failed-run-by-design"
+                    n_failed_absent += 1
                 else:
                     rdy = "missing-artifact"
                     gaps.append(f"{label}: subject '{name}' 声明的 `{path}` 不在 runDir")
@@ -4154,6 +4173,9 @@ def agent_audit(limit: int = 0, save: bool = False) -> dict:
         # O-61 (2026-09-25): `exit 3`(锁占用) 的 run body **从未运行** ⇒ 框架件天然不产出。与 ephemeral 同族。
         f"**锁占用缺席**（`exit 3` ⇒ body 未运行, 证据件天然不产出）: {n_locked} 条"
         f" —— 不计入缺口, 也**不计入可离线复算**（O-61；这是 O-59/T1 之后的**预期形态**）",
+        # 2026-10-23: 失败 run 与 `exit 3` 同族 —— run 本身未完成, 证据件不产出。单列, 不静默。
+        f"**失败 run 缺席**（`status=failed` ⇒ 该 run 本身失败, 证据件不产出）: {n_failed_absent} 条"
+        f" —— 不计入缺口, 也**不计入可离线复算**（2026-10-23 口径；与 O-61 同族）",
         f"已归档但未声明: {n_undecl} 件",
         f"有 manifest 的 run: {n_runs_v2}/{len(out_runs)}",
         # P1 (ADR-0007 路A, 2026-09-18): **口径要说实话** —— 上面那行只说"有多少个 run 有 manifest",
@@ -4177,6 +4199,8 @@ def agent_audit(limit: int = 0, save: bool = False) -> dict:
                       "ephemeral": n_ephemeral,
                       # O-61: `exit 3`(锁占用) ⇒ 证据件"设计性缺席"
                       "locked_out": n_locked,
+                      # 2026-10-23: `status=failed` ⇒ 证据件"失败 run 缺席"（与 locked_out 同族）
+                      "failed_run_absent": n_failed_absent,
                       # O-57: 归属核对三态（不符 = 归档件疑为别的 run 的残留）
                       "accept_ok": n_acc_ok, "accept_bad": n_acc_bad, "accept_skip": n_acc_skip}}
     if save:
