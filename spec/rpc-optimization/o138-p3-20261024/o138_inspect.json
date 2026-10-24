@@ -1,0 +1,292 @@
+[
+    {
+        "Id": "7d5736cd2a6a5339857d778f23461255ae2c84ba68e9ca223017c1b18494805d",
+        "Created": "2026-10-24T14:01:16.231411838Z",
+        "Path": "/usr/local/bin/entrypoint.sh",
+        "Args": [
+            "all"
+        ],
+        "State": {
+            "Status": "running",
+            "Running": true,
+            "Paused": false,
+            "Restarting": false,
+            "OOMKilled": false,
+            "Dead": false,
+            "Pid": 235140,
+            "ExitCode": 0,
+            "Error": "",
+            "StartedAt": "2026-10-24T14:01:16.252633113Z",
+            "FinishedAt": "0001-01-01T00:00:00Z"
+        },
+        "Image": "sha256:2e98dc53ed4a43b5600b11a80852eedfa573f4ffc3f10c64da01245f2a3217fc",
+        "ResolvConfPath": "/var/lib/docker/containers/7d5736cd2a6a5339857d778f23461255ae2c84ba68e9ca223017c1b18494805d/resolv.conf",
+        "HostnamePath": "/var/lib/docker/containers/7d5736cd2a6a5339857d778f23461255ae2c84ba68e9ca223017c1b18494805d/hostname",
+        "HostsPath": "/var/lib/docker/containers/7d5736cd2a6a5339857d778f23461255ae2c84ba68e9ca223017c1b18494805d/hosts",
+        "LogPath": "/var/lib/docker/containers/7d5736cd2a6a5339857d778f23461255ae2c84ba68e9ca223017c1b18494805d/7d5736cd2a6a5339857d778f23461255ae2c84ba68e9ca223017c1b18494805d-json.log",
+        "Name": "/halogen-flash",
+        "RestartCount": 0,
+        "Driver": "overlayfs",
+        "Platform": "linux",
+        "MountLabel": "",
+        "ProcessLabel": "",
+        "AppArmorProfile": "docker-default",
+        "ExecIDs": null,
+        "HostConfig": {
+            "Binds": [
+                "/home/scott-lau/.lmstudio/models/lmstudio-community/Qwen3.8-Flash-Next-GGUF/UD-IQ4_XS:/models"
+            ],
+            "ContainerIDFile": "",
+            "LogConfig": {
+                "Type": "json-file",
+                "Config": {}
+            },
+            "NetworkMode": "bridge",
+            "PortBindings": {
+                "8731/tcp": [
+                    {
+                        "HostIp": "127.0.0.1",
+                        "HostPort": "8731"
+                    }
+                ]
+            },
+            "RestartPolicy": {
+                "Name": "no",
+                "MaximumRetryCount": 0
+            },
+            "AutoRemove": false,
+            "VolumeDriver": "",
+            "VolumesFrom": null,
+            "ConsoleSize": [
+                0,
+                0
+            ],
+            "CapAdd": null,
+            "CapDrop": null,
+            "CgroupnsMode": "private",
+            "Dns": null,
+            "DnsOptions": [],
+            "DnsSearch": [],
+            "ExtraHosts": null,
+            "GroupAdd": [
+                "44",
+                "992"
+            ],
+            "IpcMode": "host",
+            "Cgroup": "",
+            "Links": null,
+            "OomScoreAdj": 0,
+            "PidMode": "",
+            "Privileged": false,
+            "PublishAllPorts": false,
+            "ReadonlyRootfs": false,
+            "SecurityOpt": [
+                "label=disable"
+            ],
+            "UTSMode": "",
+            "UsernsMode": "",
+            "ShmSize": 67108864,
+            "Runtime": "runc",
+            "Isolation": "",
+            "CpuShares": 0,
+            "Memory": 0,
+            "NanoCpus": 0,
+            "CgroupParent": "",
+            "BlkioWeight": 0,
+            "BlkioWeightDevice": [],
+            "BlkioDeviceReadBps": [],
+            "BlkioDeviceWriteBps": [],
+            "BlkioDeviceReadIOps": [],
+            "BlkioDeviceWriteIOps": [],
+            "CpuPeriod": 0,
+            "CpuQuota": 0,
+            "CpuRealtimePeriod": 0,
+            "CpuRealtimeRuntime": 0,
+            "CpusetCpus": "",
+            "CpusetMems": "",
+            "Devices": [
+                {
+                    "PathOnHost": "/dev/kfd",
+                    "PathInContainer": "/dev/kfd",
+                    "CgroupPermissions": "rwm"
+                },
+                {
+                    "PathOnHost": "/dev/dri",
+                    "PathInContainer": "/dev/dri",
+                    "CgroupPermissions": "rwm"
+                }
+            ],
+            "DeviceCgroupRules": null,
+            "DeviceRequests": null,
+            "MemoryReservation": 0,
+            "MemorySwap": 0,
+            "MemorySwappiness": null,
+            "OomKillDisable": null,
+            "PidsLimit": null,
+            "Ulimits": [
+                {
+                    "Name": "memlock",
+                    "Hard": -1,
+                    "Soft": -1
+                }
+            ],
+            "CpuCount": 0,
+            "CpuPercent": 0,
+            "IOMaximumIOps": 0,
+            "IOMaximumBandwidth": 0,
+            "MaskedPaths": [
+                "/proc/acpi",
+                "/proc/asound",
+                "/proc/interrupts",
+                "/proc/kcore",
+                "/proc/keys",
+                "/proc/latency_stats",
+                "/proc/sched_debug",
+                "/proc/scsi",
+                "/proc/timer_list",
+                "/proc/timer_stats",
+                "/sys/devices/virtual/powercap",
+                "/sys/firmware"
+            ],
+            "ReadonlyPaths": [
+                "/proc/bus",
+                "/proc/fs",
+                "/proc/irq",
+                "/proc/sys",
+                "/proc/sysrq-trigger"
+            ]
+        },
+        "Storage": {
+            "RootFS": {
+                "Snapshot": {
+                    "Name": "overlayfs"
+                }
+            }
+        },
+        "Mounts": [
+            {
+                "Type": "bind",
+                "Source": "/home/scott-lau/.lmstudio/models/lmstudio-community/Qwen3.8-Flash-Next-GGUF/UD-IQ4_XS",
+                "Destination": "/models",
+                "Mode": "",
+                "RW": true,
+                "Propagation": "rprivate"
+            }
+        ],
+        "Config": {
+            "Hostname": "7d5736cd2a6a",
+            "Domainname": "",
+            "User": "",
+            "AttachStdin": false,
+            "AttachStdout": false,
+            "AttachStderr": false,
+            "ExposedPorts": {
+                "8731/tcp": {}
+            },
+            "Tty": false,
+            "OpenStdin": false,
+            "StdinOnce": false,
+            "Env": [
+                "HALOGEN_CHECKPOINT=/models/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf",
+                "HALOGEN_CTX=8192",
+                "HALOGEN_KV_SLOTS=1",
+                "HALOGEN_KV_POOL_POSITIONS=8192",
+                "HALOGEN_HOST_RESERVE_GIB=8",
+                "HALOGEN_CACHE_DIR=/cache",
+                "HALOGEN_DOWNLOAD=peonist-ai/halogen-qwen3.8-flash-next",
+                "HALOGEN_API_PORT=8731",
+                "PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "LANG=C.UTF-8",
+                "GPG_KEY=7169605F62C751356D054A26A821E680E5FA6305",
+                "PYTHON_VERSION=3.12.15",
+                "PYTHON_SHA256=c2c4321961fab0fb999d66e0cecf521c2ab3994c7992873ea99e306c1094fd5a",
+                "ROCM_SITE=/usr/local/lib/python3.12/site-packages",
+                "ROCM_PATH=/usr/local/lib/python3.12/site-packages/_rocm_sdk_core",
+                "HIP_PATH=/usr/local/lib/python3.12/site-packages/_rocm_sdk_core",
+                "HIP_DEVICE_LIB_PATH=/usr/local/lib/python3.12/site-packages/_rocm_sdk_core/lib/llvm/amdgcn/bitcode",
+                "LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/_rocm_sdk_core/lib:/usr/local/lib/python3.12/site-packages/_rocm_sdk_libraries/lib",
+                "HALOGEN_ARCH=gfx1151",
+                "HIP_FORCE_DEV_KERNARG=1",
+                "PYTHONUNBUFFERED=1",
+                "HF_HUB_OFFLINE=1",
+                "TRANSFORMERS_VERBOSITY=error",
+                "HALOGEN_ATTN_FA=64",
+                "HALOGEN_PROMPT_CACHE=2",
+                "HALOGEN_PREFILL_CHUNK=32768",
+                "HALOGEN_MAX_TOK=32768",
+                "HALOGEN_MATMUL_ALGOS=1",
+                "HALOGEN_MATMUL_BUCKET=1",
+                "HALOGEN_MATMUL_TUNING_FILE=/opt/halogen/flash-tune.plan",
+                "HALOGEN_DRAFT_VOCAB_FILE=/opt/halogen/draft-vocab.lists",
+                "HALOGEN_TOKENIZER=/tokenizer",
+                "HALOGEN_PORT=8730",
+                "HALOGEN_BIND=127.0.0.1",
+                "HALOGEN_MAX_TOKENS_CAP=65536",
+                "HALOGEN_QUEUE_TIMEOUT=3600",
+                "HALOGEN_IMAGE_VERSION=0.18.13",
+                "HALOGEN_IMAGE_MODES=all engine api bench sweep convert inspect verify ppl niah"
+            ],
+            "Cmd": [
+                "all"
+            ],
+            "Image": "ghcr.nju.edu.cn/peonist-ai/halogen-flash-server@sha256:2e98dc53ed4a43b5600b11a80852eedfa573f4ffc3f10c64da01245f2a3217fc",
+            "Volumes": null,
+            "WorkingDir": "",
+            "Entrypoint": [
+                "/usr/local/bin/entrypoint.sh"
+            ],
+            "Labels": {
+                "ai.peonist.halogen.modes": "all engine api bench sweep convert inspect verify ppl niah",
+                "io.buildah.version": "1.43.2",
+                "org.opencontainers.image.description": "Qwen3.8-Flash-Next inference server for AMD Strix Halo (gfx1151)",
+                "org.opencontainers.image.documentation": "https://github.com/peonist-ai/halogen-flash-server",
+                "org.opencontainers.image.licenses": "LicenseRef-Peonist-EULA",
+                "org.opencontainers.image.revision": "a00875cbb6d1",
+                "org.opencontainers.image.source": "https://github.com/peonist-ai/halogen-flash-server",
+                "org.opencontainers.image.title": "halogen-flash-server",
+                "org.opencontainers.image.vendor": "Peonist",
+                "org.opencontainers.image.version": "0.18.13"
+            }
+        },
+        "NetworkSettings": {
+            "SandboxID": "7304cc7e4716095dfbc63002b7b03ef152bbe3a6d64dc52a576f370cc1976b32",
+            "SandboxKey": "/var/run/docker/netns/7304cc7e4716",
+            "Ports": {
+                "8731/tcp": [
+                    {
+                        "HostIp": "127.0.0.1",
+                        "HostPort": "8731"
+                    }
+                ]
+            },
+            "Networks": {
+                "bridge": {
+                    "IPAMConfig": null,
+                    "Links": null,
+                    "Aliases": null,
+                    "DriverOpts": null,
+                    "GwPriority": 0,
+                    "NetworkID": "dd1099b878f46b1c14566183957c39edec48d6860a5e0e16ab8c79f0ff3e1945",
+                    "EndpointID": "f3329e0303c254047ed2361f9d1800178d070624bc3a0e632fbe4cc3c85003a3",
+                    "Gateway": "172.17.0.1",
+                    "IPAddress": "172.17.0.2",
+                    "MacAddress": "02:69:99:9d:6b:c6",
+                    "IPPrefixLen": 16,
+                    "IPv6Gateway": "",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+                    "DNSNames": null
+                }
+            }
+        },
+        "ImageManifestDescriptor": {
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "digest": "sha256:2e98dc53ed4a43b5600b11a80852eedfa573f4ffc3f10c64da01245f2a3217fc",
+            "size": 4510,
+            "platform": {
+                "architecture": "amd64",
+                "os": "linux"
+            }
+        }
+    }
+]

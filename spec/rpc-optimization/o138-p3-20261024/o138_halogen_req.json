@@ -1,0 +1,1 @@
+{"model":"qwen3.8-flash-next","messages":[{"role":"user","content":"print the word red ten times"}],"max_tokens":64,"temperature":0}
