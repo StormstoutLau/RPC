@@ -4414,7 +4414,14 @@ function Invoke-SplitTask {
 
     # collect + merge results
     $mergedRoot = Join-Path $projRoot 'agent-out'
-    $mergedDir = Join-Path $mergedRoot ('split-' + [DateTime]::UtcNow.ToString('yyyyMMddHHmmss'))
+    # ★★ O-171（2026-10-24 · 乙）：合并目录名的时间源 = **本地时钟**，与 runDir 名（`Get-UniqueRunStamp`
+    #   用 `[DateTime]::Now`）/台账/证据链**同一口径**。原先此处用 `[DateTime]::UtcNow` ⇒ 同一棵树里两套
+    #   偏移，目录名**排序 ≠ 时间序**（差 8h：实测 `split-20261023191424` 实际创建于本地 2026-10-24
+    #   03:14:24，被读成"昨天的旧目录"）—— RFC 3339 的"字典序 = 时间序"**只在偏移一致时成立**。
+    #   ⚠ **纪元边界**：2026-10-24 之前生成的 `split-*` 名仍为 UTC ⇒ 按名排序**跨纪元**仍不可靠。
+    #   自动消费者本就没有（`_probe_fallback.ps1` 显式排除 `split-*`；`cluster.py` 只认含
+    #   `.agent-run.json` 的目录）⇒ 残余风险只在**人读**，正因如此才要消灭两套口径。
+    $mergedDir = Join-Path $mergedRoot ('split-' + [DateTime]::Now.ToString('yyyyMMddHHmmss'))
     New-Item -ItemType Directory -Path $mergedDir -Force | Out-Null
     $results = @()
     $allOk = $true

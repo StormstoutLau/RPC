@@ -5,7 +5,7 @@ model: claude
 cli: claude
 sensitivity: local-only
 readonly: false
-timeout_s: 300
+timeout_s: 600
 accept:
   - test -f out/probe-tools.md
   - grep -q '^PROBE_DONE' out/probe-tools.md
