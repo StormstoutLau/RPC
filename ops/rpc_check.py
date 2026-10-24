@@ -50,7 +50,14 @@ ROOT = Path(__file__).resolve().parent.parent
 #     见 tests/test_rpc_check_secret_forms.py 的残留盲区说明。
 SECRET_RE = re.compile(
     r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}"
-    r"|[\"']?\b(?:pass|passwd|password|pwd)\b[\"']?\s*[:=]\s*"
+    # ★★ 2026-10-24（O-174）：口令族**允许下划线前缀** —— 原写法 `\b(?:pass|…)` 在
+    #   `ADMIN_PASS` / `DB_PWD` 上是**漏报**：`_` 与 `P` 之间没有字边界（两者都是 word char）
+    #   ⇒ 整条赋值被跳过（实测：`archive/scripts-history/b5f_hub_deploy.sh` 里一条 59 字符
+    #   真凭据因此长期不被门禁看见）。现改为「非字母数字起 + 任意 `xxx_` 前缀 + 关键字」，
+    #   并要求关键字**后**不再接字母数字（`(?![A-Za-z0-9])`）。
+    #   ⚠ 边界刻意保留：`SSH_ASKPASS_REQUIRE = "force"` 不命中（关键字后接 `_REQUIRE`）、
+    #   `bypass="…"` 不命中（`by`/`pass` 之间无下划线），夹具 `test_rpc_check_secret_forms.py` 钉住。
+    r"|[\"']?(?<![A-Za-z0-9])(?:[A-Za-z0-9]+_)*(?:pass|passwd|password|pwd)(?![A-Za-z0-9])[\"']?\s*[:=]\s*"
     r"(?:\"(?=[^\"]*[A-Za-z0-9])[^\"\s]{4,}\"|'(?=[^']*[A-Za-z0-9])[^'\s]{4,}')"
     r"|-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"
     r"|(?<![A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}"
