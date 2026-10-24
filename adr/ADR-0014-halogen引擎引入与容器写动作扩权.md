@@ -304,6 +304,43 @@ prompt set = **上游 `tools/eval-prompts.json`**（10 例：code/proof/proc/cha
   **结论**：① **0.18.12 的 prefill 提速在冷 8k/32k 长 prompt 上未复现**（+0.3% / +0.6%，与 0.18.11 末次复测的 +0.05% / +0.24% 同量级 ⇒ **噪声**）；② **0.18.13 的并发公平性可复现且量级大**：短请求 TTFT **15.77 → 0.80 s（≈19.8×）**、流式最大中断 **15.96 → 0.85 s（≈18.8×）**；**关闭 splice/nest 后回到 15.78 / 16.04 s** ⇒ **归因成立**；③ **代价**：并发时**长 prompt 的 prefill 从 16.00 s 增到 17.42 s（+8.9%）**（与上游"5–7% 更晚"同向，本测略高）；④ 单流冷 prefill 三臂无实质差异（≤1.2%，含漂移）。
   ⚠ **射程**：仅 **C 站**、Qwen3.8-Flash-Next、**冷 8k/32k 长 prompt**、`enable_thinking=false`；**短 prompt / cache-on 首请求 / >2 并发**未测。原始 JSONL / probe / analysis 已入库：[spec/rpc-optimization/ab-halogen-20261022](../spec/rpc-optimization/ab-halogen-20261022/)。
 
+## §V6.3 实证 —— **MTP 投机是默认生效的**（2026-10-24 · 站 C · E1）
+
+> 开题动因：`O-138` 的 P3（draft/MTP）原写"须等上游 `#27836`/`#28243` 并入主线，或给 llama.cpp 打约 400 行补丁"。
+> 本轮先核"我们自己的容器到底吃没吃到投机"，结果推翻该前置。
+
+**两条硬事实（逐字取证）**
+
+1. **draft head 放在 GGUF 旁边即被自动拾取，无需任何开关**：本轮**未**设 `HALOGEN_MTP_HEAD`，
+   容器启动日志自报 `MTP depth-2 (up to 7, confidence gate) selectable (drafter 1, speculates while alone)`，
+   且 `checkpoint: 71.97 GiB in 1197 tensor(s) already resident (the repacked arena and **the head file**)`。
+   ⇒ 本仓 #9 登记的那个 `qwen38-flash-next-mtp.hgn`（1.5 G）**正是这条路的必需件**，且早就在位。
+2. **关闭开关唯一且简单**：`HALOGEN_MTP=0`（上游 FLAGS 文档：关掉后无 head 可跑，启动时会说明）。
+   ⚠ 关掉 MTP **不等于纯串行** —— prompt-lookup（`HALOGEN_PLD`）仍工作，`drafter` 会显示 `lookup`；
+   要纯串行须再关 `HALOGEN_PLD=0`（本轮未做）。
+
+**定量 A/B（站 C · 引擎 0.18.13 · 同一 checkpoint · ctx 32768 · temp 0 · `enable_thinking=false`）**
+
+探针 = `probe_halogen.py`（与 `O-138` P1 的 `probe.py` **逐字同逻辑**，仅 URL 参数化）；每档 3 次；读数取引擎自报 `timings.predicted_per_second`。
+
+| 档 | MTP 默认（on） | `HALOGEN_MTP=0` | 比 | 对照：llama.cpp Vulkan 现役 |
+|---|---|---|---|---|
+| 短 ≈560 tok | **39.42** t/s | 28.97 | **1.36×** | 27.55 |
+| 长 ≈4.1k tok | **35.97** | 28.48 | **1.26×** | 26.85 |
+
+- 投机统计（逐字）：`"drafter":"mtp"` · head 2 轮 **9/9 接受** · lookup 3 轮 **6/6** · `draft_n=15 / draft_n_accepted=15`。
+- 接受率 **0.49–0.57**（"写长段续写"散文型），与同 SoC 社区实测的 prose **0.55–0.67** 同区间。
+- ★★ **因果拆开**：`off ≈ llama.cpp（+5%/+6%）` ⇒ **"换引擎"本身几乎不赚；+34~43% 全部来自投机**。
+  这条同时把 `O-138` 的 P4（换引擎）从"待评估"推向"不推"。
+
+**射程（如实）**：单站 C · 单流 · 3 次/档（轮间波动 ±6%）· ctx 32768（**>32k 未测**）· 质量锚**未测** ·
+Arm B 非纯串行（见上）· 与同 SoC 社区的档位不同（其 `UD-Q3_K_XL` 83.8 GiB / ctx 65536）**不可互换**。
+
+**工程细节**：`docker` **不认** `--group-add keep-groups`（那是 podman 语法 ⇒ 实测 `rc=125 unable to find group`），
+沿用 D4/#7 已定的**数字 GID 44/992**；ctx / KV 池 / 驻留预算全走 `CONTAINER_MODELS` 的 `env`
+（`HALOGEN_CTX` / `HALOGEN_KV_POOL_POSITIONS` / `HALOGEN_HOST_RESERVE_GIB`），容器**不读站上 conf**。
+证据：[spec/rpc-optimization/o138-p3-20261024](../spec/rpc-optimization/o138-p3-20261024/)（两臂 `docker logs`、响应 JSON、`docker inspect`、探针）。
+
 ---
 
 ## 未实测登记（不静默）
@@ -355,3 +392,4 @@ prompt set = **上游 `tools/eval-prompts.json`**（10 例：code/proof/proc/cha
 | 2.0 | 2026-10-11 | **A 站真部署落地**（V6 由「未做」→「已做」，新增 §V6 实证：镜像 digest/体积、BYO GGUF + 专用 head/tokenizer、内存/端口、冒烟短/长 ctx、**三处实测修正**、副作用）；新增 **D7**（Qwen3.8-Flash-Next 默认执行框架 = halogen，裁定已下/落地未做）与 **D8**（B/C 复用 —— 实测「有 CLI、无 daemon」阻断，备选 a/b/c）；未实测登记重排（#1–#5 标已实测、新增 #7–#10）。 |
 | 2.1 | 2026-10-11 | **B/C 复用落地真部署**（D8(a)：`containers install` 补 daemon + `containers up` 照抄 A 配方；B/C `/health` ok、冒烟同档，新增 **§V6.1 实证**）；**D7 前置解**（三站均可跑 halogen ⇒ 默认框架前提已满足，代码层仍待确认）；`8730/8731` 的 `inventory/ports.yaml` **scope `[A]`→`[A, B, C]`**；未实测登记 #10 标已解。 |
 | 2.2 | 2026-10-22 | **digest pin 实施 + 开放项闭环 + 镜像升 0.18.13**：`CONTAINER_MODELS.image` 由 tag 改为 `tag@sha256`（0.18.11 → 0.18.13），`rpc_check --only engine` 加 digest 漂移判定；#2/#6/#7/#9 闭环（#9 用户裁定保留）；**三站 0.18.13 真升级**（新增 **§V6.2 实证**：三站 `Config.Image`/`RepoDigests` = 新 pin、`version.api=engine=0.18.13`、greedy 冒烟三站一致、`engine` PASS）。 |
+| 2.3 | 2026-10-24 | **MTP 投机被证实"默认生效"**（新增 **§V6.3 实证**）：head 放 GGUF 旁即自动拾取（无需 `HALOGEN_MTP_HEAD`）、`HALOGEN_MTP=0` 为关闭开关；本集群 A/B decode **39.42/35.97 vs 28.97/28.48 t/s**（短/长 = 1.36×/1.26×），对照 llama.cpp 27.55/26.85 ⇒ **换引擎本身≈0 收益，+34~43% 全来自投机**；同时注销 `O-138` 的 P3 前置（"须等上游 `#28243` / 打 400 行补丁"）。 |

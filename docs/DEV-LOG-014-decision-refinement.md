@@ -6890,3 +6890,110 @@ run `202610130354429167`（且该 run 在 **TC 已转之后**派发）⇒
 
 全量门禁 **PASS**（46 绿 / 3 黄 / 0 红）· `_fm_golden_test.ps1` **605/0** · `py-tests` 全绿。
 
+***
+
+## 108. 备路判据面收口 + 产物新鲜度双向验收 + 脏历史清洗（2026-10-23/24 · `O-165`~`O-174`）
+
+> 本批横跨两天、十项台账条目（`O-165`–`O-174`）与一次 `O-138` 的调研闭环。逐条依据在
+> [`spec/d6-agent-standard/OPEN-ISSUES.md`](../spec/d6-agent-standard/OPEN-ISSUES.md)，本节只记**方法、读数与教训**。
+
+### 108.1 `O-165`/`O-166`：备路的判据根与 golden 注入（承前一批）
+
+- **缺陷**：站上 claude 备路的 `accept`/`accept-golden` 在**主控 `$projRoot`** 判，而产物落在**站上 `$stWorkDir`**
+  ⇒ 主控有陈旧同名片 = **假绿**，主控干净 = **假红**；golden 更从未 scp 上站（第一步就 `No such file`）。
+- **落法**：判定根收成唯一 `$judgeRoot`（站上 = `$stWorkDir`，本地 = `$projRoot`），golden 注入同一根，agent 结束后落盘、判后清理。
+- **教训**：「判据和产物必须在**同一个根**」这条在备路过了一周才被发现 —— 主路一直是站上 body 内判，**两路不一致就是漏检源**。
+
+### 108.2 `O-167`：产物新鲜度判据（**本批最有价值的一条**）
+
+- **缺陷**：`accept` 只看"文件在不在"，不看"是不是本轮产物" ⇒ 陈旧工作区里同名旧件能让**失败的 run 假绿**
+  （2026-10-23 实测：agent 侧 `rc=1`，accept 却全绿，而那件 mtime 是 **10-08**）。
+- **落法（候选乙的产物清单变体）**：卡面 `evidence-manifest` 声明 `state: out/...` ⇒ 主路 body、备路本地、站上脚本**三处各加一次**
+  「产物必须存在于 `out/` 且**不新于** `.run-marker` 则拒」（`STALE_PRODUCT`. 路径唯一来源 = `Get-DeclaredProductPaths`，**不复制三份**）。
+- **★★ 判据必须能拒 —— 于是补了一个负控卡**：`neg-o167-stale-main`（"不许写任何文件"是它的硬性要求）。
+  **主路负向真跑** `202610241020239336`（站 B）：站上预置 `out/p0-tail-ok.txt`（mtime 2026-10-08、内容正确）
+  ⇒ 两条 accept 命令 **`ACCEPT_RC=0/0`（没有新鲜度判据就是假绿）**，但判据逐字报
+  `STALE_PRODUCT: out/p0-tail-ok.txt (older than .run-marker)` ⇒ `ACCEPT_OK=0` · `TASK_RC=9` · `RUN_S=9` · `EVM_STATE pulled=1`；
+  收尾 `O46_CLEAN: 清理远端声明产物 1 项`。**主路正向** `202610240312321138`（新鲜产物 ⇒ accept 1）。
+- **教训**：加判据时**同时造"该拒的样本"**，否则只证明了"能通过"（同 `neg-o46-cleanup` 的先例）。
+
+### 108.3 `O-168`：local-only 的 claude 路 —— fail-fast + 站上 64k
+
+- **缺陷**：claude 请求 33185 tokens > 引擎 32768 ⇒ API 400，之后 300s 超时（不是慢，是必失败）。
+- **落法**：站上脚本在 `MODE=local` 且 `CTX<49152` 时 **fail-fast**（`claude-local-ctx-too-small`，rc=14，**不 resume**）；
+  B 站引擎 `CTX 32768→65536` 重载（备份 conf 留档）。真跑：14 s 收 14（原 300 s）；重载后 `engine_ctx=65536`、**无 400**。
+- **残留**：首跑 300 s 超时 ⇒ `probe-claude-tools-local` 卡 `timeout_s 300→600`，复跑 `run_s=408`、首跑即 rc=0（无 resume）。
+
+### 108.4 `O-169`：覆盖盘点 —— **46/59 → 51/59**，5 张卡全部真跑
+
+- 5 张补 `evidence-manifest`（`p0-tail-probe` / `probe-claude-tools-local` / `probe-claude-tools` / `smoke-claude-channel` / `needs-decl-probe`），
+  7 张判**不适用**（负控 / 仅 stdout / split join / readonly 不写文件）。真跑 5/5：
+  `p0-tail`（opencode/ultra `202610240312321138`）· `probe-claude-tools`（`202610240313078017`）·
+  `smoke-claude-channel`（`202610240324409059`）· `needs-decl-probe` split（`split-20261023191424`）。
+- **★ 一次"看起来是缺陷、其实不是"的判读**：`p0-tail` 走 claude 路失败（`202610240253123308`）——
+  stdout 已出正确串，但**文件未落盘**。根因 = 卡面 `readonly: true` ⇒ claude 路按 `O-42` **不传** `--permission-mode acceptEdits`
+  ⇒ 写文件被沙箱 approval 挡。⇒ **归因到 `O-30` 已登记的"readonly 与必须落文件互斥"，不是判据缺陷**；改走卡面原设计的 opencode 路后一次通过。
+- **教训**：「真跑失败」先分三类 —— 判据错 / 卡面契约自相矛盾 / 路径能力缺失。**只有第一类才是本批的修面**。
+
+### 108.5 `O-170`：glob 产物窗口判据（O-167 的假红修正）
+
+- **缺陷**：`glob-probe` 卡 task 允许 agent 自定文件名，accept 却写死 `out/glob-probe.txt`；而 manifest 的 `path` 是 **runDir 落盘名**、`state` 才是源
+  ⇒ 固定检查会**假红**。
+- **落法**：`Get-DeclaredProductPaths` 返回 `{path,state,glob,src}`；glob subject 用**窗口**
+  （`find out -maxdepth 1 -type f -name '<pattern>' ! -name '.*' -newer .run-marker` **恰 1 个**），非 glob 用 `src`；三处同步。
+- **★ 一处自伤**：卡面首版用 `test "$(find …)"`（`$()`），被本地 `bash -c` 的引号层破坏 ⇒ accept 0；改 **pipeline**（`wc -l | grep -qx ' *1'` + `xargs -r grep`）后通过。
+
+### 108.6 `O-171`：`split` 合并目录名改用本地时钟（裁【乙】）
+
+- **事实**：`$mergedDir` 用 `[DateTime]::UtcNow`，而 runDir / 台账 / 证据链用 `[DateTime]::Now` ⇒ **同树两套偏移**，
+  名比实际早 8h（`split-20261023191424` 实际是本地 `10-24 03:14`）—— 本轮**我自己先误读成旧目录**。
+- **落法**：一行改 `Now` + 代码处写死**纪元边界**（旧 `split-*` 仍是 UTC 名）。**先验红 → 复跑绿**：修后 `split-20261024033338` = 本地 `03:33:38`。
+- **未采纳**：甲（只文档化双口径，下次仍会误读）· 丙（run 名也改 UTC，动 runDir 身份，撞 `O-162` 前提与「不追溯改历史」）。
+
+### 108.7 `O-172`：`evidence_budget` **不补**（一次"看起来该补"的裁决）
+
+- **事实**：59 张卡只有 1 张声明；全仓消费者扫描 = **0 处**拿声明值与实际（`usage.tool_uses`）比对。
+- **裁**：不补 —— 为清 `open` 桶填 `anchors=1` 是**形式值**，正撞本仓「通过 ≠ 有值」；且局部补不达标（其余 55 张一跑仍报），
+  真清只有批量改 58 张，而契约 §1.6 明文禁止批量改写。**前置条件写清**：先有 declared-vs-actual 判据 **且**解决备路 `usage` 不可采。
+
+### 108.8 `O-173`/`O-174`：脏历史清洗 + 门禁看不见的一类口令
+
+- **`O-173`（乙：历史重写）**：`git filter-repo --replace-text` 重写 **830 commits**（新 tip `5f8e0480`，旧 `b04d9189`），
+  备份留 `D:\RPC_bak_20261024_histrewrite`；**双向自证**：重写前 151 条命中有 1 条**真凭据**（59 字符），重写后 150 条且该条消失（余下全误报）。
+  强推被仓库 ruleset `main-protect-worm`（`non_fast_forward` + `deletion`）挡 ⇒ 按用户授权**临时停用 → 强推 → 恢复**（`PUT enforcement`，`PATCH` 返 404）；
+  事后：旧 SHA 查 API 得 **422 No commit found**。
+  ⚠ **`甲`（轮换口令）仍未做** —— 历史干净 ≠ 凭据失效，**这一步只有用户能做**。
+- **`O-174`（TDD 先验红）**：`SECRET_RE` 的口令族用 `\b(pass|passwd|password|pwd)\b`，而 `_`/`P` 都是 word char ⇒
+  **`ADMIN_PASS=` / `DB_PWD=` 整条漏报**（那条 59 字符真凭据正是这样逃过门禁）。改「非字母数字起 + 任意 `xxx_` 前缀 + 关键字后不接字母数字」后：
+  夹具 **16→18（先验红 2/18 → 修后 18/18）**、误报边界（`SSH_ASKPASS_REQUIRE` / `bypass` / `PASS: derived-view` / `PASS="***"`）全不命中、`secrets` 门禁 **0 命中**。
+  **★ 教训**：「门禁 0 命中」≠「没有凭据」—— 正则的口径本身也可能是漏检面。
+
+### 108.9 `O-138` 调研闭环 + `ADR-0014 §V6.3`
+
+- 调研 11 条路线**每条都有结论**、P1–P5 各有终态 ⇒ 收 ✅；承载文档新增 **§11.4**（三条新事实 + P2 否定 + P3 改写 + 收口表）。
+- **本批最硬的一条读数**：halogen 的 **MTP 默认生效**（head 放 GGUF 旁即被拾取，`drafter 1`）；`HALOGEN_MTP=0` 为关闭开关；
+  本集群 A/B（同 P1 探针）：**39.42 / 35.97 vs 28.97 / 28.48 t/s**（1.36× / 1.26×），对照 llama.cpp **27.55 / 26.85**
+  ⇒ **"换引擎"本身≈0，+34~43% 全来自投机**。已回写 `ADR-0014 §V6.3` + 手册 §3.2/§3.5。
+
+### 108.10 文档回写（本批补做的部分）
+
+| 文档 | 回写内容 |
+|---|---|
+| [三机推理集群使用手册 §1.2](三机推理集群使用手册.md) | **端点表读法更正**：三站引擎一律绑 `127.0.0.1`，表内 `站名:8080` 只是"站上本机"口径；跨机须 ssh 或隧道；同模型时端口相同 ⇒ **只能靠主机区分** |
+| 同上 §3.2 | halogen **MTP 默认生效** + `HALOGEN_MTP=0` 关闭 + `HALOGEN_PLD` 残留 + 数字 GID 坑 + A/B 读数指针 |
+| 同上 §3.5 | `qwen3.8-flash-next` 基线行由"双机 RPC 15.7"改为**现役实测**（llama.cpp 27.55/26.85 · halogen 39.42/35.97 / off 28.97/28.48） |
+| [ADR-0014](../adr/ADR-0014-halogen引擎引入与容器写动作扩权.md) | 新增 **§V6.3 实证** + 修订历史 **2.3** |
+| [调研 §11.4](research/2026-10-01_Qwen3.8系列本地推理加速调研.md) | 三条新事实 / P2 否定 / P3 改写 / P1–P5 收口表 |
+
+### 108.11 门禁读数（收官）
+
+全量 **PASS · 46 绿 / 3 黄 / 0 红**（黄灯均为存量：`evidence` 可重放缺口 · `memory-gates` 引擎侧无门通道 · `stations`）·
+`_fm_golden_test.ps1` **663/0** · `py-tests` **54/54** · 台账 **170 行 / 闭环 166 / 仍开 4** · 证据链 **360 条**（`agent-chain.json` 实测）。
+
+### 108.12 明确不在本批（越界项）
+
+- **不做** `evidence-budget` 批量补声明（`O-172` 已裁，须先有消费者判据）。
+- **不做** halogen 生产化（常驻 / 262144 ctx / 切换回滚）—— 属 `ADR-0014` 落地范围，本批只验证机制。
+- **不做** 长 ctx（>32k）与质量锚（`O-138` 未测三项，只有生产化才需要）。
+- **不代持凭据**：轮换监控平台口令 = 用户动作（`O-173` 甲仍开）。
+
