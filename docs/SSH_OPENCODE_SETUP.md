@@ -107,6 +107,15 @@ pip     → C:\Users\Peng\AppData\Local\Programs\Python\Python312\Scripts\pip.ex
 **解决**: 用 Python 3.12 完整路径执行脚本。
 
 **ssh_setup.py 脚本** ([scripts/ssh_setup.py](file:///f:/Cpp_Hub/scripts/ssh_setup.py)):
+
+> ⚠ **安全更正（2026-10-21 安全评审 HIGH-1 · 2026-10-24 就地登记）**：下面片段里的
+> `paramiko.AutoAddPolicy()` **已判定为不安全** —— 它**不校验主机密钥**，首次连接自动信任任意主机键
+> （可被中间人）。本仓 [`ops/cluster_ssh.py`](../ops/cluster_ssh.py) 已改为
+> `load_system_host_keys()` + `RejectPolicy()`（未知主机**直接拒绝**，不再静默写盘），
+> 入网/校验/回滚见 [三机推理集群使用手册](三机推理集群使用手册.md) §2.6。
+> ⇒ **本片段只作历史记录，不要照抄**；复用前须先 `client.load_system_host_keys()`
+> 并把策略改成 `paramiko.RejectPolicy()`，且目标机的主机键**先登记**到 `known_hosts`。
+
 ```python
 import paramiko, os
 
