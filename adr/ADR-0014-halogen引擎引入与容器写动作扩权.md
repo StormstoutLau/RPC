@@ -399,6 +399,34 @@ Arm B 非纯串行（见上）· 与同 SoC 社区的档位不同（其 `UD-Q3_K
 
 ---
 
+## §V6.6 实证 —— **GGUF 三片退役 · 生产权重全切 v2 `.hgn`**（2026-10-25 · 用户裁方案乙）
+
+> 触发（用户原话）：「采用方案乙 但是具体存储gguf模型根据三站磁盘空间来定 生产方案全切换至halogen」。
+
+- **保留站 = C**（按 `df -BG` 实测余量：C **877G** > A 742G > B 627G；且 C 已同时持有 v2 与 GGUF ⇒ **零删除**）。
+  ⇒ **A/B 删除 GGUF**（各 89 GiB），**C 保留 GGUF + `qwen3.8-flash-next.env`** 作冷回退。
+- **生产配方**（单一真值 = `CONTAINER_MODELS`）：
+  `checkpoint=/hgn/qwen38-flash-next-v2.hgn` · 同目录 `qwen38-flash-next-ngram.hgn` · 独立 tokenizer
+  （`/data/models/hgn/peonist-ai/qwen38-flash-next-tokenizer` → `/tokenizer:ro`，22 MB）。
+  **不挂 GGUF 目录**，**移除 `HALOGEN_DOWNLOAD` / `HF_ENDPOINT` / `HF_HUB_DISABLE_XET`**。
+- **自包含证据（E1）**：完全不挂 GGUF 的实跑 ⇒ `/health` `drafter_weights_loaded=true` / `drafter_default=mtp`、
+  启动日志**无** `draft head` 行、decode **56.02 / 56.75**（对照 58.16 / 54.25，噪声带内）⇒
+  ★ **MTP head 由 checkpoint 自带，GGUF 目录不再是运行依赖**。
+- **分发**：C → A（`10.10.12.1`）/ B（`10.10.11.1`）走 **10GbE** rsync，110 GiB ×2 并行实测 **3 min 36 s**，
+  两站 sha256 与源一致（`71246c6a…fc687` / `3450acada…dffe`）。
+- **判据联动（一处，已先验红）**：`check_aliases` (7) 原判「按站路由名必须在 inventory 声明 conf」，
+  生产全切 halogen 后 A/B 无 conf ⇒ **逐字假红**（`qwen3.8-flash-next-a/-b … 未声明 … 有 conf`）。
+  改为「**有 conf 或该别名有 `CONTAINER_MODELS` 配方**」⇒ 复跑 PASS（41 例）。
+- **回退**：`cluster.py load qwen3.8-flash-next-c --backend unsloth`（llama.cpp 需要 GGUF，只有 C 站还有）。
+- **落地读数（E1）**：三站 `load qwen3.8-flash-next-{a,b,c}` 均 **READY**（`context=262144` / `kv_pool_positions=524288` / `drafter=mtp`）；
+  decode 两轮（短 / 长）：**A 57.33 / 51.65 → 54.39 / 56.67** · **B 52.29 / 52.38 → 51.57 / 50.21** · **C 54.21 / 53.38**；
+  `df -BG` 前→后：A **742→721G** · B **627→602G** · C **877G**（保留 GGUF）⇒ 三站合计 **−46 GiB**
+  （v2 +220、GGUF −178、其余 −4）。B 低 5–8%：同配方、启动 **0 compaction stalls**、89 GiB 常驻 ⇒ **记读数，不归因**（未做逐站热/频对照）。
+- ⚠ **射程**：A/B 的 `qwen3.8-flash-next.env` 仅停用（`.env.retired-20261025`，恢复即可）；
+  C 的 GGUF 仍在盘 ⇒ 「退役」= **生产不再走 GGUF**，不是"全仓零 GGUF 副本"。
+
+---
+
 ## 未实测登记（不静默）
 
 1. ~~**`containers` 子命令与真部署分两批**~~ **→ 已实测（2026-10-11 · A 站）**：V6 对象即本轮真部署，全程只经统一入口。
@@ -451,3 +479,4 @@ Arm B 非纯串行（见上）· 与同 SoC 社区的档位不同（其 `UD-Q3_K
 | 2.3 | 2026-10-24 | **MTP 投机被证实"默认生效"**（新增 **§V6.3 实证**）：head 放 GGUF 旁即自动拾取（无需 `HALOGEN_MTP_HEAD`）、`HALOGEN_MTP=0` 为关闭开关；本集群 A/B decode **39.42/35.97 vs 28.97/28.48 t/s**（短/长 = 1.36×/1.26×），对照 llama.cpp 27.55/26.85 ⇒ **换引擎本身≈0 收益，+34~43% 全来自投机**；同时注销 `O-138` 的 P3 前置（"须等上游 `#28243` / 打 400 行补丁"）。 |
 | 2.4 | 2026-10-25 | **checkpoint 单变量对照落地**（新增 **§V6.4 实证**）：下 109.8 GiB 的 v2 `.hgn`（62.11 GiB + ngram 47.68 GiB），只换 checkpoint、其余全冻结 ⇒ decode **58.16 / 54.25 vs GGUF 39.42 / 35.97**（**1.48× / 1.51×**），驻留权重 62.1 vs 72.0 GiB；v2 与官方 README prose **54 t/s 吻合** ⇒ **复现官方吞吐的必经项 = v2 checkpoint**，并记录 v2 的三个隐含依赖（ngram 同目录 / tokenizer / 无 overlay）。 |
 | 2.5 | 2026-10-25 | **128-token 窗口复核 + 1M YaRN/KV8 长 ctx**（新增 **§V6.5 实证**）：512-token 输出 **57.99 / 56.08** vs 128-token **58.16 / 54.25**（差 −0.3%/+3.4%，落在 ±6% 噪声带 ⇒ **128-token 未高估**，长 decode 反而因时钟爬满略高）；`HALOGEN_CTX=1048576 + HALOGEN_ROPE_YARN=4 + HALOGEN_KV8=1` ⇒ `context/slot_ctx/kv_pool` 全 **1,048,576**、KV **int8**、static YaRN ×4；needle **131k / 350k / 899k 全命中**，prefill 1855.6→1441.5 t/s（无悬崖）；代价 = `max_tok` **32,768→16,384**、KV 池 16.3 GiB。**能力档，不是提速档**；容器已恢复默认 A0。 |
+| 2.6 | 2026-10-25 | **GGUF 三片退役 · 生产权重全切 v2 `.hgn`**（新增 **§V6.6 实证**，用户裁方案乙）：`CONTAINER_MODELS` 改 v2 + 独立 tokenizer（不挂 GGUF、去掉 `HALOGEN_DOWNLOAD`/`HF_*`）；自包含实测通过（`drafter_weights_loaded=true`、无 `draft head` 行、decode 56.02/56.75）；C→A/B 10GbE 分发 + sha256；**GGUF 只留 C 站作冷回退**（A/B 删 89 GiB、conf 改名停用）；`check_aliases` (7) 放宽为「conf 或容器配方」并先验红；`models.yaml` 的 `conf [A,B,C]→[C]`。**生产不再走 GGUF**。 |

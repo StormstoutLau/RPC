@@ -137,3 +137,23 @@ sudo docker run -d --name halogen-v2 --device /dev/kfd --device /dev/dri \
 
 证据：`longout_420_512.txt` · `longout_3300_512.txt` · `yarn_health.json` · `yarn_startup.log` · `yarn_probe_420.txt` · `yarn_probe_3300.txt` · `yarn_needle_150k.txt` · `yarn_needle_400k.txt` · `yarn_needle_900k.txt` · `yarn1m_health.json` · `yarn1m_startup.log`（探针 = [`o138_needle.py`](../o138_needle.py)）
 
+---
+
+## 追加：v2 **自包含**验证 —— 不挂 GGUF 也能跑（2026-10-25 · 站 C · E1）
+
+> 动因：退役 GGUF 的前置问题是「v2 是否还依赖 GGUF 目录」—— 此前的配方把 GGUF 目录挂在 `/gguf`，tokenizer 借的是它，**MTP head 也在它里面**（GGUF 档日志逐字 `draft head /models/qwen38-flash-next-mtp.hgn (1.5G)`）。
+
+**做法**：把 `tokenizer/`（**22 MB**）复制到 `/data/models/hgn/peonist-ai/qwen38-flash-next-tokenizer`；容器**只挂** `/hgn` + 该 tokenizer 目录（`:ro`），**完全不挂 GGUF 目录**，其余配方不变。
+
+| 项 | 读数 |
+|---|---|
+| `/health` | `context=262144` · `kv_pool=524288` · `checkpoint_format=hgn` · `chat_template=/tokenizer/chat_template.jinja` · **`drafter_weights_loaded=true`** · `drafter_default=mtp` |
+| 启动日志 | **无 `draft head` 行**（GGUF 档有）· lookup table = `/hgn/qwen38-flash-next-ngram.hgn` · 常驻 **89.0 GiB** |
+| decode 420 | **56.02**（57.14 / 57.05 / 53.87）· acc 0.56 · `drafter=mtp` |
+| decode 3300 | **56.75**（54.70 / 59.72 / 55.83）· acc 0.63 · `drafter=mtp` |
+| 对照（挂 GGUF 的默认档） | 58.16 / 54.25 ⇒ **−3.7% / +4.6%**（噪声带内） |
+
+★ **结论**：v2 的运行时依赖只有三样 —— `qwen38-flash-next-v2.hgn` · 同目录的 `qwen38-flash-next-ngram.hgn` · **一个 tokenizer 目录（22 MB）**。**GGUF 目录不再是 v2 的运行依赖**，MTP head 由 checkpoint 自带（无需那 1.5 GiB 的 `qwen38-flash-next-mtp.hgn`）。
+
+证据：`nogguf_health.json` · `nogguf_startup.log` · `nogguf_probe_420.txt` · `nogguf_probe_3300.txt`（容器已恢复默认 A0）
+

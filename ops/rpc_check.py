@@ -4933,11 +4933,17 @@ def check_aliases(ctx):
             continue    # non_model_conf (如 rpc-nodes 读的 nodes.env) 不是可加载模型, 不该有按站路由名
         for st in (meta.get("conf") or []):
             declared_conf.add((str(alias), st))
+    # ★ 2026-10-25 (O-138 方案乙): "可加载"有两种后端 ——
+    #   ① 站上有 llama.cpp conf（原判据）；② 该别名有 **halogen 容器配方**（CONTAINER_MODELS，
+    #   三站通用）。生产全切 halogen 后 A/B 不再保留 conf ⇒ 只认 conf 会把 -a/-b 判成假红
+    #   （实测：`conf: [C]` 时先红在本行，随后放宽到"容器配方也算可加载"）。
+    #   ⚠ 只放宽"后端存在性"这一半：路由名仍须指向真实别名（real 有配方 = 站上可加载）。
+    container_backed = set(getattr(cluster, "CONTAINER_MODELS", None) or {})
     for name, (st, real) in sorted(cluster.STATION_ROUTES.items()):
         n += 1
-        if (real, st) not in declared_conf:
+        if (real, st) not in declared_conf and real not in container_backed:
             detail.append(f"按站路由名 {name!r} -> ({st}, {real!r}), 但 inventory/models.yaml "
-                          f"未声明 {real} 在 {st} 站有 conf")
+                          f"未声明 {real} 在 {st} 站有 conf（且该别名无 halogen 容器配方）")
     named = {(real, st) for _, (st, real) in cluster.STATION_ROUTES.items()}
     gap = declared_conf - named
     if gap:

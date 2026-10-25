@@ -106,24 +106,23 @@ models:
       与站上实际别名不一致 —— 见 known_issues。
 
   - alias: qwen3.8-flash-next
-    engine_id: lmstudio-community/Qwen3.8-Flash-Next-GGUF
-    quant: UD-IQ4_XS
+    engine_id: peonist-ai/halogen-qwen3.8-flash-next
+    quant: hgn-v2
     stations: [A, B, C]
-    conf: [A, B, C]
+    conf: [C]
     route: B
     note: |
-      2026-09-14: conf 的 MODEL_PATH 原指向 /data/models/gguf/misc/Qwen3.8-Flash-Next/
-      (该目录**根本不存在**), 已修正为实际权重:
-      /data/models/gguf/lmstudio-community/Qwen3.8-Flash-Next-GGUF/UD-IQ4_XS/
-      Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf (三片齐全, 约 93.7GB)。
-      2026-09-15: 已移出 cluster.py 的 RPC_MODELS —— 单机量化加载, 用按站路由名
-      `qwen3.8-flash-next-b` 走 B 站本地加载, 不再经 RPC 双机通道。
-      2026-09-16: C 源已同步到 A (B 原本就有) -> 三站齐备; 补 A/C 的 conf;
-      新增按站路由 qwen3.8-flash-next-{a,b,c}; opencode 侧 id = local/qwen3.8-flash-next。
-      2026-10-21: **默认引擎 = halogen 容器** (ADR-0014 D7 落地; 配方单一真值 =
-      ops/cluster_const.py 的 CONTAINER_MODELS, 发布 127.0.0.1:8080->8731 + 8731->8731)。
-      回退到 llama.cpp 路径: `python ops/cluster.py load qwen3.8-flash-next --backend unsloth`。
-      (旧记「长 ctx 塌缩 5.5-6.1」是 HIP 路径的读数, 已被 2026-10-21 实测作废, 不再是本条目的口径。)
+      2026-10-25: **生产权重切 v2 `.hgn`，三站全走 halogen** (ADR-0014 §V6.4/§V6.6):
+      /data/models/hgn/peonist-ai/halogen-qwen3.8-flash-next/
+      qwen38-flash-next-v2.hgn (62.11 GiB) + qwen38-flash-next-ngram.hgn (47.68 GiB, **必须同目录**)
+      + tokenizer 目录 (22 MB, HALOGEN_TOKENIZER=/tokenizer)。
+      同镜像只换 checkpoint 实测 decode 58.16 / 54.25 vs GGUF 39.42 / 35.97 (**1.48× / 1.51×**)。
+      配方单一真值 = ops/cluster_const.py 的 CONTAINER_MODELS (发布 127.0.0.1:8080->8731 + 8731->8731)。
+      **GGUF 三片退役 (方案乙)**: 生产不再使用; 仅 **C 站**保留 conf 作冷回退
+      (`python ops/cluster.py load qwen3.8-flash-next-c --backend unsloth`), A/B 的 llama.cpp conf 已停用。
+      历史: 2026-09-14 conf MODEL_PATH 修正; 2026-09-15 单机加载不走 RPC;
+      2026-09-16 三站齐备 + 按站路由 -a/-b/-c; 2026-10-21 默认引擎改 halogen。
+      (旧记「长 ctx 塌缩 5.5-6.1」是 HIP 路径读数, 已作废; v2 + YaRN 1M 实测见 O-138。)
 
   - alias: m27-q4ks
     engine_id: lmstudio-community/MiniMax-M2.7-GGUF

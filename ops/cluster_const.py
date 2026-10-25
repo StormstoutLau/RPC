@@ -142,21 +142,34 @@ CONTAINER_MODELS = {
         #   漂移检查 = `rpc_check --only engine` (三站在跑容器的 RepoDigests vs 本串)。
         "image": "ghcr.nju.edu.cn/peonist-ai/halogen-flash-server:0.18.13"
                  "@sha256:2e98dc53ed4a43b5600b11a80852eedfa573f4ffc3f10c64da01245f2a3217fc",
-        "models_dir": "/data/models/gguf/lmstudio-community/Qwen3.8-Flash-Next-GGUF/UD-IQ4_XS",
-        "volume": ["/data/models/gguf/lmstudio-community/Qwen3.8-Flash-Next-GGUF/UD-IQ4_XS:/models"],
-        "checkpoint": "/models/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf",
+        # ★ 2026-10-25 生产权重 = **v2 `.hgn`** (ADR-0014 §V6.4/§V6.6): 只换 checkpoint 实测
+        #   decode 58.16 / 54.25 vs BYO GGUF 39.42 / 35.97 (**1.48× / 1.51×**), 驻留 62.1 vs 72.0 GiB。
+        #   v2 **自包含** (实测不挂 GGUF 目录即可跑, 见 o138-p3 的 results-v2):
+        #     · /hgn/qwen38-flash-next-v2.hgn (62.11 GiB)
+        #     · /hgn/qwen38-flash-next-ngram.hgn (47.68 GiB, **必须同目录**)
+        #     · tokenizer 目录 (22 MB) —— 由 HALOGEN_TOKENIZER 指向独立挂载
+        #   MTP head 由 checkpoint 自带 (GGUF 档才需要旁边那份 1.5 GiB 的 mtp.hgn)。
+        # ⚠ **不再带 HALOGEN_DOWNLOAD / HF_* **: 主档 62 GB 走 HF/xet 拉不动 (o138 download-notes),
+        #   分发路径 = 站间 10GbE 从 C 复制 + sha256 校验 ⇒ 配方只描述"已就位"的挂载。
+        # ★ GGUF 三片退役 (2026-10-25 用户裁方案乙): 生产三站全走 halogen; GGUF 只留 **C 站**
+        #   作冷回退 (按三站磁盘余量选点: C 877G free 最多), 回退 =
+        #   `cluster.py load qwen3.8-flash-next-c --backend unsloth`。
+        "models_dir": "/data/models/hgn/peonist-ai/halogen-qwen3.8-flash-next",
+        "volume": [
+            "/data/models/hgn/peonist-ai/halogen-qwen3.8-flash-next:/hgn",
+            "/data/models/hgn/peonist-ai/qwen38-flash-next-tokenizer:/tokenizer:ro",
+        ],
+        "checkpoint": "/hgn/qwen38-flash-next-v2.hgn",
         "device": ["/dev/kfd", "/dev/dri"],
         "group_add": ["44", "992"],
         "ipc": "host",
         "ulimit": ["memlock=-1:-1"],
         "publish": ["127.0.0.1:8080:8731", "127.0.0.1:8731:8731"],
         "env": [
-            "HALOGEN_CHECKPOINT=/models/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf",
-            "HALOGEN_DOWNLOAD=peonist-ai/halogen-qwen3.8-flash-next",
-            "HF_ENDPOINT=https://hf-mirror.com",
-            "HF_HUB_DISABLE_XET=1",
+            "HALOGEN_CHECKPOINT=/hgn/qwen38-flash-next-v2.hgn",
+            "HALOGEN_TOKENIZER=/tokenizer",
         ],
-        "ready_timeout": 300,   # 冷启: GGUF repack (1166 tensors) 实测 B ≈1 min / C ≈2 min
+        "ready_timeout": 300,   # v2 冷启实测 ~3–46 s (页缓存冷时 41 s 钉权重); 300 留余量
     }
 }
 # LiteLLM 网关服务 :4000 已退役 (2026-09-13): ADR-0002 决策 C 后链路一律直连各站引擎端口。

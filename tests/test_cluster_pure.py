@@ -402,6 +402,30 @@ chk("cleanup: 不再用 `docker rm -f … && { 等 8080 }` 的无条件等待形
     "docker rm -f halogen >/dev/null 2>&1 &&" not in _cmd,
     _cmd[:200])
 
+# ── CONTAINER_MODELS 生产配方：v2 自包含 + GGUF 只作冷回退 ─────────────────
+# 现场（2026-10-25）：v2 `.hgn` 实测**不挂 GGUF 目录**即可跑（tokenizer 21MB 独立搬出、
+# MTP head 由 checkpoint 自带）⇒ 生产全切 halogen，GGUF 仅留一站当冷回退。
+_cm = C.CONTAINER_MODELS["qwen3.8-flash-next"]
+_envd = dict(e.split("=", 1) for e in _cm.get("env", ()) if "=" in e)
+_mounts = set()
+for _v in _cm.get("volume", ()):
+    _parts = _v.split(":")
+    if len(_parts) >= 2:
+        _mounts.add(_parts[1])
+_ckpt_env = _envd.get("HALOGEN_CHECKPOINT", "")
+chk("recipe: checkpoint 指向 v2 .hgn（不再用 GGUF 三片）",
+    str(_cm.get("checkpoint", "")).endswith("qwen38-flash-next-v2.hgn"),
+    str(_cm.get("checkpoint")))
+chk("recipe: HALOGEN_CHECKPOINT 落在已挂载 volume 内",
+    any(_ckpt_env.startswith(m.rstrip("/") + "/") for m in _mounts),
+    f"{_ckpt_env} vs {sorted(_mounts)}")
+chk("recipe: HALOGEN_TOKENIZER=/tokenizer 且有独立挂载",
+    _envd.get("HALOGEN_TOKENIZER") == "/tokenizer" and "/tokenizer" in _mounts,
+    f"{_envd.get('HALOGEN_TOKENIZER')} vs {sorted(_mounts)}")
+chk("recipe: 不再带 HALOGEN_DOWNLOAD / HF_ENDPOINT（GGUF 引导路径已退役）",
+    "HALOGEN_DOWNLOAD" not in _envd and "HF_ENDPOINT" not in _envd,
+    str(sorted(_envd)))
+
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAILED -> {fails}")
 sys.exit(1 if fails else 0)
