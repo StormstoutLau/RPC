@@ -262,15 +262,18 @@ chk("R1-①(旧件四件已删): 门面上不再有 EGRESS_DAILY_FILE/_egress_da
 chk("R1-⑨(FREE_QUOTA_PAID 已删): 门面上不再有历史档位常量（档位真值源 = 服务端 free_limit）",
     not hasattr(C, "FREE_QUOTA_PAID"), "仍可达: FREE_QUOTA_PAID")
 
-# ── RPC 加载前回收 halogen 容器：防「8080 仍由容器持有 ⇒ 健康检查假绿」────────
+# ── RPC 加载前回收 halogen 容器 + worker 自动选路 ─────────────────────────
 # 现场（2026-10-22）：`load glm-5.3-flash` 时 A/B/C 的 qwen halogen 容器未回收，
 # 8080 仍由容器服务 ⇒ 远端 infer-load/健康检查命中 qwen，GLM 实际未起却报 READY。
-def _rpc_reclaim_probe(worker=None, conf_target="",
+# 2026-10-25：选路改为纯函数 resolve_rpc_worker（A 被 qwen 占用 ⇒ 自动改 C），
+#   回收范围收窄到 head(B)+选中 worker；非 worker 站的 qwen 保留。
+def _rpc_reclaim_probe(worker=None, conf_target="", busy=None,
                        alive="10.10.10.1:50052 10.10.11.3:50052",
                        decl="10.10.10.1:50052 10.10.11.3:50052"):
     calls, built, runs = [], [], []
+    busy = busy or {}
     saved = (C._reclaim_containers, C.ssh_stream, C.ssh_run,
-             C._build_infer_load_cmd, C._conf_rpc_target)
+             C._build_infer_load_cmd, C._conf_rpc_target, C._probe_worker_busy)
     try:
         C._reclaim_containers = lambda st: calls.append(st) or True
         C.ssh_stream = lambda *a, **k: 0
@@ -286,40 +289,57 @@ def _rpc_reclaim_probe(worker=None, conf_target="",
         C.ssh_run = _ssh_run
         C._build_infer_load_cmd = lambda *a, **k: built.append((a, k)) or "true"
         C._conf_rpc_target = lambda st, al: conf_target
+        C._probe_worker_busy = lambda st: busy.get(st, "")
         rc = C._load_rpc("glm-5.3-flash", "B", None, worker)
     finally:
         (C._reclaim_containers, C.ssh_stream, C.ssh_run,
-         C._build_infer_load_cmd, C._conf_rpc_target) = saved
+         C._build_infer_load_cmd, C._conf_rpc_target, C._probe_worker_busy) = saved
     return rc, calls, built, runs
 
 
 _rc_rpc, _reclaim_calls, _built, _runs = _rpc_reclaim_probe()
-chk("RPC load: 先回收 A/B/C 三站 halogen 容器（防 8080 假绿）",
-    _rc_rpc == 0 and _reclaim_calls == ["A", "B", "C"],
-    f"rc={_rc_rpc} calls={_reclaim_calls}")
-chk("RPC load: conf 无单 worker 目标时不传 --rpc-target（保留 auto/多节点语义）",
-    _rc_rpc == 0 and _built and _built[-1][0][3] is None
-    and "rpc-nodes --start 'glm-5.3-flash'" in _runs,
-    f"built={_built} runs={_runs}")
+chk("RPC load 默认(无 conf): 自动选 A，回收范围 = A+B（非 worker C 保留）",
+    _rc_rpc == 0 and _reclaim_calls == ["A", "B"] and _built
+    and _built[-1][0][3] == "10.10.10.1:50052"
+    and "rpc-nodes --start 'glm-5.3-flash' '10.10.10.1:50052'" in _runs,
+    f"rc={_rc_rpc} calls={_reclaim_calls} built={_built} runs={_runs}")
+
+# 2026-10-25 自动切换：A 有 halogen ⇒ 自动改 C，A 的 qwen 不被回收。
+_rc_sw, _calls_sw, _built_sw, _runs_sw = _rpc_reclaim_probe(
+    conf_target="10.10.10.1:50052", busy={"A": "halogen"})
+chk("RPC load 自动切换: A 忙(halogen) ⇒ 选 C + 回收 B/C（A 的 qwen 保留）",
+    _rc_sw == 0 and _calls_sw == ["B", "C"]
+    and _built_sw[-1][0][3] == "10.10.11.3:50052"
+    and "rpc-nodes --start 'glm-5.3-flash' '10.10.11.3:50052'" in _runs_sw,
+    f"rc={_rc_sw} calls={_calls_sw} built={_built_sw} runs={_runs_sw}")
+
+# 两站都忙 ⇒ 改用 C（回收 C，保 A）；只有 C 不可用时才回退 A。
+_rc_fb, _calls_fb, _built_fb, _ = _rpc_reclaim_probe(
+    conf_target="10.10.10.1:50052", busy={"A": "halogen", "C": "halogen"})
+chk("RPC load 自动选路: 两站都忙 ⇒ 改用 C（回收 C，保 A）",
+    _rc_fb == 0 and _calls_fb == ["B", "C"] and _built_fb[-1][0][3] == "10.10.11.3:50052",
+    f"rc={_rc_fb} calls={_calls_fb} built={_built_fb}")
 
 # 2026-10-22 单 worker 指派：head 固定 B，worker 由用户选 A|C。
 _rc_w, _calls_w, _built_w, _runs_w = _rpc_reclaim_probe(worker="C")
-chk("RPC load --worker C: 映射 10.10.11.3:50052 并透传 --rpc-target",
-    _rc_w == 0 and _calls_w == ["A", "B", "C"] and _built_w
+chk("RPC load --worker C: 映射 10.10.11.3:50052 并透传 --rpc-target（回收 B/C）",
+    _rc_w == 0 and _calls_w == ["B", "C"] and _built_w
     and _built_w[-1][0][3] == "10.10.11.3:50052"
     and "rpc-nodes --start 'glm-5.3-flash' '10.10.11.3:50052'" in _runs_w,
-    f"rc={_rc_w} built={_built_w} runs={_runs_w}")
+    f"rc={_rc_w} calls={_calls_w} built={_built_w} runs={_runs_w}")
 _rc_wa, _calls_wa, _built_wa, _runs_wa = _rpc_reclaim_probe(worker="A")
-chk("RPC load --worker A: 映射 10.10.10.1:50052",
-    _rc_wa == 0 and _built_wa and _built_wa[-1][0][3] == "10.10.10.1:50052",
-    f"rc={_rc_wa} built={_built_wa}")
+chk("RPC load --worker A: 映射 10.10.10.1:50052（回收 A/B）",
+    _rc_wa == 0 and _calls_wa == ["A", "B"]
+    and _built_wa and _built_wa[-1][0][3] == "10.10.10.1:50052",
+    f"rc={_rc_wa} calls={_calls_wa} built={_built_wa}")
 
 # 无 --worker 时从 conf 读出的单 worker 目标也应约束预启动与 infer-load。
 _rc_c, _calls_c, _built_c, _runs_c = _rpc_reclaim_probe(conf_target="10.10.10.1:50052")
-chk("RPC load 默认: conf 单 worker A ⇒ 预启动与 --rpc-target 都只带 A",
-    _rc_c == 0 and _built_c and _built_c[-1][0][3] == "10.10.10.1:50052"
+chk("RPC load 默认: conf 单 worker A ⇒ 预启动与 --rpc-target 都只带 A（回收 A/B）",
+    _rc_c == 0 and _calls_c == ["A", "B"] and _built_c
+    and _built_c[-1][0][3] == "10.10.10.1:50052"
     and "rpc-nodes --start 'glm-5.3-flash' '10.10.10.1:50052'" in _runs_c,
-    f"rc={_rc_c} built={_built_c} runs={_runs_c}")
+    f"rc={_rc_c} calls={_calls_c} built={_built_c} runs={_runs_c}")
 
 # 2026-10-23: 显式 worker 的失败面 —— 死节点 / 未声明节点必须在加载前中止。
 _rc_dead, _, _built_dead, _ = _rpc_reclaim_probe(
@@ -425,6 +445,63 @@ chk("recipe: HALOGEN_TOKENIZER=/tokenizer 且有独立挂载",
 chk("recipe: 不再带 HALOGEN_DOWNLOAD / HF_ENDPOINT（GGUF 引导路径已退役）",
     "HALOGEN_DOWNLOAD" not in _envd and "HF_ENDPOINT" not in _envd,
     str(sorted(_envd)))
+
+# ── RPC worker 选路（纯函数）：A 被 qwen/halogen 占用时自动改 C ──────────────
+# 现场（2026-10-25）：三站都跑 qwen halogen；GLM/DS 的 conf RPC_TARGET 固定 A，
+# 且 `_load_rpc` 会回收三站容器 ⇒ A 的 qwen 被杀。选路纯函数只做决策，不碰站。
+_AW = "10.10.10.1:50052"
+_CW = "10.10.11.3:50052"
+_CANDS = [_AW, _CW]
+
+
+def _rw(conf, busy=None, explicit=None, cands=None):
+    return C.resolve_rpc_worker(conf, _CANDS if cands is None else cands, busy or {}, explicit)
+
+
+d = _rw(_AW)
+chk("rpc-worker: 未指定且 conf 空闲 ⇒ 选 conf(A)",
+    d["target"] == _AW and d["station"] == "A" and d["source"] == "conf", str(d))
+d = _rw(_AW, {_AW: "halogen"})
+chk("rpc-worker: conf(A) 被 halogen 占用 ⇒ 自动改 C",
+    d["target"] == _CW and d["station"] == "C" and d["source"] == "auto", str(d))
+d = _rw(_AW, {_AW: "halogen", _CW: "halogen"})
+chk("rpc-worker: 两站都忙 ⇒ 改用 C（回收 C，保 A）",
+    d["target"] == _CW and d["source"] == "auto" and "回收" in d["reason"], str(d))
+d = _rw(_AW, {_AW: "halogen"}, cands=[_AW])
+chk("rpc-worker: conf 忙且无其他候选 ⇒ 回退 conf(A) 并标 fallback",
+    d["target"] == _AW and d["source"] == "fallback", str(d))
+d = _rw(_AW, {}, explicit=_CW)
+chk("rpc-worker: 显式 --worker C ⇒ 选 C（显式优先）",
+    d["target"] == _CW and d["source"] == "explicit", str(d))
+d = _rw(_AW, {_AW: "halogen"}, explicit=_CW)
+chk("rpc-worker: 显式 C 不受 A 忙影响",
+    d["target"] == _CW and d["source"] == "explicit", str(d))
+d = _rw(_AW, {}, explicit="10.10.99.99:50052")
+chk("rpc-worker: 显式目标未声明 ⇒ target=None（可响亮中止）",
+    d["target"] is None and d["source"] == "explicit-invalid", str(d))
+d = _rw(None, {})
+chk("rpc-worker: conf 未配置 ⇒ 取候选首个", d["target"] == _AW and d["source"] == "auto", str(d))
+d = _rw(None, {_AW: "halogen"})
+chk("rpc-worker: conf 未配置且首个忙 ⇒ 取下一个空闲",
+    d["target"] == _CW and d["source"] == "auto", str(d))
+d = _rw(_AW, {}, cands=[_CW, _AW])
+chk("rpc-worker: 候选顺序被尊重（C 在前但有 conf A ⇒ 仍 A）", d["target"] == _AW, str(d))
+d = _rw(_AW, {}, cands=[])
+chk("rpc-worker: 候选为空 ⇒ None（判不了 ≠ 选默认）",
+    d["target"] is None and d["source"] == "none", str(d))
+d = _rw("10.10.99.99:50052", {})
+chk("rpc-worker: conf 不在候选 ⇒ 从候选自动选，不凭空用 conf",
+    d["target"] == _AW and d["source"] == "auto", str(d))
+# 同源对照（防恒真）：同一输入只改 busy ⇒ 选择必须翻转
+_d1, _d2 = _rw(_AW, {}), _rw(_AW, {_AW: "halogen"})
+chk("rpc-worker 同源对照: 只改 busy(A) ⇒ 选站翻转",
+    _d1["target"] == _AW and _d2["target"] == _CW, f'{_d1["target"]} -> {_d2["target"]}')
+chk("rpc-worker busy 解析: 空输出 ⇒ 空闲", C.parse_worker_busy("") == "", "")
+chk("rpc-worker busy 解析: halogen ⇒ 单个忙因",
+    C.parse_worker_busy("halogen\n") == "halogen", C.parse_worker_busy("halogen\n"))
+chk("rpc-worker busy 解析: 双因去重且排序",
+    C.parse_worker_busy("port8080\nhalogen\nhalogen\n") == "halogen+port8080",
+    C.parse_worker_busy("port8080\nhalogen\nhalogen\n"))
 
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAILED -> {fails}")

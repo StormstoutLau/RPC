@@ -1074,6 +1074,76 @@ def cmd_load(alias: str, backend: str = None, engine: str = None, worker: str = 
     return 0
 
 
+# ── RPC worker 选路（纯函数，2026-10-25）────────────────────────────────
+# 现场：三站都跑 qwen halogen；GLM/DS 的 conf RPC_TARGET 固定 A。`_load_rpc`
+# 原先未给 --worker 时无条件用 conf 的 A，且回收三站容器 ⇒ A 的 qwen 被杀。
+# 本函数只做"选哪个节点"的决策（不碰站、不发 ssh）：
+#   · 显式 --worker 优先；
+#   · 否则 conf 目标空闲就用它；
+#   · conf 忙（如 A 有 halogen 容器）⇒ 按候选顺序取第一个空闲节点（自动换 C）；
+#   · 全部忙 ⇒ 回退 conf 目标并标 fallback（调用方负责大声报出）；
+#   · 候选为空 / 无法映射到站 ⇒ target=None（判不了 ≠ 选默认）。
+RPC_WORKER_STATIONS = {ip: st for st, ip in RPC_WORKER_IPS.items()}
+
+
+def resolve_rpc_worker(conf_target=None, candidates=None, busy=None, explicit=None):
+    """RPC worker 选路（纯函数）。返回 {target, station, source, reason}。
+
+    source: explicit | explicit-invalid | conf | auto | fallback | none
+    busy:   {target: 忙因}（如 {"10.10.10.1:50052": "halogen"}）；不在表里 = 空闲
+    """
+    busy = busy or {}
+    known = [c for c in (candidates or []) if c in RPC_WORKER_STATIONS]
+    if explicit:
+        if explicit not in known:
+            return {"target": None, "station": None, "source": "explicit-invalid",
+                    "reason": f"显式目标 {explicit} 不在已声明/存活候选 {known or '空'}"}
+        return {"target": explicit, "station": RPC_WORKER_STATIONS[explicit],
+                "source": "explicit", "reason": "用户显式指派"}
+    if not known:
+        return {"target": None, "station": None, "source": "none",
+                "reason": "候选为空或无节点可映射到站"}
+    if conf_target in known and conf_target not in busy:
+        return {"target": conf_target, "station": RPC_WORKER_STATIONS[conf_target],
+                "source": "conf", "reason": "conf 目标空闲"}
+    if conf_target in known:
+        # conf 目标忙 ⇒ **优先保护它**（如 A 的 qwen）：有其他候选就改用其他候选，
+        # 即使那个候选也忙（它会由调用方回收）。只有没有其他候选时才回退 conf。
+        alts = [c for c in known if c != conf_target]
+        if alts:
+            t = alts[0]
+            extra = (f"；{t} 也忙({busy[t]}) ⇒ 回收它" if t in busy else f"；{t} 空闲")
+            return {"target": t, "station": RPC_WORKER_STATIONS[t], "source": "auto",
+                    "reason": f"conf {conf_target} 忙({busy[conf_target]}) ⇒ 改用 {t}{extra}"}
+        return {"target": conf_target, "station": RPC_WORKER_STATIONS[conf_target],
+                "source": "fallback",
+                "reason": f"conf {conf_target} 忙({busy[conf_target]}) 且无其他候选 ⇒ 回退并回收它"}
+    # conf 不在候选（未配置 / 未声明）：优先空闲，全忙则取首个（会被回收）。
+    for t in known:
+        if t not in busy:
+            return {"target": t, "station": RPC_WORKER_STATIONS[t], "source": "auto",
+                    "reason": "conf 不在候选 ⇒ 用空闲节点"}
+    t = known[0]
+    return {"target": t, "station": RPC_WORKER_STATIONS[t], "source": "auto",
+            "reason": f"conf 不在候选且候选全忙 ⇒ 用 {t}（会被回收）"}
+
+
+def parse_worker_busy(out: str) -> str:
+    """把站上 busy 探针输出解析成忙因（排序去重；'' = 空闲）。"""
+    toks = sorted({t.strip() for t in (out or "").splitlines() if t.strip()})
+    return "+".join(toks)
+
+
+def _probe_worker_busy(st: str) -> str:
+    """只读探针：站上有 halogen 容器或 :8080 在听 ⇒ 忙因；SSH 探不了 ⇒ probe-failed（fail-closed）。"""
+    ok, out = ssh_run(
+        st,
+        "docker ps --format '{{.Names}}' 2>/dev/null | grep -qx halogen && echo halogen; "
+        "ss -ltn 2>/dev/null | grep -q ':8080 ' && echo port8080",
+        timeout=20)
+    return parse_worker_busy(out) if ok else "probe-failed"
+
+
 def _load_rpc(alias: str, station: str, engine: str = None, worker: str = None) -> int:
     """RPC 双机类加载编排 (2026-09-15, 方案 v2 P0-3)。
 
@@ -1098,28 +1168,56 @@ def _load_rpc(alias: str, station: str, engine: str = None, worker: str = None) 
       未给 --worker ⇒ 沿用 conf 的 RPC_TARGET (GLM/DS 已固化单 worker, 见 params-ledger)。
       目标必须同时出现在 `rpc-nodes --all` 声明与存活探测中: 显式 RPC_TARGET 不像 `auto`
       那样可静默退化, 死 worker 会让 llama-server 加载中途失败且难读。
+    ★ 2026-10-25 自动选路: 未给 --worker 时探 A/C 的 busy（halogen 容器 / :8080 在听），
+      conf 目标忙则改用另一空闲节点（`resolve_rpc_worker`, 纯函数）；两站都忙则回退 conf
+      目标并打 `RPC_AUTO_WORKER source=fallback`。容器回收范围同时收窄到 **head + 选中
+      worker**（非 worker 站的 qwen 保留）。
     """
     if station != "B":
         print(f"[cluster] RPC 类由 B 站(master)发起 (nodes.env/ rpc-nodes 均在其上), 已忽略指定的 {station} 站。")
         station = "B"
-    rpc_target = RPC_WORKER_IPS.get(worker) if worker else None
-    if worker and not rpc_target:
+    explicit_target = RPC_WORKER_IPS.get(worker) if worker else None
+    if worker and not explicit_target:
         print(f"[cluster] 非法 --worker '{worker}'. 可选: {', '.join(sorted(RPC_WORKER_IPS))} (exit 1)")
         return 1
-    if worker:
-        print(f"[cluster] worker 指派: {worker} -> {rpc_target} (head 固定 {station} 站, 本次不改 conf)")
-    else:
-        # 无 --worker ⇒ 以 conf 的 RPC_TARGET 为准（单 worker 时预启动也只起它）。
-        rpc_target = _conf_rpc_target(station, alias) or None
     print(f"[cluster] == RPC 双机类加载编排: {alias} @ {station} 站 (master) ==")
     if engine:
         print(f"[cluster] 引擎变体: {engine} (head 与 worker 必须同版, 由 conf + rpc-nodes 透传)")
 
-    # ★ 2026-10-22 修「8080 假绿」：RPC 加载原先只做 `infer-unload`（systemd 路径），
-    #   **不回收 docker 容器**。若 A/B/C 上仍有 halogen 容器（如 qwen3.8）持着 8080，
-    #   远端 `infer-load` 的 READY 判定会命中容器 ⇒ **GLM 没起来也会报 READY**（实测撞到）。
-    #   ⇒ 先回收三站所有已登记容器；无容器时 `_container_cleanup_cmd` 立即返回，不等待。
-    for st in sorted(STATIONS):
+    # ── worker 选路（2026-10-25）────────────────────────────────────────
+    # 候选 = B 站 nodes.env 的**声明**清单（启动前的 “存活” 必然为空，不能拿它当候选）。
+    ok_d, decl = ssh_run(station, "rpc-nodes --all 2>/dev/null")
+    decl_list = decl.replace(",", " ").split() if ok_d else []
+    if not decl_list:
+        print(f"[cluster] nodes.env 声明清单为空/不可读 ({decl.strip() or '空'}) → 中止。")
+        return 1
+    conf_target = _conf_rpc_target(station, alias) or None
+    busy = {}
+    if not explicit_target:
+        for t in decl_list:
+            st = RPC_WORKER_STATIONS.get(t)
+            if st:
+                reason = _probe_worker_busy(st)
+                if reason:
+                    busy[t] = reason
+        print(f"[cluster] 选路输入: conf={conf_target or '(空)'} busy={busy or '{}'}")
+    decision = resolve_rpc_worker(conf_target, decl_list, busy, explicit_target)
+    if decision["target"] is None:
+        print(f"[cluster] RPC worker 选路失败: {decision['reason']} → 中止 (不静默退化)。")
+        return 1
+    rpc_target = decision["target"]
+    worker_station = decision["station"]
+    print(f"[cluster] RPC_AUTO_WORKER source={decision['source']} target={rpc_target} "
+          f"station={worker_station} :: {decision['reason']}")
+    if decision["source"] == "fallback":
+        print("[cluster] ⚠ conf 忙且无其他候选 ⇒ 回退 conf 目标（该站的 qwen/halogen 会被回收）。")
+
+    # ★ 2026-10-22 修「8080 假绿」：RPC 加载原先只做 `infer-unload`，不回收 docker 容器。
+    #   2026-10-25 收窄：只回收 **head(B) + 选中 worker**；非 worker 站的 qwen 不动。
+    #   （B 的 8080 仍被先回收 ⇒ READY 不会命中旧容器。）
+    reclaim = sorted({station, worker_station})
+    print(f"[cluster] 回收容器范围: {'/'.join(reclaim)}（非 worker 站的 qwen 保留）")
+    for st in reclaim:
         _reclaim_containers(st)
 
     print("[cluster] [1/4] 卸载本站现存实例 (幂等, 释放 GTT) ...")
@@ -1140,23 +1238,16 @@ def _load_rpc(alias: str, station: str, engine: str = None, worker: str = None) 
     # 但 C 站未装 rpc-server 单元(--start 会报 Unit not found, 由 rpc-nodes 容错兜住)。
     # 只有**存活**节点才会进 llama-server 的 --rpc, 故这里显式打印两者差异。
     ok, alive = ssh_run(station, "rpc-nodes 2>/dev/null")
-    ok2, decl = ssh_run(station, "rpc-nodes --all 2>/dev/null")
     print(f"[cluster] [3/4] RPC 存活节点: {alive.strip() or '(无)'}")
     print(f"[cluster]        声明清单  : {decl.strip() or '(空)'}")
     if not alive.strip():
         print("[cluster] 无存活 RPC 节点 → 中止 (否则 llama-server 会因 --rpc 空而退化为单机)。")
         return 1
-    if rpc_target:
-        decl_set = decl.replace(",", " ").split()
-        alive_set = alive.replace(",", " ").split()
-        if rpc_target not in decl_set:
-            print(f"[cluster] --worker {worker} 目标 {rpc_target} 不在 nodes.env 声明清单 "
-                  f"({decl.strip() or '空'}) → 中止 (节点真值以 B 站 nodes.env 为准)。")
-            return 1
-        if rpc_target not in alive_set:
-            print(f"[cluster] --worker {worker} 目标 {rpc_target} 不在存活清单 "
-                  f"({alive.strip() or '空'}) → 中止 (显式 worker 不会像 auto 那样静默退化)。")
-            return 1
+    alive_set = alive.replace(",", " ").split()
+    if rpc_target not in alive_set:
+        print(f"[cluster] 选中 worker {rpc_target} 未在存活清单 "
+              f"({alive.strip() or '空'}) → 中止 (不会静默退化到 conf/auto)。")
+        return 1
 
     print(f"[cluster] [4/4] 加载权重 (RPC_TARGET={rpc_target or 'conf 值'}) ...")
     # ★★ 2026-09-28 修: 这里原为 `_build_infer_load_cmd(alias, None)` —— **backend 漏传**。
