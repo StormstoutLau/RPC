@@ -6,6 +6,42 @@
 
 ---
 
+## 0. 分布式推理框架调研 · 统一入口（vLLM / SGLang / RCCL / CIRU / Skulk / ds4）
+
+> **先看这里**：回答「本集群跑 GLM-5.3-Flash / DS V4.1-Flash 该用什么多机框架」时，按本节路由；**本节只做索引，不复制结论**。
+> **三类真值分工**：上游 PR/引擎基线 → [TRACKER](../../spec/upstream-tracker/TRACKER.md)；**决策** → [ADR-0011](../../adr/ADR-0011-A4-vLLM-TP2-暂缓裁定.md) / [ADR-0010](../../adr/ADR-0010-DwarfStar第二引擎引入立项.md)；**事实与实测** → 下表承载文档。
+
+**阅读顺序（按问题）**
+
+1. **先选型** → [FRAMEWORK-SURVEY-2026-09](../../spec/model-eval/FRAMEWORK-SURVEY-2026-09.md)：llama.cpp RPC / ds4 / vLLM / SGLang 全景与首次判定。
+2. **要在 USB4 上做多机 TP** → [CIRU-Skulk 多机 TP](./2026-09-16_分布式推理路线可行性调研_CIRU-Skulk-多机TP.md)：CIRU 双机 GLM **23.69 / 402**、Skulk 只是编排、通用 vLLM TP 需 100GbE。
+3. **要问 RCCL 能不能上** → [RCCL 必要性](./2026-09-30_RCCL部署方案与集群必要性评估.md)：RCCL 不是引擎；无消费方；socket 跨机 **182 µs**。
+4. **要问 vLLM TP=2 做不做** → [ADR-0011](../../adr/ADR-0011-A4-vLLM-TP2-暂缓裁定.md)：**暂缓**；tg 17.60 < 24；GGUF 不可用，需 AWQ/FP8。
+5. **要问 ds4 能不能当第二引擎** → [ADR-0010](../../adr/ADR-0010-DwarfStar第二引擎引入立项.md) + [ds4 执行记录](./2026-09-28_DwarfStar前置核验与ROCm工具链安装决策.md) + [ds4 方案](./2026-09-28_DwarfStar部署专项方案.md)：**观察保留**；旧读数 0.41–0.44 t/s。
+6. **GLM-5.3-Flash 怎么跑** → [GLM 系列](./2026-09-28_GLM系列本地推理部署.md)：`glm5next` + 双机 RPC **11.2–11.9 t/s**；MTP 后 **19.40 t/s**（手册 §3.3）。
+7. **DS V4.1-Flash 怎么跑** → [DeepSeek V4 系列](./2026-09-28_DeepSeek-V4系列调研与部署.md)：V4.1 与 V4 不同 arch；llama.cpp 无、ds4 官方 V4.1 无 ROCm、vLLM 仅数据中心。
+8. **服务化/编排（LiteLLM / llama-swap / exo）** → [双机推理服务化与编排框架调研](../../spec/operator-optimization/research/双机推理服务化与编排框架调研.md)。
+9. **互连层（USB4 / RDMA / 100GbE）** → [AMD395 互连调研](../../spec/rpc-optimization/research/AMD395分布式推理高性能互连方案调研.md)。
+
+**框架 → 承载文档 → 当前判定（2026-10-26）**
+
+| 框架/主题 | 权威文档 | 回答什么 | 当前判定 |
+|---|---|---|---|
+| **llama.cpp RPC** | [FRAMEWORK-SURVEY](../../spec/model-eval/FRAMEWORK-SURVEY-2026-09.md) + 手册 §3.3 | 官方多机/层切分 | **生产基线**；GLM 需变体档 `glm5next`；V4.1 无 `deepseek41` |
+| **vLLM** | [ADR-0011](../../adr/ADR-0011-A4-vLLM-TP2-暂缓裁定.md) + [双机服务化调研](../../spec/operator-optimization/research/双机推理服务化与编排框架调研.md) + [kyuz0 评估](./2026-09-30_kyuz0容器方案评估与现役venv对比.md) | TP=2 / RCCL / 容器 | **暂缓**；gfx1151 小模型可用；GLM/V4.1 recipe 仅 **gfx950/MI300X** |
+| **SGLang** | [AMD395 互连 §2.5](../../spec/rpc-optimization/research/AMD395分布式推理高性能互连方案调研.md) + [FRAMEWORK-SURVEY](../../spec/model-eval/FRAMEWORK-SURVEY-2026-09.md) | 多节点/PD 分离 | **排除/不建议**：gfx1151 未验证；社区 patch 后仍慢于 vLLM |
+| **RCCL** | [RCCL 必要性](./2026-09-30_RCCL部署方案与集群必要性评估.md) | 集合通信库 | **不部署**：无消费方；socket 182 µs |
+| **CIRU StrixLink** | [CIRU-Skulk](./2026-09-16_分布式推理路线可行性调研_CIRU-Skulk-多机TP.md) | GLM 双机 TP=2 现成包 | **已取证 23.69 / 402**；需 ROCm10 + Py3.14 + **NHI（内核 7.2.2）**；本集群 6.17 拿不到 |
+| **Skulk** | [CIRU-Skulk](./2026-09-16_分布式推理路线可行性调研_CIRU-Skulk-多机TP.md) | 编排/引擎注入 | **不引入**：后端仍是 llama.cpp；常驻 supervisor 与零自加载冲突 |
+| **ds4 / DwarfStar** | [ADR-0010](../../adr/ADR-0010-DwarfStar第二引擎引入立项.md) + [执行记录](./2026-09-28_DwarfStar前置核验与ROCm工具链安装决策.md) | 第二引擎/分布式 | **观察保留**；官方 V4.1 ROCm 未实现；**PR #1036** 双机 16.6 / 395（未合）、**PR #1011** GLM 单机 11.9 / 203 |
+| **其它（Project Maya / hipEngine / exo / distributed-llama / prima.cpp）** | [FRAMEWORK-SURVEY](../../spec/model-eval/FRAMEWORK-SURVEY-2026-09.md) + [AMD395 §2.5](../../spec/rpc-optimization/research/AMD395分布式推理高性能互连方案调研.md) | 替代运行时 | **不适用/排除**：Maya 是 CUDA 侧 fork；hipEngine 单 GPU；exo 等已排除 |
+
+> **一句话现状（2026-10-26）**：**官方多机只有 llama.cpp RPC**；**GLM 单流极限 = CIRU 23.7**（代价大）；**GLM 实用 = ds4 PR 单机 11.9 或现役 llama RPC 11.2–11.9**；**V4.1 唯一 = ds4 PR #1036 双机 16.6**（100GbE 口径；USB4 40G 未测）；**vLLM/SGLang 在 gfx1151 上对这两个大模型没有可用多机路径**。
+
+> **边界**：本节只做**索引与路由**；上游 PR 状态变化**先改 TRACKER**，再回写本表；任何「换框架」动作**另立 ADR**（ADR-0004 唯一管理面）。
+
+---
+
 ## A. 推理引擎与模型部署
 
 | 文档 | 主题（一句话） |
