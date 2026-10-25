@@ -1,0 +1,1 @@
+NEEDLE {"marker_expect": "ZQX-FF96", "answer": "ZQX-FF96", "hit": true, "prompt_n": 349907, "prompt_tps": 1627.1, "predicted_n": 8, "predicted_tps": 96.85, "wall_s": 215.9, "drafter": "mtp"}

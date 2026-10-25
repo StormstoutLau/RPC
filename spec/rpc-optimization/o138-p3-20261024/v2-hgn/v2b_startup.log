@@ -1,0 +1,9 @@
+halogen: halogen-flash-server 0.18.13, mode all
+halogen: /hgn/qwen38-flash-next-v2.hgn carries its own precision choices: no quality sidecar applies and none is looked for
+halogen: the checkpoint's lookup table is its own file: /hgn/qwen38-flash-next-ngram.hgn
+halogen: KV budget 4 slot(s) over one 524288-position pool (each request up to 262144) = 14.9 GiB (~28 KiB/position incl. block scratch + ~115 MiB/slot) + 2.7 GiB prompt cache in RAM, on top of roughly 62.1 GiB (read from the checkpoint) of weights and 12.6 GiB of working memory (HALOGEN_MAX_TOK 32768). Those last two are estimates for this pre-flight check; the engine prints its measured figures once loaded, including the large lookup table it reads from disk and never holds. MemAvailable now 118.8 GiB.
+halogen: GTT in use before this start: 0.1 GiB of 117.2 (117.1 free; this start puts about 23.7 GiB there)
+halogen: no tokenizer.json in /tokenizer
+  mount the weights directory at /models (it contains tokenizer/),
+  or point HALOGEN_TOKENIZER at a FLAT tokenizer dir
+  (cp -L out of an HF snapshot; symlinks dangle in a container)

@@ -341,6 +341,62 @@ Arm B 非纯串行（见上）· 与同 SoC 社区的档位不同（其 `UD-Q3_K
 （`HALOGEN_CTX` / `HALOGEN_KV_POOL_POSITIONS` / `HALOGEN_HOST_RESERVE_GIB`），容器**不读站上 conf**。
 证据：[spec/rpc-optimization/o138-p3-20261024](../spec/rpc-optimization/o138-p3-20261024/)（两臂 `docker logs`、响应 JSON、`docker inspect`、探针）。
 
+## §V6.4 实证 —— **BYO GGUF vs 官方 v2 checkpoint 单变量**（2026-10-25 · 站 C · E1）
+
+> 动因：§V6.3 的 A/B 用的是 BYO GGUF（`UD-IQ4_XS`）；而 README 的官方吞吐数字全测在 v2 `.hgn` 上。
+> 于是把 109.8 GiB 权重下到站上，做**只换 checkpoint** 的对照。
+
+**结果（除 checkpoint 外全部冻结：同镜像 digest · ctx 262144 · 4 槽 · `max_tok` 32768 · MTP `drafter 1` · `xhigh` · temp 0 · 同探针 ×3）**
+
+| 档 | BYO GGUF（4.25 bpw） | **v2 `.hgn`（4.16 bpw）** | 比 |
+|---|---|---|---|
+| 短 ≈560 tok decode | 39.42 t/s | **58.16** | **1.48×** |
+| 长 ≈4.1k tok decode | 35.97 | **54.25** | **1.51×** |
+| prefill ≈4.1k | 1698–1725 | 1988–1998 | +16% |
+| 驻留权重 | 72.0 GiB | **62.1 GiB** | −13.7% |
+
+★ **结论**：差异**不是**"GGUF 格式开销 ~2%"（bpw 只差 0.19），而是 **~50%**；且 v2 的读数**与官方 README 的 prose 54 t/s 吻合**。
+⇒ **要复现官方吞吐，checkpoint 是必要条件**（不是可选项）；GGUF 只适合"零下载、先跑通"。
+
+**v2 的三个隐含依赖（换档时必须一起带）**：① 必须配 `qwen38-flash-next-ngram.hgn`（47.68 GiB）**同目录**，否则拒启
+（逐字 `does not carry the model's lookup table …`）；② 必须有 `tokenizer/`（`/models` 下或 `HALOGEN_TOKENIZER` 指扁平 dir，
+本次借用 GGUF 目录的 `tokenizer/`）；③ **不需要** quality overlay（`overlay: none needed (this checkpoint carries its own trunk precision)`）。
+
+⚠ **射程**：单站单流 · 3 次/档 · ctx 32768 以下的 prompt（长 ctx 见 **§V6.5**）· **未做**逐张量位宽对比或 kernel profile ⇒
+**"自有布局更贴合 MMA"是假设，不是结论**。证据：[o138-p3-20261024/v2-hgn](../spec/rpc-optimization/o138-p3-20261024/v2-hgn/results-v2.md)。
+
+---
+
+## §V6.5 实证 —— **128-token 窗口复核 + 1M YaRN/KV8 长 ctx**（2026-10-25 · 站 C · E1）
+
+> 动因：两条指令 —— (a) 换更长输出 workload 复核 128-token 窗口是否高估；(b) 上 1M YaRN + KV8 换长 ctx 能力（**牺牲速度，不是提速**）。
+
+**(a) 512-token 输出复核 ⇒ 128-token 没有高估**
+
+| 档 | 128 tok（`v2c_probe_*`） | 512 tok（`longout_*_512`） | 差 |
+|---|---|---|---|
+| 短 420 | 58.16（54.1/61.8/58.6） | 57.99（55.0/57.8/61.1） | **−0.3%** |
+| 长 3300 | 54.25（54.3/51.9/56.5） | 56.08（53.4/54.8/60.0） | **+3.4%** |
+
+- 两档差都落在 §矩阵已量到的 **±6% 轮间带**内 ⇒ **128-token 读数可继续当基线，不构成高估**。
+- 512 两组内部都是 run3 > run2 > run1（单调上升），128 组（每次 2.5–4.5 s）没有这个爬坡 ⇒ 更长的 decode 让 GPU 时钟爬满；**若有偏差，128-token 在保守一侧**。
+- 接受率两档几乎不变（0.58/0.57 vs 0.60/0.57）⇒ 差异不是投机命中率引起的。
+
+**(b) 1M YaRN + KV8 ⇒ 能力可用，代价是输出上限与 KV 精度**
+
+| 项 | 默认 | 1M YaRN + KV8 |
+|---|---|---|
+| `context` / `slot_ctx` / `kv_pool_positions` | 262,144 / 262,144 / 524,288 | **1,048,576 ×3** |
+| `kv_cache` | bf16 | **int8**（16,712 B/position） |
+| `rope_scaling` | 原生 | **static YaRN ×4**（over 262,144；attention scale 1.138629） |
+| `max_tok`（启动日志口径） | 32,768 | **16,384**（`HALOGEN_MAX_TOK 32768 is capped at 16384 here`） |
+| 常驻 | 62.1 权重 + 14.4 KV + 12.5 工作 = **89.0 GiB** | 62.1 + **16.3** + 8.0 = **86.4 GiB** |
+
+- **decode**（128 tok）：55.08 / 58.82 vs 58.16 / 54.25 ⇒ −5.3% / +8.4%，**中位 −2.6% / +0.7%** ⇒ 在噪声带内，**这是能力档不是提速档**。
+- **needle**（标记埋 prompt 开头、末尾追问）：131k / 350k / **899k** prompt **全部命中**；prefill 1855.6 → 1627.1 → 1441.5 t/s（−22.3%，**无悬崖**）；899k 时序 626 s。
+- ⚠ **三项一起换**（ctx ×4 · YaRN ×4 · KV bf16→int8）⇒ 这组读数**不是 "YaRN 单独成本"的受控实验**。
+- 证据：[o138-p3-20261024/v2-hgn](../spec/rpc-optimization/o138-p3-20261024/v2-hgn/results-v2.md) 第三段 + 同目录 `longout_*_512.txt` / `yarn_*.json|log|txt`（探针 = [o138_needle.py](../spec/rpc-optimization/o138-p3-20261024/o138_needle.py)）。
+
 ---
 
 ## 未实测登记（不静默）
@@ -393,3 +449,5 @@ Arm B 非纯串行（见上）· 与同 SoC 社区的档位不同（其 `UD-Q3_K
 | 2.1 | 2026-10-11 | **B/C 复用落地真部署**（D8(a)：`containers install` 补 daemon + `containers up` 照抄 A 配方；B/C `/health` ok、冒烟同档，新增 **§V6.1 实证**）；**D7 前置解**（三站均可跑 halogen ⇒ 默认框架前提已满足，代码层仍待确认）；`8730/8731` 的 `inventory/ports.yaml` **scope `[A]`→`[A, B, C]`**；未实测登记 #10 标已解。 |
 | 2.2 | 2026-10-22 | **digest pin 实施 + 开放项闭环 + 镜像升 0.18.13**：`CONTAINER_MODELS.image` 由 tag 改为 `tag@sha256`（0.18.11 → 0.18.13），`rpc_check --only engine` 加 digest 漂移判定；#2/#6/#7/#9 闭环（#9 用户裁定保留）；**三站 0.18.13 真升级**（新增 **§V6.2 实证**：三站 `Config.Image`/`RepoDigests` = 新 pin、`version.api=engine=0.18.13`、greedy 冒烟三站一致、`engine` PASS）。 |
 | 2.3 | 2026-10-24 | **MTP 投机被证实"默认生效"**（新增 **§V6.3 实证**）：head 放 GGUF 旁即自动拾取（无需 `HALOGEN_MTP_HEAD`）、`HALOGEN_MTP=0` 为关闭开关；本集群 A/B decode **39.42/35.97 vs 28.97/28.48 t/s**（短/长 = 1.36×/1.26×），对照 llama.cpp 27.55/26.85 ⇒ **换引擎本身≈0 收益，+34~43% 全来自投机**；同时注销 `O-138` 的 P3 前置（"须等上游 `#28243` / 打 400 行补丁"）。 |
+| 2.4 | 2026-10-25 | **checkpoint 单变量对照落地**（新增 **§V6.4 实证**）：下 109.8 GiB 的 v2 `.hgn`（62.11 GiB + ngram 47.68 GiB），只换 checkpoint、其余全冻结 ⇒ decode **58.16 / 54.25 vs GGUF 39.42 / 35.97**（**1.48× / 1.51×**），驻留权重 62.1 vs 72.0 GiB；v2 与官方 README prose **54 t/s 吻合** ⇒ **复现官方吞吐的必经项 = v2 checkpoint**，并记录 v2 的三个隐含依赖（ngram 同目录 / tokenizer / 无 overlay）。 |
+| 2.5 | 2026-10-25 | **128-token 窗口复核 + 1M YaRN/KV8 长 ctx**（新增 **§V6.5 实证**）：512-token 输出 **57.99 / 56.08** vs 128-token **58.16 / 54.25**（差 −0.3%/+3.4%，落在 ±6% 噪声带 ⇒ **128-token 未高估**，长 decode 反而因时钟爬满略高）；`HALOGEN_CTX=1048576 + HALOGEN_ROPE_YARN=4 + HALOGEN_KV8=1` ⇒ `context/slot_ctx/kv_pool` 全 **1,048,576**、KV **int8**、static YaRN ×4；needle **131k / 350k / 899k 全命中**，prefill 1855.6→1441.5 t/s（无悬崖）；代价 = `max_tok` **32,768→16,384**、KV 池 16.3 GiB。**能力档，不是提速档**；容器已恢复默认 A0。 |

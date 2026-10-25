@@ -1,0 +1,5 @@
+halogen: halogen-flash-server 0.18.13, mode all
+halogen: /hgn/qwen38-flash-next-v2.hgn carries its own precision choices: no quality sidecar applies and none is looked for
+halogen: /hgn/qwen38-flash-next-v2.hgn does not carry the model's lookup table, and qwen38-flash-next-ngram.hgn is not beside it.
+  Put the table file in the models volume beside the checkpoint, point HALOGEN_NGRAM_TABLE at it,
+  or start once with HALOGEN_DOWNLOAD set and the volume read-write.
