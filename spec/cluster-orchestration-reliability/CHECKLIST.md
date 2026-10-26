@@ -47,7 +47,7 @@ upstream: null
 - 不验收"`asset-unreadable` / `asset-not-file` / `asset-not-dir` 在真站复现"——防御性分支，只验单测。
 - 不验收 `.hgn` 同尺寸损坏的检出——`min_bytes` 只抓截断/未完成/挂错。
 - 不验收 K8s/Envoy/Terraform 机制等价性——只迁移判定语义。
-- 不验收 `Conflicts=`（Q1 已延后，若做另立 ADR）。
+- 不验收 `Conflicts=`（Q1 已裁**不采纳**，2026-10-26；理由见 DESIGN §5.5 / §12 Q1）。
 - 不做性能基准对比——只验"预检不引入可感知延迟"的量级判据（§9.2）。
 
 ### 0.1 Step 7 复核发现（已修入 IMPLEMENTATION）
@@ -382,7 +382,7 @@ upstream: null
 | Phase 7 手册回写 + O-176 登记（T8/T9/F5/W3）+ P3-1/P3-2 判据修正 + 开发日志 | 终验前 | ☑ 2026-10-26（116/116，见 §13.2） |
 | 第 3 轮终验（翻"验收通过"，status → accepted） | Phase 6/7 完成后 | ☑ 2026-10-26（116/116；单测 ALL PASS；全量门禁 PASS 47/3/0） |
 | B 站 GLM conf `CTX=65536` vs 台账 32768 核对 | 旁发现问题，另议 | ☑ 2026-10-26（站上实况 `CTX=65536`；变更来源 = O-168 甲 2026-10-24，备份 `glm-5.3-flash.env.bak-ctx32768-20261024`；台账 [params-ledger §1.4](../infer-load/params-ledger.md) 已由 32768 对齐为 65536，未改站上任何配置） |
-| 若采纳 `Conflicts=` 另立 ADR（Q1） | 本轮不做 | ☐ |
+| 若采纳 `Conflicts=` 另立 ADR（Q1） | 本轮不做 | ☑ 2026-10-26（**裁不采纳**：只覆盖 systemd 单元，管不到 halogen 容器（docker）与手工进程（Phase 6 S2 实证）；不隐含顺序 ⇒ 不能替代编排层卸载；不新增第二管理面（ADR-0004）。决定记于 DESIGN §5.5 / §12 Q1） |
 
 ---
 

@@ -363,6 +363,8 @@ K8s 式 level-triggered 控制器能自动重试，但需要 daemon 与持续 SS
 但它**管不到手工拉起的进程**（studio 直接执行的二进制），且不隐含顺序。
 故只能作为第二道防线，不能替代编排层卸载；若采纳需另立 ADR（扩写动作面）。
 
+**2026-10-26 裁：不采纳** —— 它同样**管不到 halogen 容器**（docker，非 systemd 单元；Phase 6 S2 实测：手工 `ds4-server` 占 `:8080` 只能由 `infer-unload` 的 pkill 清理），且引入**第二管理面**（与 ADR-0004 唯一管理入口冲突）。
+
 ### 5.6 方案 F：并入 `check_stations` 而不是新开断言（否决）
 
 `check_stations` 已承担 conf/权重/凭据/端口四类判据，再塞入容器资产会让
@@ -575,7 +577,7 @@ PREFLIGHT qwen3.8-flash-next@B ok=False :: asset-missing:/hgn/qwen38-flash-next-
 
 | # | 问题 | 建议 |
 |---|---|---|
-| Q1 | 是否采纳 systemd `Conflicts=` 作为第二道防线 | 本轮不做；若做另立 ADR（扩写动作面） |
+| Q1 | 是否采纳 systemd `Conflicts=` 作为第二道防线 | **已裁不采纳（2026-10-26）**：只覆盖 systemd 单元（`llama-server@*` / `rpc-server@*`），**管不到 halogen 容器与手工进程**（Phase 6 S2 实证：手工 `ds4-server` 占 8080 只能由 `infer-unload` 清理）；且不隐含顺序（端口释放/就绪仍靠既有 480s 等待与探针）⇒ 不能替代编排层卸载，且会新增第二管理面（ADR-0004）。若后续重启议题，另立 ADR（扩写动作面）。 |
 | Q2 | `halogen-assets` 是否也检查非 `stations` 声明的站 | 不检查；避免对"未部署"的站假红 |
 | Q3 | `min_bytes` 是否改为读 `inventory` | 暂不；配方内静态常量更直观，且只有一个模型 |
 | Q4 | 是否把 `RECLAIM` 结果写入台账 | 本轮只打印；如需留痕，走既有日志/台账纪律另议 |

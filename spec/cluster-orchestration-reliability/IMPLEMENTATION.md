@@ -43,7 +43,7 @@ upstream: null
 - 不改 `infer-load` / `infer-unload` / `rpc-nodes` 的站上实现。
 - 不新增数字退出码（仍 `0/1/2`）。
 - 不对 `.hgn` 做全量哈希（`min_bytes` 只抓截断/未挂）。
-- 不采纳 systemd `Conflicts=`（Q1：若做需另立 ADR）。
+- 不采纳 systemd `Conflicts=`（Q1 已裁不采纳，2026-10-26；理由见 DESIGN §5.5 / §12 Q1）。
 
 ---
 
@@ -670,7 +670,7 @@ def preflight_container(alias: str, station: str) -> dict:
 
 - 手册 §3.3 行为矩阵（DESIGN §7）六行替换。
 - `OPEN-ISSUES.md` 新登记 O-176，引用 DESIGN §1 与调研 §3。
-- 若后续采纳 `Conflicts=`，另立 ADR（Q1）。
+- Q1（systemd `Conflicts=`）已裁**不采纳**（2026-10-26，理由见 DESIGN §5.5 / §12）；若后续重启议题，另立 ADR。
 
 ---
 

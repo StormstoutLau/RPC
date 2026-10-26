@@ -40,7 +40,7 @@ upstream: \[d6-agent-standard-OPEN-ISSUES（O-175/O-176）, docs/三机推理集
 - **门条件核对**：§13.1 统计 116/116 · 0 待办；P0 全过；P1（F5）已核对一致；无 P1/P2 审计发现遗留。
 - **复证读数（逐字）**：`tests\test_cluster_pure.py` ⇒ `RESULT: ALL PASS` / `EXIT=0`；全量门禁 `py ops\rpc_check.py` ⇒ `PASS · 绿灯 47 · 黄灯 3 · 红灯 0`（黄灯 = `evidence` 可重放 gap 37 存量 · `memory-gates` 引擎侧无门通道 1 条 · `stations` 已登记 `known_drift`；`py-tests` 54/54）；三站引擎态 `可达 3/3 站 · 在服务 1 站`（B 站生产 qwen）。
 - **落位**：CHECKLIST front matter `status: pending → accepted`、正文「待验收 → 已验收」、§13.2 翻「验收通过」（有条件通过行标注为被取代并取消勾选）、§13.3 增第 3 轮签字、§14「第 3 轮终验」→ ☑；复跑 `doc-status/md-tables/doclinks` PASS（词表 105/105，`accepted` 合 checklist 档词表）。
-- **旁议进展（2026-10-26）**：B 站 GLM conf `CTX` 核对**已闭环** —— 站上实况 = **65536**（`/etc/llama-instances/glm-5.3-flash.env` 只读复核；旧值备份 `glm-5.3-flash.env.bak-ctx32768-20261024`；变更来源 = O-168 甲 2026-10-24 为 claude 本地档 33185 tok 超 32768 而上调）；台账 [params-ledger §1.4](../../spec/infer-load/params-ledger.md) 与手册 §3.3 已对齐。⚠ 联动项读数：B 站 opencode `local/main` 131072、claude `MAX_CONTEXT_TOKENS=120000` 均大于 65536（交互式长会话仍有 400 风险，已写进台账；未改站上配置）。仅剩 `Conflicts=` 是否另立 ADR（Q1）为旁议。
+- **旁议进展（2026-10-26）**：B 站 GLM conf `CTX` 核对**已闭环** —— 站上实况 = **65536**（`/etc/llama-instances/glm-5.3-flash.env` 只读复核；旧值备份 `glm-5.3-flash.env.bak-ctx32768-20261024`；变更来源 = O-168 甲 2026-10-24 为 claude 本地档 33185 tok 超 32768 而上调）；台账 [params-ledger §1.4](../../spec/infer-load/params-ledger.md) 与手册 §3.3 已对齐。⚠ 联动项读数：B 站 opencode `local/main` 131072、claude `MAX_CONTEXT_TOKENS=120000` 均大于 65536（交互式长会话仍有 400 风险，已写进台账；未改站上配置）。**Q1（systemd `Conflicts=`）已裁不采纳**（2026-10-26）：只覆盖 systemd 单元，管不到 halogen 容器与手工进程（Phase 6 S2 实证），且不隐含顺序、会新增第二管理面（ADR-0004）⇒ 决定记于 DESIGN §5.5 / §12 Q1，不另立 ADR。
 
 ### 教训（Phase 6 实测沉淀）
 
