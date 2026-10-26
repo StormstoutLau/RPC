@@ -93,6 +93,13 @@
 |---|---|
 | [2026-10-26_集群编排与RPC选路可靠性_社区外部锚点调研.md](./2026-10-26_集群编排与RPC选路可靠性_社区外部锚点调研.md) | ★ **`cluster.py` 编排/RPC 选路的四个可靠性缺口**（未知态误作忙 · worker 普通引擎未卸载 · 回收失败不传播 · 预检晚于销毁）⇒ **社区外部锚点**（K8s 探针/驱逐/device plugin · systemd `Conflicts=` · Slurm DRAIN · Terraform plan/`create_before_destroy` · Envoy panic threshold 反例 · SLSA digest）→ 可迁移机制 + 不可照搬清单 + 契约级设计与 14 条先验红夹具 |
 
+## F. 代码评审复核
+
+| 文档 | 主题 |
+|---|---|
+| [2026-10-26_原始评审报告复核_RPC.md](./2026-10-26_原始评审报告复核_RPC.md) | ★ **2026-10-21 原始评审报告 RPC 段落档 + 当前 HEAD 复核**：10 条发现（1 CRITICAL / 2 HIGH / 5 MEDIUM / 2 LOW）⇒ **1 已闭环 · 1 部分 · 8 未闭环**；7 条建议 1 完成 / 1 部分 / 5 未做；按报告口径仍「阻断」（凭据轮换未做，O-173） |
+| [2026-10-26_原始评审P1_社区外部锚点调研.md](./2026-10-26_原始评审P1_社区外部锚点调研.md) | ★ **P1 四条**（#3 模型定位 depth-2 · #4 conf 引号/`sed` 转义 · #7 ds4 监听默认 `0.0.0.0` · #10 Web token `==` + URL query）⇒ **外部锚点**（GNU find 深度语义 · ShellCheck SC2086 · GNU sed 转义 · BashFAQ 105 · CWE-1327 · PostgreSQL/Ollama 安全默认 · Python `compare_digest` · RFC 6750 §2.3 · `Referrer-Policy`）→ 可迁移/不可照搬 + 契约级设计与先验红测试方向 |
+
 ---
 
 ## 单一真值在哪（本目录之外）
