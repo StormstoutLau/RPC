@@ -789,7 +789,10 @@ def _cmd_load_c(alias: str, backend: str = None, engine: str = None) -> int:
     # ★ 2026-10-22 实测：C 站分支在 cmd_load 里**先于**通用路径 return ⇒ 必须在此单独回收容器。
     #   漏掉它的表现（C 站连续复现）：halogen 容器继续占 8080/GTT ⇒ 新 studio 落到 **8081**，
     #   两个引擎同抢 ~90 GB ⇒ 容器随后 OOM `Exited (1)`。
-    _reclaim_containers("C")
+    _rc_c = reclaim_and_unload("C")
+    if not _rc_c["ok"]:
+        print(f"[cluster] C 站回收/卸载失败 ⇒ 中止: {_rc_c['steps']}")
+        return 1
     cmd = _build_infer_load_cmd(alias, backend, engine)
     rc = ssh_stream("C", cmd)
     if rc != 0:
@@ -871,21 +874,186 @@ def _container_cleanup_cmd() -> str:
     return "; ".join(parts)
 
 
-def _reclaim_containers(station: str) -> bool:
-    """回收站上已登记的容器。**必须先于 `infer-unload`** —— 反之 infer-unload 的
-    wait_gtt 会因容器仍持 ~90 GB GTT 每站白等满 180 s (90×2s) 才 WARN 退出。
+def _reclaim_containers(station: str) -> tuple:
+    """回收站上已登记的容器，返回 `(ok, detail)`。**必须先于 `infer-unload`** —— 反之
+    infer-unload 的 wait_gtt 会因容器仍持 ~90 GB GTT 每站白等满 180 s (90×2s) 才 WARN 退出。
 
     ★ timeout=540（2026-10-22 C 站实测）：`docker rm -f` 后 8080 的真实释放可能达 ~4m18s；
-    命令内部轮询上限 480 s，这里再留余量。超时仍未释放 ⇒ 打印 `PORT8080_STILL_BUSY`（可见），
-    不静默让 studio 落到 8081。
+    命令内部轮询上限 480 s，这里再留余量。
+
+    ★ 2026-10-26 缺口 3：旧版返回裸 bool 且只 `print` 端口未释放 ⇒ 调用方**无法区分**
+    "删干净了" / "端口还占着" / "SSH 都连不上"，于是静默继续加载。现在三者都用
+    `(ok, detail)` 显式表达，detail 供上层原样打印（不吞）。
     """
     ok, out = ssh_run(station, _container_cleanup_cmd(), timeout=540)
+    if not ok:
+        return False, f"ssh:{(out or '').strip()[:160]}"
     if "PORT8080_STILL_BUSY" in (out or ""):
         print(f"[cluster] {station} 站容器已删, 但 8080 在 480s 内未释放 —— 先排查占用者再加载"
               f" (studio 可能落到 8081)")
-    if not ok:
-        print(f"[cluster] {station} 站容器回收失败: {out} (继续 —— 同名容器会在 docker run 处响亮失败)")
-    return ok
+        return False, "port8080-still-busy"
+    return True, ""
+
+
+def reclaim_and_unload(station: str) -> dict:
+    """回收容器 + 卸载引擎，返回结构化结果（**不抛异常**）。
+
+    steps 恒为两项，名称固定 `containers` / `infer-unload`：
+      {"name": "containers", "ok": bool, "detail": str}
+      {"name": "infer-unload", "ok": bool, "rc": int|None, "detail": str}
+
+    ★ 容器步失败 ⇒ **跳过** infer-unload：ok=False 只有两种来源——SSH 已断（再发必然
+    同样失败）或端口未释放（容器已删，`infer-unload` 无进程可杀）。两者都无收益，
+    跳过并记 `skipped: containers failed`，不做无意义写动作。
+    """
+    ok_c, detail_c = _reclaim_containers(station)
+    steps = [{"name": "containers", "ok": ok_c, "detail": detail_c}]
+    if not ok_c:
+        steps.append({"name": "infer-unload", "ok": False, "rc": None,
+                      "detail": "skipped: containers failed"})
+        return {"station": station, "ok": False, "steps": steps}
+
+    rc, ok_u, detail_u = None, False, ""
+    try:
+        rc = ssh_stream(station, "infer-unload")
+        ok_u = rc == 0
+        detail_u = "" if ok_u else f"rc={rc}"
+    except Exception as e:          # 连接级异常（超时/认证/端口不可达）
+        detail_u = f"{type(e).__name__}: {e}"
+    steps.append({"name": "infer-unload", "ok": ok_u, "rc": rc, "detail": detail_u})
+    return {"station": station, "ok": ok_c and ok_u, "steps": steps}
+
+
+def sh_single_quote(p: str) -> str:
+    """POSIX 单引号转义：把任意路径变成单个 shell 词（防空格/引号被循环拆词）。"""
+    return "'" + str(p).replace("'", "'\\''") + "'"
+
+
+def _host_path_for(spec: dict, inner: str) -> str:
+    """容器内路径 → 宿主路径（按 volume 的 inner 最长前缀匹配）。无法映射 ⇒ ""。
+
+    ★ 路径单一真值：只读 `volume`，配方里不另写 host 路径（DESIGN §8 不变式 6）。
+    """
+    best_host, best_cont = "", ""
+    for v in (spec.get("volume") or []):
+        parts = str(v).split(":")
+        if len(parts) < 2:
+            continue
+        host, cont = parts[0], parts[1]
+        if not host or not cont:
+            continue
+        c = cont.rstrip("/") or "/"
+        if inner == c or inner.startswith(c + "/") or c == "/":
+            if len(c) > len(best_cont):
+                best_host, best_cont = host.rstrip("/") or "/", c
+    if not best_cont:
+        return ""
+    if best_cont == "/":                 # 根映射：容器路径即宿主相对路径（不能丢前导 /）
+        return (best_host + inner) if best_host != "/" else inner
+    rest = "" if inner == best_cont else inner[len(best_cont):]
+    return (best_host + rest) if best_host != "/" else rest
+
+
+def classify_container_assets(spec: dict, observed: dict) -> list:
+    """纯函数：配方 + 观测 → problems（空 = 通过）。
+
+    observed 形状: {"image": {"present": bool},
+                    "assets": {inner_path: {"kind": "file"|"dir"|"missing"|"unreadable",
+                                            "size": int, "entries": int}}}
+    """
+    problems = []
+    assets = spec.get("assets") or []
+    for a in assets:
+        p = a.get("path")
+        if not p or not _host_path_for(spec, p):
+            problems.append(f"recipe-unmapped:{p}")
+    ckpt = spec.get("checkpoint")
+    if ckpt and assets and assets[0].get("path") != ckpt:
+        problems.append("recipe-checkpoint-mismatch")
+
+    if not ((observed or {}).get("image") or {}).get("present"):
+        problems.append("image-missing")
+
+    obs = (observed or {}).get("assets") or {}
+    for a in assets:
+        p = a.get("path")
+        o = obs.get(p) or {"kind": "missing"}
+        kind = o.get("kind")
+        if kind == "missing" or kind == "unreadable":
+            problems.append(f"asset-{kind}:{p}")
+            continue
+        if a.get("kind") == "file":
+            if kind != "file":
+                problems.append(f"asset-not-file:{p}")
+            elif int(o.get("size") or 0) < int(a.get("min_bytes") or 0):
+                problems.append(f"asset-too-small:{p}")
+        elif a.get("kind") == "dir":
+            if kind != "dir":
+                problems.append(f"asset-not-dir:{p}")
+            elif int(o.get("entries") or 0) < int(a.get("min_entries") or 1):
+                problems.append(f"asset-empty-dir:{p}")
+    return problems
+
+
+def preflight_container(alias: str, station: str) -> dict:
+    """只读预检：镜像存在性 + 资产就位。返回 {"ok", "problems", "image_missing"}。
+
+    ★ 零写动作：不 `docker rm/run`、不 `infer-unload`、不写站上任何文件。
+      校验必须先于破坏（Terraform validate-before-destroy，DESIGN §8 不变式 3/5）。
+    """
+    spec = CONTAINER_MODELS.get(alias) or {}
+    image = spec.get("image", "")
+    problems = []
+
+    ok_i, out_i = ssh_run(station, f"docker image inspect {image} --format '{{{{.Id}}}}'",
+                          strict=True)
+    # ssh_run(strict) 非零码 ⇒ "(rc=N) body"（站可达、镜像不在）；
+    # 连接失败 ⇒ "TypeName: msg"（站不可达）。两者必须区分，否则误报成"资产缺失"。
+    if not ok_i and not str(out_i).startswith("(rc="):
+        problems.append(f"ssh-failed:{(out_i or '').strip()[:120]}")
+        return {"ok": False, "problems": problems, "image_missing": False}
+    image_present = ok_i
+    if not image_present:
+        problems.append("image-missing")
+
+    observed = {"image": {"present": image_present}, "assets": {}}
+    stats = []
+    for a in (spec.get("assets") or []):
+        hp = _host_path_for(spec, a.get("path", ""))
+        if not hp:
+            continue
+        stats.append(hp)
+    if stats:
+        q = " ".join(sh_single_quote(p) for p in stats)
+        cmd = (f"for p in {q}; do "
+               f"if [ -f \"$p\" ]; then "
+               f"s=$(stat -c %s \"$p\" 2>/dev/null) && echo \"$p|file|$s\" "
+               f"|| echo \"$p|unreadable|0\"; "
+               f"elif [ -d \"$p\" ]; then "
+               f"if [ -r \"$p\" ] && [ -x \"$p\" ]; then "
+               f"echo \"$p|dir|$(ls -A \"$p\" 2>/dev/null | wc -l | tr -d ' ')\"; "
+               f"else echo \"$p|unreadable|0\"; fi; "
+               f"else echo \"$p|missing|0\"; fi; done")
+        ok_s, out_s = ssh_run(station, cmd, timeout=30)
+        if not ok_s:
+            problems.append(f"ssh-failed:{(out_s or '').strip()[:120]}")
+            return {"ok": False, "problems": problems, "image_missing": False}
+        for line in (out_s or "").splitlines():
+            parts = line.split("|")
+            if len(parts) != 3:
+                continue
+            host_path, kind, num = parts
+            # 回填容器内路径（observed 的键必须是配方里的 inner path）
+            inner = next((a["path"] for a in (spec.get("assets") or [])
+                          if _host_path_for(spec, a["path"]) == host_path), host_path)
+            observed["assets"][inner] = {
+                "kind": kind,
+                "size": int(num) if num.isdigit() else 0,
+                "entries": int(num) if num.isdigit() else 0,
+            }
+
+    problems.extend(classify_container_assets(spec, observed))
+    return {"ok": not problems, "problems": problems, "image_missing": not image_present}
 
 
 def _load_container_model(alias: str, station: str) -> int:
@@ -910,23 +1078,29 @@ def _load_container_model(alias: str, station: str) -> int:
 
     print(f"[cluster] 容器化模型: {alias} -> {station} 站 ({host}) · 引擎 {spec.get('backend')} · 镜像 {image}")
 
-    # [1/4] 回收 (互斥: 同站禁止叠加加载)
+    # [0/4] 只读预检 —— 必须在任何回收之前（validate before destroy，DESIGN §8 不变式 3）
+    pre = preflight_container(alias, station)
+    if not pre["ok"]:
+        print(f"[cluster] PREFLIGHT {alias}@{station} ok=False :: " + "; ".join(pre["problems"]))
+        if pre["image_missing"]:
+            pull_cmd = containers_plan("pull", station=station, image=image,
+                                       detach=True, log="/tmp/cluster-docker-pull.log")[0]
+            ok2, out2 = ssh_run(station, pull_cmd, timeout=30)
+            print(f"[cluster] 镜像未落地 ⇒ {'已后台拉取' if ok2 else '拉取下发失败: ' + out2}")
+            print(f"[cluster]   进度: ssh {station} 'tail -f /tmp/cluster-docker-pull.log'; "
+                  f"完成后重跑本命令。")
+        print("[cluster] 未触碰旧服务 ⇒ 修正资产后重跑。")
+        return 1
+    print(f"[cluster] PREFLIGHT {alias}@{station} ok=True")
+
+    # [1/4] 回收 + 卸载 (互斥: 同站禁止叠加加载)
     print(f"[cluster] [1/4] 回收站内既有引擎/容器 ...")
-    _reclaim_containers(station)
-    rc = ssh_stream(station, "infer-unload")
-    if rc != 0:
-        print(f"[cluster] infer-unload 失败 (rc={rc}), 中止。")
+    _r1 = reclaim_and_unload(station)
+    if not _r1["ok"]:
+        print(f"[cluster] [1/4] 回收/卸载失败 ⇒ 中止: {_r1['steps']}")
         return 1
 
-    # [2/4] 镜像存在性 —— 不做阻塞拉取
-    ok, _ = ssh_run(station, "docker image inspect " + image + " --format '{{.Id}}'", strict=True)
-    if not ok:
-        pull_cmd = containers_plan("pull", station=station, image=image,
-                                   detach=True, log="/tmp/cluster-docker-pull.log")[0]
-        ok2, out2 = ssh_run(station, pull_cmd, timeout=30)
-        print(f"[cluster] [2/4] 镜像未落地 ⇒ {'已后台拉取' if ok2 else '拉取下发失败: ' + out2}")
-        print(f"[cluster]   进度: ssh {station} 'tail -f /tmp/cluster-docker-pull.log'; 完成后重跑本命令。")
-        return 1
+    # [2/4] 镜像已在预检中确认 ⇒ 只回显（预检后到这里的窗口极小，不重复 inspect）
     print(f"[cluster] [2/4] 镜像已在站上 ✓")
 
     # [3/4] 起容器 —— 与 `containers up --go` 同一生成器
@@ -1049,17 +1223,14 @@ def cmd_load(alias: str, backend: str = None, engine: str = None, worker: str = 
     # ★ 2026-10-21: 老后端路径也必须先回收**容器** —— infer-unload 只杀进程, 看不见 docker 容器
     #   (容器仍占 8080 发布面 + ~90 GB GTT)。缺这一步时 `load ... --backend unsloth` 会与
     #   halogen 容器抢 8080/GTT。回收幂等, 无容器时零副作用。
-    _reclaim_containers(station)
-    # P1 换模型串行化: 先探 :8080, 有响应即视为已有引擎占用, 先 unload 等 GTT 释放再加载。
-    # 判定放宽为"任意 HTTP 响应" (非 {"status" 前缀)——unsloth OpenAI 后端 /health 返回 {"detail":...} 也是占用实据。
-    # infer-unload 幂等, 误判(如杂散 8080 服务)时快速成功退出, 无害; infer-load 内部亦会再兜底互斥+释放。
-    ok, out = ssh_run(station, "curl -s --max-time 5 http://127.0.0.1:8080/health")
-    if ok and out.strip():
-        print(f"[cluster] {station} 站 :8080 有引擎占用, 先卸载并等待 GTT 释放 ...")
-        rc = ssh_stream(station, "infer-unload")
-        if rc != 0:
-            print(f"[cluster] 卸载失败 (rc={rc}), 中止。")
-            return 1
+    # ★ 2026-10-26 缺口 2/3：回收 + 卸载统一走 reclaim_and_unload —— 旧代码先 `_reclaim_containers`
+    #   再用 `/health` 有无响应决定是否 unload。但容器被 `docker rm -f` 后 HTTP 服务已消失、
+    #   GTT 仍可能被 docker-proxy/命名空间持有（本仓 C 站实测 8080 释放约 4m18s）⇒ 那个条件
+    #   恰好漏掉"容器已删但资源未释放"这一格。`infer-unload` 幂等且含 wait_gtt，无条件执行更正确。
+    _r1 = reclaim_and_unload(station)
+    if not _r1["ok"]:
+        print(f"[cluster] {station} 站回收/卸载失败 ⇒ 中止: {_r1['steps']}")
+        return 1
     print(f"[cluster] 加载中 (站内 load-mem-gate 自动护航) ...")
     rc = ssh_stream(station, _build_infer_load_cmd(matched, backend, engine))
     if rc != 0:
@@ -1086,62 +1257,138 @@ def cmd_load(alias: str, backend: str = None, engine: str = None, worker: str = 
 RPC_WORKER_STATIONS = {ip: st for st, ip in RPC_WORKER_IPS.items()}
 
 
-def resolve_rpc_worker(conf_target=None, candidates=None, busy=None, explicit=None):
-    """RPC worker 选路（纯函数）。返回 {target, station, source, reason}。
-
-    source: explicit | explicit-invalid | conf | auto | fallback | none
-    busy:   {target: 忙因}（如 {"10.10.10.1:50052": "halogen"}）；不在表里 = 空闲
-    """
-    busy = busy or {}
-    known = [c for c in (candidates or []) if c in RPC_WORKER_STATIONS]
-    if explicit:
-        if explicit not in known:
-            return {"target": None, "station": None, "source": "explicit-invalid",
-                    "reason": f"显式目标 {explicit} 不在已声明/存活候选 {known or '空'}"}
-        return {"target": explicit, "station": RPC_WORKER_STATIONS[explicit],
-                "source": "explicit", "reason": "用户显式指派"}
-    if not known:
-        return {"target": None, "station": None, "source": "none",
-                "reason": "候选为空或无节点可映射到站"}
-    if conf_target in known and conf_target not in busy:
-        return {"target": conf_target, "station": RPC_WORKER_STATIONS[conf_target],
-                "source": "conf", "reason": "conf 目标空闲"}
-    if conf_target in known:
-        # conf 目标忙 ⇒ **优先保护它**（如 A 的 qwen）：有其他候选就改用其他候选，
-        # 即使那个候选也忙（它会由调用方回收）。只有没有其他候选时才回退 conf。
-        alts = [c for c in known if c != conf_target]
-        if alts:
-            t = alts[0]
-            extra = (f"；{t} 也忙({busy[t]}) ⇒ 回收它" if t in busy else f"；{t} 空闲")
-            return {"target": t, "station": RPC_WORKER_STATIONS[t], "source": "auto",
-                    "reason": f"conf {conf_target} 忙({busy[conf_target]}) ⇒ 改用 {t}{extra}"}
-        return {"target": conf_target, "station": RPC_WORKER_STATIONS[conf_target],
-                "source": "fallback",
-                "reason": f"conf {conf_target} 忙({busy[conf_target]}) 且无其他候选 ⇒ 回退并回收它"}
-    # conf 不在候选（未配置 / 未声明）：优先空闲，全忙则取首个（会被回收）。
-    for t in known:
-        if t not in busy:
-            return {"target": t, "station": RPC_WORKER_STATIONS[t], "source": "auto",
-                    "reason": "conf 不在候选 ⇒ 用空闲节点"}
-    t = known[0]
-    return {"target": t, "station": RPC_WORKER_STATIONS[t], "source": "auto",
-            "reason": f"conf 不在候选且候选全忙 ⇒ 用 {t}（会被回收）"}
-
-
 def parse_worker_busy(out: str) -> str:
     """把站上 busy 探针输出解析成忙因（排序去重；'' = 空闲）。"""
     toks = sorted({t.strip() for t in (out or "").splitlines() if t.strip()})
     return "+".join(toks)
 
 
-def _probe_worker_busy(st: str) -> str:
-    """只读探针：站上有 halogen 容器或 :8080 在听 ⇒ 忙因；SSH 探不了 ⇒ probe-failed（fail-closed）。"""
+def classify_worker_probe(ok: bool, out: str) -> dict:
+    """把一次探针结果归一成三态（纯函数）。
+
+    ★ 2026-10-26 缺口 1：旧的失败形态是字符串 "probe-failed"，随后被选路当成
+    "普通忙因" ⇒ 探测失败的节点仍进"可回收"分支（E1 复现）。这里把失败显式归
+    `unknown`，让它只能导致中止——对齐 K8s 探针语义：只有 Success 才算就绪。
+    """
+    if not ok:
+        return {"state": "unknown", "reason": f"ssh-failed: {(out or '').strip()[:120]}"}
+    why = parse_worker_busy(out)
+    if why:
+        return {"state": "busy", "reason": why}
+    return {"state": "free", "reason": ""}
+
+
+def probe_worker_state(st: str) -> dict:
+    """只读探针：站上有 halogen 容器或 :8080 在听 ⇒ busy；SSH 探不了 ⇒ unknown。
+
+    与旧 `_probe_worker_busy` 的唯一差别是**返回值形状**（三态 dict 而非字符串），
+    探针命令本身不变（仍是只读的 docker ps + ss）。
+    """
     ok, out = ssh_run(
         st,
         "docker ps --format '{{.Names}}' 2>/dev/null | grep -qx halogen && echo halogen; "
         "ss -ltn 2>/dev/null | grep -q ':8080 ' && echo port8080",
         timeout=20)
-    return parse_worker_busy(out) if ok else "probe-failed"
+    return classify_worker_probe(ok, out)
+
+
+def _probe_map(targets) -> dict:
+    """对候选目标逐个探测 → {target: ProbeResult}。
+
+    无法映射到站的目标**不入表**（选路按缺键 = unknown 处理，不会默认空闲）；
+    单个目标探测异常也只归它自己 unknown，不拖死整条加载。
+    """
+    out = {}
+    for t in targets:
+        st = RPC_WORKER_STATIONS.get(t)
+        if not st:
+            continue
+        try:
+            out[t] = probe_worker_state(st)
+        except Exception as e:          # 连接级异常（超时/认证/端口不可达）
+            out[t] = {"state": "unknown", "reason": f"{type(e).__name__}: {e}"}
+    return out
+
+
+def resolve_rpc_worker(conf_target=None, candidates=None, probe=None,
+                       explicit=None) -> dict:
+    """RPC worker 选路（纯函数）。返回 {target, station, source, reason}。
+
+    source: explicit | explicit-invalid | conf | auto | fallback | none | aborted-unknown
+    probe:  {target: {"state": "free"|"busy"|"unknown", "reason": str}}
+            ★ 缺键 = unknown("未探测") —— 不再默认空闲。
+
+    规范序见 spec/cluster-orchestration-reliability/DESIGN.md §4.2。
+    核心纪律：**unknown 永不进入可回收分支**；它只可能让选路中止。
+    （"两站都忙 ⇒ 改用 C 并回收 C"仍成立——因为忙是**已知**状态，回收是安全动作。）
+    """
+    probe = probe or {}
+    known = [c for c in (candidates or []) if c in RPC_WORKER_STATIONS]
+
+    def state(c):
+        return (probe.get(c) or {"state": "unknown", "reason": "未探测"})["state"]
+
+    def why(c):
+        return (probe.get(c) or {}).get("reason") or state(c)
+
+    # 1. explicit（★ 显式也必须探测：旧代码在显式路径下跳过探针）
+    if explicit:
+        if explicit not in known:
+            return {"target": None, "station": None, "source": "explicit-invalid",
+                    "reason": f"显式目标 {explicit} 不在已声明/存活候选 {known or '空'}"}
+        if state(explicit) == "unknown":
+            return {"target": None, "station": None, "source": "aborted-unknown",
+                    "reason": f"显式目标 {explicit} 探测失败({why(explicit)}) ⇒ 中止，不回收"}
+        return {"target": explicit, "station": RPC_WORKER_STATIONS[explicit],
+                "source": "explicit", "reason": "用户显式指派"}
+
+    # 2. 无已知候选
+    if not known:
+        return {"target": None, "station": None, "source": "none",
+                "reason": "候选为空或无节点可映射到站"}
+
+    # 3. 分类；free/busy 全空 = 全未知
+    free = [c for c in known if state(c) == "free"]
+    busy = [c for c in known if state(c) == "busy"]
+    if not free and not busy:
+        detail = " ".join(f"{c}=unknown({why(c)})" for c in known)
+        return {"target": None, "station": None, "source": "aborted-unknown",
+                "reason": f"{detail} ⇒ 中止，不做回收"}
+
+    # 4. conf 空闲
+    if conf_target in free:
+        return {"target": conf_target, "station": RPC_WORKER_STATIONS[conf_target],
+                "source": "conf", "reason": "conf 目标空闲"}
+
+    # 5. conf 忙 ⇒ 优先保护它（如 A 的 qwen），按 a/b/c/d 互斥完备
+    if conf_target in busy:
+        alts = [c for c in known if c != conf_target]
+        alt_free = [c for c in alts if state(c) == "free"]
+        if alt_free:
+            t = alt_free[0]
+            return {"target": t, "station": RPC_WORKER_STATIONS[t], "source": "auto",
+                    "reason": f"conf {conf_target} 忙({why(conf_target)}) ⇒ 改用 {t}；{t} 空闲"}
+        alt_busy = [c for c in alts if state(c) == "busy"]
+        if alt_busy:
+            t = alt_busy[0]
+            return {"target": t, "station": RPC_WORKER_STATIONS[t], "source": "auto",
+                    "reason": f"conf {conf_target} 忙({why(conf_target)}) ⇒ 改用 {t}；"
+                              f"{t} 也忙({why(t)}) ⇒ 回收它"}
+        if alts:      # 有其他候选但全 unknown（free/busy 已被上面接住）
+            return {"target": None, "station": None, "source": "aborted-unknown",
+                    "reason": f"conf {conf_target} 忙({why(conf_target)}) 且其他候选均未知 ⇒ 中止"}
+        return {"target": conf_target, "station": RPC_WORKER_STATIONS[conf_target],
+                "source": "fallback",
+                "reason": f"conf {conf_target} 忙({why(conf_target)}) 且无其他候选 ⇒ 回退并回收它"}
+
+    # 6. conf 不在候选 / unknown：只从已知状态里选
+    if free:
+        t = free[0]
+        return {"target": t, "station": RPC_WORKER_STATIONS[t], "source": "auto",
+                "reason": "conf 不在候选/未知 ⇒ 用空闲节点"}
+    t = busy[0]
+    return {"target": t, "station": RPC_WORKER_STATIONS[t], "source": "auto",
+            "reason": f"conf 不在候选/未知且无空闲 ⇒ 用 {t}（回收它）"}
 
 
 def _load_rpc(alias: str, station: str, engine: str = None, worker: str = None) -> int:
@@ -1192,16 +1439,13 @@ def _load_rpc(alias: str, station: str, engine: str = None, worker: str = None) 
         print(f"[cluster] nodes.env 声明清单为空/不可读 ({decl.strip() or '空'}) → 中止。")
         return 1
     conf_target = _conf_rpc_target(station, alias) or None
-    busy = {}
-    if not explicit_target:
-        for t in decl_list:
-            st = RPC_WORKER_STATIONS.get(t)
-            if st:
-                reason = _probe_worker_busy(st)
-                if reason:
-                    busy[t] = reason
-        print(f"[cluster] 选路输入: conf={conf_target or '(空)'} busy={busy or '{}'}")
-    decision = resolve_rpc_worker(conf_target, decl_list, busy, explicit_target)
+    # ★ 2026-10-26 缺口 1：显式 --worker 也必须探测 —— 旧代码在显式路径下跳过探针，
+    #   于是死节点被当作"可用"直接进回收+启动。现在 probe 恒有值，unknown 只能中止。
+    probe = _probe_map(decl_list)
+    print("[cluster] 选路输入: " + " ".join(
+        f"{t}={p['state']}({p['reason']})" if p["reason"] else f"{t}={p['state']}"
+        for t, p in probe.items()))
+    decision = resolve_rpc_worker(conf_target, decl_list, probe, explicit_target)
     if decision["target"] is None:
         print(f"[cluster] RPC worker 选路失败: {decision['reason']} → 中止 (不静默退化)。")
         return 1
@@ -1216,12 +1460,12 @@ def _load_rpc(alias: str, station: str, engine: str = None, worker: str = None) 
     #   2026-10-25 收窄：只回收 **head(B) + 选中 worker**；非 worker 站的 qwen 不动。
     #   （B 的 8080 仍被先回收 ⇒ READY 不会命中旧容器。）
     reclaim = sorted({station, worker_station})
-    print(f"[cluster] 回收容器范围: {'/'.join(reclaim)}（非 worker 站的 qwen 保留）")
+    print(f"[cluster] 回收范围: {'/'.join(reclaim)}（非 worker 站的 qwen 保留）")
     for st in reclaim:
-        _reclaim_containers(st)
-
-    print("[cluster] [1/4] 卸载本站现存实例 (幂等, 释放 GTT) ...")
-    ssh_stream(station, "infer-unload")
+        _r = reclaim_and_unload(st)
+        if not _r["ok"]:
+            print(f"[cluster] {st} 站回收/卸载未完成 → 中止: {_r['steps']}")
+            return 1
 
     print("[cluster] [2/4] 启动 RPC 工作节点 (rpc-nodes --start, 含等端口 LISTEN) ...")
     # 2026-10-22: 有 --worker 时把目标作为 rpc-nodes 的第三参数（节点过滤）——
@@ -1328,14 +1572,11 @@ def cmd_load_on(station: str, alias: str, backend: str = None) -> int:
         return 1
     print(f"[cluster] 指定站加载: {alias} -> {station} 站 ({STATIONS[station]['host']})")
     # ★ 2026-10-21: 同 cmd_load —— 老后端路径必须先回收容器 (infer-unload 看不见 docker)。
-    _reclaim_containers(station)
-    ok, out = ssh_run(station, "curl -s --max-time 5 http://127.0.0.1:8080/health")
-    if ok and out.strip():
-        print(f"[cluster] {station} 站 :8080 有引擎占用, 先卸载并等待 GTT 释放 ...")
-        rc = ssh_stream(station, "infer-unload")
-        if rc != 0:
-            print(f"[cluster] 卸载失败 (rc={rc}), 中止。")
-            return 1
+    #   2026-10-26: 回收 + 卸载合并为无条件一步，失败即中止。
+    _r1 = reclaim_and_unload(station)
+    if not _r1["ok"]:
+        print(f"[cluster] {station} 站回收/卸载失败 ⇒ 中止: {_r1['steps']}")
+        return 1
     print(f"[cluster] 加载中 (站内 load-mem-gate 自动护航) ...")
     rc = ssh_stream(station, _build_infer_load_cmd(alias, backend))
     if rc != 0:
@@ -1352,10 +1593,10 @@ def cmd_unload_on(station: str) -> int:
         return 1
     # ★ 容器**必须先回收** —— 否则 infer-unload 的 wait_gtt 会因容器仍持 ~90 GB GTT
     #   在站上白等满 180 s (90×2s) 才 WARN。
-    _reclaim_containers(station)
-    rc = ssh_stream(station, "infer-unload")
-    print(f"[cluster] {station} 站 infer-unload: {'OK' if rc == 0 else f'rc={rc}'}")
-    return 0 if rc == 0 else 1
+    _r = reclaim_and_unload(station)
+    print(f"[cluster] {station} 站 " + "; ".join(
+        f"{s['name']}={'OK' if s['ok'] else (s['detail'] or 'FAIL')}" for s in _r["steps"]))
+    return 0 if _r["ok"] else 1
 
 
 def cmd_unload() -> int:
@@ -1369,8 +1610,8 @@ def cmd_unload() -> int:
         # (2026-09-29 实测形态: C 站 LAN 192.168.1.37 不通 —— 命令直接 traceback, 只回显了 A/B。
         #  与 P1-4「解析失败不能表现成业务全错」同一原则。)
         try:
-            _reclaim_containers(st)          # 同为 wait_gtt 前置; 且是"卸载"该有的语义
-            results[st] = ssh_stream(st, "infer-unload")
+            _r = reclaim_and_unload(st)   # 同为 wait_gtt 前置; 且是"卸载"该有的语义
+            results[st] = 0 if _r["ok"] else _r
         except Exception as e:          # 连接级异常: 超时 / 认证 / 端口不可达
             results[st] = f"{type(e).__name__}: {e}"
 
@@ -1383,9 +1624,9 @@ def cmd_unload() -> int:
     for st in ("A", "B", "C"):
         r = results.get(st, "线程未回填")
         if r == 0:
-            print(f"[cluster] {st} 站 infer-unload: OK")
+            print(f"[cluster] {st} 站 回收+卸载: OK")
         else:
-            print(f"[cluster] {st} 站 infer-unload: FAIL ({r})")
+            print(f"[cluster] {st} 站 回收+卸载: FAIL ({r})")
             rc = 1
     return rc
 

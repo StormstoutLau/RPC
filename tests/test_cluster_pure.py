@@ -267,33 +267,69 @@ chk("R1-⑨(FREE_QUOTA_PAID 已删): 门面上不再有历史档位常量（档�
 # 8080 仍由容器服务 ⇒ 远端 infer-load/健康检查命中 qwen，GLM 实际未起却报 READY。
 # 2026-10-25：选路改为纯函数 resolve_rpc_worker（A 被 qwen 占用 ⇒ 自动改 C），
 #   回收范围收窄到 head(B)+选中 worker；非 worker 站的 qwen 保留。
-def _rpc_reclaim_probe(worker=None, conf_target="", busy=None,
+_MISSING = object()
+
+
+def _swap(name, value):
+    """替换模块属性并返回还原闭包 —— 兼容"属性尚不存在"（先验红阶段新函数还没写）。"""
+    old = getattr(C, name, _MISSING)
+    setattr(C, name, value)
+
+    def _restore():
+        if old is _MISSING:
+            try:
+                delattr(C, name)
+            except AttributeError:
+                pass
+        else:
+            setattr(C, name, old)
+
+    return _restore
+
+
+def _rpc_reclaim_probe(worker=None, conf_target="", probe=None, reclaim=None,
                        alive="10.10.10.1:50052 10.10.11.3:50052",
                        decl="10.10.10.1:50052 10.10.11.3:50052"):
+    """RPC 编排夹具。probe 键 = target(ip:port)；reclaim 键 = 站名。
+
+    calls 记录"被要求回收的站"（只记 reclaim_and_unload 的入参）——
+    T4 的"回收 0 次"与 T5 的"两站都收到"都靠它断言。
+    """
     calls, built, runs = [], [], []
-    busy = busy or {}
-    saved = (C._reclaim_containers, C.ssh_stream, C.ssh_run,
-             C._build_infer_load_cmd, C._conf_rpc_target, C._probe_worker_busy)
+    probe = probe if probe is not None else {
+        "10.10.10.1:50052": {"state": "free", "reason": ""},
+        "10.10.11.3:50052": {"state": "free", "reason": ""},
+    }
+    reclaim = reclaim or {}
+    by_station = {C.RPC_WORKER_STATIONS[ip]: v for ip, v in probe.items()
+                  if ip in C.RPC_WORKER_STATIONS}
+
+    def _reclaim_and_unload(st):
+        calls.append(st)
+        return reclaim.get(st) or {"station": st, "ok": True, "steps": []}
+
+    def _ssh_run(st, cmd, **k):
+        runs.append(cmd)
+        return (True, decl) if cmd.startswith("rpc-nodes --all") else (True, alive)
+
+    restores = [
+        _swap("_reclaim_containers", lambda st: (True, "")),
+        _swap("reclaim_and_unload", _reclaim_and_unload),
+        _swap("ssh_stream", lambda *a, **k: 0),
+        _swap("ssh_run", _ssh_run),
+        _swap("_build_infer_load_cmd", lambda *a, **k: built.append((a, k)) or "true"),
+        _swap("_conf_rpc_target", lambda st, al: conf_target),
+        _swap("probe_worker_state",
+              lambda st: by_station.get(st) or {"state": "unknown", "reason": "未探测"}),
+        # 先验红期旧实现仍调 _probe_worker_busy；桩成"空闲"以隔离网络，
+        # 且不会掩盖 T2/T4（旧代码在这些输入下选 conf/显式，断言照样红）。
+        _swap("_probe_worker_busy", lambda st: ""),
+    ]
     try:
-        C._reclaim_containers = lambda st: calls.append(st) or True
-        C.ssh_stream = lambda *a, **k: 0
-
-        def _ssh_run(st, cmd, **k):
-            runs.append(cmd)
-            if cmd.startswith("rpc-nodes --all"):
-                return True, decl
-            if cmd.startswith("rpc-nodes "):
-                return True, alive
-            return True, alive
-
-        C.ssh_run = _ssh_run
-        C._build_infer_load_cmd = lambda *a, **k: built.append((a, k)) or "true"
-        C._conf_rpc_target = lambda st, al: conf_target
-        C._probe_worker_busy = lambda st: busy.get(st, "")
         rc = C._load_rpc("glm-5.3-flash", "B", None, worker)
     finally:
-        (C._reclaim_containers, C.ssh_stream, C.ssh_run,
-         C._build_infer_load_cmd, C._conf_rpc_target, C._probe_worker_busy) = saved
+        for _r in reversed(restores):
+            _r()
     return rc, calls, built, runs
 
 
@@ -306,7 +342,9 @@ chk("RPC load 默认(无 conf): 自动选 A，回收范围 = A+B（非 worker C 
 
 # 2026-10-25 自动切换：A 有 halogen ⇒ 自动改 C，A 的 qwen 不被回收。
 _rc_sw, _calls_sw, _built_sw, _runs_sw = _rpc_reclaim_probe(
-    conf_target="10.10.10.1:50052", busy={"A": "halogen"})
+    conf_target="10.10.10.1:50052",
+    probe={"10.10.10.1:50052": {"state": "busy", "reason": "halogen"},
+           "10.10.11.3:50052": {"state": "free", "reason": ""}})
 chk("RPC load 自动切换: A 忙(halogen) ⇒ 选 C + 回收 B/C（A 的 qwen 保留）",
     _rc_sw == 0 and _calls_sw == ["B", "C"]
     and _built_sw[-1][0][3] == "10.10.11.3:50052"
@@ -315,7 +353,9 @@ chk("RPC load 自动切换: A 忙(halogen) ⇒ 选 C + 回收 B/C（A 的 qwen �
 
 # 两站都忙 ⇒ 改用 C（回收 C，保 A）；只有 C 不可用时才回退 A。
 _rc_fb, _calls_fb, _built_fb, _ = _rpc_reclaim_probe(
-    conf_target="10.10.10.1:50052", busy={"A": "halogen", "C": "halogen"})
+    conf_target="10.10.10.1:50052",
+    probe={"10.10.10.1:50052": {"state": "busy", "reason": "halogen"},
+           "10.10.11.3:50052": {"state": "busy", "reason": "halogen"}})
 chk("RPC load 自动选路: 两站都忙 ⇒ 改用 C（回收 C，保 A）",
     _rc_fb == 0 and _calls_fb == ["B", "C"] and _built_fb[-1][0][3] == "10.10.11.3:50052",
     f"rc={_rc_fb} calls={_calls_fb} built={_built_fb}")
@@ -350,6 +390,46 @@ _rc_undecl, _, _built_undecl, _ = _rpc_reclaim_probe(
     worker="C", decl="10.10.10.1:50052")
 chk("RPC load --worker C: 目标不在 nodes.env 声明 ⇒ 加载前中止",
     _rc_undecl == 1 and not _built_undecl, f"rc={_rc_undecl} built={_built_undecl}")
+
+# ── 三态选路的编排级断言（T3-T7，见 DESIGN §10.4）─────────────────────────
+_U_T = {"state": "unknown", "reason": "ssh-failed: timeout"}
+_B_T = {"state": "busy", "reason": "halogen"}
+_F_T = {"state": "free", "reason": ""}
+
+_rc_t3, _calls_t3, _built_t3, _ = _rpc_reclaim_probe(
+    conf_target="10.10.10.1:50052",
+    probe={"10.10.10.1:50052": _U_T, "10.10.11.3:50052": _F_T})
+chk("T3 编排: conf A unknown + C free ⇒ 选 C，A 不被回收",
+    _rc_t3 == 0 and _calls_t3 == ["B", "C"] and "A" not in _calls_t3
+    and _built_t3[-1][0][3] == "10.10.11.3:50052",
+    f"rc={_rc_t3} calls={_calls_t3} built={_built_t3}")
+
+_rc_t4, _calls_t4, _built_t4, _ = _rpc_reclaim_probe(
+    worker="C", probe={"10.10.11.3:50052": _U_T})
+chk("T4 编排: 显式 --worker C 但 C unknown ⇒ 中止且回收 0 次",
+    _rc_t4 == 1 and _calls_t4 == [] and not _built_t4,
+    f"rc={_rc_t4} calls={_calls_t4} built={_built_t4}")
+
+_rc_t5, _calls_t5, _built_t5, _ = _rpc_reclaim_probe(
+    conf_target="10.10.10.1:50052",
+    probe={"10.10.10.1:50052": _B_T,
+           "10.10.11.3:50052": {"state": "busy", "reason": "port8080"}})
+chk("T5 编排: worker 被普通引擎占用 ⇒ B、C 都收到 reclaim_and_unload",
+    _rc_t5 == 0 and _calls_t5 == ["B", "C"], f"rc={_rc_t5} calls={_calls_t5}")
+
+_rc_t6, _calls_t6, _built_t6, _runs_t6 = _rpc_reclaim_probe(
+    reclaim={"B": {"station": "B", "ok": False, "steps": [
+        {"name": "infer-unload", "ok": False, "rc": 1, "detail": "rc=1"}]}})
+chk("T6 编排: head(B) 卸载失败 ⇒ 中止，未调 rpc-nodes --start",
+    _rc_t6 == 1 and not _built_t6
+    and not any("--start" in c for c in _runs_t6),
+    f"rc={_rc_t6} built={_built_t6} runs={_runs_t6}")
+
+_rc_t7, _calls_t7, _built_t7, _ = _rpc_reclaim_probe(
+    reclaim={"A": {"station": "A", "ok": False, "steps": [
+        {"name": "infer-unload", "ok": False, "rc": 1, "detail": "rc=1"}]}})
+chk("T7 编排: worker(A) 卸载失败 ⇒ 中止", _rc_t7 == 1 and not _built_t7,
+    f"rc={_rc_t7} built={_built_t7}")
 
 # 非法/越界指派必须响亮拒绝（不静默退化）。
 chk("load --worker B: 非法 worker 拒绝（head 固定 B，B 不能当 worker）",
@@ -454,26 +534,39 @@ _CW = "10.10.11.3:50052"
 _CANDS = [_AW, _CW]
 
 
-def _rw(conf, busy=None, explicit=None, cands=None):
-    return C.resolve_rpc_worker(conf, _CANDS if cands is None else cands, busy or {}, explicit)
+_F_ = {"state": "free", "reason": ""}
+_B_ = {"state": "busy", "reason": "halogen"}
+_U_ = {"state": "unknown", "reason": "ssh-failed: timeout"}
+
+
+def _rw(conf, probe=None, explicit=None, cands=None):
+    """选路纯函数夹具。probe 键 = target(ip:port)。
+
+    probe=None/空 dict ⇒ 全 free（保持迁移前 12 条用例可读）；非空 dict 不补默认，
+    这样才能表达"缺键 = unknown"（T1/T2）。
+    """
+    cs = _CANDS if cands is None else cands
+    if not probe:                      # 空 dict / None 都等价"全空闲"（旧 busy={} 语义）
+        probe = {t: {"state": "free", "reason": ""} for t in cs}
+    return C.resolve_rpc_worker(conf, cs, probe, explicit)
 
 
 d = _rw(_AW)
 chk("rpc-worker: 未指定且 conf 空闲 ⇒ 选 conf(A)",
     d["target"] == _AW and d["station"] == "A" and d["source"] == "conf", str(d))
-d = _rw(_AW, {_AW: "halogen"})
-chk("rpc-worker: conf(A) 被 halogen 占用 ⇒ 自动改 C",
+d = _rw(_AW, {_AW: _B_, _CW: _F_})
+chk("rpc-worker: conf(A) 被 halogen 占用、C 空闲 ⇒ 自动改 C",
     d["target"] == _CW and d["station"] == "C" and d["source"] == "auto", str(d))
-d = _rw(_AW, {_AW: "halogen", _CW: "halogen"})
+d = _rw(_AW, {_AW: _B_, _CW: _B_})
 chk("rpc-worker: 两站都忙 ⇒ 改用 C（回收 C，保 A）",
     d["target"] == _CW and d["source"] == "auto" and "回收" in d["reason"], str(d))
-d = _rw(_AW, {_AW: "halogen"}, cands=[_AW])
+d = _rw(_AW, {_AW: _B_}, cands=[_AW])
 chk("rpc-worker: conf 忙且无其他候选 ⇒ 回退 conf(A) 并标 fallback",
     d["target"] == _AW and d["source"] == "fallback", str(d))
 d = _rw(_AW, {}, explicit=_CW)
 chk("rpc-worker: 显式 --worker C ⇒ 选 C（显式优先）",
     d["target"] == _CW and d["source"] == "explicit", str(d))
-d = _rw(_AW, {_AW: "halogen"}, explicit=_CW)
+d = _rw(_AW, {_AW: _B_, _CW: _F_}, explicit=_CW)
 chk("rpc-worker: 显式 C 不受 A 忙影响",
     d["target"] == _CW and d["source"] == "explicit", str(d))
 d = _rw(_AW, {}, explicit="10.10.99.99:50052")
@@ -481,7 +574,7 @@ chk("rpc-worker: 显式目标未声明 ⇒ target=None（可响亮中止）",
     d["target"] is None and d["source"] == "explicit-invalid", str(d))
 d = _rw(None, {})
 chk("rpc-worker: conf 未配置 ⇒ 取候选首个", d["target"] == _AW and d["source"] == "auto", str(d))
-d = _rw(None, {_AW: "halogen"})
+d = _rw(None, {_AW: _B_, _CW: _F_})
 chk("rpc-worker: conf 未配置且首个忙 ⇒ 取下一个空闲",
     d["target"] == _CW and d["source"] == "auto", str(d))
 d = _rw(_AW, {}, cands=[_CW, _AW])
@@ -492,16 +585,210 @@ chk("rpc-worker: 候选为空 ⇒ None（判不了 ≠ 选默认）",
 d = _rw("10.10.99.99:50052", {})
 chk("rpc-worker: conf 不在候选 ⇒ 从候选自动选，不凭空用 conf",
     d["target"] == _AW and d["source"] == "auto", str(d))
-# 同源对照（防恒真）：同一输入只改 busy ⇒ 选择必须翻转
-_d1, _d2 = _rw(_AW, {}), _rw(_AW, {_AW: "halogen"})
+# 同源对照（防恒真）：同一输入只改 A 的状态（free → busy）⇒ 选择必须翻转
+_d1, _d2 = _rw(_AW, {}), _rw(_AW, {_AW: _B_, _CW: _F_})
 chk("rpc-worker 同源对照: 只改 busy(A) ⇒ 选站翻转",
     _d1["target"] == _AW and _d2["target"] == _CW, f'{_d1["target"]} -> {_d2["target"]}')
+
+# ── T1-T4：未知态不得进入可回收分支（DESIGN §10.4）────────────────────────
+d = _rw(_AW, {_AW: _U_, _CW: _U_})
+chk("T1: 两站 unknown ⇒ aborted-unknown，target=None",
+    d["target"] is None and d["source"] == "aborted-unknown", str(d))
+d = _rw(_AW, {_AW: _B_, _CW: _U_})
+chk("T2: conf 忙 + 备选 unknown ⇒ 中止（不选 C、不回收 C）",
+    d["target"] is None and d["source"] == "aborted-unknown", str(d))
+d = _rw(_AW, {_AW: _U_, _CW: _F_})
+chk("T3: conf unknown + 备选 free ⇒ 选 C", d["target"] == _CW and d["source"] == "auto", str(d))
+d = _rw(_CW, {_CW: _U_}, explicit=_CW)
+chk("T4: 显式 worker unknown ⇒ aborted-unknown（显式也须探测）",
+    d["target"] is None and d["source"] == "aborted-unknown", str(d))
 chk("rpc-worker busy 解析: 空输出 ⇒ 空闲", C.parse_worker_busy("") == "", "")
 chk("rpc-worker busy 解析: halogen ⇒ 单个忙因",
     C.parse_worker_busy("halogen\n") == "halogen", C.parse_worker_busy("halogen\n"))
 chk("rpc-worker busy 解析: 双因去重且排序",
     C.parse_worker_busy("port8080\nhalogen\nhalogen\n") == "halogen+port8080",
     C.parse_worker_busy("port8080\nhalogen\nhalogen\n"))
+
+# ── T8/T9：回收契约（薄壳，mock ssh_run）──────────────────────────────────
+def _reclaim_shell(ok, out):
+    restore = _swap("ssh_run", lambda st, cmd, **k: (ok, out))
+    try:
+        return C._reclaim_containers("A")
+    finally:
+        restore()
+
+
+_r8 = _reclaim_shell(False, "ssh: timeout")
+chk("T8: 容器回收 SSH 失败 ⇒ (False, 'ssh:...')",
+    isinstance(_r8, tuple) and len(_r8) == 2 and _r8[0] is False
+    and str(_r8[1]).startswith("ssh:"), str(_r8))
+_r9 = _reclaim_shell(True, "PORT8080_STILL_BUSY\n")
+chk("T9: 端口未释放 ⇒ (False, 'port8080-still-busy')",
+    isinstance(_r9, tuple) and _r9 == (False, "port8080-still-busy"), str(_r9))
+
+
+# ── E6/E7：reclaim_and_unload 的异常隔离与跳过语义（Step 10 验收补测）────
+def _rau_e7():
+    """容器步失败 ⇒ 跳过 unload（不发第二个写动作）。"""
+    r1 = _swap("_reclaim_containers", lambda st: (False, "ssh:boom"))
+    ran = {"stream": False}
+
+    def _fake_stream(st, cmd):
+        ran["stream"] = True
+        return 0
+
+    r2 = _swap("ssh_stream", _fake_stream)
+    try:
+        return C.reclaim_and_unload("B"), ran["stream"]
+    finally:
+        r1(); r2()
+
+
+_r_e7, _streamed_e7 = _rau_e7()
+chk("E7: 容器步失败 ⇒ steps[1].detail 含 skipped，且未发 infer-unload",
+    _r_e7["ok"] is False
+    and str(_r_e7["steps"][1]["detail"]).startswith("skipped")
+    and not _streamed_e7, str(_r_e7))
+
+
+def _rau_e6():
+    """infer-unload 连接异常 ⇒ 就地捕获，不抛出。"""
+    r1 = _swap("_reclaim_containers", lambda st: (True, ""))
+
+    def _boom(st, cmd):
+        raise RuntimeError("connection reset")
+
+    r2 = _swap("ssh_stream", _boom)
+    try:
+        return C.reclaim_and_unload("B")
+    finally:
+        r1(); r2()
+
+
+_r_e6 = _rau_e6()
+chk("E6: infer-unload 连接异常 ⇒ 就地捕获，detail 含异常类型名，不抛出",
+    _r_e6["ok"] is False
+    and "RuntimeError" in str(_r_e6["steps"][1]["detail"]), str(_r_e6["steps"][1]))
+
+# ── T10-T13：容器预检（纯函数，见 DESIGN §4.4）───────────────────────────
+_SPEC_T = {
+    "image": "halogen:test",
+    "volume": ["/data/models/hgn/peonist-ai/halogen-qwen3.8-flash-next:/hgn",
+               "/data/models/hgn/peonist-ai/qwen38-flash-next-tokenizer:/tokenizer:ro"],
+    "checkpoint": "/hgn/qwen38-flash-next-v2.hgn",
+    "assets": [
+        {"path": "/hgn/qwen38-flash-next-v2.hgn", "kind": "file", "min_bytes": 60 * 1024**3},
+        {"path": "/hgn/qwen38-flash-next-ngram.hgn", "kind": "file", "min_bytes": 45 * 1024**3},
+        {"path": "/tokenizer", "kind": "dir", "min_entries": 1},
+    ],
+}
+_HP = getattr(C, "_host_path_for", None)
+_CA = getattr(C, "classify_container_assets", None)
+_V2 = "/hgn/qwen38-flash-next-v2.hgn"
+_NG = "/hgn/qwen38-flash-next-ngram.hgn"
+_TK = "/tokenizer"
+
+
+def _cls(observed):
+    return _CA(_SPEC_T, observed) if _CA else None
+
+
+_OK_OBS = {"image": {"present": True}, "assets": {
+    _V2: {"kind": "file", "size": 60 * 1024**3},
+    _NG: {"kind": "file", "size": 45 * 1024**3},
+    _TK: {"kind": "dir", "entries": 5},
+}}
+chk("T10 前置(防恒真): 资产齐全 ⇒ problems 为空",
+    _cls(_OK_OBS) == [], str(_cls(_OK_OBS)))
+
+_p10 = _cls({**_OK_OBS, "assets": {k: v for k, v in _OK_OBS["assets"].items() if k != _V2}})
+chk("T10: 缺 checkpoint ⇒ asset-missing（且回收 0 次由调用顺序保证）",
+    _p10 is not None and any(x.startswith(f"asset-missing:{_V2}") for x in _p10), str(_p10))
+
+_p11a = _cls({**_OK_OBS, "assets": {k: v for k, v in _OK_OBS["assets"].items() if k != _NG}})
+chk("T11a: 缺 ngram ⇒ asset-missing",
+    _p11a is not None and any(x.startswith(f"asset-missing:{_NG}") for x in _p11a), str(_p11a))
+
+_p11b = _cls({**_OK_OBS, "assets": {**_OK_OBS["assets"], _TK: {"kind": "dir", "entries": 0}}})
+chk("T11b: tokenizer 空目录 ⇒ asset-empty-dir",
+    _p11b is not None and any(x.startswith(f"asset-empty-dir:{_TK}") for x in _p11b),
+    str(_p11b))
+
+_p12 = _cls({**_OK_OBS, "image": {"present": False}})
+chk("T12: 镜像缺失 ⇒ problems 含 image-missing",
+    _p12 is not None and "image-missing" in _p12, str(_p12))
+
+chk("T13a: /hgn/x 映射到 volume 宿主路径",
+    bool(_HP) and _HP(_SPEC_T, "/hgn/x")
+    == "/data/models/hgn/peonist-ai/halogen-qwen3.8-flash-next/x",
+    str(_HP(_SPEC_T, "/hgn/x")) if _HP else "<缺 _host_path_for>")
+chk("T13b: /tokenizer 映射（忽略 :ro 后缀）",
+    bool(_HP) and _HP(_SPEC_T, "/tokenizer")
+    == "/data/models/hgn/peonist-ai/qwen38-flash-next-tokenizer",
+    str(_HP(_SPEC_T, "/tokenizer")) if _HP else "<缺>")
+chk("T13c: 未挂载路径 ⇒ 空串（判不了 ≠ 猜一个）",
+    bool(_HP) and _HP(_SPEC_T, "/nope") == "", str(_HP(_SPEC_T, "/nope")) if _HP else "<缺>")
+chk("T13d: 根映射不丢前导斜杠（Step 7 修）",
+    bool(_HP) and _HP({"volume": ["/data/models:/"]}, "/x") == "/data/models/x",
+    str(_HP({"volume": ["/data/models:/"]}, "/x")) if _HP else "<缺>")
+
+# ── D1-D4：实施期偏差的锚点 ──────────────────────────────────────────────
+_p_d1a = _cls({**_OK_OBS, "assets": {**_OK_OBS["assets"], _V2: {"kind": "unreadable"}}})
+chk("D1a: 资产不可读 ⇒ asset-unreadable（不得降级成 asset-missing）",
+    _p_d1a is not None
+    and any(x.startswith(f"asset-unreadable:{_V2}") for x in _p_d1a)
+    and not any(x.startswith(f"asset-missing:{_V2}") for x in _p_d1a), str(_p_d1a))
+
+_p_d1b = _cls({**_OK_OBS, "assets": {**_OK_OBS["assets"], _V2: {"kind": "dir", "entries": 3}}})
+chk("D1b: 配方要 file 但观测 dir ⇒ asset-not-file",
+    _p_d1b is not None and any(x.startswith(f"asset-not-file:{_V2}") for x in _p_d1b),
+    str(_p_d1b))
+
+_p_d1c = _cls({**_OK_OBS, "assets": {**_OK_OBS["assets"], _TK: {"kind": "file", "size": 10}}})
+chk("D1c: 配方要 dir 但观测 file ⇒ asset-not-dir",
+    _p_d1c is not None and any(x.startswith(f"asset-not-dir:{_TK}") for x in _p_d1c),
+    str(_p_d1c))
+
+_SQ = getattr(C, "sh_single_quote", None)
+chk("D2: sh_single_quote 把含空格/单引号的路径包成单个 shell 词",
+    bool(_SQ) and _SQ("/a b/it's") == "'/a b/it'\\''s'",
+    repr(_SQ("/a b/it's")) if _SQ else "<缺 sh_single_quote>")
+
+_PM = getattr(C, "_probe_map", None)
+
+
+def _pm_probe(states):
+    restore = _swap("probe_worker_state",
+                    lambda st: states.get(st) or {"state": "unknown", "reason": "未探测"})
+    try:
+        return _PM([_AW, "10.10.99.99:50052"]) if _PM else None
+    finally:
+        restore()
+
+
+_m4 = _pm_probe({"A": {"state": "busy", "reason": "halogen"}})
+chk("D4: _probe_map 只探可映射到站的目标（未声明目标不入表，⇒ 选路判 unknown）",
+    _m4 is not None and _m4 == {_AW: {"state": "busy", "reason": "halogen"}}, str(_m4))
+
+# ── T14：aliases 站级缺口（门禁，动态导入 rpc_check）──────────────────────
+def _aliases_probe(models):
+    try:
+        import importlib.util
+        p = ROOT / "ops" / "rpc_check.py"
+        spec = importlib.util.spec_from_file_location("_rpc_check_t14", str(p))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        m.load_inventory = lambda: ({}, models)
+        return m.check_aliases({})
+    except Exception as e:                        # 导入失败也必须红，不得崩整条测试
+        return "ERROR", f"{type(e).__name__}: {e}", []
+
+
+_v14, _n14, _d14 = _aliases_probe({
+    "qwen3.8-flash-next": {"alias": "qwen3.8-flash-next",
+                           "stations": ["B", "C"], "conf": ["C"]}})
+chk("T14: inventory 缺 A 站 stations 声明 ⇒ FAIL 且文案含'模型库条目'",
+    _v14 == "FAIL" and any("模型库条目" in x for x in _d14), f"{_v14} {_d14}")
 
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAILED -> {fails}")

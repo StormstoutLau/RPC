@@ -1,0 +1,260 @@
+﻿PASS  alias_of: 剥离 -GGUF 后缀并小写   qwen3.8-27b
+PASS  alias_of: -GGUF 匹配大小写不敏感   foo
+PASS  alias_of: 无后缀原样小写
+PASS  alias_of: minimax-m2.7 前缀 → m27-q4ks   m27-q4ks
+PASS  alias_of: minimax 前缀（非全等）也被重映射 [BUG-PIN]   m27-q4ks
+PASS  alias_of: 非 minimax 前缀不受影响   minimax-m3.0
+PASS  infer_quant: Q4_K_M（文档示例）   Q4_K_M
+PASS  infer_quant: UD-IQ4_XS 带 UD- 前缀整体命中   UD-IQ4_XS
+PASS  infer_quant: 带目录的入参只取 basename   Q8_0
+PASS  infer_quant: F16 大写档可命中   'F16'
+PASS  infer_quant: 小写 bf16 不被识别 → 空串 [BUG-PIN]   ''
+PASS  infer_quant: 无量化串 → 空串   ''
+PASS  infer_quant: 非 .gguf 也照样解析（不校验扩展名）   Q4_K_M
+PASS  pick_representative: 优先第一分片（乱序输入）
+PASS  pick_representative: 无第一分片 → 排序取首   /m/a.gguf
+PASS  pick_representative: 空列表 → 空串
+PASS  group_by_model: 同模型多分片归一组   [('repoA', 'modelX'), ('repoB', '')]
+PASS  group_by_model: 仓库级直放 gguf → model_dir 为空串   [('repoA', 'modelX'), ('repoB', '')]
+PASS  group_by_model: 非 MODELS_ROOT 路径被忽略   [('repoA', 'modelX'), ('repoB', '')]
+PASS  group_by_model: 段数不足被忽略   [('repoA', 'modelX'), ('repoB', '')]
+PASS  parse_model_meta: G 段解析出 gguf 明细   {'ctx': 8192, 'file_type': 15, 'arch': 'llama', 'head_count_kv': 8}
+PASS  parse_model_meta: G 段空字段 → None（非 0/非异常）   {'ctx': None, 'file_type': None, 'arch': '', 'head_count_kv': None}
+PASS  parse_model_meta: G 段非法/过短行被跳过   n=2
+PASS  parse_model_meta: P 段解析出 conf 参数（值为字符串）   {'ctx': '32768', 'port': '8080', 'backend': 'unsloth', 'threads': '8', 'n_cpu_moe': '0', 'rpc_target': ''}
+PASS  parse_model_meta: P 段过短行被跳过   n=1
+PASS  parse_model_meta: 空输入 → 两个空字典（不抛）
+PASS  _reqlog_aggregate: 计数与累加正确   n=2 g_tok=500.0 restarts=1
+PASS  _reqlog_aggregate: 吞吐**加权**（Σtok/Σsec，非逐条比值均值）   p_tps=100.0 g_tps=50.0
+PASS  _reqlog_aggregate: 墙钟口径字段存在（前端并列两列）   p_wall=10.0 g_wall=25.0 busy=0.5
+PASS  _reqlog_aggregate: peak/first/last/span/ports   100.0-200.0 span=100.0 ports={8080, 8081}
+PASS  _reqlog_aggregate: 空输入 → 除数为 0 时速率给 None（不是 0/异常）   p_tps=None span=None
+PASS  agent_ledger_freshness: 空列表 → 空字典
+PASS  agent_ledger_freshness: 取**最新** ts 对应的 label（非最后一行顺序）   {'label': 'new', 'age_s': 10}
+PASS  agent_ledger_freshness: age_s 为 int 且 ≈ 10s（±5s 容差）   {'label': 'new', 'age_s': 10}
+PASS  agent_ledger_freshness: ts 不可解析 → age_s=None 但保留 label   {'label': 'L', 'age_s': None}
+PASS  agent_ledger_freshness: 缺 ts 键 → KeyError [BUG-PIN]
+PASS  resolve_quant: 无 ledger 登记时回退文件名推断（来源=filename）   ('Q4_K_M', 'filename')
+PASS  resolve_quant: 无登记且文件名无量化串 → ('', 'none')   ('', 'none')
+PASS  _free_quota_effective: 直读 free_limit（权威字段优先）   (1000, 'limit')
+PASS  _free_quota_effective: ★同源对照 —— is_free_tier=False 但 limit=50 ⇒ 直读 50（**不**按推断给 1000）   (50, 'limit')
+PASS  ★甲/乙结论必须不同（否则本组判据恒真）: 直读 limit=50 vs 推断 is_free_tier=False   直读=50 推断=1000
+PASS  _free_quota_effective: 缺字段 ⇒ fail-closed 50 且**如实报出** source='fallback-50'   (50, 'fallback-50')
+PASS  _free_quota_effective: free_limit=None ⇒ 兜底 50 + fallback-50（判不了 ≠ 猜）   (50, 'fallback-50')
+PASS  _free_quota_effective: 非数字串 ⇒ 兜底 50 + fallback-50   (50, 'fallback-50')
+PASS  _free_quota_effective: 0/负 ⇒ 兜底 50 + fallback-50（不把 0 当有效上限）   (50, 'fallback-50')
+PASS  R1-①(旧件四件已删): 门面上不再有 EGRESS_DAILY_FILE/_egress_daily/_egress_bump/_egress_save（防死件复活）   仍可达: []
+PASS  R1-⑨(FREE_QUOTA_PAID 已删): 门面上不再有历史档位常量（档位真值源 = 服务端 free_limit）   仍可达: FREE_QUOTA_PAID
+[cluster] == RPC 双机类加载编排: glm-5.3-flash @ B 站 (master) ==
+[cluster] 选路输入: conf=(空) busy={}
+[cluster] RPC_AUTO_WORKER source=auto target=10.10.10.1:50052 station=A :: conf 不在候选 ⇒ 用空闲节点
+[cluster] 回收容器范围: A/B（非 worker 站的 qwen 保留）
+[cluster] [1/4] 卸载本站现存实例 (幂等, 释放 GTT) ...
+[cluster] [2/4] 启动 RPC 工作节点 (rpc-nodes --start, 含等端口 LISTEN) ...
+10.10.10.1:50052 10.10.11.3:50052
+[cluster] [3/4] RPC 存活节点: 10.10.10.1:50052 10.10.11.3:50052
+[cluster]        声明清单  : 10.10.10.1:50052 10.10.11.3:50052
+[cluster] [4/4] 加载权重 (RPC_TARGET=10.10.10.1:50052) ...
+[cluster] B 站引擎响应: 10.10.10.1:50052 10.10.11.3:50052
+[cluster] RPC READY ✓  (glm-5.3-flash 已跨机加载; 收尾用 cluster.py unload)
+FAIL  RPC load 默认(无 conf): 自动选 A，回收范围 = A+B（非 worker C 保留）   rc=0 calls=[] built=[(('glm-5.3-flash', 'llama-rpc', None, '10.10.10.1:50052'), {})] runs=['rpc-nodes --all 2>/dev/null', "rpc-nodes --start 'glm-5.3-flash' '10.10.10.1:50052'", 'rpc-nodes 2>/dev/null', 'curl -s --max-time 5 http://127.0.0.1:8080/health']
+[cluster] == RPC 双机类加载编排: glm-5.3-flash @ B 站 (master) ==
+[cluster] 选路输入: conf=10.10.10.1:50052 busy={}
+[cluster] RPC_AUTO_WORKER source=conf target=10.10.10.1:50052 station=A :: conf 目标空闲
+[cluster] 回收容器范围: A/B（非 worker 站的 qwen 保留）
+[cluster] [1/4] 卸载本站现存实例 (幂等, 释放 GTT) ...
+[cluster] [2/4] 启动 RPC 工作节点 (rpc-nodes --start, 含等端口 LISTEN) ...
+10.10.10.1:50052 10.10.11.3:50052
+[cluster] [3/4] RPC 存活节点: 10.10.10.1:50052 10.10.11.3:50052
+[cluster]        声明清单  : 10.10.10.1:50052 10.10.11.3:50052
+[cluster] [4/4] 加载权重 (RPC_TARGET=10.10.10.1:50052) ...
+[cluster] B 站引擎响应: 10.10.10.1:50052 10.10.11.3:50052
+[cluster] RPC READY ✓  (glm-5.3-flash 已跨机加载; 收尾用 cluster.py unload)
+FAIL  RPC load 自动切换: A 忙(halogen) ⇒ 选 C + 回收 B/C（A 的 qwen 保留）   rc=0 calls=[] built=[(('glm-5.3-flash', 'llama-rpc', None, '10.10.10.1:50052'), {})] runs=['rpc-nodes --all 2>/dev/null', "rpc-nodes --start 'glm-5.3-flash' '10.10.10.1:50052'", 'rpc-nodes 2>/dev/null', 'curl -s --max-time 5 http://127.0.0.1:8080/health']
+[cluster] == RPC 双机类加载编排: glm-5.3-flash @ B 站 (master) ==
+[cluster] 选路输入: conf=10.10.10.1:50052 busy={}
+[cluster] RPC_AUTO_WORKER source=conf target=10.10.10.1:50052 station=A :: conf 目标空闲
+[cluster] 回收容器范围: A/B（非 worker 站的 qwen 保留）
+[cluster] [1/4] 卸载本站现存实例 (幂等, 释放 GTT) ...
+[cluster] [2/4] 启动 RPC 工作节点 (rpc-nodes --start, 含等端口 LISTEN) ...
+10.10.10.1:50052 10.10.11.3:50052
+[cluster] [3/4] RPC 存活节点: 10.10.10.1:50052 10.10.11.3:50052
+[cluster]        声明清单  : 10.10.10.1:50052 10.10.11.3:50052
+[cluster] [4/4] 加载权重 (RPC_TARGET=10.10.10.1:50052) ...
+[cluster] B 站引擎响应: 10.10.10.1:50052 10.10.11.3:50052
+[cluster] RPC READY ✓  (glm-5.3-flash 已跨机加载; 收尾用 cluster.py unload)
+FAIL  RPC load 自动选路: 两站都忙 ⇒ 改用 C（回收 C，保 A）   rc=0 calls=[] built=[(('glm-5.3-flash', 'llama-rpc', None, '10.10.10.1:50052'), {})]
+[cluster] == RPC 双机类加载编排: glm-5.3-flash @ B 站 (master) ==
+[cluster] RPC_AUTO_WORKER source=explicit target=10.10.11.3:50052 station=C :: 用户显式指派
+[cluster] 回收容器范围: B/C（非 worker 站的 qwen 保留）
+[cluster] [1/4] 卸载本站现存实例 (幂等, 释放 GTT) ...
+[cluster] [2/4] 启动 RPC 工作节点 (rpc-nodes --start, 含等端口 LISTEN) ...
+10.10.10.1:50052 10.10.11.3:50052
+[cluster] [3/4] RPC 存活节点: 10.10.10.1:50052 10.10.11.3:50052
+[cluster]        声明清单  : 10.10.10.1:50052 10.10.11.3:50052
+[cluster] [4/4] 加载权重 (RPC_TARGET=10.10.11.3:50052) ...
+[cluster] B 站引擎响应: 10.10.10.1:50052 10.10.11.3:50052
+[cluster] RPC READY ✓  (glm-5.3-flash 已跨机加载; 收尾用 cluster.py unload)
+FAIL  RPC load --worker C: 映射 10.10.11.3:50052 并透传 --rpc-target（回收 B/C）   rc=0 calls=[] built=[(('glm-5.3-flash', 'llama-rpc', None, '10.10.11.3:50052'), {})] runs=['rpc-nodes --all 2>/dev/null', "rpc-nodes --start 'glm-5.3-flash' '10.10.11.3:50052'", 'rpc-nodes 2>/dev/null', 'curl -s --max-time 5 http://127.0.0.1:8080/health']
+[cluster] == RPC 双机类加载编排: glm-5.3-flash @ B 站 (master) ==
+[cluster] RPC_AUTO_WORKER source=explicit target=10.10.10.1:50052 station=A :: 用户显式指派
+[cluster] 回收容器范围: A/B（非 worker 站的 qwen 保留）
+[cluster] [1/4] 卸载本站现存实例 (幂等, 释放 GTT) ...
+[cluster] [2/4] 启动 RPC 工作节点 (rpc-nodes --start, 含等端口 LISTEN) ...
+10.10.10.1:50052 10.10.11.3:50052
+[cluster] [3/4] RPC 存活节点: 10.10.10.1:50052 10.10.11.3:50052
+[cluster]        声明清单  : 10.10.10.1:50052 10.10.11.3:50052
+[cluster] [4/4] 加载权重 (RPC_TARGET=10.10.10.1:50052) ...
+[cluster] B 站引擎响应: 10.10.10.1:50052 10.10.11.3:50052
+[cluster] RPC READY ✓  (glm-5.3-flash 已跨机加载; 收尾用 cluster.py unload)
+FAIL  RPC load --worker A: 映射 10.10.10.1:50052（回收 A/B）   rc=0 calls=[] built=[(('glm-5.3-flash', 'llama-rpc', None, '10.10.10.1:50052'), {})]
+[cluster] == RPC 双机类加载编排: glm-5.3-flash @ B 站 (master) ==
+[cluster] 选路输入: conf=10.10.10.1:50052 busy={}
+[cluster] RPC_AUTO_WORKER source=conf target=10.10.10.1:50052 station=A :: conf 目标空闲
+[cluster] 回收容器范围: A/B（非 worker 站的 qwen 保留）
+[cluster] [1/4] 卸载本站现存实例 (幂等, 释放 GTT) ...
+[cluster] [2/4] 启动 RPC 工作节点 (rpc-nodes --start, 含等端口 LISTEN) ...
+10.10.10.1:50052 10.10.11.3:50052
+[cluster] [3/4] RPC 存活节点: 10.10.10.1:50052 10.10.11.3:50052
+[cluster]        声明清单  : 10.10.10.1:50052 10.10.11.3:50052
+[cluster] [4/4] 加载权重 (RPC_TARGET=10.10.10.1:50052) ...
+[cluster] B 站引擎响应: 10.10.10.1:50052 10.10.11.3:50052
+[cluster] RPC READY ✓  (glm-5.3-flash 已跨机加载; 收尾用 cluster.py unload)
+FAIL  RPC load 默认: conf 单 worker A ⇒ 预启动与 --rpc-target 都只带 A（回收 A/B）   rc=0 calls=[] built=[(('glm-5.3-flash', 'llama-rpc', None, '10.10.10.1:50052'), {})] runs=['rpc-nodes --all 2>/dev/null', "rpc-nodes --start 'glm-5.3-flash' '10.10.10.1:50052'", 'rpc-nodes 2>/dev/null', 'curl -s --max-time 5 http://127.0.0.1:8080/health']
+[cluster] == RPC 双机类加载编排: glm-5.3-flash @ B 站 (master) ==
+[cluster] RPC_AUTO_WORKER source=explicit target=10.10.11.3:50052 station=C :: 用户显式指派
+[cluster] 回收容器范围: B/C（非 worker 站的 qwen 保留）
+[cluster] [1/4] 卸载本站现存实例 (幂等, 释放 GTT) ...
+[cluster] [2/4] 启动 RPC 工作节点 (rpc-nodes --start, 含等端口 LISTEN) ...
+10.10.10.1:50052
+[cluster] [3/4] RPC 存活节点: 10.10.10.1:50052
+[cluster]        声明清单  : 10.10.10.1:50052 10.10.11.3:50052
+[cluster] 选中 worker 10.10.11.3:50052 未在存活清单 (10.10.10.1:50052) → 中止 (不会静默退化到 conf/auto)。
+PASS  RPC load --worker C: 目标不在存活清单 ⇒ 加载前中止   rc=1 built=[]
+[cluster] == RPC 双机类加载编排: glm-5.3-flash @ B 站 (master) ==
+[cluster] RPC worker 选路失败: 显式目标 10.10.11.3:50052 不在已声明/存活候选 ['10.10.10.1:50052'] → 中止 (不静默退化)。
+PASS  RPC load --worker C: 目标不在 nodes.env 声明 ⇒ 加载前中止   rc=1 built=[]
+[cluster] == RPC 双机类加载编排: glm-5.3-flash @ B 站 (master) ==
+[cluster] 选路输入: conf=10.10.10.1:50052 busy={}
+[cluster] RPC_AUTO_WORKER source=conf target=10.10.10.1:50052 station=A :: conf 目标空闲
+[cluster] 回收容器范围: A/B（非 worker 站的 qwen 保留）
+[cluster] [1/4] 卸载本站现存实例 (幂等, 释放 GTT) ...
+[cluster] [2/4] 启动 RPC 工作节点 (rpc-nodes --start, 含等端口 LISTEN) ...
+10.10.10.1:50052 10.10.11.3:50052
+[cluster] [3/4] RPC 存活节点: 10.10.10.1:50052 10.10.11.3:50052
+[cluster]        声明清单  : 10.10.10.1:50052 10.10.11.3:50052
+[cluster] [4/4] 加载权重 (RPC_TARGET=10.10.10.1:50052) ...
+[cluster] B 站引擎响应: 10.10.10.1:50052 10.10.11.3:50052
+[cluster] RPC READY ✓  (glm-5.3-flash 已跨机加载; 收尾用 cluster.py unload)
+FAIL  T3 编排: conf A unknown + C free ⇒ 选 C，A 不被回收   rc=0 calls=[] built=[(('glm-5.3-flash', 'llama-rpc', None, '10.10.10.1:50052'), {})]
+[cluster] == RPC 双机类加载编排: glm-5.3-flash @ B 站 (master) ==
+[cluster] RPC_AUTO_WORKER source=explicit target=10.10.11.3:50052 station=C :: 用户显式指派
+[cluster] 回收容器范围: B/C（非 worker 站的 qwen 保留）
+[cluster] [1/4] 卸载本站现存实例 (幂等, 释放 GTT) ...
+[cluster] [2/4] 启动 RPC 工作节点 (rpc-nodes --start, 含等端口 LISTEN) ...
+10.10.10.1:50052 10.10.11.3:50052
+[cluster] [3/4] RPC 存活节点: 10.10.10.1:50052 10.10.11.3:50052
+[cluster]        声明清单  : 10.10.10.1:50052 10.10.11.3:50052
+[cluster] [4/4] 加载权重 (RPC_TARGET=10.10.11.3:50052) ...
+[cluster] B 站引擎响应: 10.10.10.1:50052 10.10.11.3:50052
+[cluster] RPC READY ✓  (glm-5.3-flash 已跨机加载; 收尾用 cluster.py unload)
+FAIL  T4 编排: 显式 --worker C 但 C unknown ⇒ 中止且回收 0 次   rc=0 calls=[] built=[(('glm-5.3-flash', 'llama-rpc', None, '10.10.11.3:50052'), {})]
+[cluster] == RPC 双机类加载编排: glm-5.3-flash @ B 站 (master) ==
+[cluster] 选路输入: conf=10.10.10.1:50052 busy={}
+[cluster] RPC_AUTO_WORKER source=conf target=10.10.10.1:50052 station=A :: conf 目标空闲
+[cluster] 回收容器范围: A/B（非 worker 站的 qwen 保留）
+[cluster] [1/4] 卸载本站现存实例 (幂等, 释放 GTT) ...
+[cluster] [2/4] 启动 RPC 工作节点 (rpc-nodes --start, 含等端口 LISTEN) ...
+10.10.10.1:50052 10.10.11.3:50052
+[cluster] [3/4] RPC 存活节点: 10.10.10.1:50052 10.10.11.3:50052
+[cluster]        声明清单  : 10.10.10.1:50052 10.10.11.3:50052
+[cluster] [4/4] 加载权重 (RPC_TARGET=10.10.10.1:50052) ...
+[cluster] B 站引擎响应: 10.10.10.1:50052 10.10.11.3:50052
+[cluster] RPC READY ✓  (glm-5.3-flash 已跨机加载; 收尾用 cluster.py unload)
+FAIL  T5 编排: worker 被普通引擎占用 ⇒ B、C 都收到 reclaim_and_unload   rc=0 calls=[]
+[cluster] == RPC 双机类加载编排: glm-5.3-flash @ B 站 (master) ==
+[cluster] 选路输入: conf=(空) busy={}
+[cluster] RPC_AUTO_WORKER source=auto target=10.10.10.1:50052 station=A :: conf 不在候选 ⇒ 用空闲节点
+[cluster] 回收容器范围: A/B（非 worker 站的 qwen 保留）
+[cluster] [1/4] 卸载本站现存实例 (幂等, 释放 GTT) ...
+[cluster] [2/4] 启动 RPC 工作节点 (rpc-nodes --start, 含等端口 LISTEN) ...
+10.10.10.1:50052 10.10.11.3:50052
+[cluster] [3/4] RPC 存活节点: 10.10.10.1:50052 10.10.11.3:50052
+[cluster]        声明清单  : 10.10.10.1:50052 10.10.11.3:50052
+[cluster] [4/4] 加载权重 (RPC_TARGET=10.10.10.1:50052) ...
+[cluster] B 站引擎响应: 10.10.10.1:50052 10.10.11.3:50052
+[cluster] RPC READY ✓  (glm-5.3-flash 已跨机加载; 收尾用 cluster.py unload)
+FAIL  T6 编排: head(B) 卸载失败 ⇒ 中止，未调 rpc-nodes --start   rc=0 built=[(('glm-5.3-flash', 'llama-rpc', None, '10.10.10.1:50052'), {})] runs=['rpc-nodes --all 2>/dev/null', "rpc-nodes --start 'glm-5.3-flash' '10.10.10.1:50052'", 'rpc-nodes 2>/dev/null', 'curl -s --max-time 5 http://127.0.0.1:8080/health']
+[cluster] == RPC 双机类加载编排: glm-5.3-flash @ B 站 (master) ==
+[cluster] 选路输入: conf=(空) busy={}
+[cluster] RPC_AUTO_WORKER source=auto target=10.10.10.1:50052 station=A :: conf 不在候选 ⇒ 用空闲节点
+[cluster] 回收容器范围: A/B（非 worker 站的 qwen 保留）
+[cluster] [1/4] 卸载本站现存实例 (幂等, 释放 GTT) ...
+[cluster] [2/4] 启动 RPC 工作节点 (rpc-nodes --start, 含等端口 LISTEN) ...
+10.10.10.1:50052 10.10.11.3:50052
+[cluster] [3/4] RPC 存活节点: 10.10.10.1:50052 10.10.11.3:50052
+[cluster]        声明清单  : 10.10.10.1:50052 10.10.11.3:50052
+[cluster] [4/4] 加载权重 (RPC_TARGET=10.10.10.1:50052) ...
+[cluster] B 站引擎响应: 10.10.10.1:50052 10.10.11.3:50052
+[cluster] RPC READY ✓  (glm-5.3-flash 已跨机加载; 收尾用 cluster.py unload)
+FAIL  T7 编排: worker(A) 卸载失败 ⇒ 中止   rc=0 built=[(('glm-5.3-flash', 'llama-rpc', None, '10.10.10.1:50052'), {})]
+[cluster] 非法 --worker 'B'. 可选: A, C (exit 1)
+PASS  load --worker B: 非法 worker 拒绝（head 固定 B，B 不能当 worker）   应 rc=1
+[cluster] --worker 仅适用于 RPC 双机类模型 (deepseek-v4-flash-0731, glm-5.3-flash, gpt-oss-120b-fable-5-distilled) (exit 1)
+PASS  load --worker 非 RPC 模型: 拒绝   应 rc=1
+[cluster] --worker 'A' 与 --backend unsloth (强制单机) 矛盾 (exit 1)
+PASS  load --worker + 强制单机后端: 拒绝（矛盾组合）   应 rc=1
+PASS  R1-②(可判): 今日件 + 实名按站 ⇒ (dict, '') 且 sum == 3（**单件承载**读数正确）   ({'A': 1, 'B': 0, 'C': 2}, '')
+PASS  R1-③(fail-closed·缺件): 文件不存在 ⇒ (None, 原因非空) —— **不印 0**（判不了 ≠ 0）   (None, '状态件不存在/不可读')
+PASS  R1-④(fail-closed·跨 UTC 日): `date` 不是今天 ⇒ 判不了（日界与写侧同口径 = UTC）   (None, '状态件的 date 不是今天(UTC) ⇒ 跨日/陈旧')
+PASS  R1-⑤(fail-closed·坏 JSON): 解析失败 ⇒ 判不了（绝不静默当 0）   (None, '状态件不是合法 JSON')
+PASS  R1-⑥(fail-closed·结构不符): 缺 `by_station` ⇒ 判不了   (None, '状态件缺 by_station / 为空')
+PASS  R1-⑦(fail-closed·值非法): 某站计数非整数 ⇒ 判不了（不按半个计数对账）   (None, "状态件 by_station['A'] 不是整数")
+PASS  R1-⑧(★真生产者形状): 写侧 PS5.1 落 **BOM** ⇒ 带 BOM 的件**必须可判**（不得用 python 写形状冒充生产者）   ({'A': 5}, '')
+PASS  cleanup: 先探容器存在再删（docker container inspect 在 docker rm 之前）   if docker container inspect halogen >/dev/null 2>&1; then docker rm -f halogen >/dev/null 2>&1; for _ in $(seq 1 240); do ss -ltn 2>/dev/null | grep -q ':8080 ' || break; sleep 2; done; ss -ltn 2>/dev
+PASS  cleanup: 不再用 `docker rm -f … && { 等 8080 }` 的无条件等待形状   if docker container inspect halogen >/dev/null 2>&1; then docker rm -f halogen >/dev/null 2>&1; for _ in $(seq 1 240); do ss -ltn 2>/dev/null | grep -q ':8080 ' || break; sleep 2; done; ss -ltn 2>/dev
+PASS  recipe: checkpoint 指向 v2 .hgn（不再用 GGUF 三片）   /hgn/qwen38-flash-next-v2.hgn
+PASS  recipe: HALOGEN_CHECKPOINT 落在已挂载 volume 内   /hgn/qwen38-flash-next-v2.hgn vs ['/hgn', '/tokenizer']
+PASS  recipe: HALOGEN_TOKENIZER=/tokenizer 且有独立挂载   /tokenizer vs ['/hgn', '/tokenizer']
+PASS  recipe: 不再带 HALOGEN_DOWNLOAD / HF_ENDPOINT（GGUF 引导路径已退役）   ['HALOGEN_CHECKPOINT', 'HALOGEN_TOKENIZER']
+FAIL  rpc-worker: 未指定且 conf 空闲 ⇒ 选 conf(A)   {'target': '10.10.11.3:50052', 'station': 'C', 'source': 'auto', 'reason': "conf 10.10.10.1:50052 忙({'state': 'free', 'reason': ''}) ⇒ 改用 10.10.11.3:50052；10.10.11.3:50052 也忙({'state': 'free', 'reason': ''}) ⇒ 回收它"}
+PASS  rpc-worker: conf(A) 被 halogen 占用、C 空闲 ⇒ 自动改 C   {'target': '10.10.11.3:50052', 'station': 'C', 'source': 'auto', 'reason': "conf 10.10.10.1:50052 忙({'state': 'busy', 'reason': 'halogen'}) ⇒ 改用 10.10.11.3:50052；10.10.11.3:50052 也忙({'state': 'free', 'reason': ''}) ⇒ 回收它"}
+PASS  rpc-worker: 两站都忙 ⇒ 改用 C（回收 C，保 A）   {'target': '10.10.11.3:50052', 'station': 'C', 'source': 'auto', 'reason': "conf 10.10.10.1:50052 忙({'state': 'busy', 'reason': 'halogen'}) ⇒ 改用 10.10.11.3:50052；10.10.11.3:50052 也忙({'state': 'busy', 'reason': 'halogen'}) ⇒ 回收它"}
+PASS  rpc-worker: conf 忙且无其他候选 ⇒ 回退 conf(A) 并标 fallback   {'target': '10.10.10.1:50052', 'station': 'A', 'source': 'fallback', 'reason': "conf 10.10.10.1:50052 忙({'state': 'busy', 'reason': 'halogen'}) 且无其他候选 ⇒ 回退并回收它"}
+PASS  rpc-worker: 显式 --worker C ⇒ 选 C（显式优先）   {'target': '10.10.11.3:50052', 'station': 'C', 'source': 'explicit', 'reason': '用户显式指派'}
+PASS  rpc-worker: 显式 C 不受 A 忙影响   {'target': '10.10.11.3:50052', 'station': 'C', 'source': 'explicit', 'reason': '用户显式指派'}
+PASS  rpc-worker: 显式目标未声明 ⇒ target=None（可响亮中止）   {'target': None, 'station': None, 'source': 'explicit-invalid', 'reason': "显式目标 10.10.99.99:50052 不在已声明/存活候选 ['10.10.10.1:50052', '10.10.11.3:50052']"}
+PASS  rpc-worker: conf 未配置 ⇒ 取候选首个   {'target': '10.10.10.1:50052', 'station': 'A', 'source': 'auto', 'reason': 'conf 不在候选 ⇒ 用空闲节点'}
+FAIL  rpc-worker: conf 未配置且首个忙 ⇒ 取下一个空闲   {'target': '10.10.10.1:50052', 'station': 'A', 'source': 'auto', 'reason': 'conf 不在候选且候选全忙 ⇒ 用 10.10.10.1:50052（会被回收）'}
+PASS  rpc-worker: 候选顺序被尊重（C 在前但有 conf A ⇒ 仍 A）   {'target': '10.10.10.1:50052', 'station': 'A', 'source': 'conf', 'reason': 'conf 目标空闲'}
+PASS  rpc-worker: 候选为空 ⇒ None（判不了 ≠ 选默认）   {'target': None, 'station': None, 'source': 'none', 'reason': '候选为空或无节点可映射到站'}
+PASS  rpc-worker: conf 不在候选 ⇒ 从候选自动选，不凭空用 conf   {'target': '10.10.10.1:50052', 'station': 'A', 'source': 'auto', 'reason': 'conf 不在候选 ⇒ 用空闲节点'}
+PASS  rpc-worker 同源对照: 只改 busy(A) ⇒ 选站翻转   10.10.10.1:50052 -> 10.10.11.3:50052
+FAIL  T1: 两站 unknown ⇒ aborted-unknown，target=None   {'target': '10.10.11.3:50052', 'station': 'C', 'source': 'auto', 'reason': "conf 10.10.10.1:50052 忙({'state': 'unknown', 'reason': 'ssh-failed: timeout'}) ⇒ 改用 10.10.11.3:50052；10.10.11.3:50052 也忙({'state': 'unknown', 'reason': 'ssh-failed: timeout'}) ⇒ 回收它"}
+FAIL  T2: conf 忙 + 备选 unknown ⇒ 中止（不选 C、不回收 C）   {'target': '10.10.11.3:50052', 'station': 'C', 'source': 'auto', 'reason': "conf 10.10.10.1:50052 忙({'state': 'busy', 'reason': 'halogen'}) ⇒ 改用 10.10.11.3:50052；10.10.11.3:50052 也忙({'state': 'unknown', 'reason': 'ssh-failed: timeout'}) ⇒ 回收它"}
+PASS  T3: conf unknown + 备选 free ⇒ 选 C   {'target': '10.10.11.3:50052', 'station': 'C', 'source': 'auto', 'reason': "conf 10.10.10.1:50052 忙({'state': 'unknown', 'reason': 'ssh-failed: timeout'}) ⇒ 改用 10.10.11.3:50052；10.10.11.3:50052 也忙({'state': 'free', 'reason': ''}) ⇒ 回收它"}
+FAIL  T4: 显式 worker unknown ⇒ aborted-unknown（显式也须探测）   {'target': '10.10.11.3:50052', 'station': 'C', 'source': 'explicit', 'reason': '用户显式指派'}
+PASS  rpc-worker busy 解析: 空输出 ⇒ 空闲
+PASS  rpc-worker busy 解析: halogen ⇒ 单个忙因   halogen
+PASS  rpc-worker busy 解析: 双因去重且排序   halogen+port8080
+[cluster] A 站容器回收失败: ssh: timeout (继续 —— 同名容器会在 docker run 处响亮失败)
+FAIL  T8: 容器回收 SSH 失败 ⇒ (False, 'ssh:...')   False
+[cluster] A 站容器已删, 但 8080 在 480s 内未释放 —— 先排查占用者再加载 (studio 可能落到 8081)
+FAIL  T9: 端口未释放 ⇒ (False, 'port8080-still-busy')   True
+FAIL  T10 前置(防恒真): 资产齐全 ⇒ problems 为空   None
+FAIL  T10: 缺 checkpoint ⇒ asset-missing（且回收 0 次由调用顺序保证）   None
+FAIL  T11a: 缺 ngram ⇒ asset-missing   None
+FAIL  T11b: tokenizer 空目录 ⇒ asset-empty-dir   None
+FAIL  T12: 镜像缺失 ⇒ problems 含 image-missing   None
+FAIL  T13a: /hgn/x 映射到 volume 宿主路径   <缺 _host_path_for>
+FAIL  T13b: /tokenizer 映射（忽略 :ro 后缀）   <缺>
+FAIL  T13c: 未挂载路径 ⇒ 空串（判不了 ≠ 猜一个）   <缺>
+FAIL  T13d: 根映射不丢前导斜杠（Step 7 修）   <缺>
+FAIL  D1a: 资产不可读 ⇒ asset-unreadable（不得降级成 asset-missing）   None
+FAIL  D1b: 配方要 file 但观测 dir ⇒ asset-not-file   None
+FAIL  D1c: 配方要 dir 但观测 file ⇒ asset-not-dir   None
+FAIL  D2: sh_single_quote 把含空格/单引号的路径包成单个 shell 词   <缺 sh_single_quote>
+FAIL  D4: _probe_map 只探可映射到站的目标（未声明目标不入表，⇒ 选路判 unknown）   None
+FAIL  T14: inventory 缺 A 站 stations 声明 ⇒ FAIL 且文案含'模型库条目'   FAIL ["按站路由名 'davidau-q38-27b-q4k-b' -> (B, 'davidau-q38-27b-q4k'), 但 inventory/models.yaml 未声明 davidau-q38-27b-q4k 在 B 站有 conf（且该别名无 halogen 容器配方）", "按站路由名 'deepseek-v4-flash-0731-b' -> (B, 'deepseek-v4-flash-0731'), 但 inventory/models.yaml 未声明 deepseek-v4-flash-0731 在 B 站有 conf（且该别名无 halogen 容器配方）", "按站路由名 'glm-5.3-flash-b' -> (B, 'glm-5.3-flash'), 但 inventory/models.yaml 未声明 glm-5.3-flash 在 B 站有 conf（且该别名无 halogen 容器配方）", "按站路由名 'gpt-oss-120b-a' -> (A, 'gpt-oss-120b'), 但 inventory/models.yaml 未声明 gpt-oss-120b 在 A 站有 conf（且该别名无 halogen 容器配方）", "按站路由名 'gpt-oss-120b-b' -> (B, 'gpt-oss-120b'), 但 inventory/models.yaml 未声明 gpt-oss-120b 在 B 站有 conf（且该别名无 halogen 容器配方）", "按站路由名 'gpt-oss-120b-c' -> (C, 'gpt-oss-120b'), 但 inventory/models.yaml 未声明 gpt-oss-120b 在 C 站有 conf（且该别名无 halogen 容器配方）", "按站路由名 'gpt-oss-120b-fable-5-distilled-b' -> (B, 'gpt-oss-120b-fable-5-distilled'), 但 inventory/models.yaml 未声明 gpt-oss-120b-fable-5-distilled 在 B 站有 conf（且该别名无 halogen 容器配方）", "按站路由名 'gpt-oss-20b-b' -> (B, 'gpt-oss-20b'), 但 inventory/models.yaml 未声明 gpt-oss-20b 在 B 站有 conf（且该别名无 halogen 容器配方）", "按站路由名 'm27-q4ks-a' -> (A, 'm27-q4ks'), 但 inventory/models.yaml 未声明 m27-q4ks 在 A 站有 conf（且该别名无 halogen 容器配方）", "按站路由名 'm27-q4ks-b' -> (B, 'm27-q4ks'), 但 inventory/models.yaml 未声明 m27-q4ks 在 B 站有 conf（且该别名无 halogen 容器配方）", "按站路由名 'm27-q4ks-c' -> (C, 'm27-q4ks'), 但 inventory/models.yaml 未声明 m27-q4ks 在 C 站有 conf（且该别名无 halogen 容器配方）", "按站路由名 'nvidia-nemotron-3-super-120b-a12b-b' -> (B, 'nvidia-nemotron-3-super-120b-a12b'), 但 inventory/models.yaml 未声明 nvidia-nemotron-3-super-120b-a12b 在 B 站有 conf（且该别名无 halogen 容器配方）", "按站路由名 'nvidia-nemotron-3-super-120b-a12b-c' -> (C, 'nvidia-nemotron-3-super-120b-a12b'), 但 inventory/models.yaml 未声明 nvidia-nemotron-3-super-120b-a12b 在 C 站有 conf（且该别名无 halogen 容器配方）", "按站路由名 'nvidia-nemotron-3.5-super-vl-120b-a12b-b' -> (B, 'nvidia-nemotron-3.5-super-vl-120b-a12b'), 但 inventory/models.yaml 未声明 nvidia-nemotron-3.5-super-vl-120b-a12b 在 B 站有 conf（且该别名无 halogen 容器配方）", "按站路由名 'qwen3.8-27b-mtp-b' -> (B, 'qwen3.8-27b-mtp'), 但 inventory/models.yaml 未声明 qwen3.8-27b-mtp 在 B 站有 conf（且该别名无 halogen 容器配方）", "按站路由名 'qwen3.8-27b-mtp-c' -> (C, 'qwen3.8-27b-mtp'), 但 inventory/models.yaml 未声明 qwen3.8-27b-mtp 在 C 站有 conf（且该别名无 halogen 容器配方）"]
+
+RESULT: 33 FAILED -> ['RPC load 默认(无 conf): 自动选 A，回收范围 = A+B（非 worker C 保留）', 'RPC load 自动切换: A 忙(halogen) ⇒ 选 C + 回收 B/C（A 的 qwen 保留）', 'RPC load 自动选路: 两站都忙 ⇒ 改用 C（回收 C，保 A）', 'RPC load --worker C: 映射 10.10.11.3:50052 并透传 --rpc-target（回收 B/C）', 'RPC load --worker A: 映射 10.10.10.1:50052（回收 A/B）', 'RPC load 默认: conf 单 worker A ⇒ 预启动与 --rpc-target 都只带 A（回收 A/B）', 'T3 编排: conf A unknown + C free ⇒ 选 C，A 不被回收', 'T4 编排: 显式 --worker C 但 C unknown ⇒ 中止且回收 0 次', 'T5 编排: worker 被普通引擎占用 ⇒ B、C 都收到 reclaim_and_unload', 'T6 编排: head(B) 卸载失败 ⇒ 中止，未调 rpc-nodes --start', 'T7 编排: worker(A) 卸载失败 ⇒ 中止', 'rpc-worker: 未指定且 conf 空闲 ⇒ 选 conf(A)', 'rpc-worker: conf 未配置且首个忙 ⇒ 取下一个空闲', 'T1: 两站 unknown ⇒ aborted-unknown，target=None', 'T2: conf 忙 + 备选 unknown ⇒ 中止（不选 C、不回收 C）', 'T4: 显式 worker unknown ⇒ aborted-unknown（显式也须探测）', "T8: 容器回收 SSH 失败 ⇒ (False, 'ssh:...')", "T9: 端口未释放 ⇒ (False, 'port8080-still-busy')", 'T10 前置(防恒真): 资产齐全 ⇒ problems 为空', 'T10: 缺 checkpoint ⇒ asset-missing（且回收 0 次由调用顺序保证）', 'T11a: 缺 ngram ⇒ asset-missing', 'T11b: tokenizer 空目录 ⇒ asset-empty-dir', 'T12: 镜像缺失 ⇒ problems 含 image-missing', 'T13a: /hgn/x 映射到 volume 宿主路径', 'T13b: /tokenizer 映射（忽略 :ro 后缀）', 'T13c: 未挂载路径 ⇒ 空串（判不了 ≠ 猜一个）', 'T13d: 根映射不丢前导斜杠（Step 7 修）', 'D1a: 资产不可读 ⇒ asset-unreadable（不得降级成 asset-missing）', 'D1b: 配方要 file 但观测 dir ⇒ asset-not-file', 'D1c: 配方要 dir 但观测 file ⇒ asset-not-dir', 'D2: sh_single_quote 把含空格/单引号的路径包成单个 shell 词', 'D4: _probe_map 只探可映射到站的目标（未声明目标不入表，⇒ 选路判 unknown）', "T14: inventory 缺 A 站 stations 声明 ⇒ FAIL 且文案含'模型库条目'"]

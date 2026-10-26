@@ -52,6 +52,7 @@ kind_source:
 kinds:
 # ★ 只登记**无模板档**的归属（有模板的按 kind_rule 机械判，不列在此）
 - {file: spec/d6-agent-standard/DEVELOPMENT-LOG.md, kind: ledger}
+- {file: spec/cluster-orchestration-reliability/DEVELOPMENT-LOG.md, kind: ledger}
 - {file: spec/d6-agent-standard/OPEN-ISSUES.md, kind: ledger}
 - {file: spec/upstream-tracker/TRACKER.md, kind: ledger}
 - {file: spec/infer-load/params-ledger.md, kind: ledger}

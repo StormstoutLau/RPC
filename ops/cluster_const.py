@@ -160,6 +160,15 @@ CONTAINER_MODELS = {
             "/data/models/hgn/peonist-ai/qwen38-flash-next-tokenizer:/tokenizer:ro",
         ],
         "checkpoint": "/hgn/qwen38-flash-next-v2.hgn",
+        # ★ 2026-10-26: 预检资产声明（**容器内**路径）。宿主路径由 cluster._host_path_for
+        #   从 volume 派生 ⇒ 不新增第二份 host 路径真值（DESIGN §8 不变式 6）。
+        #   min_bytes 是**下限**：只抓"没到 / 被截断 / 挂错目录"，不抓版本差异/同尺寸损坏。
+        #   实测 v2 62.11 GiB、ngram 47.68 GiB ⇒ 取 60/45 GiB 留 ~2 GiB 余量。
+        "assets": [
+            {"path": "/hgn/qwen38-flash-next-v2.hgn", "kind": "file", "min_bytes": 60 * 1024**3},
+            {"path": "/hgn/qwen38-flash-next-ngram.hgn", "kind": "file", "min_bytes": 45 * 1024**3},
+            {"path": "/tokenizer", "kind": "dir", "min_entries": 1},
+        ],
         "device": ["/dev/kfd", "/dev/dri"],
         "group_add": ["44", "992"],
         "ipc": "host",

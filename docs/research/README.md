@@ -87,6 +87,12 @@
 |---|---|
 | [2026-09-28_Textbook并发与派发机制可借鉴性调研.md](./2026-09-28_Textbook并发与派发机制可借鉴性调研.md) | Textbook 的并发/派发机制对本仓的**可借鉴性** |
 
+## E. 集群编排与失败语义
+
+| 文档 | 主题 |
+|---|---|
+| [2026-10-26_集群编排与RPC选路可靠性_社区外部锚点调研.md](./2026-10-26_集群编排与RPC选路可靠性_社区外部锚点调研.md) | ★ **`cluster.py` 编排/RPC 选路的四个可靠性缺口**（未知态误作忙 · worker 普通引擎未卸载 · 回收失败不传播 · 预检晚于销毁）⇒ **社区外部锚点**（K8s 探针/驱逐/device plugin · systemd `Conflicts=` · Slurm DRAIN · Terraform plan/`create_before_destroy` · Envoy panic threshold 反例 · SLSA digest）→ 可迁移机制 + 不可照搬清单 + 契约级设计与 14 条先验红夹具 |
+
 ---
 
 ## 单一真值在哪（本目录之外）

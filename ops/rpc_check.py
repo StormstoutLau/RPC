@@ -4927,23 +4927,34 @@ def check_aliases(ctx):
     # (7) 按站路由名 <-> inventory 的 conf 声明 双向一致
     #     · 路由名指向的 (station, 别名) 必须已声明有 conf (FAIL) —— 防止路由名指向一个站上不存在的东西
     #     · inventory 有 conf 的组合应配一个按站路由名 (WARN) —— 保证"能加载的都点得出来"
-    declared_conf = set()
+    declared_conf, declared_stations = set(), set()
     for alias, meta in (models or {}).items():
         if alias != meta.get("alias") or meta.get("_group") == "non_model_conf":
             continue    # non_model_conf (如 rpc-nodes 读的 nodes.env) 不是可加载模型, 不该有按站路由名
         for st in (meta.get("conf") or []):
             declared_conf.add((str(alias), st))
+        for st in (meta.get("stations") or []):
+            declared_stations.add((str(alias), st))
     # ★ 2026-10-25 (O-138 方案乙): "可加载"有两种后端 ——
     #   ① 站上有 llama.cpp conf（原判据）；② 该别名有 **halogen 容器配方**（CONTAINER_MODELS，
     #   三站通用）。生产全切 halogen 后 A/B 不再保留 conf ⇒ 只认 conf 会把 -a/-b 判成假红
     #   （实测：`conf: [C]` 时先红在本行，随后放宽到"容器配方也算可加载"）。
     #   ⚠ 只放宽"后端存在性"这一半：路由名仍须指向真实别名（real 有配方 = 站上可加载）。
+    # ★ 2026-10-26 (T14): 容器配方只证明"站上能加载"，不证明"该站有模型库条目"。
+    #   再补一层 stations 声明校验：有配方但 inventory 未声明该站 ⇒ 站上大概率没权重，
+    #   加载会走到预检才失败。提前在门禁里点名（区分"无配方"与"未声明"两种缺口）。
     container_backed = set(getattr(cluster, "CONTAINER_MODELS", None) or {})
     for name, (st, real) in sorted(cluster.STATION_ROUTES.items()):
         n += 1
-        if (real, st) not in declared_conf and real not in container_backed:
+        if (real, st) in declared_conf:
+            continue
+        if real not in container_backed:
             detail.append(f"按站路由名 {name!r} -> ({st}, {real!r}), 但 inventory/models.yaml "
                           f"未声明 {real} 在 {st} 站有 conf（且该别名无 halogen 容器配方）")
+        elif (real, st) not in declared_stations:
+            detail.append(f"按站路由名 {name!r} -> ({st}, {real!r}) 有容器配方，"
+                          f"但 inventory/models.yaml 未声明 {real} 在 {st} 站有模型库条目 "
+                          f"(stations 字段)")
     named = {(real, st) for _, (st, real) in cluster.STATION_ROUTES.items()}
     gap = declared_conf - named
     if gap:
@@ -4956,6 +4967,46 @@ def check_aliases(ctx):
     if warn:
         return "WARN", note, warn
     return "PASS", note, []
+
+
+# ── 断言 A4b: 容器模型资产预检 (P2, 慢, 非 quick, 2026-10-26) ─────────────
+# 为什么新开而不是塞进 check_stations: 后者已承担 conf/权重/凭据/端口四类判据（DESIGN §5.6），
+# 再塞容器资产会让"失败归因"变模糊；且它复用的是 conf 视角的 MODEL_PATH，看不见容器内路径。
+def check_halogen_assets(ctx):
+    """只读：容器配方声明的资产是否在站上就位（镜像 + 权重 + tokenizer）。
+
+    ★ 站不可达 ⇒ **跳过并记 WARN**，不判 FAIL —— 未部署/掉线的站不该把门禁染红
+      （与 Q2「不对未部署的站假红」一致）。跳过信息必须出现在 note/output 里，不得静默。
+    """
+    sys.path.insert(0, str(ROOT / "ops"))
+    try:
+        import cluster
+    except Exception as e:
+        return ("WARN", f"无法导入 cluster.py ({type(e).__name__}: {e})", [])
+
+    _, models = load_inventory()
+    declared = {}
+    for alias, meta in (models or {}).items():
+        if alias == meta.get("alias"):
+            declared[str(alias)] = [str(s) for s in (meta.get("stations") or [])]
+
+    detail, warn, n = [], [], 0
+    for alias in sorted(cluster.CONTAINER_MODELS):
+        for st in declared.get(alias, []):
+            ok_h, out_h = cluster.ssh_run(st, "true", strict=True)
+            if not ok_h:                      # 未部署/不可达 ⇒ 不判（避免假红）
+                warn.append(f"{st} 站不可达，跳过 {alias} 资产预检: {str(out_h)[:80]}")
+                continue
+            n += 1
+            pre = cluster.preflight_container(alias, st)
+            if not pre["ok"]:
+                detail.append(f"{st} 站 {alias}: " + "; ".join(pre["problems"]))
+    note = f"容器资产预检 {n} 站例" + (f"（{len(warn)} 站例跳过）" if warn else "")
+    if detail:
+        return ("FAIL", note, detail)
+    if warn:                                  # 跳过信息必须可见，不得静默丢在局部变量里
+        return ("WARN", note, warn)
+    return ("PASS", note, [])
 
 
 # ── 断言 A5: 站上实况对账 (P2, 慢, 非 quick) ───────────────────────
@@ -9904,6 +9955,9 @@ CHECKS = [
             "loadavg>8 等负载回落再加载; 站上件与仓库副本不一致 => 这些件是站上件(改仓库不生效), "
             "按明细走「备份(cp -a, 核备份 md5 == 原 md5) → install -m 755 → 核新 md5 == 仓库副本」, "
             "或回滚站上版并改仓库侧; 清单见 rpc_check.py 的 STATION_BINS"},
+    {"id": "halogen-assets", "title": "容器模型资产预检", "fn": check_halogen_assets,
+     "quick": False,
+     "fix": "按明细补资产/重分发权重；镜像缺失则 containers pull；不要先杀旧服务"},
     {"id": "engine", "title": "引擎态与残留", "fn": check_engine, "quick": False,
      "fix": "残留用 infer-unload 或清 llama/rpc 进程; 端口在听但 RSS 异常需查进程归属"},
     {"id": "backend", "title": "引擎后端与 studio 防线", "fn": check_backend, "quick": False,
