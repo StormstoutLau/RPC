@@ -47,6 +47,16 @@ def _with(steps, key):
     return vals
 
 
+def _shell_targets(runs):
+    """从 run 命令里抽出被 shellcheck 的仓内路径（去重保序）。"""
+    seen, out = set(), []
+    for tok in runs.replace("\\", " ").split():
+        if tok.startswith("ops/") and tok not in seen:
+            seen.add(tok)
+            out.append(tok)
+    return out
+
+
 def validate_ci(data, text):
     """纯函数：返回 problems 列表；空 = PASS。"""
     problems = []
@@ -80,12 +90,26 @@ def validate_ci(data, text):
         problems.append("setup-python 未指定 3.12")
     if "tests/run_py_tests.py" not in _runs(steps):
         problems.append("py-tests 未运行 tests/run_py_tests.py")
+    # Windows runner 默认 cp1252：run_py_tests.py 打印中文会 UnicodeEncodeError
+    if not (py.get("env") or {}).get("PYTHONUTF8"):
+        problems.append("py-tests 未设 PYTHONUTF8（Windows runner 编码）")
 
     sc = jobs["shellcheck"]
     if "ubuntu" not in str(sc.get("runs-on", "")):
         problems.append("shellcheck 不在 ubuntu runner")
-    if "--severity=error" not in _runs(_steps(sc)):
+    sc_runs = _runs(_steps(sc))
+    if "--severity=error" not in sc_runs:
         problems.append("shellcheck 未用 --severity=error")
+    # SC1071：非 shell 脚本（如 python）不能进 shellcheck 列表
+    for rel in _shell_targets(sc_runs):
+        f = ROOT / rel
+        if not f.is_file():
+            problems.append(f"shellcheck 目标不存在: {rel}")
+            continue
+        shebang = f.read_text(encoding="utf-8", errors="replace").splitlines()[:1]
+        shebang = shebang[0] if shebang else ""
+        if not shebang.startswith("#!") or "bash" not in shebang:
+            problems.append(f"shellcheck 目标非 bash: {rel} ({shebang})")
 
     if "secrets." in text:
         problems.append("workflow 含 secrets.")

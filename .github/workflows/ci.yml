@@ -16,6 +16,9 @@ jobs:
     name: py-tests (windows-2022)
     runs-on: windows-2022
     timeout-minutes: 30
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -42,7 +45,6 @@ jobs:
             ops/station-bin/infer-list \
             ops/station-bin/llama-serve-instance \
             ops/station-bin/rpc-serve-instance \
-            ops/station-bin/cluster-ttl \
             ops/station-bin/load-gate \
             ops/station-bin/load-mem-gate \
             ops/station-bin/wait-gtt-release \
