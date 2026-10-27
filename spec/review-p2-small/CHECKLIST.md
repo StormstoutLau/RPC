@@ -14,13 +14,13 @@ upstream: null
 
 > **Feature**: 收掉 P2 里改动小、确定性高的三项——#6 两份遗留 systemd 单元的键段位、#9 活跃运行时身份收敛、CI（`py-tests` + `shellcheck`）。
 > **创建日期**: 2026-10-28
-> **状态**: 已验收（第 1 轮单测先验红→后验绿；第 2 轮三站部署/真站只读；第 3 轮全量门禁。CI 首跑待推，不阻塞本轮）
+> **状态**: 已验收（第 1 轮单测先验红→后验绿；第 2 轮三站部署/真站只读；第 3 轮全量门禁；第 4 轮 CI 首跑三修后两 job 全绿）
 > **Spec 步骤**: Step 5（验收）
 > **基于实施**: [IMPLEMENTATION.md](./IMPLEMENTATION.md)
 > **基于设计**: [DESIGN.md](./DESIGN.md)
 > **基于调研**: [P2 小批次社区外部锚点调研](../../docs/research/2026-10-27_原始评审P2小批次_社区外部锚点调研.md)
-> **代码基线**: `49425f19`（`main`，已推送；本轮改动未提交）
-> **审查轮次**: 第 1 轮单测（2026-10-28）· 第 2 轮三站部署 + 真站只读（2026-10-28）· 第 3 轮全量门禁（2026-10-28）
+> **代码基线**: `49425f19`（`main`，已推送；本轮改动提交见 §7 R-1）
+> **审查轮次**: 第 1 轮单测（2026-10-28）· 第 2 轮三站部署 + 真站只读（2026-10-28）· 第 3 轮全量门禁（2026-10-28）· 第 4 轮 CI 首跑（2026-10-28）
 
 ---
 
@@ -40,7 +40,7 @@ upstream: null
 
 - #5 `set -euo` 扫荡、#8 拆大文件/分目录（另立大 spec）。
 - 两份遗留单元的部署/启用（非活单元，只改仓库快照）。
-- CI 首跑结果（需推送后由 GitHub Actions 产生；本轮只验收 workflow 结构）。
+- CI 首跑**修复过程**的逐次细节（结果见 §7 R-1；本轮只验收最终形态）。
 - 179 个冻结探针、历史文档、`agent-cli-smoke.sh`（白名单）。
 
 ---
@@ -132,6 +132,7 @@ upstream: null
 | M5-5 | `doclinks` | 353 篇 / 3897 链接 / 失效 0 | ☑ |
 | M5-6 | `md-tables` | 新增违规 **0**（存量冻结 28） | ☑ |
 | M5-7 | `doc-status` / `spec-untested` / `secrets` / `syntax` / `scripts` | 全 PASS | ☑ |
+| M5-8 | CI 实跑（GitHub Actions） | run `40593489402`：`py-tests 62/62`（windows-2022）· `shellcheck 0.9.0` 无 error（ubuntu-24.04） | ☑ |
 
 **3 条黄灯均为存量**：`evidence`（37 条可重放 gap，存量）· `memory-gates`（引擎侧 `adhoc-notes-flat`，本仓关不了）· `stations`（`claude.mkt` 已登记漂移 `claude-plugins-official`）。
 
@@ -154,7 +155,7 @@ upstream: null
 
 | # | 项 | 状态 | 处置 |
 |---|---|---|---|
-| R-1 | CI 首跑（两个 job） | **待推**（外部动作） | 推送后观察；失败按 IMPLEMENTATION §7 修路径/依赖，不降平台 |
+| R-1 | CI 首跑（两个 job） | **已闭环** | 首跑两 job 红（`SC1071` / Windows cp1252）⇒ 二跑 `py-tests` 曝出「干净 checkout」三条（`tmp/` 缺失、`agent-chain.json` 未入库、夹具写死 `d:\RPC`）⇒ 逐条修；三跑仍红（runner 无 `Get-FileHash`）⇒ 改 .NET SHA256。终跑 run [40593489402](https://github.com/StormstoutLau/RPC/actions/runs/40593489402)：`py-tests 62/62`（windows-2022）· `shellcheck 0.9.0` 无 error（ubuntu-24.04）· 全绿。提交 `c574ac87` / `aabf8c68` / `d8ae5510` / `658dca70` |
 | R-2 | `systemd` 单元 `User=`/`Group=` | 已记录边界 | systemd 不能 env 展开；换机统一改 4 文件 |
 | R-3 | `agent-cli.ps1` `Get-TargetHost` `.local` | 已记录边界（F-6） | O-124 反查真值源；黄金夹具兜底 |
 | R-4 | `cluster-watchdog` A/B 变体 | 已记录 | README 写明 A `PEER=192.168.10.32` |
@@ -165,10 +166,9 @@ upstream: null
 
 ## 8. 结论
 
-**验收通过**：M1-M6 全绿，M7 仅 CI 首跑为外部待办（不阻塞本轮）。#6 为仓库快照修正、#9 活跃运行时身份收敛、CI workflow 结构均已落地并有先验红/后验绿与三站证据。
+**验收通过**：M1-M6 全绿，M7 全项闭环（CI 首跑经三修后两 job 全绿）。#6 为仓库快照修正、#9 活跃运行时身份收敛、CI workflow 均已落地并有先验红/后验绿、三站证据与 CI 实跑结果。
 
 **尚未闭环（不阻塞）**：
 
-1. CI 首推后两个 job 的实际结果。
-2. 两份遗留单元仍为历史快照（按设计不部署）。
-3. #5/#8 仍待另立大 spec。
+1. 两份遗留单元仍为历史快照（按设计不部署）。
+2. #5/#8 仍待另立大 spec。

@@ -165,6 +165,9 @@ jobs:
   py-tests:
     runs-on: windows-2022
     timeout-minutes: 30
+    env:
+      PYTHONUTF8: '1'          # runner 默认 cp1252 ⇒ 中文输出会 UnicodeEncodeError
+      PYTHONIOENCODING: 'utf-8'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -187,7 +190,6 @@ jobs:
             ops/station-bin/infer-list \
             ops/station-bin/llama-serve-instance \
             ops/station-bin/rpc-serve-instance \
-            ops/station-bin/cluster-ttl \
             ops/station-bin/load-gate \
             ops/station-bin/load-mem-gate \
             ops/station-bin/wait-gtt-release \
@@ -195,6 +197,8 @@ jobs:
             ops/station-bin/conf-lib.sh \
             ops/station-bin/conf-get
 ```
+
+- **非 bash 脚本不进列表**：`cluster-ttl` 是 `#!/usr/bin/env python3` ⇒ 进 shellcheck 会 `SC1071`（Step 5 首跑实测）。`test_ci_workflow.py` 已按 shebang 防回归。
 
 - **权限**：仅 `contents: read`；不使用 `secrets.*`。
 - **并发**：同 ref 取消旧运行，避免排队。
