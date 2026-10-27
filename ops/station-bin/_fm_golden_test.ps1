@@ -5,7 +5,9 @@
 # 隔离方式: 从 agent-cli.ps1 用 AST 提取 Get-FrontMatter 函数体单独定义(不执行主入口)
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$cli = 'd:\RPC\ops\station-bin\agent-cli.ps1'
+# 路径一律从本文件位置派生（CI 的 checkout 根不是 `d:\RPC`；写死绝对路径会让夹具在 runner 上崩）
+$repoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+$cli = Join-Path $PSScriptRoot 'agent-cli.ps1'
 $tmpCards = Join-Path $env:TEMP 'agent-cli-fm-test'
 if (-not (Test-Path $tmpCards)) { New-Item -ItemType Directory -Path $tmpCards -Force | Out-Null }
 
@@ -1081,7 +1083,7 @@ $codeOnlyFull = (($content -split "`n") | ForEach-Object { $_ -replace '#.*$', '
 #   **住在 `ops/rpc_check.py`** ⇒ 断言必须读**那个文件**。
 #   ⚠ 我第一版把 o70 断言写在 `$codeOnlyFull` 上（= 读错了被测对象）⇒ **门禁 P3-2 当场判红**
 #     —— 那条"先判是回归还是夹具期望值陈旧"的护栏正为此存在，这次它咬的是**我**。
-$checkSrc = [System.IO.File]::ReadAllText('d:\RPC\ops\rpc_check.py', [System.Text.UTF8Encoding]::new($false))
+$checkSrc = [System.IO.File]::ReadAllText((Join-Path $repoRoot 'ops\rpc_check.py'), [System.Text.UTF8Encoding]::new($false))
 $checkCode = (($checkSrc -split "`n") | ForEach-Object { $_ -replace '#.*$', '' }) -join "`n"
 Assert-True "o68: ★★ **已无**'无条件删固定名'(D2 落地 = O-68 修法的**前提条件**; 只看代码)" (
     -not $codeOnlyFull.Contains('$evRmCmd'))
@@ -3139,7 +3141,7 @@ Assert-True "O154④(先验红·同源对照): 旧写法在该判据下**必被�
 #   （实测 `review … --allow-l1-red` ⇒ NamedParameterNotFound；见台账 O-157）。
 #   ★ 本仓已付过代价的同一形态 = `compliance` / `station`「声明了却无人读」= **假防线**。
 #   ⇒ 判据：**外层 usage 里每个 review 开关，都必须同时满足【已声明】与【已传】两件事**。
-$cliSrc2 = [System.IO.File]::ReadAllText('d:\RPC\ops\station-bin\agent-cli.ps1', [System.Text.UTF8Encoding]::new($false))
+$cliSrc2 = [System.IO.File]::ReadAllText($cli, [System.Text.UTF8Encoding]::new($false))
 # ⚠ 取数注意（本刀实测踩到）：`usage: agent-cli review` 在本文件出现**两次** —— 函数内 L5728 是
 #   **PS 风格** `[-Xxx]`，外层 review 分支注释才是**双横线** `[--xxx]` ⇒ 必须**挑含 `[--` 的那一条**，
 #   否则 `Match` 取到函数内那条 ⇒ 开关数 = 0（判据退化成空判）。
@@ -3326,7 +3328,7 @@ $g170Prods = if ($gdpAst) { @(Get-DeclaredProductPaths @(
 Assert-True "g170①(行为): glob subject ⇒ glob=1/src=out/*.txt；非 glob ⇒ glob=0/src=out/v4-evidence.txt" (
     $g170Prods.Count -eq 2 -and [bool]$g170Prods[0].glob -and $g170Prods[0].src -eq 'out/*.txt' -and
     -not [bool]$g170Prods[1].glob -and $g170Prods[1].src -eq 'out/v4-evidence.txt')
-$gCard170 = [IO.File]::ReadAllText('d:\RPC\spec\d6-agent-standard\dogfood-cards\glob-probe.md')
+$gCard170 = [IO.File]::ReadAllText((Join-Path $repoRoot 'spec\d6-agent-standard\dogfood-cards\glob-probe.md'))
 Assert-True "g170④(结构): glob-probe 卡 accept 用窗口（find ... -newer .run-marker）" (
     ($gCard170 -match 'find out -maxdepth 1.*-name') -and ($gCard170 -match '-newer \.run-marker'))
 
@@ -3388,7 +3390,7 @@ Assert-True "g170③(行为): glob 窗口 0 ⇒ STALE_PRODUCT + ACCEPT_OK=0" (
 $gRoot = Join-Path $env:TEMP 'agent-cli-g166-test'
 Remove-Item -LiteralPath $gRoot -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path (Join-Path $gRoot '.golden'),(Join-Path $gRoot 'out') -Force | Out-Null
-$gSrcFile = 'd:\RPC\ops\station-bin\golden\smoke_dispatch_golden.sh'
+$gSrcFile = Join-Path $repoRoot 'ops\station-bin\golden\smoke_dispatch_golden.sh'
 Copy-Item -LiteralPath $gSrcFile -Destination (Join-Path $gRoot '.golden/smoke_dispatch_golden.sh') -Force
 $gSha = (Get-FileHash -Algorithm SHA256 (Join-Path $gRoot '.golden/smoke_dispatch_golden.sh')).Hash.ToLower()
 $gCmdB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('bash .golden/smoke_dispatch_golden.sh'))

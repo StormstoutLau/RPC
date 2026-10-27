@@ -10,6 +10,7 @@
     若把 `None` 当成"空命中 ⇒ 过"，那这条判据在**没接扫描输入**时就是**恒真**的。
 """
 import copy
+import subprocess
 import sys
 
 from pathlib import Path
@@ -18,6 +19,20 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "ops"))
 
 import rpc_check as R  # noqa: E402
+
+
+def _runtime_ignored(rel: str) -> bool:
+    """登记路径被 gitignore（运行时件）⇒ 干净 checkout 里天然不存在，不算登记腐化。
+
+    ⚠ 本机（有历史运行态）照旧判盘上存在；CI/新 clone 只对 gitignore 项让步，
+      未登记进 `.gitignore` 的缺失仍然判红（不然这条判据就成了"缺了也过"）。
+    """
+    try:
+        p = subprocess.run(["git", "check-ignore", "-q", "--", rel], cwd=ROOT,
+                           capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return p.returncode == 0
 
 
 def _doc(**over):
@@ -143,7 +158,11 @@ def main() -> int:
         # 盘上存在性（check_ 里那一半）也走一遍
         miss = [p for lg in (real.get("ledgers") or []) for p in (lg.get("paths") or [])
                 if not (ROOT / p).exists()]
+        runtime_absent = [p for p in miss if _runtime_ignored(p)]
+        miss = [p for p in miss if p not in runtime_absent]
         print(f"  {'ok  ' if not miss else 'FAIL'} 端到端 登记的 `paths` 全部在盘上（缺 {len(miss)}）")
+        if runtime_absent:
+            print(f"  note 运行时件（gitignore ⇒ 干净 checkout 里天然缺）: {runtime_absent}")
         if miss:
             fails.append(f"登记路径不存在: {miss}")
     except ImportError:

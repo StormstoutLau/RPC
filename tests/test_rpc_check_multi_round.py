@@ -199,6 +199,8 @@ def main() -> int:
 
     # ── ★★ 两条**只能用临时探针**验的（真文件里造不出干净的反例）──────────
     try:
+        # `tmp/` 是 gitignore 的运行时目录 ⇒ 干净 checkout（CI）里不存在，探针写不进去
+        PROBE_ABS.parent.mkdir(parents=True, exist_ok=True)
         PROBE_ABS.write_text(
             "# 探针: 两处**同值不同实现**与两处散文上限\n"
             "A=0\n"
