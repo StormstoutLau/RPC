@@ -5063,8 +5063,10 @@ STATION_CMD = (
     # 单行串写会变成转义地狱, 且三站口径无法保证一致。
     "printf '\\n[plug]\\n'; plugin-probe 2>/dev/null || true; "
     "printf '\\n[mpath]\\n'; for f in /etc/llama-instances/*.env; do [ -e \"$f\" ] || continue; "
-    "a=${f##*/}; a=${a%.env}; p=$(sed -n 's/^MODEL_PATH=//p' \"$f\" | head -1 | tr -d '\"'); "
-    "if [ -z \"$p\" ]; then echo \"$a NO_MODEL_PATH\"; "
+    "a=${f##*/}; a=${a%.env}; "
+    "CG=$(command -v conf-get 2>/dev/null || echo /usr/local/bin/conf-get); "
+    "p=$(\"$CG\" \"$f\" MODEL_PATH 2>/dev/null); rc=$?; "
+    "if [ \"$rc\" -ne 0 ] || [ -z \"$p\" ]; then echo \"$a NO_MODEL_PATH\"; "
     "elif [ -f \"$p\" ]; then echo \"$a OK\"; else echo \"$a MISSING $p\"; fi; done; "
     # (f) 凭据引用完整性 —— 2026-09-14 补: 起因是把 B/C 的 apiKeyHelper 抄进 A 站 settings.json
     # 时**没有把被引用的 claude-key.sh 一起部署**, 而所有断言都只看"配置文件是否一致",
@@ -6021,12 +6023,15 @@ def classify_engine_band(has_ports, rss_mb, n_proc=None):
 # ⚠ 为什么敢判 FAIL(而非 WARN): 接入前实测过**误报面** —— 8 个件 × 三站里 7 个本来就逐字节一致,
 #   唯一不一致的 `wait-gtt-release` 是**真漂移**(A/B 落后一版且带 BOM), 已单独立项。
 # 2026-09-29 补第 9 件 `rpc-serve-instance`(RPC worker 包装器, GLM-5.3-Flash 引擎变体需要)。
+# 2026-10-27 补第 10-12 件（P1 review-p1-remediation）:
+#   `model-locate.sh` / `conf-lib.sh` / `conf-get` —— #3 模型定位与 #4 conf 读写的共享实现。
 # ⚠⚠ 同日本项**顺带抓到一类系统性假红**: `core.autocrlf=true` 使仓库工作树里
 #   `infer-load` / `infer-unload` 是 CRLF, 而站上是 LF ⇒ 逐字节比对必然 FAIL(内容其实一致)。
 #   判据是对的(CRLF 的 shell 脚本在 Linux 上**真的**语法错误, 2026-09-29 部署时实测 203/EXEC 同类),
 #   错的是**仓库工作树**: 已把这 2 件归一为 LF。改这几个件时务必确认行尾是 LF。
 STATION_BINS = ("infer-load", "infer-unload", "infer-list", "llama-serve-instance",
-                "rpc-serve-instance", "cluster-ttl", "load-mem-gate", "wait-gtt-release", "load-gate")
+                "rpc-serve-instance", "cluster-ttl", "load-mem-gate", "wait-gtt-release",
+                "load-gate", "model-locate.sh", "conf-lib.sh", "conf-get")
 
 _HEALTH_CMD = (
     "echo '===ADDR==='; ip -o -4 addr show 2>/dev/null "

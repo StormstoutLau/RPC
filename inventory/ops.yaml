@@ -31,6 +31,7 @@ entry_modules:
   - ops/cluster_model.py
   - ops/cluster_secrets.py
   - ops/cluster_egress.py
+  - ops/conf_parse.py          # P1 #4: conf 解析（被 cluster.py 函数内懒加载；纯模块，不可直接跑）
 
 # cluster 模块**层序**（D6-P2-1，底→顶）：**只允许依赖严格下层**（同层/反向/成环 ⇒ 门禁 `deps` FAIL）。
 # 为什么单列: 拆出 5 个模块后, "谁能 import 谁"原先**无任何约束** ⇒ 反向依赖会悄悄长回来。
@@ -56,6 +57,10 @@ station_runtime:
   - ops/station-bin/infer-load
   - ops/station-bin/infer-unload
   - ops/station-bin/infer-list
+  # P1 #3/#4 (2026-10-27): 站上共享库 + conf 读取薄壳 —— 被 infer-load/infer-list source、rpc_check 经 ssh 调用。
+  - ops/station-bin/model-locate.sh
+  - ops/station-bin/conf-lib.sh
+  - ops/station-bin/conf-get
   - ops/station-bin/llama-serve-instance
   - ops/station-bin/rpc-serve-instance
   - ops/station-bin/load-gate

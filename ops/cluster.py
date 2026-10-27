@@ -133,6 +133,7 @@ import base64
 import socket
 import hashlib
 import datetime
+import ipaddress
 import subprocess
 import threading
 from pathlib import Path
@@ -234,15 +235,13 @@ _KV_BPE = {"f16": 2.0, "bf16": 2.0, "f32": 4.0, "q8_0": 1.0625,
 
 
 def _parse_conf(text: str) -> dict:
-    """解析站上 conf (/etc/llama-instances/<alias>.env) 为 dict。"""
-    d = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, _, v = line.partition("=")
-        d[k.strip()] = v.strip().strip('"').strip("'")
-    return d
+    """解析站上 conf (/etc/llama-instances/<alias>.env) 为 dict。
+
+    P1 #4: 委托 ops/conf_parse（与站上 conf-lib.sh 同一转义规则）。
+    函数内导入 ⇒ 不成为 cluster_*.py 依赖图的模块级边。
+    """
+    from conf_parse import parse_conf
+    return parse_conf(text)
 
 
 def _station_mem(st: str) -> dict:
@@ -815,16 +814,64 @@ def _engine_ok(engine: str) -> bool:
     return bool(engine) and all(c in _ENGINE_CHARS for c in engine)
 
 
+def _pp_listen_ip(coord: str, worker: str) -> str:
+    """coordinator 在 coord-worker 直连段上的 IP；找不到 / 多义 / 非法 ⇒ ""（不猜）。
+
+    只解析 inventory/net.yaml 的 `segments:` 段（ends 为 inline map）。
+    找不到返回空，由 _load_ds4_pp 在起 worker **之前**中止 —— 绝不退回 0.0.0.0。
+    """
+    path = Path(__file__).resolve().parent.parent / "inventory" / "net.yaml"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    in_seg, seg, hits = False, {}, []
+
+    def close_seg():
+        if coord in seg and worker in seg and coord != worker:
+            hits.append(seg[coord])
+
+    for line in lines:
+        s = line.strip()
+        if s.startswith("segments:"):
+            in_seg = True
+            continue
+        if in_seg and s.startswith("routes:"):
+            break
+        if not in_seg:
+            continue
+        if s.startswith("- name:"):
+            close_seg()
+            seg = {}
+            continue
+        m = re.search(r"station:\s*([ABC])\b.*?\bip:\s*([0-9.]+)", s)
+        if m:
+            try:
+                ipaddress.ip_address(m.group(2))
+            except ValueError:
+                continue
+            seg[m.group(1)] = m.group(2)
+    close_seg()
+    return hits[0] if len(hits) == 1 else ""
+
+
 def _build_infer_load_cmd(matched: str, backend: str, engine: str = None,
-                          rpc_target: str = None) -> str:
+                          rpc_target: str = None, pp_listen: str = None) -> str:
     """拼装远端 infer-load 命令。backend 来自白名单校验(枚举), engine 来自 _engine_ok(), 均无注入风险。
     engine(引擎变体) 见 infer-load 的 --engine 说明: 名 -> /opt/llama.cpp-<名>/, 或绝对路径。
-    rpc_target: 仅 RPC 类使用；worker 站 letter 经 RPC_WORKER_IPS 映射后传入（已在调用方校验）。"""
+    rpc_target: 仅 RPC 类使用；worker 站 letter 经 RPC_WORKER_IPS 映射后传入（已在调用方校验）。
+    pp_listen: 仅 ds4 coordinator 使用；由 _pp_listen_ip 从直连段取值并在此二次校验。"""
     cmd = f"infer-load '{matched}'" + (f" --backend {backend}" if backend else "")
     if engine:
         cmd += f" --engine '{engine}'"
     if rpc_target:
         cmd += f" --rpc-target '{rpc_target}'"
+    if pp_listen:
+        try:
+            ipaddress.ip_address(pp_listen)
+        except ValueError as e:
+            raise ValueError(f"非法 pp_listen: {pp_listen!r}") from e
+        cmd += f" --pp-listen '{pp_listen}'"
     return cmd
 
 
@@ -1531,14 +1578,23 @@ def _load_ds4_pp(alias: str, coord: str, worker: str) -> int:
     """
     print(f"[cluster] == ds4 双机 PP 加载编排: {alias} @ worker={worker} 站 → coordinator={coord} 站 ==")
 
+    # P1 #7: 先取 coordinator 的直连段 IP —— 取不到就在**起 worker 之前**中止，
+    # 绝不退回 0.0.0.0（CWE-1327：默认即全接口暴露）。
+    pp_ip = _pp_listen_ip(coord, worker)
+    if not pp_ip:
+        print(f"[cluster] 无法从 inventory/net.yaml 读出 {coord}-{worker} 直连段 IP "
+              f"⇒ ds4 PP 中止 (不默认 0.0.0.0)。")
+        return 1
+    print(f"[cluster] PP listen: coordinator={coord} ip={pp_ip}")
+
     print(f"[cluster] [1/3] 先在 worker={worker} 站起 ds4 (官方序: 先 worker 后 coordinator) ...")
     rc = ssh_stream(worker, _build_infer_load_cmd(alias, "ds4"))
     if rc != 0:
         print(f"[cluster] worker 启动失败 (rc={rc}) → 中止, 未起 coordinator。")
         return 1
 
-    print(f"[cluster] [2/3] 再在 coordinator={coord} 站起 ds4 ...")
-    rc = ssh_stream(coord, _build_infer_load_cmd(alias, "ds4"))
+    print(f"[cluster] [2/3] 再在 coordinator={coord} 站起 ds4 (--pp-listen {pp_ip}) ...")
+    rc = ssh_stream(coord, _build_infer_load_cmd(alias, "ds4", pp_listen=pp_ip))
     if rc != 0:
         print(f"[cluster] coordinator 启动失败 (rc={rc}) → 中止。")
         return 1

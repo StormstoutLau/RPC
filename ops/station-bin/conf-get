@@ -1,0 +1,9 @@
+#!/bin/bash
+# conf-get <file> <key> — 输出反转义后的值；缺失/解析失败 rc=1（P1 #4）
+# 薄壳：实现唯一在 conf-lib.sh 的 conf_get_kv。
+set -uo pipefail
+_self=${BASH_SOURCE[0]}
+case "$_self" in */*) ;; *) _self=$(command -v -- "$_self" || true) ;; esac
+HERE=$(cd "$(dirname "$(readlink -f "$_self")")" && pwd)
+. "$HERE/conf-lib.sh"
+conf_get_kv "${1-}" "${2-}"

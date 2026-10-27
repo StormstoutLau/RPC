@@ -20,16 +20,20 @@ cluster_web.py — cluster.py web 子命令: 傻瓜式推理框架管理 Web UI 
 设计: spec/d2-cluster-cli/  .trae/documents/cluster-web-ui-实现计划.md
 """
 import io
+import os
 import re
 import sys
 import json
 import time
+import hmac
 import socket
+import hashlib
 import secrets
 import contextlib
 import threading
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import cluster  # 复用 ssh_run / probe_frames / cmd_load / cmd_unload / BACKENDS / ROUTE 等
 
@@ -390,20 +394,67 @@ def _load_action(alias, backend):
     return rc
 
 
+def _token_eq(a, b) -> bool:
+    """常量时间比较（P1 #10）。空值/非字符串 ⇒ False；统一转 bytes 以兼容非 ASCII。"""
+    if not a or not b:
+        return False
+    try:
+        return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+    except (AttributeError, TypeError):
+        return False
+
+
+def _mask_token(t: str) -> str:
+    """日志用掩码：前 4 位 + sha256 前 8 位；不输出完整 token。"""
+    h = hashlib.sha256(t.encode("utf-8")).hexdigest()[:8]
+    return f"{t[:4]}…{h}" if len(t) > 4 else f"…{h}"
+
+
+def _startup_lines(port, token, token_file, host) -> list:
+    """启动日志（纯函数，便于测试断言"不含完整 token"）。"""
+    lines = [
+        "[cluster-web] 三机推理框架管理 UI 已启动 (按需服务, Ctrl-C 退出)",
+        f"[cluster-web]   token: {_mask_token(token)}"
+        + (f" (文件 {token_file})" if token_file else " (来自 --token)"),
+        f"[cluster-web]   打开: http://127.0.0.1:{port}/  "
+        f"(loopback 首次用 ?token= 引导；token 见{'文件' if token_file else '启动参数'})",
+        f"[cluster-web]   监听: {port} (localhost 与 127.0.0.1 均可用)",
+    ]
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        lines.append("[cluster-web]   ⚠ 已绑定非 loopback：?token= 引导已禁用，"
+                     "仅允许 X-Auth-Token header / rpc_token Cookie 鉴权")
+    return lines
+
+
 class Handler(BaseHTTPRequestHandler):
 
     server_version = "ClusterWeb/0.1"
     _token = ""
     _page = ""
+    _host = "127.0.0.1"
 
     def _auth_ok(self):
-        return self.headers.get("X-Auth-Token", "") == self._token
+        """Header 或 Cookie 任一通过；比较必须用 _token_eq（常量时间）。"""
+        cands = [self.headers.get("X-Auth-Token") or ""]
+        raw = self.headers.get("Cookie") or ""
+        for part in raw.split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == "rpc_token":
+                cands.append(unquote(v))
+                break
+        return any(_token_eq(c, self._token) for c in cands)
+
+    def _common_headers(self, code):
+        self.send_header("Referrer-Policy", "no-referrer")
+        if code in (302, 401):
+            self.send_header("Cache-Control", "no-store")
 
     def _json(self, code, obj):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self._common_headers(code)
         self.end_headers()
         self.wfile.write(body)
 
@@ -412,8 +463,28 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        self._common_headers(code)
         self.end_headers()
         self.wfile.write(body)
+
+    def _redirect(self, location, cookie=None):
+        self.send_response(302)
+        self.send_header("Location", location)
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
+        self.send_header("Content-Length", "0")
+        self._common_headers(302)
+        self.end_headers()
+
+    def _bootstrap_allowed(self):
+        """`?token=` 引导只在 loopback 绑定 + loopback 客户端时允许。"""
+        return (self._host in ("127.0.0.1", "localhost", "::1")
+                and self.client_address[0] in ("127.0.0.1", "::1"))
+
+    def log_message(self, fmt, *args):
+        """默认实现会打印含 query 的 requestline ⇒ 把 token 值脱敏。"""
+        msg = re.sub(r"([?&]token=)[^&\s\"]+", r"\1***", fmt % args)
+        super().log_message("%s", msg)
 
     def _body_json(self):
         try:
@@ -428,8 +499,22 @@ class Handler(BaseHTTPRequestHandler):
         # ⚠️ 必须先剥离 query string! `self.path` 形如 "/?token=xxx",
         # 直接与 "/" 比较会失配 → 免输链接 /?token=… 会返回 {"error":"not found"}。
         # 2026-09-15 实测踩到: 只测了不带 query 的 "/", 漏测了带 token 的真实入口。
-        path = urlparse(self.path).path
+        # 2026-10-27 (P1 #10): query token 改为 **loopback 一次性引导** ——
+        #   校验通过 ⇒ Set-Cookie + 302 到 "/"（history 里不留 query）；
+        #   非 loopback 绑定 ⇒ 401，禁用引导（token 只能走 header/cookie）。
+        u = urlparse(self.path)
+        path = u.path
         if path in ("/", "/index.html"):
+            qs = parse_qs(u.query)
+            if "token" in qs:
+                if not self._bootstrap_allowed():
+                    return self._json(401, {"error": "unauthorized"})
+                cand = qs["token"][0] if qs["token"] else ""
+                if not _token_eq(cand, self._token):
+                    return self._json(401, {"error": "unauthorized"})
+                cookie = (f"rpc_token={quote(self._token, safe='')}; "
+                          f"HttpOnly; SameSite=Strict; Path=/")
+                return self._redirect("/", cookie=cookie)
             return self._text(200, self._page)
         if path == "/api/status":
             if not self._auth_ok():
@@ -736,15 +821,13 @@ details[open]>summary{border-bottom:1px solid var(--line)}
 
 <script>
 let token = localStorage.getItem('cluster_token') || '';
-// 支持从 URL ?token= 自动登录: 启动日志会打印"免输链接", 点击即用, 无需手输。
-// (手输入口仍保留, 作为换机/清缓存后的兜底)
-const urlTok = new URLSearchParams(location.search).get('token');
-if(urlTok){ token = urlTok; localStorage.setItem('cluster_token', token);
-  history.replaceState(null, '', location.pathname); }
+// P1 #10: ?token= 由服务端做 loopback 一次性引导（302 + HttpOnly Cookie），
+// 前端**不再**从 URL 取 token、也不再把它写进 localStorage（避免 token 留在历史/存储）。
+// 手输入口保留，作为 Cookie 不可用（非 loopback / 换浏览器）时的 header 回退。
 let busy = false;
 const tokBox = document.getElementById('tokInput');
 tokBox.value = token;
-document.getElementById('loginBox').style.display = token ? 'none' : 'block';
+document.getElementById('loginBox').style.display = 'none';
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -1397,9 +1480,24 @@ def serve(argv=None):
         if argv[i] == "--token" and i + 1 < len(argv):
             token = argv[i + 1]; i += 2; continue
         i += 1
+    explicit = token is not None
     token = token or secrets.token_urlsafe(9)
     Handler._token = token
+    Handler._host = host
     Handler._page = _build_page()
+
+    # token 落点 (P1 #10): 显式 --token 不落盘；自动生成写 0600 文件，日志只打路径+掩码。
+    token_file = None
+    if not explicit:
+        p = Path.home() / ".local" / "share" / "rpc" / "web-token"
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(token + "\n", encoding="utf-8")
+            os.chmod(p, 0o600)
+            token_file = p
+        except OSError as e:
+            print(f"[cluster-web] 无法写 token 文件 {p}: {e} —— 请用 --token 显式指定")
+            return 1
 
     # 双栈监听 (2026-09-15 修): Windows 下 `localhost` 会同时解析出 `::1`(IPv6) 与
     # `127.0.0.1`, 且 **::1 排在前面**; 而默认 ThreadingHTTPServer 只绑 IPv4 →
@@ -1433,12 +1531,9 @@ def serve(argv=None):
                 return 1
             print(f"[cluster-web] (提示) IPv6 未绑定 {addr}:{port}: {e}")
 
-    print("[cluster-web] 三机推理框架管理 UI 已启动 (按需服务, Ctrl-C 退出)")
-    print(f"[cluster-web]   免输链接(推荐): http://127.0.0.1:{port}/?token={token}")
-    print(f"[cluster-web]   或手输 token : {token}")
+    for line in _startup_lines(port, token, token_file, host):
+        print(line)
     print(f"[cluster-web]   监听: {', '.join(bound)}  (port {port}; localhost 与 127.0.0.1 均可用)")
-    if host in ("0.0.0.0", ""):
-        print("[cluster-web]   已监听局域网, 请妥善保管 token")
     try:
         for s in servers[1:]:
             threading.Thread(target=s.serve_forever, daemon=True).start()

@@ -17,21 +17,45 @@
 set -uo pipefail
 AWORK="scott-lau@scott-lau-NEX.local"
 
-PREFIX=""; BACKEND=""; PORT=""; CTX=""; THREADS=""; CLI_ENGINE=""; CLI_RPC_TARGET=""
+PREFIX=""; BACKEND=""; PORT=""; CTX=""; THREADS=""; CLI_ENGINE=""; CLI_RPC_TARGET=""; CLI_PP_LISTEN=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --backend) BACKEND="$2"; shift 2 ;;
     --engine|-e) CLI_ENGINE="$2"; shift 2 ;;
     --rpc-target) CLI_RPC_TARGET="$2"; shift 2 ;;
+    --pp-listen) CLI_PP_LISTEN="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
     --ctx) CTX="$2"; shift 2 ;;
     --threads) THREADS="$2"; shift 2 ;;
     *) PREFIX="$1"; shift ;;
   esac
 done
-[ -n "$PREFIX" ] || { echo "用法: infer-load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] [--engine <变体名|绝对路径>] [--rpc-target <ip:port>] [--port N]"; exit 1; }
+[ -n "$PREFIX" ] || { echo "用法: infer-load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] [--engine <变体名|绝对路径>] [--rpc-target <ip:port>] [--pp-listen <ip>] [--port N]"; exit 1; }
 
 log() { echo "[infer-load] $(date '+%H:%M:%S') $*"; }
+
+# ---- 共享库 (P1 #3/#4, 2026-10-27) ----
+# model-locate.sh: 模型定位唯一实现（#3）；conf-lib.sh: conf 读写唯一实现（#4）。
+# source 后必须断言函数存在 —— 非交互 bash 下 `. 缺失文件` 只返回非零**不退出**，
+# 若无断言会退化成 "model_file_for_alias: command not found" 式误导诊断。
+_self=${BASH_SOURCE[0]}
+case "$_self" in */*) ;; *) _self=$(command -v -- "$_self" || true) ;; esac
+HERE=$(cd "$(dirname "$(readlink -f "$_self")")" && pwd)
+. "$HERE/model-locate.sh"
+. "$HERE/conf-lib.sh"
+for _fn in model_scan model_aliases model_file_for_alias conf_escape conf_set_kv conf_get_kv; do
+  command -v "$_fn" >/dev/null 2>&1 || {
+    echo "ERROR: 共享库加载失败 ($_fn 缺失, HERE=$HERE)"; exit 1
+  }
+done
+unset _self _fn
+
+# P1 #7: --pp-listen 只接受 IP 字符（防止把任意串拼进远端/conf）。
+if [ -n "${CLI_PP_LISTEN:-}" ]; then
+  case "$CLI_PP_LISTEN" in
+    *[!0-9A-Fa-f:.]*) log "ERROR: --pp-listen 非法 IP: '${CLI_PP_LISTEN}'"; exit 1 ;;
+  esac
+fi
 
 # ---- 引擎变体解析 (2026-09-28, GLM-5.3-Flash / glm5next 分支) ----
 # 为什么**不做成新 backend**: "引擎变体"与现有 backend 枚举的轴**不正交** ——
@@ -59,7 +83,7 @@ fi
 #      gpt-oss-120b 与 gpt-oss-120b-fable-5-distilled => `load gpt-oss-120b-b` 直接 exit 1。
 #   ② PREFIX 未转义 => `.` 是正则通配, `qwen3.8` 会命中 `qwen3x8` (误配)。
 #   修法: 候选集全列出 -> 精确相等者直接胜出 -> 否则才走唯一前缀; 前缀比较用 shell `case` 按**字面**串。
-# ★ 2026-10-12 修 Bug B: 原实现按 `find -mindepth 2 -maxdepth 2 -type d` 找**模型目录**
+# ★ 2026-10-12 修 Bug B: 原实现按 depth-2 的**目录级** find 找模型目录
 #   ⇒ `gguf/<repo>/<file>.gguf` 这种"仓库级直放"(depth-1) **完全看不到** —— 实测 B 站
 #   `davidau-q38-27b-q4k` 有 conf(:18081)、能加载, 却在这里被判"无匹配 '$PREFIX'"。
 #   ⚠ 同一缺陷 **infer-list 已于 2026-09-15 修掉**(其头部注释①逐字记的就是本例), 改按
@@ -67,9 +91,7 @@ fi
 #   本就要求"别名规则须与 ... 站上 infer-load 一致")。现改为**与 infer-list scan() 同规则**:
 #     gguf/<repo>/<file>.gguf            → 模型 = <repo>                    (NF == 2)
 #     gguf/<repo>/<Model>-GGUF/…/<file>  → 模型 = <Model>                  (NF >= 3)
-ALL_ALIASES=$(find -L /data/models/gguf -mindepth 2 -name '*.gguf' ! -name 'mmproj*' -printf '%P\n' 2>/dev/null | \
-  awk -F/ '{ print (NF == 2) ? $1 : $1"/"$2 }' | \
-  sed 's|.*/||; s|-GGUF$||' | tr 'A-Z' 'a-z' | sed 's/^minimax-m2.7.*/m27-q4ks/' | sort -u)
+ALL_ALIASES=$(model_aliases)
 # ★ ds4 后端: 别名来自另一个命名空间 (2026-09-28, ADR-0010 / spec/ds4-backend/DESIGN.md §2/§4.2)。
 #   为什么必须分家: ds4 是**项目专属 GGUF、非通用加载器**, 其模型刻意**不并入** /data/models/gguf ——
 #   否则 infer-list/models 会扫出一个 llama.cpp 根本加载不了的模型 (DESIGN §2 三条隔离原则之②)。
@@ -92,7 +114,11 @@ if [ -n "$EXACT" ]; then
   ALIAS="$EXACT"
 else
   N=$(printf '%s' "$PFX" | grep -c .)
-  if [ "$N" -eq 0 ]; then echo "ERROR: 无匹配 '$PREFIX' (infer-list 查看)"; exit 1; fi
+  if [ "$N" -eq 0 ]; then
+    echo "ERROR: 无匹配 '$PREFIX' (infer-list 查看)"
+    echo "候选 alias: $(printf '%s' "$ALL_ALIASES" | tr '\n' ' ')"
+    exit 1
+  fi
   if [ "$N" -gt 1 ]; then echo "ERROR: 前缀歧义 ($N 匹配):"; printf '%s\n' "$PFX"; exit 1; fi
   ALIAS=$(printf '%s' "$PFX" | head -1)
 fi
@@ -112,13 +138,13 @@ if [ "$BACKEND" = "ds4" ]; then
 else
 CONF="/etc/llama-instances/${ALIAS}.env"
 if [ ! -f "$CONF" ]; then
-  REPO=$(find -L /data/models/gguf -mindepth 2 -maxdepth 2 -type d 2>/dev/null | \
-    while read -r d; do a=$(basename "$d" | sed 's/-GGUF$//' | tr 'A-Z' 'a-z'); \
-    case "$a" in minimax-m2.7*) a="m27-q4ks";; esac; [ "$a" = "$ALIAS" ] && echo "$d"; done | head -1)
-  [ -z "$REPO" ] && { echo "ERROR: repo not found"; exit 1; }
-  F=$(find -L "$REPO" -name '*.gguf' ! -name '*-of-0000*.gguf' ! -name 'mmproj*' -size +1G -printf '%s %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-  [ -z "$F" ] && F=$(find -L "$REPO" -name '*-00001-of-*.gguf' | head -1)
-  [ -z "$F" ] && F=$(find -L "$REPO" -name '*.gguf' | head -1)
+  # P1 #3: 模型文件由共享库定位（文件级枚举，覆盖三种落点；旧实现 depth-2 目录会漏仓库级直放）。
+  F=$(model_file_for_alias "$ALIAS") || {
+    echo "ERROR: 模型文件未找到 (alias=$ALIAS)"
+    echo "候选 alias: $(model_aliases | tr '\n' ' ')"
+    exit 1
+  }
+  REPO=$(dirname "$F")
   if echo "$F" | grep -q -- '-of-0000'; then SZ=$(du -smL "$REPO" | cut -f1); else SZ=$(( $(stat -c%s "$F") / 1048576 )); fi
   # 后端默认判定: 默认 unsloth (除 embedding 小模型用 llama-single)
   if [ -z "$BACKEND" ]; then
@@ -132,9 +158,11 @@ if [ ! -f "$CONF" ]; then
   #   ⚠ 本行只在**首次生成 conf** 时生效; 已存在的 conf 不会被改写(要改请直接编辑 conf)。
   NCM=0
   EMB=""; case "$ALIAS" in all-minilm*) EMB="--embedding";; esac
+  # P1 #4: MODEL_PATH 走 conf_escape（双引号 + 固定转义集），与 conf_get_kv/conf_parse 互逆。
+  MP_ESC=$(conf_escape "$F") || { echo "ERROR: MODEL_PATH 含非法字符 (换行)"; exit 1; }
   sudo tee "$CONF" >/dev/null <<CEOF
 # B5i 自动生成 ($(date '+%F %T')) [默认后端 unsloth] — 可编辑后 infer-load(重载) 或 systemctl 回退
-MODEL_PATH=${F}
+MODEL_PATH="${MP_ESC}"
 PORT=${PORT:-8080}
 CTX=${CTX:-32768}
 THREADS=${THREADS:-16}
@@ -172,20 +200,9 @@ source "$CONF"
 # 注意**不做反向清理**: 未给 --engine 时不动已存在的键 —— 引擎变体是**实例属性**(可由人手工
 #   编辑 conf 钉死), `--engine` 只是"顺手设置它"的入口(与 conf 头注释"可编辑后重载"一致)。
 _set_conf_key() {  # _set_conf_key <KEY> <VALUE> — 幂等写/改实例 conf 的一行
-  if grep -q "^$1=" "$CONF" 2>/dev/null; then
-    sudo sed -i "s|^$1=.*|$1=$2|" "$CONF"
-  else
-    # ★ 2026-10-12 修 Bug C: 原实现直接 `tee -a` —— 若 conf **末行无换行**, 追加会**拼到末行尾部**:
-    #   实测 qwen3.8-27b-mtp.env 末行 `EXTRA_FLAGS="…--metrics"` **无换行**, 于是 `--engine` 追加
-    #   `LLAMA_RPC_SERVER_BIN=…` 后变成 `…--metrics"LLAMA_RPC_SERVER_BIN=…` ⇒ llama-server 启动
-    #   报 `error: invalid argument: --metricsLLAMA-RPC-SERVER-BIN=…` 直接 status=1 失败。
-    #   ⚠ 该缺陷**只在"目标键不存在 + conf 末行无换行"时触发** ⇒ 有 conf 一直没暴露;
-    #   修法 = 追加前先确保文件以换行结尾 (POSIX 文本文件, 空文件不补)。
-    if [ -s "$CONF" ] && [ -n "$(tail -c1 "$CONF")" ]; then
-      echo "" | sudo tee -a "$CONF" >/dev/null
-    fi
-    echo "$1=$2" | sudo tee -a "$CONF" >/dev/null
-  fi
+  # P1 #4: 收敛到 conf_set_kv（双引号 + 转义 + mktemp/mv 原子替换）。
+  # 旧实现的 sed -i 非原子、$2 未转义；"末行无换行导致追加粘连"(Bug C) 也由整文件重写结构性消除。
+  conf_set_kv "$CONF" "$1" "$2" || { log "ERROR: conf 写入失败 ($1, rc=$?)"; exit 1; }
 }
 if [ -n "$ENGINE_BIN" ] && [ "${CLI_BACKEND:-}" != "ds4" ]; then
   _set_conf_key LLAMA_SERVER_BIN "$ENGINE_BIN"
@@ -361,6 +378,17 @@ if [ "$BACKEND" = "ds4" ]; then
   HTTP_PORT="${HTTP_PORT:-${PORT_NUM:-8080}}"
   DS4_LOG_DIR="${DS4_LOG_DIR:-/var/log/ds4}"
 
+  # P1 #7: PP 绑定地址。优先级 CLI > conf/env；未显式给值时：
+  #   coordinator ⇒ **中止**（它必须绑定一个 worker 可达的直连段 IP，不能默认 0.0.0.0）；
+  #   worker      ⇒ 不使用该值；
+  #   单机        ⇒ 变量默认 127.0.0.1，但不向引擎传 --listen（HTTP 面仍 --host 127.0.0.1）。
+  _PP_EXPLICIT="${CLI_PP_LISTEN:-${PP_LISTEN:-}}"
+  PP_LISTEN="${_PP_EXPLICIT:-127.0.0.1}"
+  if [ "$PP_ROLE" = "coordinator" ] && [ -z "$_PP_EXPLICIT" ]; then
+    log "ERROR: PP coordinator 需要一个可被 worker 访问的直连段 IP (--pp-listen)，不能默认 0.0.0.0"
+    exit 1
+  fi
+
   # 模型缺失/非法**响亮失败** —— ds4 不做静默回退 (否则"看似加载成功实则错")。
   if [ -z "${MODEL_PATH:-}" ] || [ ! -f "$MODEL_PATH" ]; then
     log "ERROR: ds4 MODEL_PATH 未设或文件不存在: '${MODEL_PATH:-<空>}' (conf=$DS4_CONF) —— 拒绝加载。"
@@ -389,14 +417,14 @@ if [ "$BACKEND" = "ds4" ]; then
         > "$DS4_LOG" 2>&1 &
       ;;
     coordinator)
-      log "ds4 coordinator: 起 ds4-server --role coordinator (layers='${PP_LAYERS:-}' listen='${PP_LISTEN:-0.0.0.0}' pp=${PP_PORT} http=${HTTP_PORT}) ..."
+      log "ds4 coordinator: 起 ds4-server --role coordinator (layers='${PP_LAYERS:-}' listen='${PP_LISTEN}' pp=${PP_PORT} http=${HTTP_PORT}) ..."
       nohup "${DS4_HOME}/ds4-server" --rocm --role coordinator --layers "${PP_LAYERS:-}" \
-        --listen "${PP_LISTEN:-0.0.0.0}" "${PP_PORT}" \
+        --listen "${PP_LISTEN}" "${PP_PORT}" \
         -m "$MODEL_PATH" -c "$CTX" --host 127.0.0.1 --port "$HTTP_PORT" \
         > "$DS4_LOG" 2>&1 &
       ;;
     *)
-      log "ds4 单机: 起 ds4-server (port ${HTTP_PORT} ctx ${CTX}) ..."
+      log "ds4 单机: 起 ds4-server (port ${HTTP_PORT} ctx ${CTX}; PP listen 未显式传参, 引擎默认) ..."
       nohup "${DS4_HOME}/ds4-server" --rocm -m "$MODEL_PATH" -c "$CTX" \
         --host 127.0.0.1 --port "$HTTP_PORT" \
         > "$DS4_LOG" 2>&1 &

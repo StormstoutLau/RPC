@@ -60,26 +60,23 @@ infer-list — 模型清单: alias / 位置 / 大小 / 建议后端 / CONF
 USAGE
 }
 
+# P1 #3: 模型定位共享库（唯一实现；本机与对端都用同一份函数）。
+_self=${BASH_SOURCE[0]}
+case "$_self" in */*) ;; *) _self=$(command -v -- "$_self" || true) ;; esac
+HERE=$(cd "$(dirname "$(readlink -f "$_self")")" && pwd)
+. "$HERE/model-locate.sh"
+unset _self
+for _fn in model_scan model_aliases model_file_for_alias; do
+  command -v "$_fn" >/dev/null 2>&1 || {
+    echo "[infer-list] ERROR: 共享库加载失败 ($_fn 缺失, HERE=$HERE)" >&2; exit 1
+  }
+done
+unset _fn
+
 # 单站扫描: 输出 `alias|模型目录|大小MB|主gguf`
 scan() {
-  find -L /data/models/gguf -mindepth 2 -name '*.gguf' ! -name 'mmproj*' -printf '%P\n' 2>/dev/null \
-  | awk -F/ '{ print (NF == 2) ? $1 : $1"/"$2 }' \
-  | sort -u \
-  | while IFS= read -r d; do
-      [ -z "$d" ] && continue
-      full="/data/models/gguf/$d"
-      # 主 gguf 优先级: 合并单文件(B5j 产物, 排除分片/mmproj) > 分片首片 > 任意非 mmproj
-      F=$(find -L "$full" -name '*.gguf' ! -name '*-of-0000*.gguf' ! -name 'mmproj*' \
-             -size +1G -printf '%s %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-      [ -z "$F" ] && F=$(find -L "$full" -name '*-00001-of-*.gguf' 2>/dev/null | head -1)
-      [ -z "$F" ] && F=$(find -L "$full" -name '*.gguf' ! -name 'mmproj*' 2>/dev/null | head -1)
-      [ -z "$F" ] && continue
-      # 大小用模型目录总量, -L 跟随软链 (软链指向物理库; 分片首片可能 header-only)
-      SZ=$(du -smL "$full" 2>/dev/null | cut -f1)
-      alias=$(basename "$d" | sed 's/-GGUF$//' | tr 'A-Z' 'a-z')
-      case "$alias" in minimax-m2.7*) alias="m27-q4ks" ;; esac
-      printf '%s|%s|%s|%s\n' "$alias" "$d" "${SZ:-0}" "$F"
-    done
+  # GGUF 模型：共享库的 model_scan（文件级枚举，覆盖仓库级直放/模型目录/量化子目录）。
+  model_scan
   # 非 GGUF 权重 (vLLM AWQ 分片目录); 现役已无, 保留以识别历史引用
   for d in /data/models/*/; do
     case "$d" in */gguf/) continue ;; esac
@@ -95,7 +92,9 @@ scan() {
 #   非引用型 heredoc 会在**本地**展开函数体里的 $d/$full/$() , 送过去就成了坏函数。
 peer_scan() {
   local payload addr out
-  payload="$(declare -f scan)
+  # P1 #3: 共享库函数必须一起送到对端（对端不必先部署新库）。
+  payload="$(declare -f _model_alias_of _model_main_gguf model_scan model_aliases model_file_for_alias)
+$(declare -f scan)
 scan"
   for addr in ${NODE[$1]}; do
     out=$(printf '%s\n' "$payload" | ssh -o BatchMode=yes -o ConnectTimeout=6 "$addr" bash -s)

@@ -16,13 +16,22 @@
 | load-gate            | /usr/local/bin/load-gate            | **加载前内存门禁**（4 条硬规则：used+need+12G≤total / avail≥need+12G / 已有 llama RSS+need+12G≤total / loadavg1>8 WARN）；默认查本机，可传 peer 站 |
 | load-mem-gate        | /usr/local/bin/load-mem-gate        | 内存门（12G 垫）                                 |
 | wait-gtt-release     | /usr/local/bin/wait-gtt-release     | GTT 回收等待                                   |
+| model-locate.sh      | /usr/local/bin/model-locate.sh      | **模型定位共享库**（P1 #3，2026-10-27；`infer-load`/`infer-list` 共同 source） |
+| conf-lib.sh          | /usr/local/bin/conf-lib.sh          | **conf 读写共享库**（P1 #4；双引号+转义+原子写，`infer-load` source） |
+| conf-get             | /usr/local/bin/conf-get             | conf 读取 CLI 薄壳（`conf-get <file> <key>`；`rpc_check` 权重存在性检查用） |
 
 ## 两站一致性
 
 修改后核对：`md5sum /usr/local/bin/<file>`（两站必须一致）。
-**当前（2026-10-22，站上件 · 三站一致）**：infer-load **`28ce417c...`**、infer-unload `a9f8f3f0...`、
-llama-serve-instance `e8c20ede...`、**rpc-serve-instance `24a3e592...`**、infer-list `74033ef1...`、
-**cluster-ttl `89af1078...`**。
+**当前（2026-10-27，站上件 · 三站一致）**：infer-load **`184dc54c...`**、infer-unload `a9f8f3f0...`、
+llama-serve-instance `e8c20ede...`、**rpc-serve-instance `24a3e592...`**、infer-list **`b33f6437...`**、
+**cluster-ttl `89af1078...`**、**model-locate.sh `c9e0374c...`**、**conf-lib.sh `8a311f9e...`**、**conf-get `54affdd6...`**。
+（2026-10-27 P1 `review-p1-remediation` 改动：新增 `model-locate.sh` / `conf-lib.sh` / `conf-get` 三件；
+`infer-load` `28ce417c…` → `184dc54c…`（#3 模型定位走共享库、#4 conf 写入口 conf_set_kv、#7 `--pp-listen` +
+coordinator 无显式 IP 即中止）；`infer-list` `74033ef1…` → `b33f6437…`（scan 改调 model_scan、peer_scan 发送共享函数、source 后断言）。
+部署：三站「备份 → `install -m 755` → `bash -n` → md5 对账」；infer-load/infer-list 备份
+`*.bak-p1review-20261027`。冒烟：B 站 `conf-get` 读出 glm conf 的 MODEL_PATH 且文件存在；
+`model_file_for_alias davidau-q38-27b-q4k` 命中仓库级直放（12 个别名）。）
 （2026-10-22 `infer-load` 改动 `582fd068…` → `28ce417c…`：新增 **`--rpc-target <ip:port>`**（仅 llama-rpc；
 仅本次加载覆盖 conf 的 RPC_TARGET，并经 `/run` 覆盖层让 systemd 单元同样生效；值有字符白名单）；GTT 等待改为等**实际 worker**
 （auto 仍等 A）；RPC 节点启动改为**只起本次 worker**（传 rpc-nodes 第三参数）。
