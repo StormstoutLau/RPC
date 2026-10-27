@@ -12,8 +12,8 @@
 
 | 站 | 角色 | 服务 | 状态 | 关键读数 |
 |---|---|---|---|---|
-| B | head | GLM-5.3-Flash-UD-IQ4_XS + MTP（变体引擎 `glm5next-20260928`） | **READY** | `/props n_ctx=1048576`；进程 `-c 1048576 --n-cpu-moe 8`；冒烟 12.4 t/s（MTP draft 9 / accept 4） |
-| A | worker | `ggml-rpc-server` 10.10.10.1:50052 | **active** | GTT 79.4G（调参后）；RAM 47.8G 可用 |
+| B | head | GLM-5.3-Flash-UD-IQ4_XS + MTP（变体引擎 `glm5next-20260928`） | **READY** | `/props n_ctx=1048576`；进程 `-c 1048576 --n-cpu-moe 8 --tensor-split 0.60,0.40`；冒烟 12.5 t/s（MTP draft 9 / accept 4）；**GTT 101.5G（余 24.3G）· RAM 26G 可用** |
+| A | worker | `ggml-rpc-server` 10.10.10.1:50052 | **active** | **GTT 99.3G（余 26.6G）· RAM 29G 可用** |
 | C | 独立 | halogen qwen3.8-flash-next（v2 `.hgn`） | **READY** | `context=1048576` · `kv_pool_positions=1048576` · YaRN factor 4.0 · KV int8 |
 
 > 注：A 站无 `:8080`（worker 只开 50052），`cluster.py status` 显示 A STOPPED 属正常。
@@ -27,6 +27,7 @@
 ```
 CTX=1048576
 N_CPU_MOE=8
+EXTRA_FLAGS="-fa on --spec-type draft-mtp --tensor-split 0.60,0.40"
 ```
 
 - **原生 ctx = 1,048,576**（`estimate` 读出：46 层 · 全注意力 12/46 · head_dim 512），**不需要 YaRN**。
@@ -34,6 +35,8 @@ N_CPU_MOE=8
 - 备份：
   - `glm-5.3-flash.env.bak-ctx65536-20261026`（改 CTX 前）
   - `glm-5.3-flash.env.bak-ncpumoe0-20261026`（改 N_CPU_MOE 前）
+  - `glm-5.3-flash.env.bak-pre-ts045-20261027`（首次切分试验前：1M + 无 ts）
+  - `glm-5.3-flash.env.bak-ts6040-ctx512k-20261027`（512K + 0.60,0.40）
 
 ### 2.2 为什么 `N_CPU_MOE=8`（关键教训）
 
@@ -61,12 +64,14 @@ py -3.12 ops/cluster.py load glm-5.3-flash --engine glm5next-20260928 --worker A
 复验：
 
 - `/props` → `n_ctx: 1048576`，`model_path` = GLM IQ4_XS；
-- 进程 cmdline 含 `-c 1048576 --n-cpu-moe 8 --spec-type draft-mtp`；
+- 进程 cmdline 含 `-c 1048576 --n-cpu-moe 8 --spec-type draft-mtp --tensor-split 0.60,0.40`；
 - 最小生成 HTTP 200（`/v1/messages` 与 `/v1/chat/completions` 均通）。
 
-### 2.4 余量警告
+### 2.4 余量（P1 层切分后）
 
-加载后 B 站 **RAM 可用 8.1G · GTT 121.3G/125.8G**，余量很薄。真正 1M 长文 prefill 仍有 OOM / device-lost 风险；若需稳定长文，优先降到 512K（释放约 6.4G KV）或再调层切分。
+`--tensor-split 0.60,0.40`（A 60% / B 40%）把原来的 **B 121.3G / A 79.4G** 拉成 **B 101.5G / A 99.3G**：B GTT 余 **24.3G**、RAM 26G；A GTT 余 26.6G、RAM 29G；`gates` 最小余量 **+14G**。1M 仍 READY，MTP/速度未退化（12.5 t/s）。
+
+> 2026-10-27 切分前的「B 只剩 4.47G、RAM 7.9G」是未切分状态；现已由 §6.7 解决。
 
 ---
 
@@ -156,10 +161,104 @@ HALOGEN_KV8=1
 4. **C 站 1M 是运行时能力档**：仓库配方仍 262k；要长期 1M 需显式写入配方（本轮刻意不做，避免短文本质量风险成为默认）。
 5. **cc-switch 写入纪律**：先备份 DB；app 未运行时写入；provider 不设默认；隧道是 Base URL 可达性的前提。
 6. **无管理员权限**：计划任务路走不通；用户启动目录是可用的替代。
+7. **层切分不均是 1M 的真正瓶颈**：B 站 GTT 121.3G vs A 站 79.4G（A 还余 46.4G）；`N_CPU_MOE` 只是把压力从 GTT 换到系统内存，不是根因。优化方案见 §6；**2026-10-27 已用 `--tensor-split 0.60,0.40` 解决（§6.7）**。
 
 ---
 
-## 6. 回退手册
+## 6. 优化方案（层切分不均，待实施）
+
+### 6.1 问题
+
+| 站 | GTT 已用 / 总量 | 余量 | 说明 |
+|---|---|---|---|
+| B（head） | 121.36G / 125.83G | **4.47G** | 多数层 + `N_CPU_MOE=8` 的 CPU 专家 |
+| A（worker） | 79.4G / 125.83G | **46.4G** | 余量充足 |
+
+同硬件、同引擎，B 比 A 多承载约 **42G**；1M 时 B 是唯一瓶颈（4.47G），A 还有 46.4G。根因不是模型或 ctx，而是 **llama.cpp RPC 默认层分布 + `N_CPU_MOE=8`**；`infer-load` 没有暴露切分参数。
+
+后果：1M 可加载但长 prefill 易 `DeviceLost`；B 站系统内存 7.9G，推送门禁必红；q4 KV 只能补 6.4G，属于治标。
+
+### 6.2 目标（可验收）
+
+- 1M READY，`/props n_ctx=1048576`；
+- **B GTT 余量 ≥ 12G**，A GTT 余量 ≥ 12G（最低不得低于 8G）；
+- **B 系统内存 ≥ 12G**（`gates` 推送门禁绿）；
+- MTP draft/accept 不退化；128K/512K needle 冒烟通过；
+- 任一档失败可只回滚 conf 并重载。
+
+> **2026-10-27 状态：已达成（§6.7：B 101.5G / A 99.3G，`gates` +14G）。**
+
+### 6.3 候选方案（按优先级）
+
+| 优先级 | 方案 | 做法 | 预期 | 风险 / 前提 |
+|---|---|---|---|---|
+| P0 | 512K 安全档 | conf `CTX=524288`，`N_CPU_MOE=8` | B GTT 余 8～10.5G；先稳住 | 失去 1M；系统内存/推送门禁未必变绿 |
+| **P1** | **层切分重平衡** | 在 `EXTRA_FLAGS` 追加 `--tensor-split 0.45,0.55`（B:A；当前设备数=2：本地 B + RPC A），从 512K 起试，逐档调比例 | B GTT 降到 ≤112G，A 承接更多层 | RPC 下 `-ts` 的索引/语义未验证；比例错会 device-lost；**只改 conf，不改代码** |
+| P2 | 降 `N_CPU_MOE` | P1 成功后，8→6→0 逐档重载 | 释放 B 系统内存（推送门禁绿），恢复最多 +22% decode | GTT 反向增加；每档需记录 B/A GTT 与系统内存 |
+| P3 | KV q4_0（不推荐） | 先 K q8_0 + V q4_0，保持 `-fa on` | 再省 3.2～6.4G | 质量悬崖/长文变慢/可能静默回退；官方用 FP8/BF16；`infer-load:533` 硬编码 q8_0，需改码 |
+
+### 6.4 实施顺序
+
+1. **P0**：日常切到 512K；1M 仅用于短上下文。
+2. **P1**：`llama-server --help` 已确认支持 `-ts/--tensor-split`；当前 head 只有 **1 个 RPC worker**（`--rpc 10.10.10.1:50052`）⇒ `-ts` 两个值（本地 B、RPC A）。先在 512K 下试 `0.45,0.55`，记录 B/A GTT、系统内存、t/s、MTP；再上 1M。
+3. **P2**：P1 达标后，再逐档降 `N_CPU_MOE`；每档只改一个变量，保留 conf 备份。
+4. **P3**：仅在 P1/P2 仍不足且明确接受质量风险时做；先 128K needle A/B。
+
+### 6.5 未验证点（必须先测）
+
+- `-ts` 在 RPC 设备上的索引顺序（本地 B 是否固定为 N0）与 `--split-mode layer` 的交互；
+- 层切分后 MTP draft 是否仍按预期分布；
+- `N_CPU_MOE` 与 `-ts` 的交互（CPU 专家是否按层绑定到 B）；
+- 1M prefill 峰值：建议 512K→768K→1M 逐档，不在 1M 直接做长文压测。
+
+### 6.6 首档实测（2026-10-27，512K + `0.45,0.55`）
+
+| 项 | 读数 |
+|---|---|
+| B GTT | **117.98G / 125.83G**（余 **7.85G**） |
+| A GTT | **62.50G / 125.83G**（余 **63.33G**） |
+| B 系统内存 | 113G used / **11G avail**（`gates` 余量 **-1G**） |
+| A 系统内存 | 61G used / **63G avail** |
+| MTP | draft 9 / accept 4；**12.5 t/s** |
+| C qwen | 1M 仍 READY（未受影响） |
+
+**结论**：
+- `-ts` 已生效（argv 可见 `--tensor-split 0.45,0.55`），但方向与假设相反：B 从「512K 无切分的理论 ~114.9G」**升到 117.98G**，A 从 1M 的 79.4G **降到 62.5G** ⇒ 设备顺序更像 **RPC A 在前、本地 B 在后**；`0.45,0.55` 实际 = **A 45% / B 55%**。
+- 当前 B 仍是瓶颈：GTT 7.85G、系统内存 11G，均未达 §6.2 的 ≥12G；`gates` 仍 -1G。
+- **下一档**：`0.60,0.40`（A 60% / B 40%），预期 B GTT 降到 ~110G、系统内存回到 ≥12G；若 B 反而升高，则说明顺序相反，改用 `0.40,0.60`。
+
+### 6.7 第二档实测（2026-10-27，`0.60,0.40`）
+
+**512K 验证**（先低风险）：
+
+| 项 | 读数 |
+|---|---|
+| B GTT | **90.98G / 125.83G**（余 **34.85G**） |
+| A GTT | **89.49G / 125.83G**（余 **36.33G**） |
+| B 内存 | **36G 可用**；`gates` 最小余量 **+24G** |
+| MTP | draft 9 / accept 4；12.3 t/s |
+
+**1M 验证**（同一切分）：
+
+| 项 | 读数 |
+|---|---|
+| B GTT | **101.48G / 125.83G**（余 **24.35G**） |
+| A GTT | **99.26G / 125.83G**（余 **26.57G**） |
+| B 内存 | 98G used / **26G avail** |
+| A 内存 | 95G used / **29G avail** |
+| `gates` | **PASS，最小余量 +14G** |
+| MTP | draft 9 / accept 4；**12.5 t/s** |
+| C qwen | 1M 仍 READY（未受影响） |
+
+**结论：P1 达标。**
+- `0.60,0.40` 实际 = **A 60% / B 40%**（证实 A-first）；1M 下 B/A 基本均衡；
+- GTT 余量 24–27G、系统内存 26–29G，推送门禁由 **-1G 转为 +14G**；
+- MTP 与速度未退化（12.5 t/s，与切分前 12.5 持平）；
+- **P2（降 `N_CPU_MOE`）现在可选**，不再是 1M 的前置；当前 8 档已满足 §6.2。
+
+---
+
+## 7. 回退手册
 
 | 目标 | 操作 |
 |---|---|
@@ -171,7 +270,7 @@ HALOGEN_KV8=1
 
 ---
 
-## 7. 关联文档
+## 8. 关联文档
 
 - [params-ledger §1.4](../spec/infer-load/params-ledger.md)：GLM CTX / N_CPU_MOE 的台账真值（本轮已回写）。
 - [手册 §3.3](三机推理集群使用手册.md)：conf 调参与现役 CTX 清单（已回写）。

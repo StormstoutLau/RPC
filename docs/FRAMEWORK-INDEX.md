@@ -42,7 +42,7 @@
 | [2026-10-11_26610形态验证执行方案.md](2026-10-11_26610形态验证执行方案.md) | **H 类 阶段依据 · 执行方案**（#26610 RPC `-sm tensor` 怎么验：验证闸门插点 · 影子引擎 · 8 条测试矩阵 · Go/No-Go；★ 上承清单 §2.1，**唯一真值 = TRACKER §1.5 EV-12**） |
 | [2026-10-12_引擎升级可行性梳理与升级过程落档.md](2026-10-12_引擎升级可行性梳理与升级过程落档.md) | **H 类 阶段依据 · 执行记录**（分布式引擎升级全记录：资产盘点 / 两负载可行性 / **S1–S7b 全程 + 失败根因** / 补测 A/B / 上游状态；★ 含「单站引擎 A/B 两轴」判定） |
 | [2026-10-12_单站引擎轴不一致调研与统一方案.md](2026-10-12_单站引擎轴不一致调研与统一方案.md) | **H 类 阶段依据 · 调研+执行**（`~/llama.cpp` 单站轴 A/B/C 不一致六层成因 → 方案① 退役；**§5.2 三个工具缺陷（A/B/C）修复+验证** · §5.3 `load-gate` 对齐） |
-| [2026-10-27_GLM1M_Qwen1M_启动与cc-switch接入.md](2026-10-27_GLM1M_Qwen1M_启动与cc-switch接入.md) | **H 类 执行记录**（A+B GLM-5.3-Flash **1M** + C halogen qwen3.8-flash-next **1M** 启动；`N_CPU_MOE=8` 解决 worker Vulkan device lost；cc-switch 4 provider + 18081/18082 SSH 隧道 + 用户启动脚本；含回退手册） |
+| [2026-10-27_GLM1M_Qwen1M_启动与cc-switch接入.md](2026-10-27_GLM1M_Qwen1M_启动与cc-switch接入.md) | **H 类 执行记录**（A+B GLM-5.3-Flash **1M** + C halogen qwen3.8-flash-next **1M** 启动；`N_CPU_MOE=8` 解决 worker Vulkan device lost；cc-switch 4 provider + 18081/18082 SSH 隧道 + 用户启动脚本；**§6 层切分不均优化方案**（`--tensor-split` / `N_CPU_MOE` / q4 取舍）；含回退手册） |
 | DEV-LOG-* | F 类 DevLog |
 | 三机推理集群使用手册.md（2026-09-09 由"双机推理集群使用手册.md"改名）/ 分布式推理.md / SSH_OPENCODE_SETUP.md 等 | F 类手册/运维文档 |
 
