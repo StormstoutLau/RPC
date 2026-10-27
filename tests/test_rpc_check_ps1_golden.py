@@ -46,11 +46,15 @@ def main() -> int:
         fails.append("Get-BackendEgress 的 fail-closed 判据不见了")
 
     # ④ 实跑一次（本机有 powershell 才跑）—— 退出码 0 才算 PASS
-    st, note, _det = R.check_ps1_golden({})
+    st, note, det = R.check_ps1_golden({})
     ok4 = st in ("PASS", "WARN")          # WARN = 本机无 powershell ⇒ 不算失败
     print(f"  {'ok  ' if ok4 else 'FAIL'} [实跑] {st} · {note}")
     if not ok4:
         fails.append(f"实跑非 PASS/WARN: {st} · {note}")
+        # 夹具崩了却不打印自己的输出 ⇒ 只能看到"（无汇总行）"，定位不了（CI 上尤其致命）
+        print("  ── 夹具输出（末 %d 行）──" % len(det))
+        for ln in det:
+            print("     " + ln)
 
     print(f"RESULT: {'ALL PASS' if not fails else f'失败 {len(fails)} 条'}")
     for f in fails:
