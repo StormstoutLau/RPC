@@ -113,12 +113,15 @@ HALOGEN_KV8=1
 |---|---|---|---|
 | `claude` | **GLM-5.3-Flash 1M (A+B)** | `http://127.0.0.1:18081` | `ANTHROPIC_MODEL=GLM-5.3-Flash-UD-IQ4_XS.gguf` |
 | `claude` | **Halogen Qwen3.8 1M (C)** | `http://127.0.0.1:18082` | `ANTHROPIC_MODEL=qwen3.8-flash-next` |
+| `claude` | **DS4 V4-Flash 1M (A+B)** | `http://127.0.0.1:18081` | `ANTHROPIC_MODEL=DeepSeek-V4-Flash-0731-MXFP4.gguf` |
 | `claude-desktop` | **GLM-5.3-Flash 1M (A+B)** | `http://127.0.0.1:18081` | opus/sonnet/haiku/fable → GLM，`supports1m: true` |
 | `claude-desktop` | **Halogen Qwen3.8 1M (C)** | `http://127.0.0.1:18082` | 同上 → qwen3.8-flash-next，`supports1m: true` |
+| `claude-desktop` | **DS4 V4-Flash 1M (A+B)** | `http://127.0.0.1:18081` | 同上 → DeepSeek-V4-Flash-0731-MXFP4.gguf，`supports1m: true` |
 
 - **未设为默认**（延续 2026-10-25 的做法：切换由用户在 cc-switch 中执行）。
-- 认证 token 为占位串 `local-glm` / `local-halogen`（两条引擎都不校验 key）。
-- DB 备份：`~/.cc-switch/cc-switch.db.bak-20261027-glm1m-qwen1m`；`PRAGMA integrity_check = ok`。
+- 认证 token 为占位串 `local-glm` / `local-halogen` / `local-ds4`（引擎都不校验 key）。
+- DB 备份：`~/.cc-switch/cc-switch.db.bak-20261027-glm1m-qwen1m`（写入 GLM/Qwen 前）、`cc-switch.db.bak-20261027-ds4`（写入 Claude Code DS4 前）、`cc-switch.db.bak-20261027-ds4-desktop`（写入 Desktop DS4 前）；`PRAGMA integrity_check = ok`。
+- ⚠ **B 站 18081 当前实际服务是 DS4**：旧 `GLM-5.3-Flash 1M (A+B)`（Claude Code 与 Desktop 两条）仍指向同一地址，标签与实际模型不符；当前正确入口是新增的 **DS4 V4-Flash 1M (A+B)**。GLM 重载后可切回旧条目，或删除旧条目。
 
 ### 4.2 隧道
 
@@ -276,3 +279,43 @@ HALOGEN_KV8=1
 - [手册 §3.3](三机推理集群使用手册.md)：conf 调参与现役 CTX 清单（已回写）。
 - [手册 §3.4](三机推理集群使用手册.md)：qwen 1M YaRN 配方与实测（既有）。
 - [2026-10-20_p019独立复验 §11.4](2026-10-20_p019独立复验_异基座模型配置分析.md)：cc-switch + 18080 的上一轮做法（本轮沿用其「隧道 + 自定义 provider」模式）。
+
+---
+
+## 9. 追加测试：DeepSeek-V4-Flash 1M（2026-10-27）
+
+> 在 GLM 1M 验收后，按用户要求把 DS4 也推到原生 1M；**C 站 qwen 未受影响**。
+
+### 9.1 配置
+
+B 站 `/etc/llama-instances/deepseek-v4-flash-0731.env`：
+
+```
+CTX=1048576
+N_CPU_MOE=0
+EXTRA_FLAGS="-fa on --metrics --tensor-split 0.55,0.45"
+```
+
+备份：`deepseek-v4-flash-0731.env.bak-ctx32768-20261027`。
+
+### 9.2 实测
+
+| 项 | 读数 |
+|---|---|
+| B GTT | **84.05G / 125.83G**（余 **41.78G**） |
+| A GTT | **110.64G / 125.83G**（余 **15.19G**） |
+| B 系统内存 | **43G 可用** |
+| A 系统内存 | **18G 可用** |
+| `gates` | **PASS，最小余量 +6G** |
+| 速度 | prefill 16.1 t/s · decode **13.8 t/s**（小 prompt） |
+| `/props` | `n_ctx=1048576` |
+| C qwen | 1M 仍 READY |
+
+### 9.3 结论与边界
+
+- DS4 原生 1M，145.6G 权重 + **45.69G KV**（43 层全注意力，远大于 GLM 的 12.75G）；`--tensor-split 0.55,0.45`（A 55%/B 45%）下 1M **加载成功**。
+- 当前切分**偏 A**：A 110.6G（余 15.2G）vs B 84.0G（余 41.8G）；A 是瓶颈但仍 ≥12G，`gates` +6G。
+- 若需更均衡，可试 `0.50,0.50`（预期 A/B 各 ~97G、余 ~28G）；当前 1M 已可用。
+- 速度 13.8 t/s 明显高于台账旧基线 6.3 t/s（小 prompt 口径，非长文/思考预算）。
+- cc-switch 已追加 **Claude Code + Claude Desktop 各一条 DS4 provider**（`DS4 V4-Flash 1M (A+B)` · 18081 · `local-ds4`）；旧 GLM provider 仍指向 18081，当前会实际命中 DS4，标签待 GLM 重载时恢复或删除。
+- 回退：恢复 `bak-ctx32768-20261027` 并重载；或 `cluster.py unload`。
