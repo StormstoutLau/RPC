@@ -3392,7 +3392,10 @@ Remove-Item -LiteralPath $gRoot -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path (Join-Path $gRoot '.golden'),(Join-Path $gRoot 'out') -Force | Out-Null
 $gSrcFile = Join-Path $repoRoot 'ops\station-bin\golden\smoke_dispatch_golden.sh'
 Copy-Item -LiteralPath $gSrcFile -Destination (Join-Path $gRoot '.golden/smoke_dispatch_golden.sh') -Force
-$gSha = (Get-FileHash -Algorithm SHA256 (Join-Path $gRoot '.golden/smoke_dispatch_golden.sh')).Hash.ToLower()
+# ⚠ 不用 `Get-FileHash`：GitHub Windows runner 的 Windows PowerShell 里它可能不可用
+#   （实测 `CommandNotFoundException` ⇒ 夹具整段中止、连汇总行都打不出）⇒ 直接走 .NET SHA256。
+$gSha = ([BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash(
+    [System.IO.File]::ReadAllBytes((Join-Path $gRoot '.golden/smoke_dispatch_golden.sh')))) -replace '-', '').ToLower()
 $gCmdB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('bash .golden/smoke_dispatch_golden.sh'))
 $gRootBash = $gRoot -replace '\\','/'
 $gScriptPath = Join-Path $gRoot 'golden.sh'

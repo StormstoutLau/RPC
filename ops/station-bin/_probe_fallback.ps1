@@ -19,7 +19,7 @@ param(
     [switch]$SmokeOnly, [switch]$DryDispatch   # 2026-09-22 只静态自检(不派发/不触站) · 2026-10-20 X2 只"零触站零网络"的 dry 派发
 )
 $ErrorActionPreference = 'SilentlyContinue'
-$cliPath = 'd:\RPC\ops\station-bin\agent-cli.ps1'
+$cliPath = Join-Path $PSScriptRoot 'agent-cli.ps1'
 
 # --- parse source (UTF8, BOM-safe) ---
 $src = [System.IO.File]::ReadAllText($cliPath)
@@ -177,7 +177,7 @@ $probeProj = Join-Path $env:TEMP 'probe-proj'
 if (Test-Path $probeProj) { Remove-Item $probeProj -Recurse -Force -ErrorAction SilentlyContinue }
 New-Item -ItemType Directory -Path $probeProj -Force | Out-Null
 $Script:PROJECTS = @{ paper = $probeProj }
-$Script:REPO_ROOT = 'd:\RPC'
+$Script:REPO_ROOT = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $Script:WORKSPACE_ROOT = 'C:\Windows\Temp\probe-ws'
 $Script:WORKSPACE_ARCHIVE_ROOT = 'C:\Windows\Temp\probe-arch'
 $Script:TMP_ROOT = 'C:\Windows\Temp\probe-tmp'
