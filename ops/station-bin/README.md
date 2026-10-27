@@ -19,19 +19,21 @@
 | model-locate.sh      | /usr/local/bin/model-locate.sh      | **模型定位共享库**（P1 #3，2026-10-27；`infer-load`/`infer-list` 共同 source） |
 | conf-lib.sh          | /usr/local/bin/conf-lib.sh          | **conf 读写共享库**（P1 #4；双引号+转义+原子写，`infer-load` source） |
 | conf-get             | /usr/local/bin/conf-get             | conf 读取 CLI 薄壳（`conf-get <file> <key>`；`rpc_check` 权重存在性检查用） |
+| cluster-watchdog     | /usr/local/bin/cluster-watchdog     | 双机 health 看门狗（60s oneshot；A/B 两站仅 `PEER` 不同：A=192.168.10.32 / B=192.168.10.33，管理 LAN） |
 
-## 两站一致性
+## 站上一致性
 
-修改后核对：`md5sum /usr/local/bin/<file>`（两站必须一致）。
-**当前（2026-10-27，站上件 · 三站一致）**：infer-load **`184dc54c...`**、infer-unload `a9f8f3f0...`、
-llama-serve-instance `e8c20ede...`、**rpc-serve-instance `24a3e592...`**、infer-list **`b33f6437...`**、
-**cluster-ttl `89af1078...`**、**model-locate.sh `c9e0374c...`**、**conf-lib.sh `8a311f9e...`**、**conf-get `54affdd6...`**。
-（2026-10-27 P1 `review-p1-remediation` 改动：新增 `model-locate.sh` / `conf-lib.sh` / `conf-get` 三件；
-`infer-load` `28ce417c…` → `184dc54c…`（#3 模型定位走共享库、#4 conf 写入口 conf_set_kv、#7 `--pp-listen` +
-coordinator 无显式 IP 即中止）；`infer-list` `74033ef1…` → `b33f6437…`（scan 改调 model_scan、peer_scan 发送共享函数、source 后断言）。
-部署：三站「备份 → `install -m 755` → `bash -n` → md5 对账」；infer-load/infer-list 备份
-`*.bak-p1review-20261027`。冒烟：B 站 `conf-get` 读出 glm conf 的 MODEL_PATH 且文件存在；
-`model_file_for_alias davidau-q38-27b-q4k` 命中仓库级直放（12 个别名）。）
+修改后核对：`md5sum /usr/local/bin/<file>`（三站必须一致；`cluster-watchdog` 例外：A 站为 A 变体）。
+**当前（2026-10-28，站上件 · 三站）**：infer-load **`891165f3...`**、infer-unload **`0f1844a6...`**、
+llama-serve-instance `e8c20ede...`、**rpc-serve-instance `24a3e592...`**、infer-list **`98c084c4...`**、
+**cluster-ttl `89af1078...`**、**model-locate.sh `c9e0374c...`**、**conf-lib.sh `8a311f9e...`**、**conf-get `54affdd6...`**、
+cluster-watchdog **B/C `183c22b0...` · A `6abcd44f...`**。
+（2026-10-28 P2 `review-p2-small` 改动：`infer-load` `184dc54c…` → `891165f3…`（身份/家目录收敛：
+`AWORK=$(id -un)@…`、`/home/<user>/*` → `$HOME/*`）；`infer-unload` `a9f8f3f0…` → `0f1844a6…`（`$HOME` + `RPC_USER` 派生）；
+`infer-list` `b33f6437…` → `98c084c4…`（NODE 去 `.local`，仅管理 LAN IP + `$(id -un)`）；
+`cluster-watchdog` `…` → B/C `183c22b0…` / A `6abcd44f…`（`PEER` 改 IP、`SERVICE_USER` 单点）。
+部署：三站「备份 `*.bak-p2small-20261027` → `install -m 755` → `bash -n` → md5 对账」；A 站 watchdog 以
+`PEER=192.168.10.32` 变体部署，B/C 用仓库缺省 `PEER=192.168.10.33`。冒烟：B/A `infer-list` 均能扫出三站清单。）
 （2026-10-22 `infer-load` 改动 `582fd068…` → `28ce417c…`：新增 **`--rpc-target <ip:port>`**（仅 llama-rpc；
 仅本次加载覆盖 conf 的 RPC_TARGET，并经 `/run` 覆盖层让 systemd 单元同样生效；值有字符白名单）；GTT 等待改为等**实际 worker**
 （auto 仍等 A）；RPC 节点启动改为**只起本次 worker**（传 rpc-nodes 第三参数）。

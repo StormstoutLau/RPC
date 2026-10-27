@@ -1,7 +1,10 @@
 [Unit]
 Description=llama.cpp RPC server (ggml-rpc-server on USB4 thunderbolt0, A 站 Worker)
+# 历史快照：当前未部署（实测 A 站 disabled/inactive）；保留作参考。
+# StartLimitIntervalSec 属 [Unit]；写在 [Service] 会被 systemd 当 Unknown key 忽略（2026-10-27 修正）。
 # Phase 2: -H 10.10.10.1 收敛暴露面(协议无认证, 弃 0.0.0.0) + -c 本地缓存(二次加载 A 侧网络流量归零)
 # Phase 3: Restart=always 兜底崩溃传导(PR #26724 未合并前, B 站整进程 abort 后可自动恢复)
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -12,7 +15,6 @@ Environment=LLAMA_CACHE=/data/rpccache/MiniMax-M2.7-Q4KS
 ExecStart=/opt/llama.cpp/ggml-rpc-server -H 10.10.10.1 -p 50052 -c
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=0
 
 [Install]
 WantedBy=multi-user.target

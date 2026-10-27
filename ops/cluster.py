@@ -148,7 +148,7 @@ import paramiko
 from cluster_const import (  # noqa: E402
     STATIONS, STATION_PORT, ROUTE, STATION_ROUTES, BACKENDS,
     DEFAULT_STATION, RPC_MODELS, RPC_WORKER_IPS, DS4_PP_MODELS, CONTAINER_MODELS,
-    HTML_OUT, SSH_TIMEOUT, PANELS,
+    HTML_OUT, SSH_TIMEOUT, PANELS, SERVICE_USER,
 )
 
 
@@ -2234,7 +2234,7 @@ LM_DL_UNIT_FILE = "/etc/systemd/system/lm-download@.service"
 #   以 `std::__ios_failure`(SIGABRT) 中止，排查成本高（看着像工具坏了）。
 #   只 chown **目录本身**（不做 -R）即足够：unlink / 建文件只需**父目录**写权限，文件保持
 #   root 0644 不影响读取（推理面只读权重）。
-SERVICE_USER = "scott-lau"
+# P2 #9: SERVICE_USER 从 cluster_const.STATIONS 派生（单一真值）；此处不再写字面量。
 
 
 def _fetch_plan(repo, files, base, dl_dir, mirror):

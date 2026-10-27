@@ -15,7 +15,7 @@
 # 旧后端 llama-rpc/llama-single/vllm 保留 (systemd llama-server 路径), 可用 --backend 显式回退
 # 首次加载自动生成默认 conf (打印路径)
 set -uo pipefail
-AWORK="scott-lau@scott-lau-NEX.local"
+AWORK="$(id -un)@10.10.10.1"
 
 PREFIX=""; BACKEND=""; PORT=""; CTX=""; THREADS=""; CLI_ENGINE=""; CLI_RPC_TARGET=""; CLI_PP_LISTEN=""
 while [ $# -gt 0 ]; do
@@ -306,8 +306,8 @@ if pgrep -f 'vllm.entrypoint[s]' >/dev/null 2>&1; then
   log "停 vLLM (Ray 双机)..."
   pkill -f 'vllm.entrypoint[s]' 2>/dev/null || true
   pkill -f '^ray::' 2>/dev/null || true
-  /home/scott-lau/vllm-rocm/bin/ray stop -f 2>/dev/null || true
-  ssh -o BatchMode=yes "$AWORK" "pkill -f '^ray::' 2>/dev/null; /home/scott-lau/vllm-rocm/bin/ray stop -f 2>/dev/null" 2>/dev/null || true
+  "$HOME/vllm-rocm/bin/ray" stop -f 2>/dev/null || true
+  ssh -o BatchMode=yes "$AWORK" "pkill -f '^ray::' 2>/dev/null; \$HOME/vllm-rocm/bin/ray stop -f 2>/dev/null" 2>/dev/null || true
 fi
 # 清理 ds4 (DwarfStar) 进程 —— 幂等, 防护性字符类 [d] 避免 pkill 自匹配自身命令行:
 #   · ds4-server: 单机 / coordinator 形态 (命令行含 'ds4-server')
@@ -340,7 +340,7 @@ if [ -n "${RPC_TARGET:-}" ]; then
     wait_gtt "A" "$AWORK"
   else
     W_IP="${RPC_TARGET%%:*}"
-    wait_gtt "worker(${W_IP})" "scott-lau@${W_IP}"
+    wait_gtt "worker(${W_IP})" "$(id -un)@${W_IP}"
   fi
 else
   log "worker GTT 跳过 (单机模式: RPC_TARGET 空, worker 站资源与本加载无关)"
@@ -349,7 +349,7 @@ fi
 # ---- [4] vLLM 路径 (回退) ----
 if [ "$BACKEND" = "vllm" ]; then
   log "vLLM 路径: 调 a4_vllm_launch.sh (仅 m27-awq 验证)..."
-  exec bash /home/scott-lau/scripts/a4_vllm_launch.sh
+  exec bash "$HOME/scripts/a4_vllm_launch.sh"
 fi
 
 # ---- [4b] ds4 (DwarfStar) 路径 (2026-09-28, 见 spec/ds4-backend/DESIGN.md) ----
@@ -363,7 +363,7 @@ fi
 #   严禁写 /etc/ld.so.conf.d/ 或系统 profile (见 DESIGN §2.1)。
 # conf 缺省路径 /etc/ds4-instances/${ALIAS}.env; 可用环境变量 DS4_CONF 覆盖 (便于测试)。
 if [ "$BACKEND" = "ds4" ]; then
-  DS4_HOME="${DS4_HOME:-/home/scott-lau/ds4}"
+  DS4_HOME="${DS4_HOME:-$HOME/ds4}"
   DS4_CONF="${DS4_CONF:-/etc/ds4-instances/${ALIAS}.env}"
   if [ ! -f "$DS4_CONF" ]; then
     log "ERROR: ds4 conf 不存在: $DS4_CONF (见 spec/ds4-backend/DESIGN.md §4.2) —— 拒绝加载, 不静默回退。"
@@ -498,7 +498,7 @@ if [ -n "${RPC_TARGET:-}" ]; then
   [ "$RPC_TARGET" = "auto" ] || RPC_FILTER="$RPC_TARGET"
   log "起 RPC 节点 (${RPCCMD} --start ${ALIAS} ${RPC_FILTER:+(仅 ${RPC_FILTER})}, 服务用户身份 + 自带等端口)..."
   if [ "$(id -u)" = "0" ]; then
-    RPC_ALIVE="$(sudo -u "${RPC_USER:-scott-lau}" "$RPCCMD" --start "${ALIAS}" ${RPC_FILTER:+"$RPC_FILTER"})"
+    RPC_ALIVE="$(sudo -u "${RPC_USER:-$(id -un)}" "$RPCCMD" --start "${ALIAS}" ${RPC_FILTER:+"$RPC_FILTER"})"
   else
     RPC_ALIVE="$("$RPCCMD" --start "${ALIAS}" ${RPC_FILTER:+"$RPC_FILTER"})"
   fi || {
@@ -553,8 +553,8 @@ if [ "$BACKEND" = "unsloth" ]; then
       log "ERR: STUDIO_FLAGS 含禁用项 (-c/--ctx-size/-fa/--flash-attn 由 wrapper 拥有): ${STUDIO_FLAGS}"
       exit 1 ;;
   esac
-  cd /home/scott-lau
-  UN_LOG="/home/scott-lau/.unsloth/run-${ALIAS}.log"
+  cd "$HOME"
+  UN_LOG="$HOME/.unsloth/run-${ALIAS}.log"
   nohup "$HOME/.local/bin/unsloth" studio run --model "$MODEL_PATH" \
     --port "${PORT_NUM}" --api-only \
     --flash-attn on --no-context-shift -c "${CTX:-32768}" --device "$DEVICE" --kv-unified \

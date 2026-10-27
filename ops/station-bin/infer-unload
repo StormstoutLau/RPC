@@ -18,7 +18,7 @@ if pgrep -f 'vllm.entrypoint[s]' >/dev/null 2>&1; then
   log "停 vLLM..."
   pkill -f 'vllm.entrypoint[s]' 2>/dev/null || true
   pkill -f '^ray::' 2>/dev/null || true
-  /home/scott-lau/vllm-rocm/bin/ray stop -f 2>/dev/null || true
+  "$HOME/vllm-rocm/bin/ray" stop -f 2>/dev/null || true
 fi
 
 # ---- 停 RPC worker (两层, 都幂等; 2026-09-15 修) ----
@@ -26,7 +26,7 @@ fi
 # ⇒ 每轮双机加载都会在 C 留下常驻 `rpc-server@<alias>`, 让集群门禁 engine 项长期黄灯
 # (实测 "C 站引擎在服务: 端口 50052 · RSS 0G / 有端口在听但 RSS 仅 121M")。
 # ⚠ ssh 必须用**持有节点密钥的服务用户**: 以 root 跑本脚本时 root 无密钥 (与 infer-load 真因①同源)。
-RPC_USER="${RPC_USER:-scott-lau}"
+RPC_USER="${RPC_USER:-$(id -un)}"
 if [ "$(id -u)" = "0" ]; then SSHX=(sudo -u "$RPC_USER" ssh -o BatchMode=yes)
 else SSHX=(ssh -o BatchMode=yes); fi
 

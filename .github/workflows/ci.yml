@@ -1,0 +1,51 @@
+name: ci
+
+"on":
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  py-tests:
+    name: py-tests (windows-2022)
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install test deps
+        run: python -m pip install paramiko pyyaml
+      - name: Run py-tests
+        run: python tests/run_py_tests.py
+
+  shellcheck:
+    name: shellcheck (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: ShellCheck (error only, active station bins)
+        run: |
+          shellcheck --version
+          shellcheck --severity=error \
+            ops/rpc-nodes \
+            ops/station-bin/infer-load \
+            ops/station-bin/infer-unload \
+            ops/station-bin/infer-list \
+            ops/station-bin/llama-serve-instance \
+            ops/station-bin/rpc-serve-instance \
+            ops/station-bin/cluster-ttl \
+            ops/station-bin/load-gate \
+            ops/station-bin/load-mem-gate \
+            ops/station-bin/wait-gtt-release \
+            ops/station-bin/model-locate.sh \
+            ops/station-bin/conf-lib.sh \
+            ops/station-bin/conf-get

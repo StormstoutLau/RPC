@@ -39,8 +39,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $Script:GNU_TAR = 'C:\Program Files\Git\usr\bin\tar.exe'   # S1: not Win10 bsdtar
 $Script:REMOTE_USER = 'scott-lau'
-$Script:WORKSPACE_ROOT = '/home/scott-lau/agent-workspaces'
-$Script:WORKSPACE_ARCHIVE_ROOT = '/home/scott-lau/agent-workspaces-archive'   # O-02 (2026-09-14): archive snapshot root
+$Script:WORKSPACE_ROOT = "/home/$($Script:REMOTE_USER)/agent-workspaces"
+$Script:WORKSPACE_ARCHIVE_ROOT = "/home/$($Script:REMOTE_USER)/agent-workspaces-archive"   # O-02 (2026-09-14): archive snapshot root
 # ★★ 2026-10-13（`$PROJECTS` 数据化）：真值 = `inventory/projects.yaml`（**项目注册表**）；本处只**声明空表**，
 #   实际载入见下方 INIT 块（须排在 `$Script:REPO_ROOT` 之后 —— 它定义在 L48）。
 #   ★ 外壳**不自己解析 YAML**（PS 5.1 无 YAML 解析器 ⇒ 自解析会造**第二个解析器**，与门禁

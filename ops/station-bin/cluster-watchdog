@@ -4,10 +4,11 @@
 # 模态覆盖: M2 服务冻结(本机处置) / M3+M4 主机失联(对端探测,只通知) / M5 GTT 残留(告警)
 # 边界: 不自动拉起模型(零自加载); 对端故障不远程处置(M3/M4 冻结域外无处置能力)
 # 维护: 先改仓库 ops/station-bin/ 再同步上站 (station-bin 约定)
-# 差异: 两站仅下行 PEER 不同 — A 站=scott-lau-GTR-Pro.local, B 站=scott-lau-NEX.local
+# 差异: 两站仅下行 PEER 不同 — A 站=192.168.10.32, B 站=192.168.10.33 (管理 LAN)
 
-PEER="scott-lau-NEX.local"              # ← B 站版本; A 站部署时改为 scott-lau-GTR-Pro.local
-PEER_USER="scott-lau"
+PEER="${PEER:-192.168.10.33}"            # 缺省 B 站(peer A)；A 站部署改 PEER=192.168.10.32
+SERVICE_USER="${SERVICE_USER:-scott-lau}"
+PEER_USER="$SERVICE_USER"
 STATE_DIR="/var/lib/cluster-watchdog"
 LOG="/var/log/cluster-watchdog.log"
 GTT_WARN_BYTES=$((20*1024*1024*1024))    # 无 active 实例时 GTT 残留告警线 20G
@@ -15,10 +16,10 @@ WARN_AFTER=3                             # 连续失败 N 次 → WARN
 ACT_AFTER=5                              # 连续失败 N 次 → 处置 (仅本机 M2)
 
 if [ ! -d "$STATE_DIR" ]; then
-  sudo mkdir -p "$STATE_DIR" && sudo chown scott-lau:scott-lau "$STATE_DIR"
+  sudo mkdir -p "$STATE_DIR" && sudo chown "$SERVICE_USER:$SERVICE_USER" "$STATE_DIR"
 fi
 if [ ! -w "$LOG" ]; then
-  sudo touch "$LOG" && sudo chown scott-lau:scott-lau "$LOG"
+  sudo touch "$LOG" && sudo chown "$SERVICE_USER:$SERVICE_USER" "$LOG"
 fi
 ts() { date '+%F %T'; }
 log() { echo "[watchdog] $(ts) $*" | tee -a "$LOG" >&2; }

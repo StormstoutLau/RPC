@@ -30,6 +30,8 @@ STATIONS = {
     "B": {"host": "192.168.10.32", "user": "scott-lau"},
     "C": {"host": "192.168.10.37", "user": "scott-lau"},   # seaviv (2026-09-29 静态化; 沿革: 2026-09-09 原 192.168.1.24 过期 → .37; seaviv.local 可解析但保持 IPv4 规避 paramiko/IPv6)
 }
+# P2 #9: 站上服务用户单点（三站同用户）。换身份只改 STATIONS，不在各脚本散落。
+SERVICE_USER = STATIONS["B"]["user"]
 # 各站引擎 /health 端口 (A/B/C 均 8080; 原 C=18080 为过时值)
 STATION_PORT = {"A": 8080, "B": 8080, "C": 8080}
 ROUTE = {"gpt-oss-120b": "A", "qwen3.8-27b-mtp": "C", "m27-q4ks": "C"}     # 其余一律 B (DEFAULT_STATION)
@@ -189,8 +191,8 @@ SSH_TIMEOUT = 8
 
 
 PANELS = [
-    ("Beszel 监控", "http://scott-lau-GTR-Pro.local:8090"),
-    ("Cockpit B", "https://scott-lau-GTR-Pro.local:9095"),
-    ("Cockpit A", "https://scott-lau-NEX.local:9095"),
+    ("Beszel 监控", "http://192.168.10.32:8090"),
+    ("Cockpit B", "https://192.168.10.32:9095"),
+    ("Cockpit A", "https://192.168.10.33:9095"),
     ("Cockpit C", "https://192.168.10.37:9095"),
 ]

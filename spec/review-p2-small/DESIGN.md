@@ -71,7 +71,7 @@ upstream: null
 | D6 | [infer-unload](../../ops/station-bin/infer-unload) | 修改 | `$HOME/vllm-rocm`；`RPC_USER` 缺省 `$(id -un)` |
 | D7 | [infer-list](../../ops/station-bin/infer-list) | 修改 | `NODE` 改 `$(id -un)@<LAN IP>`；去 `.local` 兜底；同步注释 |
 | D8 | [cluster-watchdog](../../ops/station-bin/cluster-watchdog) | 修改 | `SERVICE_USER` 单点缺省 + `PEER` 改 IP（无 `.local`）；`chown` 用它 |
-| D9 | [agent-cli.ps1](../../ops/station-bin/agent-cli.ps1) | 修改 | workspace 根用 `REMOTE_USER` 拼；A/B 主机函数改 LAN IP |
+| D9 | [agent-cli.ps1](../../ops/station-bin/agent-cli.ps1) | 修改 | workspace 根用 `REMOTE_USER` 拼；主机函数**保留** `Get-TargetHost` 单一表（A/B `.local`、C IP）—— 它是 O-124 反查真值源，改 IP 会破坏批行 `station=` 反查 |
 | D10 | `.github/workflows/ci.yml` | 新增 | 两个 job：`py-tests`（Windows）/ `shellcheck`（Ubuntu） |
 | D11 | `tests/test_systemd_units.py` | 新增 | #6 先验红 |
 | D12 | `tests/test_identity_literals.py` | 新增 | #9 先验红 |
@@ -105,7 +105,7 @@ ops/*.service 快照
 主控 PowerShell
   $Script:REMOTE_USER       # 单一常量块（agent-cli.ps1 L41）
   workspace = "/home/$Script:REMOTE_USER/..."
-  station host = LAN IP
+  station host = Get-TargetHost 单一表（A/B `.local`、C IP；O-124 反查真值源）
 
 systemd 单元
   User=/Group= 字面量       # 部署身份，不做运行时派生（边界）
@@ -143,11 +143,11 @@ push / pull_request
 |---|---|---|
 | 站上 bash | SSH 用户 `$(id -un)`；家目录 `$HOME`；站间地址用 IP | `SELF` 的 `hostname -s` 映射（本站识别） |
 | 主控 Python | `STATIONS` 单点；`SERVICE_USER` 从它派生 | `STATIONS` 里的 `user: "scott-lau"`（唯一真值） |
-| 主控 PowerShell | `REMOTE_USER` 单一常量；workspace 用它拼；主机用 LAN IP | `REMOTE_USER` 的缺省值一处 |
+| 主控 PowerShell | `REMOTE_USER` 单一常量；workspace 用它拼；主机走 `Get-TargetHost` 单一表（A/B `.local`、C IP） | `REMOTE_USER` 的缺省值一处；`Get-TargetHost` 的 3 个 host 串 |
 | systemd 单元 | 部署身份 | `User=`/`Group=`（4 文件） |
 | 冻结探针/文档/smoke | 不动 | 白名单 |
 
-**禁止模式（活跃清单内）**：`scott-lau@`、`.local`、`/home/scott-lau`（注释行剥除后再扫）。
+**禁止模式（活跃清单内）**：`scott-lau@`、已知 mDNS 名、`/home/scott-lau`（注释行剥除后再扫）；`agent-cli.ps1` 的 `Get-TargetHost` 三个 host 串是已记录白名单（O-124 反查真值源）。
 
 ### 4.3 CI 契约
 
@@ -299,15 +299,15 @@ jobs:
 | 风险 | 影响 | 缓解 |
 |---|---|---|
 | `id -un` 在 `sudo` 下变成 root | SSH 选错用户 | 站上脚本由 ssh 以服务用户执行（非 sudo）；`cluster-watchdog` 保留 `SERVICE_USER` 缺省 |
-| `cluster-watchdog` 的 `PEER` 默认只适配 B 站 | A 站需改一行 | README 注明"A 站设 `PEER=10.10.10.2`"；保留可覆盖 |
-| `agent-cli.ps1` 主机改 IP 后 known_hosts 不匹配 | agent 任务 SSH 失败 | ADR-0006 已按 IP 收录 known_hosts；首跑观察 |
+| `cluster-watchdog` 的 `PEER` 默认只适配 B 站 | A 站需改一行 | README 注明"A 站设 `PEER=192.168.10.32`（管理 LAN）"；保留可覆盖 |
+| `agent-cli.ps1` 主机表若改 IP | O-124 批行 `station=` 反查失效 | 保留 `Get-TargetHost` `.local` 表（Step 5 发现的 F-6）；workspace 根仍动态 |
 | CI Windows 首跑 Git Bash/PowerShell 路径不符 | job 失败 | 先修测试路径发现；不降平台 |
 | `actions/checkout@v7` / `setup-python@v7` 标签不存在 | workflow 失败 | 首跑观察；必要时改 `@v4`/`@v5` 并记录 |
 | 站上件改了未部署 | `gates` 红 | §10 部署纪律；先部署再跑门禁 |
 
 **待决问题（本文已裁）**：
 
-- **Q1**：`cluster-watchdog` 的 `PEER` → **IP 缺省（B 站 `10.10.10.1`）+ 可覆盖**；A 站部署设 `10.10.10.2`。
+- **Q1**：`cluster-watchdog` 的 `PEER` → **管理 LAN IP 缺省（B 站 `192.168.10.33`）+ 可覆盖**；A 站部署设 `192.168.10.32`。看门狗走 SSH 健康探测（管理 LAN），不是 RPC 直连段。
 - **Q2**：`agent-cli-smoke.sh` → **白名单**，不纳入 #9 活跃清单。
 - **Q3**：CI action 版本 → **major tag `@v7`**（可读性）；SHA 钉为可选 P3。
 - **Q4**：CI 平台 → **windows-2022 + ubuntu-24.04**；首跑失败先修路径发现。

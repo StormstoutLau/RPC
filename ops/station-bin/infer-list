@@ -20,19 +20,17 @@
 # 表现为 Permission denied (publickey,password))。新站入网时须把本站公钥下发到
 # 其余两站的 ~/.ssh/authorized_keys, 否则这里会出现"取不到 X 站"的告警。
 #
-# 寻址: 每站给**候选列表**(空格分隔, 顺序即优先级) —— 管理网 IP 优先, .local 名兜底。
+# 寻址: 每站一个管理网 IP（2026-09-29 起 LAN 静态；`.local` 兜底已退役）。
 #   为什么 IP 优先: 2026-09-15 实测站间 mDNS 解析需 6~10s (慢), 且各站 known_hosts
 #     是按 **IP** 收录的 → 直接用 .local 会 `Host key verification failed`; 而 IP 六向全通。
-#   为什么保留 .local 兜底: 管理网是 DHCP, IP 漂移过 (.11→.33 / .15→.32) —— 名字仍在,
-#     届时 IP 那一次会失败并回落到名字, 工具不至于因此失明。
 #
 # 数据源: 与 infer-load 同源 —— find -L /data/models/gguf (聚合视图)。
 # 别名规则须与 cluster.alias_of / 站上 infer-load 一致(含 minimax 重映射)。
 
 declare -A NODE=(
-  [A]="scott-lau@192.168.10.33 scott-lau@scott-lau-NEX.local"
-  [B]="scott-lau@192.168.10.32 scott-lau@scott-lau-GTR-Pro.local"
-  [C]="scott-lau@192.168.10.37 scott-lau@seaviv.local"
+  [A]="$(id -un)@192.168.10.33"
+  [B]="$(id -un)@192.168.10.32"
+  [C]="$(id -un)@192.168.10.37"
 )
 ORDER=(A B C)
 

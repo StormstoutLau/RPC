@@ -14,7 +14,7 @@ upstream: null
 
 > **Feature**: 收掉 P2 里改动小、确定性高的三项：#6 两份遗留 systemd 单元的键段位、#9 活跃运行时身份收敛、CI（`py-tests` + `shellcheck`）。
 > **创建日期**: 2026-10-27
-> **状态**: draft（Step 3 IMPLEMENTATION；Step 4 设计评审见 §12）
+> **状态**: draft（Step 4 设计评审已复核，记录见 §12.5；实施按 §10 顺序待启动）
 > **Spec 步骤**: Step 3（IMPLEMENTATION）
 > **基于设计**: [DESIGN.md](./DESIGN.md)
 > **基于调研**: [P2 小批次社区外部锚点调研](../../docs/research/2026-10-27_原始评审P2小批次_社区外部锚点调研.md)
@@ -95,7 +95,8 @@ upstream: null
 | L352 | `exec bash /home/scott-lau/scripts/a4_vllm_launch.sh` | `exec bash "$HOME/scripts/a4_vllm_launch.sh"` |
 | L366 | `DS4_HOME="${DS4_HOME:-/home/scott-lau/ds4}"` | `"${DS4_HOME:-$HOME/ds4}"` |
 | L501 | `RPC_USER:-scott-lau` | `RPC_USER:-$(id -un)` |
-| L399 注释 | "服务用户(scott-lau)" | "服务用户"（可用 `$(id -un)` 描述） |
+| L556-557 | `cd /home/scott-lau`；`UN_LOG="/home/scott-lau/.unsloth/run-${ALIAS}.log"` | `cd "$HOME"`；`UN_LOG="$HOME/.unsloth/run-${ALIAS}.log"` |
+| L399/L518 注释 | 含 `scott-lau` 的历史注释 | 不改（测试剥注释后不扫；L518 是历史教训，保留） |
 
 ### T6（#9）：`infer-unload`
 
@@ -122,10 +123,10 @@ upstream: null
 
 | 位置 | 现状 | 改法 |
 |---|---|---|
-| L9 | `PEER="scott-lau-NEX.local"` | `PEER="${PEER:-10.10.10.1}"`（B 站缺省；A 站部署设 `PEER=10.10.10.2`） |
+| L9 | `PEER="scott-lau-NEX.local"` | `PEER="${PEER:-192.168.10.33}"`（B 站缺省；A 站部署设 `PEER=192.168.10.32`；看门狗走管理 LAN） |
 | L10 | `PEER_USER="scott-lau"` | `SERVICE_USER="${SERVICE_USER:-scott-lau}"` + `PEER_USER="$SERVICE_USER"` |
 | L18/21 | `chown scott-lau:scott-lau` | `chown "$SERVICE_USER:$SERVICE_USER"` |
-| 头注 L7 | 两站 `.local` 差异 | 改为"两站仅 `PEER` IP 不同（B=10.10.10.1 / A=10.10.10.2）" |
+| 头注 L7 | 两站 `.local` 差异 | 改为"两站仅 `PEER` IP 不同（B 站 `192.168.10.33` / A 站 `192.168.10.32`）" |
 
 **为什么不用 `$(id -un)`**：`cluster-watchdog.service` 无 `User=`，由 root oneshot 执行 ⇒ `id -un` 会是 `root`。`SERVICE_USER` 单点缺省 + 可覆盖是正确的。
 
@@ -134,9 +135,7 @@ upstream: null
 | 位置 | 现状 | 改法 |
 |---|---|---|
 | L42-43 | `/home/scott-lau/agent-workspaces` / archive | `"/home/$($Script:REMOTE_USER)/agent-workspaces"` / `.../agent-workspaces-archive` |
-| L263 | A → `scott-lau-NEX.local` | `'192.168.10.33'` |
-| L265 | B → `scott-lau-GTR-Pro.local` | `'192.168.10.32'` |
-| L878 | 缺省 `scott-lau-GTR-Pro.local` | `'192.168.10.32'` |
+| L263/L265/L878 | `Get-TargetHost` 的 A/B `.local` / 默认 `.local` | **保留**：它是 O-124 `Get-StationLetterFromHost` 的唯一反查真值源；改 IP 会让批行 `station=` 反查失效（Step 5 F-6） |
 | L41 | `REMOTE_USER='scott-lau'` | **保留**（单一常量；主控 Windows 用户名不是远端 Linux 用户，不能用 `$env:USERNAME`） |
 
 ### T10：CI workflow
@@ -151,7 +150,7 @@ upstream: null
 ### T11-T13：测试
 
 - `test_systemd_units.py`：解析两份单元；正向断言段位；负向夹具证明"键在 `[Service]` 会 FAIL"。
-- `test_identity_literals.py`：剥注释后扫活跃清单；三模式 `scott-lau@` / `.local` / `/home/scott-lau`；负向夹具证明探测器非空转；白名单断言 `agent-cli-smoke.sh` 不在清单。
+- `test_identity_literals.py`：剥注释后扫活跃清单；模式 `scott-lau@` / 已知 mDNS 名 / `/home/scott-lau`；`agent-cli.ps1` 因 O-124 反查真值源只禁前两者与家目录（`HOST_MAP_FILES` 白名单）；负向夹具证明探测器非空转。
 - `test_ci_workflow.py`：`yaml.safe_load` + 纯函数 `validate_ci`；正向 + 负向夹具（缺权限/含 secrets 必须 FAIL）。
 
 ### T14：站上部署
@@ -269,7 +268,7 @@ declare -A NODE=(
 ### 4.8 `ops/station-bin/cluster-watchdog`
 
 ```bash
-PEER="${PEER:-10.10.10.1}"       # B 站缺省；A 站部署设 10.10.10.2
+PEER="${PEER:-192.168.10.33}"     # B 站缺省；A 站部署设 192.168.10.32（管理 LAN）
 SERVICE_USER="${SERVICE_USER:-scott-lau}"
 PEER_USER="$SERVICE_USER"
 ...
@@ -285,10 +284,10 @@ $Script:REMOTE_USER = 'scott-lau'
 $Script:WORKSPACE_ROOT = "/home/$($Script:REMOTE_USER)/agent-workspaces"
 $Script:WORKSPACE_ARCHIVE_ROOT = "/home/$($Script:REMOTE_USER)/agent-workspaces-archive"
 ...
-if ($station -eq 'A') { return '192.168.10.33' }
-return '192.168.10.32'
+if ($station -eq 'A') { return 'scott-lau-NEX.local' }   # O-124 反查真值源，保留
+return 'scott-lau-GTR-Pro.local'                          # B default，保留
 ...
-if (-not $hostName) { $hostName = '192.168.10.32' }
+if (-not $hostName) { $hostName = 'scott-lau-GTR-Pro.local' }
 ```
 
 ### 4.10 `.github/workflows/ci.yml`
@@ -313,8 +312,8 @@ if (-not $hostName) { $hostName = '192.168.10.32' }
 | 场景 | 策略 |
 |---|---|
 | 站上 `infer-list` 的 `.local` 兜底 | LAN 已静态（`net.yaml`），删除；若未来回 DHCP，按 ADR-0006 重新评估 |
-| `cluster-watchdog` A 站 PEER | 部署时设 `PEER=10.10.10.2`；缺省只适配 B |
-| `agent-cli.ps1` 主机改 IP | main `known_hosts` 已按 IP 收录（ADR-0006）；首跑观察 |
+| `cluster-watchdog` A 站 PEER | 部署时设 `PEER=192.168.10.32`；缺省只适配 B（管理 LAN） |
+| `agent-cli.ps1` 主机表 | **不改**（O-124 反查真值源）；workspace 根动态，SSH 目标不变 ⇒ known_hosts 不变 |
 | 单元 `User=` | 保持字面量；换机由安装者统一改 4 个文件（已记录边界） |
 | CI 首跑 | 若 Windows runner 路径不符，修测试的 bash/powershell 发现，不降平台 |
 | 站上件未部署 | `gates` 会报 md5 漂移；必须先部署再跑门禁 |
@@ -358,8 +357,8 @@ if (-not $hostName) { $hostName = '192.168.10.32' }
 |---|---|---|---|
 | 6 | 两份单元 `StartLimitIntervalSec` 在 `[Service]` | 在 `[Unit]`；`[Service]` 无 | `test_systemd_units.py` |
 | 6 | 负向夹具：键在 `[Service]` | 测试 FAIL | 同上 |
-| 9 | 活跃清单命中 `scott-lau@` / `.local` / `/home/scott-lau` | 0 命中 | `test_identity_literals.py` |
-| 9 | 负向夹具：构造一行 `scott-lau@x.local` | 探测器 FAIL | 同上 |
+| 9 | 活跃清单命中 `scott-lau@` / 已知 mDNS 名 / `/home/scott-lau` | 0 命中（`agent-cli.ps1` 的 `Get-TargetHost` 白名单除外） | `test_identity_literals.py` |
+| 9 | 负向夹具：构造一行 `scott-lau@scott-lau-NEX.local` | 探测器 FAIL | 同上 |
 | 9 | 白名单：`agent-cli-smoke.sh` 不在清单 | PASS | 同上 |
 | CI | 无 `.github/workflows/ci.yml` | 文件存在 + 结构合规 | `test_ci_workflow.py` |
 | CI | 负向夹具：缺 `permissions` / 含 `secrets.` | `validate_ci` 返回非空 | 同上 |
@@ -419,9 +418,23 @@ if (-not $hostName) { $hostName = '192.168.10.32' }
 
 **显式边界**：
 
-- `cluster-watchdog` 的 `SERVICE_USER` 保留 `scott-lau` 缺省（root oneshot，不能 `id -un`）；测试只禁 `scott-lau@`/`.local`，允许裸用户名。
-- `agent-cli.ps1` 的 `REMOTE_USER` 保留单一常量（Windows 用户名 ≠ 远端 Linux 用户）；测试允许裸用户名。
+- `cluster-watchdog` 的 `SERVICE_USER` 保留 `scott-lau` 缺省（root oneshot，不能 `id -un`）；测试只禁 `scott-lau@`/已知 mDNS 名/家目录，允许裸用户名。
+- `agent-cli.ps1` 的 `REMOTE_USER` 保留单一常量（Windows 用户名 ≠ 远端 Linux 用户）；其 `Get-TargetHost` 三个 host 串是 O-124 反查真值源，测试白名单。
 - 单元 `User=`/`Group=` 不动（systemd 语义）。
+- 主控 Python 的 `STATIONS` 三个 `user:` 值是**唯一真值**，允许裸用户名。
+- 站上脚本里 `sudo -u "${RPC_USER:-$(id -un)}"` 属既有模式（`sudo -u` 显式指定目标用户）。
+
+**裸用户名允许点清单**（测试不禁裸 `scott-lau`，只禁 `scott-lau@` / `.local` / `/home/scott-lau` 三模式；以下为全部允许点）：
+
+| 文件 | 位置 | 理由 |
+|---|---|---|
+| `cluster_const.py` | `STATIONS` 三个 `user:` | 主控身份唯一真值 |
+| `cluster_const.py` | `SERVICE_USER = STATIONS["B"]["user"]`（派生，非字面） | — |
+| `cluster.py` | 导入（无字面） | — |
+| `cluster-watchdog` | `SERVICE_USER="${SERVICE_USER:-scott-lau}"` | root oneshot 缺省，单点 |
+| `agent-cli.ps1` | `$Script:REMOTE_USER = 'scott-lau'` | 主控常量块单点 |
+| `agent-cli.ps1` | `Get-TargetHost` 的 A/B `.local` + 默认 `.local` | O-124 反查真值源（Step 5 F-6） |
+| `ops/*.service` | `User=`/`Group=`（不在扫描范围） | 部署身份 |
 
 ---
 
@@ -458,9 +471,11 @@ if (-not $hostName) { $hostName = '192.168.10.32' }
 |---|---|---|
 | Windows runner 有 Git Bash/PS 5.1 | CI 首跑 `py-tests` | 修测试路径发现，不降平台 |
 | `actions/checkout@v7`/`setup-python@v7` 标签存在 | CI 首跑解析 | 改 `@v4`/`@v5` 并记录 |
-| `agent-cli.ps1` 主机改 IP 后 known_hosts 匹配 | 首跑 agent 任务 | 按 ADR-0006 核 known_hosts |
-| `cluster-watchdog` A 站 PEER | 部署时设 `PEER=10.10.10.2`；首跑日志 | 改部署变量 |
+| `agent-cli.ps1` 主机表 | **不改**（O-124 反查真值源）；只改 workspace 根 | 黄金夹具 `o124b` 三用例必须 PASS |
+| `cluster-watchdog` A 站 PEER | 部署时设 `PEER=192.168.10.32`；首跑日志 | 改部署变量 |
 | 站上件部署后 `gates` | `rpc_check --only gates` | md5/部署回滚 |
+| ShellCheck 对活跃站上件是否有 **error** 级命中 | CI 首跑 `shellcheck` job（本机 Git Bash 无 shellcheck，无法预跑） | 逐条修；`--severity=error` 不放宽 |
+| `configparser` 对 `%` 的插值 | 测试用 `RawConfigParser`（无插值） | 已在 §9.2 固化 |
 
 ### 12.4 不声称
 
@@ -468,6 +483,32 @@ if (-not $hostName) { $hostName = '192.168.10.32' }
 - 不声称 #9 消灭了所有字面量；单元 `User=`、`cluster-watchdog`/`agent-cli.ps1` 的单点常量是**已记录边界**。
 - 不声称 CI 覆盖全量门禁；它只覆盖离线 py-tests + shellcheck。
 - 不声称 Windows runner 一定通过；首跑需观察。
+
+### 12.5 Step 4 评审记录（2026-10-27，第二遍）
+
+> 方法：① 行号/段位对回 `2b9ba875` 工作区 Grep 复核；② DESIGN §3/§4 ↔ IMPLEMENTATION §1/§4 逐条比对；③ 实现者视角扫缺口（测试可行性 / `id -un` 语义 / CI 细节）。
+
+**结论：PASS（6 项发现：5 项已修订入文，1 项确认为已记录边界）**。
+
+**已修订（F-1～F-3、F-5、F-6）**：
+
+| # | 发现 | 处置 |
+|---|---|---|
+| F-1 | `infer-load` 改造点漏 **L556-557**（`cd /home/scott-lau` + `UN_LOG="/home/scott-lau/.unsloth/..."`，unsloth 后端启动路径）—— 漏改则 `test_identity_literals` 永远红 | §4.5 补两行改造点；注释行（L399/L518）明确"不改" |
+| F-2 | "裸用户名允许点"散落在 §11 三行字里，测试判据不完整 —— 若实现者按"禁裸 scott-lau"实现会误报 | §11 补**允许点清单**表（5 处 + 单元），并明确测试只禁三模式 |
+| F-3 | §9.2 写 `RawConfigParser` 但未说明为什么 —— 单元里 `%` 字符会被默认 `BasicInterpolation` 炸掉 | §12.3 验证表补一行"防 `%` 插值"，固化判据 |
+| F-5 | `cluster-watchdog` 的 `PEER` 原走**管理 LAN**（`.local` 解析到 192.168.10.x），设计初稿误写 RPC 直连段 `10.10.10.x` | T8/§4.8/Q1 改 `192.168.10.33`（B）/ `192.168.10.32`（A） |
+| F-6 | `agent-cli.ps1` 的 `Get-TargetHost` `.local` 是 O-124 `Get-StationLetterFromHost` 的**唯一反查真值源**；改 IP 会让批行 `station=` 反查失效（黄金夹具 `o124b` 三条） | T9/§4.9 改为**保留** host 表，只改 workspace 根；测试加 `HOST_MAP_FILES` 白名单 |
+
+**已确认边界（F-4，不修，记录依据）**：
+
+| # | 边界 | 依据 |
+|---|---|---|
+| F-4 | `infer-load` L310 的 ssh 远端命令串里写 `\$HOME/vllm-rocm`（**远端**展开）而非 `$HOME`（本地展开）—— 两者当前等价（同用户同 home 路径），但 `\$HOME` 语义更准（远端家目录） | §4.5 已注明；实现时二选一，测试判据不受影响 |
+
+**行号复核结果**（全部命中）：`llama-server.service` L16；`rpc-server.service` L15；`rpc-server@.service` L17（已在 `[Unit]`）；`infer-load` L18/309/310/343/352/366/399/501/518/556/557；`infer-unload` L21/L29；`.github` 不存在。`doclinks` 已证 3897 条链接可达。
+
+**行号漂移预警**：实施 #9 时 `infer-load` 行号会随改动下移（L309 之后每删一处 `/home/scott-lau` 行号不变，无插入行）⇒ 以"锚点文本"定位，不依赖行号。
 
 ---
 
@@ -477,8 +518,8 @@ if (-not $hostName) { $hostName = '192.168.10.32' }
 |---|---|---|---|
 | 站上件改了未部署 | `gates` 红；站上行为仍旧 | 先部署再跑门禁 | 部署新版或 `cp -a` 备份 |
 | `id -un` 在 sudo 下变 root | SSH 选错用户 | 站上脚本由 ssh 以服务用户执行；`cluster-watchdog` 不用 `id -un` | 恢复脚本 |
-| `cluster-watchdog` PEER 默认只适配 B | A 站误连 | README 注明 A 设 `PEER=10.10.10.2` | 改部署变量 |
-| `agent-cli.ps1` 主机改 IP | known_hosts 不匹配 | ADR-0006 已按 IP；首跑观察 | 改回 `.local` 或补 known_hosts |
+| `cluster-watchdog` PEER 默认只适配 B | A 站误连 | README 注明 A 设 `PEER=192.168.10.32` | 改部署变量 |
+| `agent-cli.ps1` 主机表被误改 | O-124 批行 `station=` 反查失效 | 保留 `Get-TargetHost` `.local` 表；黄金夹具 `o124b` 兜底 | 恢复三行 host |
 | CI Windows 首跑失败 | PR/push 红 | 修路径/依赖，不放宽判据 | 删除 workflow 即回滚 |
 | `actions/*@v7` 标签不存在 | job 无法启动 | 首跑观察；改 `@v4`/`@v5` | 改版本 |
 | 身份测试误报（字符串内 `#`） | 测试假红 | 引号感知剥注释 + 负向夹具 | 调整剥注释逻辑 |
