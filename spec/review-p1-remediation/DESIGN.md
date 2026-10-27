@@ -14,7 +14,7 @@ upstream: null
 
 > **Feature**: 修复 2026-10-21 原始评审报告 RPC 段的四条 P1——模型定位、conf 引号/转义、ds4 coordinator 监听默认、Web UI token——在不引入新 daemon、不改变推理引擎路线的前提下，把四处"默认不安全 / 同源规则脱钩 / 文本读写不一致"收敛为可判定的契约。
 > **创建日期**: 2026-10-27
-> **状态**: draft（Step 2 DESIGN；实施展开见 [IMPLEMENTATION.md](./IMPLEMENTATION.md)）
+> **状态**: draft（实施与验收已完成：见 [IMPLEMENTATION.md](./IMPLEMENTATION.md) / [CHECKLIST.md](./CHECKLIST.md)，2026-10-27 验收通过；design 档词表无 accepted，状态位保持 draft）
 > **Spec 步骤**: Step 2（DESIGN）
 > **基于调研**: [原始评审 P1 社区外部锚点调研](../../docs/research/2026-10-26_原始评审P1_社区外部锚点调研.md) · [原始评审报告复核矩阵](../../docs/research/2026-10-26_原始评审报告复核_RPC.md)
 > **代码基线**: `0c53fcc3`（`main`；行号为该基线快照）

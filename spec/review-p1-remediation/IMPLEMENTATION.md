@@ -14,7 +14,7 @@ upstream: null
 
 > **Feature**: 把 2026-10-21 原始评审 RPC 段的四条 P1（#3 模型定位、#4 conf 引号/转义、#7 ds4 监听默认、#10 Web token）落到可执行的改动点：一份模型定位、一份 conf 读写契约、一个安全默认、一条常量时间鉴权链。
 > **创建日期**: 2026-10-27
-> **状态**: draft（Step 4 设计评审已复核，记录见 §12.6；实施按 §10 顺序待启动）
+> **状态**: draft（Step 4 设计评审见 §12.6；实施已完成 `d1d94b3a`；验收通过见 [CHECKLIST.md](./CHECKLIST.md)，2026-10-27；design 档词表无 accepted，状态位保持 draft）
 > **Spec 步骤**: Step 3（IMPLEMENTATION）
 > **基于设计**: [DESIGN.md](./DESIGN.md)
 > **基于调研**: [原始评审 P1 社区外部锚点调研](../../docs/research/2026-10-26_原始评审P1_社区外部锚点调研.md) · [原始评审报告复核矩阵](../../docs/research/2026-10-26_原始评审报告复核_RPC.md)
