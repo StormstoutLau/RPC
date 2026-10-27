@@ -14,7 +14,7 @@ upstream: null
 
 > **Feature**: 把 2026-10-21 原始评审 RPC 段的四条 P1（#3 模型定位、#4 conf 引号/转义、#7 ds4 监听默认、#10 Web token）落到可执行的改动点：一份模型定位、一份 conf 读写契约、一个安全默认、一条常量时间鉴权链。
 > **创建日期**: 2026-10-27
-> **状态**: draft（Step 3 IMPLEMENTATION；Step 4 设计评审见 §12）
+> **状态**: draft（Step 4 设计评审已复核，记录见 §12.6；实施按 §10 顺序待启动）
 > **Spec 步骤**: Step 3（IMPLEMENTATION）
 > **基于设计**: [DESIGN.md](./DESIGN.md)
 > **基于调研**: [原始评审 P1 社区外部锚点调研](../../docs/research/2026-10-26_原始评审P1_社区外部锚点调研.md) · [原始评审报告复核矩阵](../../docs/research/2026-10-26_原始评审报告复核_RPC.md)
@@ -81,7 +81,7 @@ upstream: null
 4. 响应头：`_json` / `_text` / `_redirect` 统一 `Referrer-Policy: no-referrer`；`401` / `302` 追加 `Cache-Control: no-store`。
 5. `log_message` 覆写：把 `?token=…` / `&token=…` 的**值**替换为 `***`（默认 `BaseHTTPRequestHandler` 会打印含 query 的 requestline）。
 6. token 落点：显式 `--token` 不落盘；自动生成写 `~/.local/share/rpc/web-token`（0600，失败即 exit 1）；启动日志只打印路径 + `_mask_token()`。
-7. 前端：删掉 `?token=` 自动登录 + `localStorage` 写入；手输 token 保留；登录框初始隐藏，仅 401 时显示（Cookie 用户不再看到登录框）。
+7. 前端：删掉 `?token=` 自动登录与 query token 的 `localStorage` 写入（DESIGN §3.5 只禁 query token 入存储）；`saveToken()` 对**手输** token 的 localStorage 保存保留（用户主动行为，作为 Cookie 失效/非 loopback 场景的回退）；登录框初始隐藏，仅 401 时显示（Cookie 用户不再看到登录框）。
 8. 测试：`tests/test_cluster_web_auth.py`（见 §9）。
 
 ### T2（#4）：`conf-lib.sh`
@@ -468,7 +468,7 @@ if [ -n "${CLI_PP_LISTEN:-}" ]; then
 fi
 ```
 
-**顶部 source 共享库**：
+**顶部 source 共享库**（source 后必须断言函数存在 —— `. file` 在非交互 bash 下文件缺失只返回非零不退出，若无断言会退化成"command not found"式的误导诊断）：
 
 ```bash
 _self=${BASH_SOURCE[0]}
@@ -476,6 +476,9 @@ case "$_self" in */*) ;; *) _self=$(command -v -- "$_self" || true) ;; esac
 HERE=$(cd "$(dirname "$(readlink -f "$_self")")" && pwd)
 . "$HERE/model-locate.sh"
 . "$HERE/conf-lib.sh"
+for _fn in model_scan model_aliases model_file_for_alias conf_escape conf_set_kv conf_get_kv; do
+  command -v "$_fn" >/dev/null 2>&1 || { echo "ERROR: 共享库加载失败 ($_fn 缺失, HERE=$HERE)"; exit 1; }
+done
 ```
 
 **L70-72 别名**：
@@ -542,6 +545,12 @@ case "$PP_ROLE" in
 esac
 ```
 
+单机分支日志（DESIGN §3.4「日志打印实际绑定地址」的落点 —— 单机未传 `--listen` 时如实注记，不谎称 `127.0.0.1`）：
+
+```bash
+      log "ds4 单机: 起 ds4-server (port ${HTTP_PORT} ctx ${CTX}; PP listen 未显式传参, 引擎默认) ..."
+```
+
 ### 4.7 `ops/station-bin/infer-list`
 
 **L63-90 `scan()`**：
@@ -567,6 +576,16 @@ scan"
 ```
 
 ### 4.8 `ops/cluster_web.py`
+
+**import 增量**（现有 import 只有 `io/re/sys/json/time/socket/secrets/contextlib/threading/http.server/urllib.parse.urlparse`，以下为本批新增）：
+
+```python
+import hashlib
+import hmac
+import os
+from pathlib import Path
+from urllib.parse import parse_qs, quote, unquote, urlparse
+```
 
 **L399-400**：
 
@@ -683,13 +702,13 @@ def _mask_token(t: str) -> str:
             print(f"[cluster-web] 无法写 token 文件 {p}: {e} —— 请用 --token 显式指定")
             return 1
     ...
-    for line in _startup_lines(port, token, token_file):
+    for line in _startup_lines(port, token, token_file, host):
         print(line)
 ```
 
 ```python
-def _startup_lines(port, token, token_file):
-    return [
+def _startup_lines(port, token, token_file, host):
+    lines = [
         "[cluster-web] 三机推理框架管理 UI 已启动 (按需服务, Ctrl-C 退出)",
         f"[cluster-web]   token: {_mask_token(token)}"
         + (f" (文件 {token_file})" if token_file else " (来自 --token)"),
@@ -697,7 +716,13 @@ def _startup_lines(port, token, token_file):
         f"(loopback 首次用 ?token= 引导；token 见{'文件' if token_file else '启动参数'})",
         f"[cluster-web]   监听: {port} (localhost 与 127.0.0.1 均可用)",
     ]
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        lines.append("[cluster-web]   ⚠ 已绑定非 loopback：?token= 引导**已禁用**，仅允许 "
+                     "X-Auth-Token header / rpc_token Cookie 鉴权")
+    return lines
 ```
+
+（`serve` 调用处相应传 `host`。）
 
 ### 4.9 `ops/rpc_check.py`
 
@@ -816,6 +841,7 @@ STATION_BINS = ("infer-load", "infer-unload", "infer-list", "llama-serve-instanc
 | 7 | `_pp_listen_ip("B","C")` / `("A","C")` / `("A","B")` | 返回 `10.10.11.1` / `10.10.12.1` / `10.10.10.1` | 同上 |
 | 7 | `_build_infer_load_cmd` 含/不含 `pp_listen` | 含时追加 `--pp-listen '<ip>'`；非法 IP 抛 `ValueError` | 同上 |
 | 10 | `/?token=<token>` | 302 + `Set-Cookie`（HttpOnly/SameSite=Strict/Path=/）+ 空 body | `test_cluster_web_auth.py` |
+| 10 | `/?token=`（空值） | 与无 query 等价：200 公开页、无 `Set-Cookie`（评审 F-6 防回归钉） | 同上 |
 | 10 | 非 loopback + query token | 401，无 `Set-Cookie` | 同上 |
 | 10 | Header / Cookie 鉴权 | 正确 ⇒ True；错误/空 ⇒ False | 同上 |
 | 10 | 响应头 | 所有响应含 `Referrer-Policy: no-referrer`；401/302 含 `no-store` | 同上 |
@@ -954,6 +980,32 @@ STATION_BINS = ("infer-load", "infer-unload", "infer-list", "llama-serve-instanc
 - 不声称新 `conf` 读侧能兼容任意历史脏值；只兼容"带/不带引号 + 固定四类转义"，歧义值按未知转义原样保留。
 - 不声称 `model_scan` 的性能优于旧实现；它只消除两套规则，复杂度同量级。
 - 不声称 Cookie 方案能防本机恶意进程；它只收敛"token 进 URL/日志"的泄露面。
+
+### 12.6 Step 4 评审记录（2026-10-27，第二遍）
+
+> 方法：① 全部行号锚点对回 `0c53fcc3` 工作区逐条 Grep 复核；② DESIGN §4 接口 ↔ 本文 §4 逐条比对；③ 站在实现者视角扫缺口（import / 边界 / 并发 / 测试可执行性）。
+
+**结论：PASS（8 项发现：5 项已修订入文，3 项记录为已确认边界）**。
+
+**已修订（F-1～F-5）**：
+
+| # | 发现 | 处置 |
+|---|---|---|
+| F-1 | DESIGN §4.7「`--host` 非 loopback 时启动日志显式告警『仅允许 header/cookie 鉴权』」在本文 §4.8 无落点 | `_startup_lines` 增加 host 参数与非 loopback 告警行（§4.8） |
+| F-2 | DESIGN §3.4「启动日志打印实际绑定地址」—— 单机分支不传 `--listen`，若日志写 `127.0.0.1` 即谎报 | 单机日志改为如实注记「PP listen 未显式传参, 引擎默认」（§4.6） |
+| F-3 | §4.8 的代码用了 `hmac/hashlib/os/Path/parse_qs/quote/unquote`，但未声明 import 增量（现有文件没有这些） | §4.8 开头补 import 增量清单 |
+| F-4 | `. file` 在非交互 bash 下文件缺失只返回非零**不退出**；source 失败会退化成"command not found"式误导诊断，违背 DESIGN §11「启动即失败」 | infer-load source 后补 `command -v` 函数存在性断言（§4.6） |
+| F-5 | T1 第 7 条「删掉 localStorage 写入」比 DESIGN §3.5 更严（DESIGN 只禁 query token 入存储）—— 会让手输 token 刷新即丢，无安全增益 | 修为只删 query token 的自动登录与存储；`saveToken()` 手输保存保留（T1.7） |
+
+**已确认边界（不修，记录依据）**：
+
+| # | 边界 | 依据 |
+|---|---|---|
+| F-6 | `/?token=`（**空值**）在 `parse_qs` 默认（`keep_blank_values=False`）下不触发引导 ⇒ 与无 query 等价返回公开页。两条路径（进引导必 401 / 不进引导返回公开页）都不泄露 token | 行为等价性成立；测试用例显式构造非空 token，另钉一条"空 token query ⇒ 200 公开页"防回归 |
+| F-7 | `conf_set_kv` 的 `awk index($0, k "=") == 1` 只匹配**顶格** KEY= 行；前导空白的历史行既不被改写也不被删除 | 历史 conf 全部由 `sudo tee` heredoc 生成（顶格），现状无此前提；不做宽容匹配（避免把注释里的缩进示例误当键） |
+| F-8 | 引导请求本身仍会进**浏览器历史**（`?token=…` 一次性出现） | DESIGN §3.5 已把 loopback 引导定义为"瞬时请求"接受面（RFC 6750 §2.3 的残余风险）；302 后 URL 已剥离，服务端日志已脱敏 |
+
+**行号复核结果**（全部命中，无漂移）：`infer-load` L70/L115/L137/L176/L392-394；`cluster_web.py` L399-400/L431/L1437-1438；`rpc_check.py` L5066/L6028；`cluster.py` L236/L818/L1517；`net.yaml` B-C/A-C 段。`doclinks` 已证 3816 条链接可达，本文引用的 9 个文件全部存在。
 
 ---
 
