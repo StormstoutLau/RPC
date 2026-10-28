@@ -449,6 +449,43 @@ chk("load --worker 非 RPC 模型: 拒绝",
 chk("load --worker + 强制单机后端: 拒绝（矛盾组合）",
     C.cmd_load("glm-5.3-flash", "unsloth", None, "A") == 1, "应 rc=1")
 
+# ── O-178 × O-175 交点：反向冲突预检（2026-10-28）───────────────────────
+# 现场：`infer-unload` 会停 `rpc-server@*`（本地 + 按 nodes.env 停远端），而
+# `_load_container_model` / 普通 load 的第一步就是 `reclaim_and_unload(该站)`。
+# ⇒ 在**正给别的模型当 worker** 的站上加载，必然停掉那个 worker ⇒ 对面 head 的
+#   ggml-rpc 判「对端消失」⇒ `GGML_ABORT`（core-dump，30 天 12 次里的 7 次）。
+# 判据必须是**拒绝**（不是警告）：这条通路一旦走通，崩的是另一台机器上的生产进程。
+chk("O-178/O-175 冲突判定: 别的模型占着 worker ⇒ 报出该模型",
+    C._worker_conflict(["rpc-server@deepseek-v4-flash-0731.service"], "gpt-oss-120b")
+    == "deepseek-v4-flash-0731")
+chk("O-178/O-175 冲突判定: 同一模型（重载自己）⇒ 不算冲突",
+    C._worker_conflict(["rpc-server@glm-5.3-flash.service"], "glm-5.3-flash") == "")
+chk("O-178/O-175 冲突判定: 没有 rpc-server ⇒ 无冲突",
+    C._worker_conflict(["llama-server@glm-5.3-flash.service"], "x") == "")
+
+_restore = _swap("_active_rpc_workers",
+                 lambda st: (True, ["rpc-server@deepseek-v4-flash-0731.service"]))
+try:
+    _rc_g = C._guard_worker_conflict("A", "gpt-oss-120b")
+    _rc_gf = C._guard_worker_conflict("A", "gpt-oss-120b", True)
+    _rc_gs = C._guard_worker_conflict("A", "deepseek-v4-flash-0731")
+    _rc_gl = C.cmd_load("gpt-oss-120b-a", None, None, None)      # 按站路由到 A
+finally:
+    _restore()
+chk("O-178/O-175 预检: 冲突 ⇒ exit 3 · --force 放行 · 同一模型放行",
+    _rc_g == 3 and _rc_gf == 0 and _rc_gs == 0,
+    f"guard={_rc_g} force={_rc_gf} same={_rc_gs}")
+chk("O-178/O-175 预检接线: cmd_load 走到目标站时被拦住（不是死代码）",
+    _rc_gl == 3, f"rc={_rc_gl}")
+
+_restore = _swap("_active_rpc_workers", lambda st: (False, []))
+try:
+    _rc_unk = C._guard_worker_conflict("A", "gpt-oss-120b")
+finally:
+    _restore()
+chk("O-178/O-175 预检: 判不了（ssh 失败）不阻断加载，但必须留痕",
+    _rc_unk == 0, f"rc={_rc_unk}")
+
 
 def _est_str(p):
     return str(_est(p)) if _est else "<缺 _egress_station_today>"

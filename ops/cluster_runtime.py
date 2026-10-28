@@ -1054,7 +1054,69 @@ def _load_container_model(alias: str, station: str) -> int:
     return 0
 
 
-def cmd_load(alias: str, backend: str = None, engine: str = None, worker: str = None) -> int:
+# ── O-178 × O-175：反向冲突预检（2026-10-28）──────────────────────────
+# 为什么必须在 load **之前**判：`reclaim_and_unload` ⇒ `infer-unload` 会停
+# `rpc-server@*`（本站 + 按 nodes.env 停远端），而 ggml-rpc 对「对端消失」的语义是
+# **GGML_ABORT**（status=6 / core-dump），不是返回错误 ⇒ 在**正给别的模型当 worker**
+# 的站上加载，崩的是**另一台机器**上的生产 head。30 天 12 次 core-dump 里 7 次是这个形状
+# （O-178 / O-175 的唯一交点；两处台账都把它写成「不做」，这里补上拒绝面）。
+def _worker_conflict(active_units, alias: str) -> str:
+    """纯函数：站上活跃 `rpc-server@<x>` 里存在 x != alias ⇒ 返回 x（该站正为它当 worker）。
+
+    同一 alias **不算**冲突：那是「重载自己」，旧实例本来就要换掉。
+    """
+    for u in active_units or []:
+        name = str(u or "").strip()
+        if not name.startswith("rpc-server@"):
+            continue
+        served = name[len("rpc-server@"):]
+        if served.endswith(".service"):
+            served = served[:-len(".service")]
+        if served and served != alias:
+            return served
+    return ""
+
+
+def _active_rpc_workers(station: str):
+    """站上活跃 `rpc-server@*` 的单元名。返回 (ok, units)；ok=False = **判不了**。"""
+    ok, out = ssh_run(
+        station,
+        "systemctl list-units 'rpc-server@*' --state=active --no-legend 2>/dev/null "
+        "| awk '{print $1}'")
+    if not ok:
+        return False, []
+    return True, [ln.strip() for ln in out.splitlines() if ln.strip()]
+
+
+def _guard_worker_conflict(station: str, alias: str, force: bool = False) -> int:
+    """加载前预检：目标站若正在给**别的**模型当 RPC worker ⇒ 拒绝（exit 3）。
+
+    `--force` 是唯一放行口，且必须让用户看见代价（对面 head 会崩且不再自动重启）。
+    判不了（ssh 失败）**不阻断**：load 本身就要 ssh，这里再拦一次只会把网络抖动伪装成
+    参数错误；但必须打印留痕 —— 不静默（同 `_probe_worker_busy` 的「不假装知道」）。
+    """
+    ok, units = _active_rpc_workers(station)
+    if not ok:
+        print(f"[cluster] ⚠ 无法判定 {station} 站是否有 RPC worker 占用（ssh 失败）—— 继续；"
+              f"若该站正在给别的 head 当 worker，本次加载会让那个 head GGML_ABORT（O-178）")
+        return 0
+    other = _worker_conflict(units, alias)
+    if not other:
+        return 0
+    print(f"[cluster] ⛔ 反向冲突: {station} 站正在给 '{other}' 当 RPC worker"
+          f"（活跃 rpc-server@{other}）")
+    print(f"[cluster]    在此站加载 '{alias}' 会先跑 infer-unload ⇒ 停掉该 worker ⇒ "
+          f"对面的 '{other}' head 会 ggml-rpc ABORT（core-dump，O-178）")
+    if force:
+        print("[cluster]    --force 已给 ⇒ 继续（对面 head 会被打断，且已不再自动重启）")
+        return 0
+    print("[cluster]    处置: 先换 worker（重载那个 head 时加 --worker）/ 或 `cluster.py unload`；"
+          "确要牺牲它请加 --force (exit 3)")
+    return 3
+
+
+def cmd_load(alias: str, backend: str = None, engine: str = None, worker: str = None,
+             force: bool = False) -> int:
     if backend is not None and backend not in BACKENDS:
         print(f"[cluster] 非法 --backend '{backend}'. 可选: {', '.join(sorted(BACKENDS))} (exit 1)")
         return 1
@@ -1077,6 +1139,12 @@ def cmd_load(alias: str, backend: str = None, engine: str = None, worker: str = 
     if worker and not is_rpc:
         print(f"[cluster] --worker 仅适用于 RPC 双机类模型 ({', '.join(sorted(RPC_MODELS))}) (exit 1)")
         return 1
+    # ★ O-178/O-175：反向冲突预检 —— 目标站若正给**别的**模型当 RPC worker，加载会
+    #   （经 reclaim_and_unload ⇒ infer-unload）停掉那个 worker，对面 head 直接 ABORT。
+    #   放在所有分派之前：容器化/按站路由/RPC 三条路都会先回收该站。
+    _guard = _guard_worker_conflict(station or DEFAULT_STATION, matched, force)
+    if _guard:
+        return _guard
     # 容器化模型 (halogen, CONTAINER_MODELS): 不走 infer-load ⇒ 必须在 **C 站分支之前**分派。
     # 显式 `--backend unsloth` 等其它后端时**不**分派 —— 保留既有回退路径 (load ... --backend unsloth)。
     if matched in CONTAINER_MODELS and backend in (None, CONTAINER_MODELS[matched]["backend"]):

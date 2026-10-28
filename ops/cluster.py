@@ -56,6 +56,10 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
               未给 --worker ⇒ 沿用 conf 的 RPC_TARGET (GLM/DS 已固化单 worker)。
               worker 必须同时在 `rpc-nodes --all` 声明与存活清单中, 否则响亮中止。
               例: load glm-5.3-flash --worker C
+            --force 越过"反向冲突"预检 (O-178, 2026-10-28): 目标站若有活跃
+              `rpc-server@<别的模型>` (= 正在给某个 head 当 worker), 默认**拒绝**
+              (exit 3) —— 因为 load 的第一步 `infer-unload` 会停掉它, 对面 head 会
+              `GGML_ABORT`(core-dump)。确要牺牲那个 head 才加 --force。
     frames   三站框架级运行状态一览 (llama-server/unsloth/vllm/litellm/opencode), 恒 exit 0
     unload   三站并行幂等卸载
     estimate 事前预估 (P1-1): 给定 alias 预估加载后的内存/耗时, 不实际加载 (只读)。
@@ -176,7 +180,7 @@ from cluster_flow import (  # noqa: E402
 
 # ── runtime 域（2026-10-28 拆分；重导出 ⇒ 外部 `cluster.*` 调用点不变）──────
 from cluster_runtime import (  # noqa: E402
-    AliasError, FRAME_CMD, RPC_WORKER_STATIONS, _ENGINE_CHARS, _KV_BPE, _METRICS_CMD, _build_infer_load_cmd, _cmd_load_c, _conf_rpc_target, _container_cleanup_cmd, _engine_ok, _fallback_conf, _frame_status, _host_path_for, _load_container_model, _load_ds4_pp, _load_rpc, _parse_conf, _planes_compact, _pp_listen_ip, _probe_map, _reclaim_containers, _station_mem, classify_container_assets, classify_worker_probe, cmd_estimate, cmd_frames, cmd_load, cmd_load_on, cmd_status, cmd_unload, cmd_unload_on, collect_frames, collect_status, containers_plan, estimate_load, parse_worker_busy, preflight_container, probe_frames, probe_metrics, probe_worker_state, reclaim_and_unload, render_html, resolve_alias, resolve_rpc_worker, sh_single_quote,
+    AliasError, FRAME_CMD, RPC_WORKER_STATIONS, _ENGINE_CHARS, _KV_BPE, _METRICS_CMD, _active_rpc_workers, _build_infer_load_cmd, _cmd_load_c, _conf_rpc_target, _container_cleanup_cmd, _engine_ok, _fallback_conf, _frame_status, _guard_worker_conflict, _host_path_for, _load_container_model, _load_ds4_pp, _load_rpc, _parse_conf, _planes_compact, _pp_listen_ip, _probe_map, _reclaim_containers, _station_mem, _worker_conflict, classify_container_assets, classify_worker_probe, cmd_estimate, cmd_frames, cmd_load, cmd_load_on, cmd_status, cmd_unload, cmd_unload_on, collect_frames, collect_status, containers_plan, estimate_load, parse_worker_busy, preflight_container, probe_frames, probe_metrics, probe_worker_state, reclaim_and_unload, render_html, resolve_alias, resolve_rpc_worker, sh_single_quote,
 )
 
 # ── catalog 域（2026-10-28 拆分；重导出 ⇒ 外部 `cluster.*` 调用点不变）──────
@@ -241,7 +245,7 @@ def main() -> int:
         return cmd_status("--html" in args[1:], "--frames" in args[1:], "--all" in args[1:])
     if sub == "load":
         tail = args[1:]
-        rest, backend, engine, worker, i = [], None, None, None, 0
+        rest, backend, engine, worker, force, i = [], None, None, None, False, 0
         while i < len(tail):
             if tail[i] == "--backend" and i + 1 < len(tail):
                 backend = tail[i + 1]   # 提取值并跳过, 避免污染 alias 前缀
@@ -255,13 +259,17 @@ def main() -> int:
                 worker = tail[i + 1]    # 单 worker 指派 (A|C); head 固定权重站 B
                 i += 2
                 continue
+            if tail[i] == "--force":     # O-178: 越过"反向冲突"预检（目标站在给别人当 worker）
+                force = True
+                i += 1
+                continue
             rest.append(tail[i])
             i += 1
         if not rest:
             print("用法: cluster.py load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] "
-                  "[--engine <变体名|绝对路径>] [--worker A|C]")
+                  "[--engine <变体名|绝对路径>] [--worker A|C] [--force]")
             return 1
-        return cmd_load(" ".join(rest), backend, engine, worker)
+        return cmd_load(" ".join(rest), backend, engine, worker, force)
     if sub == "frames":
         return cmd_frames()
     if sub == "unload":

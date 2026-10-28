@@ -1,9 +1,15 @@
 [Unit]
 Description=llama.cpp llama-server (MiniMax-M2.7 Q4_K_S, 双机 RPC Master, B 站)
 # 历史快照：当前未部署（实测 B 站 disabled/inactive）；保留作参考。
+# ★★ 2026-10-28（O-178）：**线上三站的 `llama-server@.service` 已全部是 `Restart=no`**
+#   （C 站 09-08 起 · B 站 10-28 · A 站 10-28）。下方 `Restart=on-failure` 是**本快照的历史值**，
+#   **不要照抄部署**：RPC head 在 worker 先消失时会 `GGML_ABORT`，`on-failure` 会把它当失败
+#   **自动重载 145G 权重**，违背「零自加载」（详见 spec/d6-agent-standard/OPEN-ISSUES.md 的 O-178）。
+#   「崩了要不要重载」只由 `cluster.py load` 显式决定。
 # StartLimitIntervalSec 属 [Unit]；写在 [Service] 会被 systemd 当 Unknown key 忽略（2026-10-27 修正）。
-# Phase 3: systemd 化 + 崩溃兜底 — A 站 rpc-server 挂掉时本进程 GGML_ABORT,
-# Restart=on-failure 使其在 10s 后自动重启; ExecStartPre 等 A 站 rpc-server 自愈(最长 5 分钟)
+# Phase 3: systemd 化 + 崩溃兜底 — A 站 rpc-server 挂掉时本进程 GGML_ABORT；
+# 原设计用 Restart=on-failure 在 10s 后自动重启 + ExecStartPre 等 A 站 rpc-server 自愈（最长 5 分钟）；
+# **该兜底已被 O-178 取消**（自动重启掩盖故障且与零自加载冲突）。
 # 参数与 run_server.sh / inference.conf 完全同源(行为等价迁移, 不引入性能变量)
 StartLimitIntervalSec=0
 
