@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "ops"))
 
 import rpc_check as R  # noqa: E402
+import rpc_governance as G  # noqa: E402  （8B-3：判据本体已搬，常量在其模块里改）
 
 GOOD = """version: 1
 items:
@@ -63,12 +64,12 @@ def _run(content, tmpdir):
             p.unlink()
     else:
         p.write_text(content, encoding="utf-8", newline="")
-    orig = R.ARTIFACTS_INV
-    R.ARTIFACTS_INV = p
+    orig = G.ARTIFACTS_INV
+    G.ARTIFACTS_INV = p
     try:
         return R.check_artifacts(None)
     finally:
-        R.ARTIFACTS_INV = orig
+        G.ARTIFACTS_INV = orig
 
 
 def main() -> int:

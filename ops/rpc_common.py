@@ -127,3 +127,37 @@ def _ds(v):
     if hasattr(v, "isoformat"):
         return v.isoformat()
     return ""
+
+
+INVENTORY_DIR = ROOT / "inventory"
+
+def load_inventory():
+    """读 inventory/*.yaml。返回 (ports: {int: 条目}, models: {str: 条目})。"""
+    try:
+        import yaml
+    except Exception:
+        return None, None
+    ports, models = {}, {}
+    if not INVENTORY_DIR.is_dir():
+        return ports, models
+    for f in sorted(INVENTORY_DIR.glob("*.yaml")):
+        try:
+            doc = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+        except Exception:
+            continue
+        for group, items in doc.items():
+            # 纯登记用的段不参与"已声明真值"计算 (否则 known_broken_conf 里的 alias
+            # 会被当成正常模型键, 掩盖它其实是坏的)
+            if group in ("known_issues", "known_drift", "known_broken_conf"):
+                continue
+            if not isinstance(items, list):
+                continue
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                if isinstance(it.get("port"), int):
+                    ports[it["port"]] = {**it, "_group": group, "_file": f.name}
+                for key in ("alias", "engine_id"):
+                    if it.get(key):
+                        models[str(it[key])] = {**it, "_group": group, "_file": f.name}
+    return ports, models

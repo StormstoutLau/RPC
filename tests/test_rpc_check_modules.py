@@ -2,7 +2,7 @@
 
 阶段语义：
   · 8B-1 只有 `rpc_common` + `rpc_protocol` ⇒ 只查这两个；
-  · 六个域模块齐了以后，才启用门面 ≤ 500 行的终态断言（DESIGN §3.1）。
+  · 七个模块齐了以后，才启用门面 ≤ 500 行的终态断言（DESIGN §3.1）。
 
 用法: py tests\\test_rpc_check_modules.py
 """
@@ -16,7 +16,8 @@ sys.path.insert(0, str(ROOT / "ops"))
 import yaml  # noqa: E402
 
 OPS = ROOT / "ops"
-MODULES = ["rpc_common.py", "rpc_protocol.py", "rpc_docs.py", "rpc_d6.py", "rpc_stations.py", "rpc_governance.py"]
+MODULES = ["rpc_common.py", "rpc_protocol.py", "rpc_docs.py", "rpc_d6.py",
+           "rpc_governance.py", "rpc_stations.py", "rpc_registry.py"]
 DOMAIN = MODULES[1:]
 IMPORT_RPC = re.compile(r"(?m)^\s*(?:from|import)\s+rpc_check\b")
 fails = []

@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "ops"))
 
 import rpc_check as R  # noqa: E402
+import rpc_stations as S  # noqa: E402  （8B-3：判据本体已搬，常量在其模块里改）
 
 
 def _probe(reachable=True, rss_mb=0, listen=(), error=None, etimes_min_s=None, n_proc=None,
@@ -106,12 +107,12 @@ CASES = [
 
 def _run(case):
     desc, probe, want, kw = case
-    orig = R._health_probe
-    R._health_probe = probe
+    orig = S._health_probe
+    S._health_probe = probe
     try:
         got, note, details = R.check_engine(None)
     finally:
-        R._health_probe = orig
+        S._health_probe = orig
     blob = note + " " + " ".join(details)
     ok = (got == want) and (kw in blob)
     return desc, ok, f"verdict={got}(期望 {want}) · 关键词'{kw}':{'在' if kw in blob else '缺'}", note
@@ -171,12 +172,12 @@ def main() -> int:
         fails.append(f"O-164 校验自身失败: {type(_e).__name__}: {_e}")
 
     def _verdict(probe):
-        orig = R._health_probe
-        R._health_probe = probe
+        orig = S._health_probe
+        S._health_probe = probe
         try:
             return R.check_engine(None)
         finally:
-            R._health_probe = orig
+            S._health_probe = orig
 
     try:
         v1, n1, _ = _verdict(_all(rss_mb=208, listen=["8080"], etimes_min_s=46698, n_proc=1))

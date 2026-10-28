@@ -1083,7 +1083,10 @@ $codeOnlyFull = (($content -split "`n") | ForEach-Object { $_ -replace '#.*$', '
 #   **住在 `ops/rpc_check.py`** ⇒ 断言必须读**那个文件**。
 #   ⚠ 我第一版把 o70 断言写在 `$codeOnlyFull` 上（= 读错了被测对象）⇒ **门禁 P3-2 当场判红**
 #     —— 那条"先判是回归还是夹具期望值陈旧"的护栏正为此存在，这次它咬的是**我**。
-$checkSrc = [System.IO.File]::ReadAllText((Join-Path $repoRoot 'ops\rpc_check.py'), [System.Text.UTF8Encoding]::new($false))
+# ★ 2026-10-28（review-p2-split 8B-3）：判据已拆到 `ops/rpc_*.py` 七个文件 ⇒ 读**全部**（按名排序，
+#   保证夹具确定性）；再拆分也不用回来改这里。
+$checkSrc = ((Get-ChildItem (Join-Path $repoRoot 'ops') -Filter 'rpc_*.py' | Sort-Object Name |
+    ForEach-Object { [System.IO.File]::ReadAllText($_.FullName, [System.Text.UTF8Encoding]::new($false)) }) -join "`n")
 $checkCode = (($checkSrc -split "`n") | ForEach-Object { $_ -replace '#.*$', '' }) -join "`n"
 Assert-True "o68: ★★ **已无**'无条件删固定名'(D2 落地 = O-68 修法的**前提条件**; 只看代码)" (
     -not $codeOnlyFull.Contains('$evRmCmd'))
@@ -1321,7 +1324,7 @@ Assert-True "o67②: 把条件写成**账户/站粒度**（跨站独立 key ⇒ 
 # --- O-70 修法③ (2026-09-26): `orph2` 的**自匹配**不能靠"文本巧合"来挡 ---
 # 一手实测（三站对照）: 无残留时 **NAIVE 版（只把排除键换成 `ps -eo`）会多报 1 行 —— 就是 `grep` 进程自己**；
 #   而 **NEW 版（按 pgid 排除自己的进程组）0 行**；有真残留时 NEW **只列出真的那条**。
-Assert-True "o70①: 探针按 **pgid** 排除自己的进程组（结构性修法，不靠模式串）· **读 rpc_check.py**" (
+Assert-True "o70①: 探针按 **pgid** 排除自己的进程组（结构性修法，不靠模式串）· **读 ops/rpc_*.py**" (
     $checkCode.Contains('pid=,pgid=,etimes=,args=') -and
     $checkCode.Contains('awk -v pg=$(') -and
     $checkCode.Contains('$2!=pg'))

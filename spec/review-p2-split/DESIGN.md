@@ -28,7 +28,7 @@ upstream: null
 
 | # | 目标 | 判据 |
 |---|---|---|
-| G1 | `rpc_check.py` 拆为 **6 个模块 + 1 个门面** | 每模块 ≤ 3000 行；`rpc_check.py` 门面 ≤ 500 行 |
+| G1 | `rpc_check.py` 拆为 **7 个模块 + 1 个门面** | 每模块 ≤ 3000 行；`rpc_check.py` 门面 ≤ 500 行（8B-3 实测 320） |
 | G2 | **公共面零变化**：178 个 `R.*` 符号、52 个 `CHECKS` id、CLI 参数与输出 | 新测试 `test_rpc_check_facade.py` 全覆盖；既有 65 测试不改一行 |
 | G3 | 域模块**不得反向 import 门面** | 新测试 `test_rpc_check_modules.py` 静态扫描 import |
 | G4 | `agent-cli.ps1` 抽出 **3 个 lib**（表 / scrub / D7 判据） | 入口从 7406 行降到 ≤ 6000；lib 均带 UTF-8 BOM |
@@ -56,10 +56,13 @@ rpc_docs.py          # doclinks / spec-untested / doc-status / md-tables / deter
 rpc_d6.py            # evidence / inbox / ps1-golden / ledger / review-catalog / memory-gates / multi-round / interruption / rubric / mirror
 rpc_stations.py      # ports / plugins / impact / aliases / halogen / stations / LAN / engine / gates / usb4 / backend / models
 rpc_governance.py    # secrets / syntax / scripts / deps / adr / inventory / facade / projects / shell-strict / station-layout
-rpc_check.py         # 门面：import 六个模块 → 重导出全部公共名 → CHECKS 列表 → CLI（main/--only/--list-projects）
+rpc_registry.py      # CHECKS 字面量（唯一填充点；import 各域模块的 check_* 函数，幂等 extend）
+rpc_check.py         # 门面：import 七个模块 → 重导出全部公共名 → CLI（main/--only/--list-projects）
 ```
 
-**依赖方向**：`common ← protocol/docs/d6/stations/governance ← rpc_check`。域模块只 import `common`（允许协议模块被 d6 依赖，但**不允许**任何域模块 import `rpc_check`）。
+**依赖方向**：`common ← protocol/docs/d6/stations/governance ← registry ← rpc_check`。域模块只 import `common`（允许协议模块被 d6 依赖，但**不允许**任何域模块 import `rpc_check`）。
+
+> **为什么多一层 registry**（8B-3 实测）：`CHECKS` 字面量 455 行（`fix` 文案很长），留在门面会让「门面 ≤500 行」**必然落空**；而放进 `rpc_common` 会让 common 反向 import 域模块（成环）。⇒ 单独一层「注册表」：只 import 域模块、只填 `rpc_common.CHECKS`，门面从它取。填充点仍保持**幂等**（`if not CHECKS:`，见 §8B 的二次加载坑）。
 
 **为什么不用包（`rpc_check/`）**：入口路径 `ops/rpc_check.py` 被 hook、CI、`agent-cli.ps1 --list-projects`、文档同时引用；改成包会改调用面（`python ops/rpc_check.py` 仍可跑，但 `sys.path` 与相对导入会引入新失败面）。**平铺模块 + 门面**与 2026-09-23 `cluster.py` 完全同构。
 

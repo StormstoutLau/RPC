@@ -23,6 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "ops"))
 import rpc_check as R                                    # noqa: E402
+import rpc_stations as S                                 # noqa: E402  （8B-3：判据本体已搬）
 
 fails = []
 total = 0
@@ -77,13 +78,13 @@ DOC = {"segments": [
 
 def judge(doc, live):
     """打桩 `_net_doc`（合成真值）+ `_health_probe`（合成实况）⇒ 跑**真判据**。"""
-    orig_doc, orig_hp = R._net_doc, R._health_probe
-    R._net_doc = lambda: doc
-    R._health_probe = lambda st: live.get(st, {"reachable": False, "error": "未打桩", "raw": ""})
+    orig_doc, orig_hp = S._net_doc, S._health_probe
+    S._net_doc = lambda: doc
+    S._health_probe = lambda st: live.get(st, {"reachable": False, "error": "未打桩", "raw": ""})
     try:
         return R.check_usb4({})
     finally:
-        R._net_doc, R._health_probe = orig_doc, orig_hp
+        S._net_doc, S._health_probe = orig_doc, orig_hp
 
 
 # ── T1 真值完备（唯一读真文件处，只读）─────────────────────────────────────────

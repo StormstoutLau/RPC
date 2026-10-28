@@ -89,7 +89,7 @@ upstream: null
 |---|---|---|---|
 | **8B-1** | L885-L3178（U-2/U-1/U-3/U-4/D7/U-5/O-66 判据库） | `rpc_protocol.py` | `rpc_check.py` ≈ 8100 行；协议测试全绿 |
 | **8B-2** | L3532-L3620 doclinks · L3836-L3897 spec-untested · L8933-L8971 doc-status · L9255-L9433 md-tables · L9433-L9602 determinism · L9602-L9636 derived-view · L9636-L10378 executor-trace · L6193-L6638 evidence · L6850-L6959 inbox · L7162-L7289 ps1-golden · L7289-L7471 ledger · L7471-L7615 review-catalog · L7615-L8031 memory-gates · L8031-L8380 multi-round · L8380-L8602 interruption · L8602-L8933 rubric · L3279-L3532 mirror | `rpc_docs.py` / `rpc_d6.py` | 两模块各 ≈ 1500-2900 行 |
-| **8B-3** | L4479-L4972 ports/plugins/impact/aliases · L4972-L5177 halogen · L5012-L5860 stations · L5177-L6016 LAN · L5860-L6193 engine · L6016-L6324 gates · L6324-L6638 usb4 · L6638-L6850 backend · L38-L885 secrets/syntax/scripts · L3621-L3774 deps · L3774-L3836 adr · L4355-L4479 inventory · L3179-L3279 facade · L6959-L7159 shell-strict/station-layout · L7159-L7180 CHECKS 前的常量 | `rpc_stations.py` / `rpc_governance.py` | 门面 ≈ 300 行（仅 CHECKS + main + 重导出） |
+| **8B-3** | L4479-L4972 ports/plugins/impact/aliases · L4972-L5177 halogen · L5012-L5860 stations · L5177-L6016 LAN · L5860-L6193 engine · L6016-L6324 gates · L6324-L6638 usb4 · L6638-L6850 backend · L38-L885 secrets/syntax/scripts · L3621-L3774 deps · L3774-L3836 adr · L4355-L4479 inventory · L3179-L3279 facade · L6959-L7159 shell-strict/station-layout · L7159-L7180 CHECKS 前的常量 | `rpc_stations.py` / `rpc_governance.py` / `rpc_registry.py` | 门面 ≤500 行（实测 **320**）；stations 2294 · governance 1414 · registry 488 |
 
 > 行号会随上一阶段漂移 ⇒ 每个阶段开始前**重新用段标记定位**（`# ──` 标题），不硬编码行号。
 
@@ -100,7 +100,7 @@ upstream: null
 | 测试 | 内容 |
 |---|---|
 | `test_rpc_check_facade.py` | 从基线快照读取 178 个符号名单（硬编码）；逐个 `getattr(R, name)`；52 个 CHECKS 的 id 与顺序；`--list` 输出可解析 |
-| `test_rpc_check_modules.py` | 6 个模块存在；每模块 ≤ 3000 行；域模块源码不含 `import rpc_check` / `from rpc_check`；`entry_modules` 含 6 个新路径 |
+| `test_rpc_check_modules.py` | 7 个模块存在；每模块 ≤ 3000 行；域模块源码不含 `import rpc_check` / `from rpc_check`；`entry_modules` 含 7 个新路径；**二次加载不重复注册 CHECKS**；七模块齐后门面 ≤ 500 行 |
 | `test_agent_cli_libs.py` | 3 个 lib 存在且带 BOM；入口 `$Script:AGENT_CLI_LIBS` 与两个夹具的拼接清单**逐项相同**；拼接后函数数 ≥ 116 |
 
 ---

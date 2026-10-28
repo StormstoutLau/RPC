@@ -20,6 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "ops"))
 import rpc_check as R                                    # noqa: E402
+import rpc_stations as S                                 # noqa: E402  （8B-3：判据本体已搬）
 
 fails = []
 total = 0
@@ -53,14 +54,14 @@ def judge(seen, lan=None, master=_DEF):
     master 默认给"与真值一致"的值 ⇒ 旧的用例不受新增的主控判据影响；
     要测"master 探不到"必须**显式**传 `master=None`（故这里用哨兵而不是默认参数 None）。
     """
-    orig = R._ssh_g_hostname
-    R._ssh_g_hostname = lambda alias: {"scott-lau-NEX.local": "192.168.1.33",
+    orig = S._ssh_g_hostname
+    S._ssh_g_hostname = lambda alias: {"scott-lau-NEX.local": "192.168.1.33",
                                        "scott-lau-GTR-Pro.local": "192.168.1.32"}.get(alias)
     try:
         return R.validate_lan_addr(lan or LAN, seen,
                                    {"ip": MASTER_WANT} if master is _DEF else master)
     finally:
-        R._ssh_g_hostname = orig
+        S._ssh_g_hostname = orig
 
 
 # ── A. 正例：三站地址都与真值一致 ⇒ 无 FAIL 无 WARN ──────────────────────────
@@ -91,14 +92,14 @@ chk("B5 A/B 不因此被误报", not any("A 站" in x or "B 站" in x for x in d
 
 # ── C. 先验红：master 侧**名字绑定**漂移（D1 的那一面，必须仍然会红）──────────
 def _judge_bad_alias():
-    orig = R._ssh_g_hostname
-    R._ssh_g_hostname = lambda alias: "192.168.1.99"
+    orig = S._ssh_g_hostname
+    S._ssh_g_hostname = lambda alias: "192.168.1.99"
     try:
         return R.validate_lan_addr(LAN, {"A": {"ip": "192.168.1.33", "iface": "enp195s0"},
                                          "B": {"ip": "192.168.1.32", "iface": "enp193s0"},
                                          "C": {"ip": "192.168.1.37", "iface": "eno1"}})
     finally:
-        R._ssh_g_hostname = orig
+        S._ssh_g_hostname = orig
 
 
 d, _, _ = _judge_bad_alias()

@@ -773,13 +773,14 @@ chk("D4: _probe_map 只探可映射到站的目标（未声明目标不入表，
 # ── T14：aliases 站级缺口（门禁，动态导入 rpc_check）──────────────────────
 def _aliases_probe(models):
     try:
-        import importlib.util
-        p = ROOT / "ops" / "rpc_check.py"
-        spec = importlib.util.spec_from_file_location("_rpc_check_t14", str(p))
-        m = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(m)
-        m.load_inventory = lambda: ({}, models)
-        return m.check_aliases({})
+        import rpc_check as R
+        import rpc_stations                     # 8B-3：check_aliases 本体已搬，打桩打在定义模块
+        orig = rpc_stations.load_inventory
+        rpc_stations.load_inventory = lambda: ({}, models)
+        try:
+            return R.check_aliases({})
+        finally:
+            rpc_stations.load_inventory = orig
     except Exception as e:                        # 导入失败也必须红，不得崩整条测试
         return "ERROR", f"{type(e).__name__}: {e}", []
 

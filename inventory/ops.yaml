@@ -29,6 +29,9 @@ entry_modules:
   - ops/rpc_protocol.py
   - ops/rpc_docs.py
   - ops/rpc_d6.py
+  - ops/rpc_governance.py
+  - ops/rpc_stations.py
+  - ops/rpc_registry.py
   - ops/cluster_const.py
   - ops/cluster_console.py
   - ops/cluster_ssh.py

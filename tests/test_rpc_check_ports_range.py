@@ -28,6 +28,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "ops"))
 import rpc_check as R                                    # noqa: E402
+import rpc_stations as S                                 # noqa: E402  （8B-3：判据本体已搬）
 
 fails = []
 total = 0
@@ -75,17 +76,17 @@ def judge(port_entries, ubind="", uowner="", bind="", towner=""):
     fake = types.ModuleType("cluster")
     fake.ROUTE, fake.RPC_MODELS = {}, set()
     fake.ssh_run = lambda st, cmd, timeout=90, strict=False: (True, outs.get(st, ""))
-    saved = (sys.modules.get("cluster"), R._net_doc, R._plugins_doc,
-             R.load_inventory, R._port_entries)
+    saved = (sys.modules.get("cluster"), S._net_doc, S._plugins_doc,
+             S.load_inventory, S._port_entries)
     sys.modules["cluster"] = fake
-    R._net_doc = lambda: {}
-    R._plugins_doc = lambda: {}
-    R.load_inventory = lambda: ({}, {})
-    R._port_entries = lambda: port_entries
+    S._net_doc = lambda: {}
+    S._plugins_doc = lambda: {}
+    S.load_inventory = lambda: ({}, {})
+    S._port_entries = lambda: port_entries
     try:
         return R.check_stations({})
     finally:
-        old_cluster, R._net_doc, R._plugins_doc, R.load_inventory, R._port_entries = saved
+        old_cluster, S._net_doc, S._plugins_doc, S.load_inventory, S._port_entries = saved
         if old_cluster is None:
             sys.modules.pop("cluster", None)
         else:
@@ -171,12 +172,12 @@ _M_OK = [{"port": 9999, "purpose": "占位", "scope": ["B"], "bind": "127.0.0.1"
 
 
 def _check_ports_with(entries):
-    orig = R._port_entries
-    R._port_entries = lambda: entries
+    orig = S._port_entries
+    S._port_entries = lambda: entries
     try:
         return R.check_ports({})
     finally:
-        R._port_entries = orig
+        S._port_entries = orig
 
 
 for _ent, _label, _expect in (
