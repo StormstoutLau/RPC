@@ -23,7 +23,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "ops"))
-import cluster as C                                   # noqa: E402
+sys.path.insert(0, str(ROOT / "tests"))
+from _cluster_proxy import cluster_proxy  # noqa: E402  ★ 拆分后打桩须落到定义模块
+C = cluster_proxy()
 
 fails = []
 EMPTY_SHA = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"   # sha256("")

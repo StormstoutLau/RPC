@@ -21,7 +21,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "ops"))
-import cluster as C                                    # noqa: E402
+sys.path.insert(0, str(ROOT / "tests"))
+# ★ 2026-10-28（评审 #8 拆 cluster.py）：判据已按域搬进 `cluster_*.py`，函数读的是
+#   **自己模块的全局** ⇒ 只在门面上打桩**不生效**（实测：`_load_rpc` 那次桩全部落空 ⇒
+#   测试真的向站上派发了加载！）。⇒ 用代理，赋值同时落到所有已绑定该名字的模块。
+from _cluster_proxy import cluster_proxy  # noqa: E402
+C = cluster_proxy()
 
 fails = []
 
@@ -271,7 +276,12 @@ _MISSING = object()
 
 
 def _swap(name, value):
-    """替换模块属性并返回还原闭包 —— 兼容"属性尚不存在"（先验红阶段新函数还没写）。"""
+    """替换属性并返回还原闭包 —— `C` 是**代理**，赋值会落到所有已绑定该名字的模块。
+
+    ⚠ 为什么不能只换门面：拆分后 `_load_rpc` 等函数住在 `cluster_runtime`，它读的是
+      **本模块全局**；只换 `cluster.<name>` 会让桩全部落空（实测真的向站上派发了）。
+    兼容"属性尚不存在"（先验红阶段新函数还没写）。
+    """
     old = getattr(C, name, _MISSING)
     setattr(C, name, value)
 

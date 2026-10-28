@@ -23,7 +23,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "ops"))
-import cluster as C                                    # noqa: E402
+sys.path.insert(0, str(ROOT / "tests"))
+from _cluster_proxy import cluster_proxy  # noqa: E402  ★ 拆分后打桩须落到定义模块
+C = cluster_proxy()
+
+def _cluster_src():
+    """★ 2026-10-28（评审 #8 拆 cluster.py）：源码断言必须扫**全部** `cluster*.py`
+    —— 判据本体已按域搬走，只扫门面会让这些断言**恒假**（"守门人自己瞎了"）。"""
+    return "\n".join(p.read_text(encoding="utf-8", errors="replace")
+                     for p in sorted((ROOT / "ops").glob("cluster*.py")))
 
 fails = []
 total = 0
@@ -38,7 +46,7 @@ def chk(name, cond, extra=""):
 
 
 # ── 0. 结构护栏：重试与"如实报 race"必须真的在（防"写了但没跑"）──
-src = (ROOT / "ops" / "cluster.py").read_text(encoding="utf-8")
+src = _cluster_src()
 chk("0a O-95 生产者含写后校验（verify 读回 + wanted 判定）",
     "on_disk = set(agent_audit_baseline_load()" in src and "if wanted <= on_disk:" in src)
 chk("0b O-96 生产者含写后校验（on_disk 判定 + want）",

@@ -25,6 +25,11 @@ entry:
 # 为什么单列而不塞进 entry: entry 的语义是"入口", 塞模块会让"入口 4"这种计数失去意义。
 # 拆分方案见 docs/2026-09-23_cluster.py模块化重构_调研与方案.md (阶段 1 逐批抽取)。
 entry_modules:
+  - ops/cluster_ops.py
+  - ops/cluster_agent.py
+  - ops/cluster_flow.py
+  - ops/cluster_runtime.py
+  - ops/cluster_catalog.py
   - ops/rpc_common.py
   - ops/rpc_protocol.py
   - ops/rpc_docs.py
@@ -54,8 +59,13 @@ cluster_layers:
   - [ops/cluster_ssh.py]                              # L1: → const
   - [ops/cluster_model.py, ops/cluster_secrets.py]    # L2 平面类(互不依赖): → ssh/const
   - [ops/cluster_egress.py]                           # L3: → secrets/ssh/const
-  - [ops/cluster.py]                                  # L4 入口: 聚合全部下层
-  - [ops/cluster_web.py]                              # L5 顶层 WEB 入口: 复用 cluster
+  - [ops/cluster_catalog.py]                          # L4 目录域(评审 #8 拆分): models/versions/studio/fetch —— 无内部域依赖
+  - [ops/cluster_runtime.py]                          # L5 运行时域: metrics/status/load/unload/halogen 编排/RPC 选路/estimate
+  - [ops/cluster_flow.py]                             # L6 流程域: e2e/reqlog/声明式 flow/studio-upgrade 步骤
+  - [ops/cluster_agent.py]                            # L7 agent 域: 进度视图/证据链/批 A 判据/审计水印/judge 校准
+  - [ops/cluster_ops.py]                              # L8 运维域: TTL/inbox 封印/containers+dockerd 供应
+  - [ops/cluster.py]                                  # L9 入口: 聚合全部下层（门面 + CLI 分派）
+  - [ops/cluster_web.py]                              # L10 顶层 WEB 入口: 复用 cluster
 
 # 已登记的**反向懒加载**（[上游, 下游, 原因]）：懒加载 import **不构成导入环**（它是刻意打破环的手段），
 # 但**反向**（越层）懒加载仍是设计越界 ⇒ 必须登记。⚠ 未命中会自报"已可移除"（同 P0-2 防腐化纪律）。

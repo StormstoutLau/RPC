@@ -14,6 +14,12 @@
 """
 from pathlib import Path
 
+# ── 路径真值（2026-10-28 从 `cluster.py` 下沉）─────────────────────────────
+# 为什么下沉：拆模块后 **flow / agent / ops 三组都要用**它（`LEDGERS`、inbox 路径等），
+#   留在 `cluster.py` 会逼出"下级 import 门面"的反向依赖（门禁 `deps` 直接判 FAIL）；
+#   常量层是最底层 ⇒ 放这里不产生任何新边。
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 # ── 常量层 ──────────────────────────────────────────────
 STATIONS = {
     # 2026-09-16 (ADR-0006): A/B 由 `*.local` 名改为 **LAN IPv4** —— 与 C 站同一结论(见下行注释)。

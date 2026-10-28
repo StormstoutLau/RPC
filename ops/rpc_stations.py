@@ -439,9 +439,15 @@ def check_aliases(ctx):
         detail.append(f"未知别名 {bogus!r} 未显式落到 default")
 
     # (5) 歧义必须报错 (打桩 ROUTE 制造共享前缀, 事后还原)
-    snap = cluster.ROUTE
+    # ★ 2026-10-28（评审 #8 拆 cluster.py）：`resolve_alias` 已搬进 `cluster_runtime`，
+    #   它读的是**该模块**的 `ROUTE` ⇒ 只改 `cluster.ROUTE` 打不中（实测：判据假红"歧义未报错"）。
+    #   ⇒ 直接改函数**定义处**的全局（`__globals__`），同时同步门面别名以保持外部视图一致。
+    g = getattr(cluster.resolve_alias, "__globals__", {})
+    snap = g.get("ROUTE", cluster.ROUTE)
+    facade_snap = cluster.ROUTE
     try:
-        cluster.ROUTE = {"__amb-a__": "A", "__amb-ab__": "B"}
+        g["ROUTE"] = {"__amb-a__": "A", "__amb-ab__": "B"}
+        cluster.ROUTE = g["ROUTE"]
         n += 1
         try:
             cluster.resolve_alias("__amb-a")
@@ -449,7 +455,8 @@ def check_aliases(ctx):
         except cluster.AliasError:
             pass
     finally:
-        cluster.ROUTE = snap
+        g["ROUTE"] = snap
+        cluster.ROUTE = facade_snap
 
     # (6) inventory 里声明了 route 的别名, 必须真的路由到该站
     #     —— 这条才直接抓得住"路由键过期"的原始 bug: 旧值 qwen3.8-27b 时,

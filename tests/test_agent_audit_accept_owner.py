@@ -15,6 +15,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "ops"))
 import cluster as C                                    # noqa: E402
 
+def _cluster_src():
+    """★ 2026-10-28（评审 #8 拆 cluster.py）：源码断言必须扫**全部** `cluster*.py`
+    —— 判据本体已按域搬走，只扫门面会让这些断言**恒假**（"守门人自己瞎了"）。"""
+    return "\n".join(p.read_text(encoding="utf-8", errors="replace")
+                     for p in sorted((ROOT / "ops").glob("cluster*.py")))
+
 fails = []
 total = 0
 
@@ -86,7 +92,7 @@ same, wn, gn = C.compare_accept_cmds("---\nmodel: x\n---\n", "\n\n")
 chk("B5 双方皆空 => 相符（空件不算残留）", same is True and wn == 0 and gn == 0)
 
 # ── C. 结构护栏: 判据必须**真的接进** agent_audit（"写了但没跑" = 假防线）──
-src = (ROOT / "ops" / "cluster.py").read_text(encoding="utf-8")
+src = _cluster_src()
 chk("C1 agent_audit 内**确实调用** compare_accept_cmds",
     src.count("compare_accept_cmds(") >= 2, f"count={src.count('compare_accept_cmds(')}")
 chk("C2 gap kind `accept-cmds-mismatch` 存在且用 _gap_key 归一（可进水位）",

@@ -17,6 +17,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "ops"))
 import cluster as C                                    # noqa: E402
 
+def _cluster_src():
+    """★ 2026-10-28（评审 #8 拆 cluster.py）：源码断言必须扫**全部** `cluster*.py`
+    —— 判据本体已按域搬走，只扫门面会让这些断言**恒假**（"守门人自己瞎了"）。"""
+    return "\n".join(p.read_text(encoding="utf-8", errors="replace")
+                     for p in sorted((ROOT / "ops").glob("cluster*.py")))
+
 fails = []
 BASE = dict(proj="t", exit_code=0, status="completed",
             accept={"cmd": [], "passed": True},
@@ -171,7 +177,7 @@ finally:
 # 为什么必须钉住: T1 之后"危险面配对"从**静默互删**变成**可见 `exit 3`** ⇒ 这类 run 变多; 而它的 body
 #   **从未运行** ⇒ 框架件天然不产出。若按 missing-artifact 记, 每个这类 run 都往可重放 gap 表里灌噪声
 #   ⇒ 又回到"判据因噪声被整体忽略"。第三态与 `ephemeral` 同族: 缺席有正当理由、单列、不计入可离线复算。
-_src = (ROOT / "ops" / "cluster.py").read_text(encoding="utf-8")
+_src = _cluster_src()
 chk("O61-1 判据源 = `.agent-run.json` 的 exit_code == 3",
     # ★ 2026-10-23: 实现侧把 exit_code **只解析一次**（`_ec`），供 `locked_out` 与
     #   `failed-run-by-design`（同族第三态）共用 ⇒ 原字面 `j.get("exit_code") == 3` 不再成立。

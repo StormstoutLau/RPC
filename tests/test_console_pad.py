@@ -61,6 +61,10 @@ def main() -> int:
 
     # ⑥ 唯一实现：cluster.py 只 alias，不得留第二份 `def`
     cl = (ROOT / "ops" / "cluster.py").read_text(encoding="utf-8", errors="replace")
+    # ★ 2026-10-28（评审 #8 拆 cluster.py）：站点渲染已按域搬进 `cluster_*.py`
+    #   ⇒ ⑧ 的"站点是否改用 _pad/_dw"必须扫**全部** cluster 模块；⑥ 仍只扫门面（它判的是"门面不另写实现"）。
+    all_cl = "\n".join(p.read_text(encoding="utf-8", errors="replace")
+                       for p in sorted((ROOT / "ops").glob("cluster*.py")))
     ok6 = ("from cluster_console import disp_width as _dw" in cl
            and "from cluster_console import pad as _pad" in cl
            and "def _dw(" not in cl and "def _pad(" not in cl)
@@ -82,13 +86,13 @@ def main() -> int:
               "{'站':<3}", "{'样本':>4}", "{'跨度':>7}", "{'忙占比':>7}", "{'峰值并发':>8}",
               "{'期望':<7}", "{'第1轮':<8}", "{'倒序':<8}", "{'改写':<8}", "{'目录':<30}",
               '"-" * (len(hdr) - 2)']          # ← 分隔线也必须按显示宽度
-    left = [b for b in banned if b in cl]
+    left = [b for b in banned if b in all_cl]
     print(f"  {'ok  ' if not left else 'FAIL'} [站点] 已转换的表头无一处残留码点宽度"
           + (f"（残留 {left}）" if left else ""))
     if left:
         fails.append(f"站点回退到码点宽度: {left}")
     need = ["_pad('模型目录', 46)", "_pad('站', 3)", "_pad('期望', 7)", "_pad('目录', 30)", "_dw(hdr)"]
-    miss = [n for n in need if n not in cl]
+    miss = [n for n in need if n not in all_cl]
     print(f"  {'ok  ' if not miss else 'FAIL'} [站点] 新写法都在" + (f"（缺 {miss}）" if miss else ""))
     if miss:
         fails.append(f"站点未改用 _pad/_dw: {miss}")
