@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # ============================================================================
 # oCrun — opencode run 的可控包装 (D6 agent 标准框架 / 站内)
 #
@@ -19,7 +20,6 @@
 #   实现取管道形式 (与手册约定一致), 但两种入口都接受, 不把形式当硬约束。
 # 设计: docs/research/2026-09-14_暴露问题调研.md §1/§4
 # ============================================================================
-set -u
 
 # 尝试链 (空格分隔), 顺序即优先级
 # OpenRouter 段按 secrets/openrouter.conf 的 harness_priority 镜像 (2026-09-14 用户指定序),
@@ -67,8 +67,12 @@ for m in $CHAIN; do
   i=$((i + 1))
   echo "[oCrun] ($i) 尝试 $m  (timeout ${T}s)" >&2
   # 先取 rc: if 无 else 时语句自身返回 0, 会覆盖 $? (实测踩过)
-  printf '%s\n' "$PROMPT" | timeout "$T" opencode run -m "$m"
-  rc=$?
+  # ★ review-p2-big #5: 开 -e 后 `cmd; rc=$?` 会在 rc 赋值**之前**中止 ⇒ 必须用 if 收口
+  if printf '%s\n' "$PROMPT" | timeout "$T" opencode run -m "$m"; then
+    rc=0
+  else
+    rc=$?
+  fi
   if [ "$rc" -eq 0 ]; then
     echo "[oCrun] OK via $m" >&2
     exit 0

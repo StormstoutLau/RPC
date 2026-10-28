@@ -61,8 +61,8 @@ projects:
 - id: Full_Weather
   root: F:\Full_Weather
   reachable: true
-  files: 7
-  hits: 21
+  files: 8
+  hits: 22
 - id: Macro_Data
   root: E:\Macro_Data
   reachable: true

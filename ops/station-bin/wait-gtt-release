@@ -3,8 +3,10 @@
 # 机理: GTT 释放是异步的, 实测 30-90s; sleep 8 曾致双模型叠加 OOM (2026-09-01)
 # threshold: 相对总内存而非绝对 100G. 机器 124G 总内存空载 ~110G available,
 # 而负载 ~57G. 用 TOTAL*0.82 作"已回收"判据: 空载可过(110>101), 加载中(67<101)拒.
+set -euo pipefail
 TOTAL_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
 TARGET_MB=$(( TOTAL_MB * 82 / 100 ))
+AVAIL=0
 for i in $(seq 1 36); do
   AVAIL=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
   if [ "$AVAIL" -ge "$TARGET_MB" ]; then

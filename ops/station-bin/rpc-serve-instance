@@ -16,7 +16,7 @@
 #   ④ 本包装器 exec 它; 缺省 = 单元的 `Environment=LLAMA_RPC_SERVER_BIN=/opt/llama.cpp/ggml-rpc-server`
 #
 # 测试缝隙: LLAMA_RPC_SERVER_BIN / RPC_BIND / RPC_PORT
-set -u
+set -euo pipefail
 ALIAS="${1:?用法: rpc-serve-instance <alias>}"
 BIN="${LLAMA_RPC_SERVER_BIN:-/opt/llama.cpp/ggml-rpc-server}"
 BIND="${RPC_BIND:?FATAL: RPC_BIND 未设 (应来自单元的 Environment=)}"

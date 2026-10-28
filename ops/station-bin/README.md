@@ -2,6 +2,10 @@
 
 > 快照时间: 2026-09-04 · 来源: B 站（两站 md5 一致，见下）
 > 用途: 版本控制 + 灾难恢复参照。修改站侧脚本时**先改这里（review）再同步上站**，保持两站一致。
+>
+> **2026-10-28 布局（review-p2-big #8A）**：本目录**只放部署件 / 入口运行时件 / 在跑夹具**；
+> 一次性 `_*` 探针已归档到 [`archive/station-bin-probes/`](../../archive/station-bin-probes/README.md)
+> （只读证据，不部署、不进门禁）。新增根目录 `_*` 件会被 `station-layout` 门禁判红 —— 白名单只有 9 项（见 `inventory/ops.yaml` 的 `station_bin_layout.root_keep`）。
 
 ## 文件清单
 
@@ -24,10 +28,18 @@
 ## 站上一致性
 
 修改后核对：`md5sum /usr/local/bin/<file>`（三站必须一致；`cluster-watchdog` 例外：A 站为 A 变体）。
-**当前（2026-10-28，站上件 · 三站）**：infer-load **`891165f3...`**、infer-unload **`0f1844a6...`**、
-llama-serve-instance `e8c20ede...`、**rpc-serve-instance `24a3e592...`**、infer-list **`98c084c4...`**、
-**cluster-ttl `89af1078...`**、**model-locate.sh `c9e0374c...`**、**conf-lib.sh `8a311f9e...`**、**conf-get `54affdd6...`**、
-cluster-watchdog **B/C `183c22b0...` · A `6abcd44f...`**。
+**当前（2026-10-28，站上件 · 三站）**：infer-load **`8432f5fa...`**、infer-unload **`f09e5524...`**、
+llama-serve-instance **`8cc80844...`**、**rpc-serve-instance `3296d972...`**、infer-list **`c7fc5176...`**、
+**cluster-ttl `89af1078...`**、**model-locate.sh `c9e0374c...`**、**conf-lib.sh `8a311f9e...`**、
+**conf-get `c079f0a2...`**、load-mem-gate **`0f3ee521...`**、wait-gtt-release **`a27edcc9...`**、
+cluster-watchdog **B/C `070572d5...` · A `96fe98b2...`**。
+（2026-10-28 `review-p2-big` 改动：12 个执行件 prologue → `set -euo pipefail`（`load-gate` 保留 `set +e` 豁免）；
+`cluster-watchdog` 的远端探测改**引用型 heredoc**（原单引号串里嵌 `awk '{print $1}'` 被提前闭合 ⇒ `$1` 本地展开，
+开 `-u` 后当场暴露）；`infer-list`/`ocrun` 补显式守卫。部署：三站「备份 `*.bak-p2big-20261028` → `install -m 755`
+→ `bash -n` → md5 对账」；`gates` **36/36**。冒烟（B）：`load-gate 1` rc=0 · `load-mem-gate 1` rc=0 ·
+`infer-list B` 14 行 · `conf-get` 输出真实路径 · `rpc-nodes --all` 2 节点 · watchdog oneshot rc=0；
+A/C：`infer-list` rc=0、watchdog rc=0（C 无该 unit，直接跑二进制）。`ocrun` 三站已更新；
+`rpc-nodes` A/B 更新（C 无此件）；`backup-memories.sh` 三站均无（未部署，属手动件）。）
 （2026-10-28 P2 `review-p2-small` 改动：`infer-load` `184dc54c…` → `891165f3…`（身份/家目录收敛：
 `AWORK=$(id -un)@…`、`/home/<user>/*` → `$HOME/*`）；`infer-unload` `a9f8f3f0…` → `0f1844a6…`（`$HOME` + `RPC_USER` 派生）；
 `infer-list` `b33f6437…` → `98c084c4…`（NODE 去 `.local`，仅管理 LAN IP + `$(id -un)`）；

@@ -14,7 +14,7 @@
 #     故本脚本**不再注入**该变量, 让 studio 用自带引擎; 需要自定义引擎时由调用方显式 export。
 # 旧后端 llama-rpc/llama-single/vllm 保留 (systemd llama-server 路径), 可用 --backend 显式回退
 # 首次加载自动生成默认 conf (打印路径)
-set -uo pipefail
+set -euo pipefail
 AWORK="$(id -un)@10.10.10.1"
 
 PREFIX=""; BACKEND=""; PORT=""; CTX=""; THREADS=""; CLI_ENGINE=""; CLI_RPC_TARGET=""; CLI_PP_LISTEN=""
@@ -98,12 +98,12 @@ ALL_ALIASES=$(model_aliases)
 #   ds4 的单一命名真值 = conf 文件名 /etc/ds4-instances/<alias>.env ⇒ 别名由文件名派生。
 if [ "$BACKEND" = "ds4" ]; then
   ALL_ALIASES=$(find /etc/ds4-instances -maxdepth 1 -name '*.env' 2>/dev/null | \
-    sed 's|.*/||; s|\.env$||' | tr 'A-Z' 'a-z' | sort -u)
+    sed 's|.*/||; s|\.env$||' | tr 'A-Z' 'a-z' | sort -u || true)
 fi
 LOWER=$(printf '%s' "$PREFIX" | tr 'A-Z' 'a-z')
 EXACT=""; PFX=""
 while IFS= read -r _a; do
-  [ -z "$_a" ] && continue
+  if [ -z "$_a" ]; then continue; fi
   if [ "$_a" = "$LOWER" ]; then EXACT="$_a"; break; fi
   case "$_a" in "$LOWER"*) PFX="${PFX}${_a}
 ";; esac
@@ -113,7 +113,7 @@ ALIAS_EOF
 if [ -n "$EXACT" ]; then
   ALIAS="$EXACT"
 else
-  N=$(printf '%s' "$PFX" | grep -c .)
+  N=$(printf '%s' "$PFX" | grep -c . || true)
   if [ "$N" -eq 0 ]; then
     echo "ERROR: 无匹配 '$PREFIX' (infer-list 查看)"
     echo "候选 alias: $(printf '%s' "$ALL_ALIASES" | tr '\n' ' ')"
@@ -150,7 +150,8 @@ if [ ! -f "$CONF" ]; then
   if [ -z "$BACKEND" ]; then
     case "$ALIAS" in all-minilm*) BACKEND="llama-single";; *) BACKEND="unsloth";; esac
   fi
-  RPCV=""; [ "$BACKEND" = "llama-rpc" ] && RPCV="auto"
+  RPCV=""
+  if [ "$BACKEND" = "llama-rpc" ]; then RPCV="auto"; fi
   # N_CPU_MOE 缺省 (2026-09-29 改): 原为 `llama-rpc ⇒ 8` —— 那是**单机**省 VRAM 的腾挪手段
   #   (把前 8 层 MoE 专家压到 CPU); 在**双机 RPC** 形态下它把前 8 层专家压到 head 的 CPU 上算
   #   ⇒ 实测 decode 掉约 22%(V4-Flash 双机 10.90 vs 手工形态 14.06 t/s)。
@@ -218,12 +219,12 @@ if [ -n "$ENGINE_BIN" ] && [ "${CLI_BACKEND:-}" != "ds4" ]; then
   fi
 fi
 export LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-}"
-[ -n "$LLAMA_SERVER_BIN" ] && log "使用引擎: ${LLAMA_SERVER_BIN}"
+if [ -n "$LLAMA_SERVER_BIN" ]; then log "使用引擎: ${LLAMA_SERVER_BIN}"; fi
 # conf 优先级: 显式 CLI > conf > 默认
 BACKEND="${CLI_BACKEND:-${BACKEND:-${CONF_BACKEND:-unsloth}}}"
-[ -n "$CLI_PORT" ] && PORT="$CLI_PORT"
-[ -n "$CLI_CTX" ] && CTX="$CLI_CTX"
-[ -n "$CLI_THREADS" ] && THREADS="$CLI_THREADS"
+if [ -n "$CLI_PORT" ]; then PORT="$CLI_PORT"; fi
+if [ -n "$CLI_CTX" ]; then CTX="$CLI_CTX"; fi
+if [ -n "$CLI_THREADS" ]; then THREADS="$CLI_THREADS"; fi
 fi   # ← 结束 [2] 的 ds4 / llama 两分支
 
 # ---- [2b] 显式 --backend 同时决定 RPC 与否 (2026-09-15 修) ----
@@ -320,12 +321,12 @@ pkill -9 -f '[d]s4 .*--role' 2>/dev/null || true
 wait_gtt() {
   for i in $(seq 1 90); do
     if [ -n "$2" ]; then
-      used=$(ssh -o BatchMode=yes "$2" "cat /sys/class/drm/card*/device/mem_info_gtt_used 2>/dev/null | head -1")
+      used=$(ssh -o BatchMode=yes "$2" "cat /sys/class/drm/card*/device/mem_info_gtt_used 2>/dev/null | head -1" || true)
     else
-      used=$(cat /sys/class/drm/card*/device/mem_info_gtt_used 2>/dev/null | head -1)
+      used=$(cat /sys/class/drm/card*/device/mem_info_gtt_used 2>/dev/null | head -1 || true)
     fi
-    [ -z "$used" ] && used=0
-    [ "$used" -lt 2000000000 ] && { log "$1 GTT released"; return 0; }
+    if [ -z "$used" ]; then used=0; fi
+    if [ "$used" -lt 2000000000 ]; then log "$1 GTT released"; return 0; fi
     sleep 2
   done
   log "WARN: $1 GTT 180s 未释放"
@@ -443,7 +444,7 @@ if [ "$BACKEND" = "ds4" ]; then
     log "ds4 worker 无 HTTP 面, 按日志就绪标记判定 (最多 120s) ..."
     _DS4_READY=""
     for i in $(seq 1 60); do
-      grep -q 'distributed worker:' "$DS4_LOG" 2>/dev/null && { _DS4_READY=1; break; }
+      if grep -q 'distributed worker:' "$DS4_LOG" 2>/dev/null; then _DS4_READY=1; break; fi
       kill -0 "$DS4_PID" 2>/dev/null || break
       sleep 2
     done
@@ -479,10 +480,12 @@ fi
 #
 # 真因① **身份错了**: infer-load 由 `sudo` 拉起 ⇒ 以 **root** 执行 ssh, 而 root 的
 #   ~/.ssh 里没有到各 worker 的密钥。旧实现 `ssh -o BatchMode=yes <A> systemctl start`
-#   因此认证失败; 又因本脚本是 `set -uo pipefail`(**没有 -e**), 失败**不中断也不报错**
+#   因此认证失败; 又因本脚本是 `set -uo pipefail`(**当时没有 -e**), 失败**不中断也不报错**
 #   → 节点从没起来 → master 侧的 rpc-nodes 探测为空 → 回退单机。
 #   全程只有一个 stderr 的 warn, /health 照样通过 —— 加载看起来完全"成功"。
 #   ⇒ RPC 节点必须用**持有密钥的服务用户**来起 (`sudo -u <user> rpc-nodes ...`)。
+#   ★ 2026-10-28（review-p2-big #5）：prologue 已补 `-e`；且下面 `if … fi || { exit 7; }`
+#     把"起节点失败"变成**显式出口**（该 if 复合在逻辑或列表里 ⇒ -e 不介入，由 `exit 7` 收口）。
 #
 # 真因② **没等端口**: master 侧 `RPC_TARGET=auto` 的展开是**单次探测、无重试**,
 #   端口若还没监听, /dev/tcp 连接被**立即拒绝**(不是等 2s 超时) → 同样落空回退。
@@ -537,7 +540,7 @@ if [ "$BACKEND" = "unsloth" ]; then
     INFER_DEVICE=""
     for _pref in ROCm Vulkan CUDA; do
       _hit=$(printf '%s\n' $_DEVS | grep -m1 "^${_pref}[0-9]") || true
-      [ -n "$_hit" ] && { INFER_DEVICE="$_hit"; break; }
+      if [ -n "$_hit" ]; then INFER_DEVICE="$_hit"; break; fi
     done
     [ -n "$INFER_DEVICE" ] || INFER_DEVICE=$(printf '%s\n' $_DEVS | head -1)
     log "引擎设备探测: 候选=[${_DEVS}] 选中=${INFER_DEVICE:-无}"
@@ -564,8 +567,8 @@ if [ "$BACKEND" = "unsloth" ]; then
   # unsloth 可能改写 --port (占用则自动+1); 从日志解析实际端口
   ACT_PORT="$PORT_NUM"
   for i in $(seq 1 40); do
-    P=$(grep -oE "running at http://127.0.0.1:[0-9]+" "$UN_LOG" | head -1 | grep -oE "[0-9]+$")
-    [ -n "$P" ] && { ACT_PORT="$P"; break; }
+    P=$(grep -oE "running at http://127.0.0.1:[0-9]+" "$UN_LOG" | head -1 | grep -oE "[0-9]+$" || true)
+    if [ -n "$P" ]; then ACT_PORT="$P"; break; fi
     sleep 3
   done
   log "unsloth 实际端口: ${ACT_PORT}"
@@ -576,7 +579,7 @@ if [ "$BACKEND" = "unsloth" ]; then
   chmod 700 "$HOME/.unsloth" 2>/dev/null || true
   [ -f "$UN_LOG" ] && chmod 600 "$UN_LOG" 2>/dev/null || true
   # 解析 API Key (unsloth 每次重启重铸; /v1/models 需认证)
-  UN_KEY=$(grep -oE "sk-unsloth-[a-f0-9]+" "$UN_LOG" | tail -1)
+  UN_KEY=$(grep -oE "sk-unsloth-[a-f0-9]+" "$UN_LOG" | tail -1 || true)
   # C2 (2026-09-16): 把 studio 本次重铸的 key 落盘。引擎面固定 :8080 后, opencode 的
   # {file:~/.config/rpc/unsloth.key} 与 claude 的 apiKeyHelper 都读它 —— 这是"端口固定"之后
   # 唯一需要每次刷新的东西, 也是 claude 路径此前坏掉的**真因** (key 陈旧, 不是端口不对)。
@@ -598,7 +601,7 @@ if [ "$BACKEND" = "unsloth" ]; then
       # 2026-09-16 (a): 原为 `log "API Key: $UN_KEY"` —— 会把引擎 key 明文带进调用方 stdout
       # (cluster.py load / 会话 transcript / 任何 CI 控制台日志)。改为只打长度 + sha8 指纹,
       # 保留"同一把 key"的可关联性而不泄露材料。
-      [ -n "$UN_KEY" ] && log "API Key ok (len=${#UN_KEY} sha8=$(printf '%s' "$UN_KEY" | sha256sum | cut -c1-8))"
+      if [ -n "$UN_KEY" ]; then log "API Key ok (len=${#UN_KEY} sha8=$(printf '%s' "$UN_KEY" | sha256sum | cut -c1-8))"; fi
       exit 0
     fi
     sleep 3

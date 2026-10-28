@@ -82,6 +82,50 @@ station_runtime:
   - ops/lm-download/lm_jobs_inspect.py
   - ops/lm-download/lm_jobs_clean.py
 
+# 站上 shell **严格模式**（review-p2-big #5，2026-10-28）：真值 = 本段；判据 = `rpc_check` 的 `shell-strict`。
+#   exec = 可直接执行/被 systemd 调起的件 ⇒ 必须 `set -euo pipefail`（**逐字**，前 20 行首条非注释行）。
+#   libs = 被 `source` 的共享库 ⇒ **不得**出现任何 `set +-...`（库改调用方选项 = 跨层副作用）。
+#   allow = 执行件的显式豁免；每条必须写 why；⚠ 文件若已变严格 ⇒ 该条**必须删除**（门禁报"豁免未命中"）。
+shell_strict:
+  exec:
+    - ops/rpc-nodes
+    - ops/station-bin/infer-load
+    - ops/station-bin/infer-unload
+    - ops/station-bin/infer-list
+    - ops/station-bin/llama-serve-instance
+    - ops/station-bin/rpc-serve-instance
+    - ops/station-bin/load-mem-gate
+    - ops/station-bin/wait-gtt-release
+    - ops/station-bin/conf-get
+    - ops/station-bin/cluster-watchdog
+    - ops/station-bin/ocrun
+    - ops/station-bin/backup-memories.sh
+  libs:
+    - ops/station-bin/model-locate.sh
+    - ops/station-bin/conf-lib.sh
+  allow:
+    - file: ops/station-bin/load-gate
+      why: "报告型门禁：四条规则必须全部跑完再给 [ABORT]/[WARN]/[OK]，abort 会丢结论；取数函数在逻辑或列表中被调用 ⇒ -e 本就不生效（SC2310），保留 set +e 是显式化，不是疏漏"
+
+# `station-bin` 布局（review-p2-big #8A）：根目录只放 部署件 / 入口运行时件 / 在跑夹具。
+#   一次性 `_*` 探针 → `probes_dir`；根目录 `_*` 只允许 `root_keep`（9 项，逐条有角色）。
+#   ⚠ 迁移纪律：`git mv` 不改内容；登记 `frozen_ops_scripts` 同步删除（只减不增）。
+station_bin_layout:
+  probes_dir: archive/station-bin-probes
+  root_keep:
+    # 运行时件：agent-cli 上传到站上执行（station_runtime）
+    - _station_ready.sh
+    - _slot_gate.sh
+    - _oc_session_meta.sh
+    # 在跑夹具：CHECKS 直接执行（ps1-golden / ps1-runstamp / scrubber 覆盖）
+    - _fm_golden_test.ps1
+    - _probe_fallback.ps1
+    - _runstamp_hammer.ps1
+    - _scrubber_coverage_test.ps1
+    # 被黄金夹具 AST 读取的对象
+    - _switch_qwen_flavor.ps1
+    - _switch_qwen_flavor.sh
+
 # 历史一次性脚本: **只减不增**; 迁进统一入口后请从本表删除 (删减是受欢迎的方向)
 frozen_ops_scripts:
   # 2026-09-26 (O-85): ID 站点普查 —— 口径的**唯一实现**。**为何不能并入入口**（ADR-0004 要求写明理由）:
@@ -123,166 +167,12 @@ frozen_ops_scripts:
   - ops/lm-download/speedtest_asset.sh
   - ops/lm-download/speedtest_codeload.sh
   - ops/lm-download/speedtest_mirrors.sh
-  - ops/station-bin/_aag.sh
-  - ops/station-bin/_abench.sh
-  - ops/station-bin/_achk.sh
-  - ops/station-bin/_acld180.sh
-  - ops/station-bin/_acld8080.sh
-  - ops/station-bin/_acldbg.sh
-  - ops/station-bin/_acldclean.sh
-  - ops/station-bin/_acldcurr.sh
-  - ops/station-bin/_aclddefault.sh
-  - ops/station-bin/_acldhelp.sh
-  - ops/station-bin/_acldlist.sh
-  - ops/station-bin/_acldlong.sh
-  - ops/station-bin/_acldmodel.sh
-  - ops/station-bin/_acldopt.sh
-  - ops/station-bin/_acldsrc.sh
-  - ops/station-bin/_acldstable.sh
-  - ops/station-bin/_acldverify.sh
-  - ops/station-bin/_aconfig.sh
-  - ops/station-bin/_actx.sh
-  - ops/station-bin/_aest.sh
-  - ops/station-bin/_af16.sh
-  - ops/station-bin/_afinal.sh
-  - ops/station-bin/_agen2.sh
-  - ops/station-bin/_ahealth.sh
-  - ops/station-bin/_aic.sh
-  - ops/station-bin/_ainferload.sh
-  - ops/station-bin/_airs.sh
-  - ops/station-bin/_akill.sh
-  - ops/station-bin/_akvq.sh
-  - ops/station-bin/_akvqchk.sh
-  - ops/station-bin/_akvqread.sh
-  - ops/station-bin/_akvqtest.sh
-  - ops/station-bin/_amem.sh
-  - ops/station-bin/_aocdebug.sh
-  - ops/station-bin/_aoclocal.sh
-  - ops/station-bin/_aocverify.sh
-  - ops/station-bin/_aoe8080run.sh
-  - ops/station-bin/_aopen.sh
-  - ops/station-bin/_aopen2.sh
-  - ops/station-bin/_apost.sh
-  - ops/station-bin/_apre.sh
-  - ops/station-bin/_aprobe.sh
-  - ops/station-bin/_arade.sh
-  - ops/station-bin/_areason.sh
-  - ops/station-bin/_areq.sh
-  - ops/station-bin/_arestore.sh
-  - ops/station-bin/_astate.sh
-  - ops/station-bin/_asynccli2.sh
-  - ops/station-bin/_asynccli3.sh
-  - ops/station-bin/_asynccli4.sh
-  - ops/station-bin/_asynccli5.sh
-  - ops/station-bin/_asynccli6.sh
-  - ops/station-bin/_asyncld1.sh
-  - ops/station-bin/_averify.sh
-  - ops/station-bin/_averify2.sh
-  - ops/station-bin/_b120bstate.sh
-  - ops/station-bin/_b20bchk.sh
-  - ops/station-bin/_bcfg.sh
-  - ops/station-bin/_bclean.sh
-  - ops/station-bin/_bconf.sh
-  - ops/station-bin/_bdump.sh
-  - ops/station-bin/_bdump2.sh
-  - ops/station-bin/_bench_ab.sh
-  - ops/station-bin/_bfulltest.sh
-  - ops/station-bin/_binferlist.sh
-  - ops/station-bin/_binstall.sh
-  - ops/station-bin/_binstall2.sh
-  - ops/station-bin/_bkvq.sh
-  - ops/station-bin/_bkvqread.sh
-  - ops/station-bin/_bkvqtest.sh
-  - ops/station-bin/_bload.sh
-  - ops/station-bin/_bload120b.sh
-  - ops/station-bin/_bloadmgmt.sh
-  - ops/station-bin/_bloadtail.sh
-  - ops/station-bin/_bmodel.sh
-  - ops/station-bin/_bocdbg.sh
-  - ops/station-bin/_bocdbg2.sh
-  - ops/station-bin/_bocfull.sh
-  - ops/station-bin/_bocparse.sh
-  - ops/station-bin/_bocpure.sh
-  - ops/station-bin/_bocreq.sh
-  - ops/station-bin/_bocverify.sh
-  - ops/station-bin/_bperm.sh
-  - ops/station-bin/_bprobe.sh
-  - ops/station-bin/_brespchk.sh
-  - ops/station-bin/_brestart.sh
-  - ops/station-bin/_bs1.py
-  - ops/station-bin/_bs1.sh
-  - ops/station-bin/_bs1_iso.py
-  - ops/station-bin/_bs6.sh
-  - ops/station-bin/_bsprobe.sh
-  - ops/station-bin/_bsrvlog.sh
-  - ops/station-bin/_bsum.sh
-  - ops/station-bin/_btest.sh
-  - ops/station-bin/_btestload.sh
-  - ops/station-bin/_bump_run.sh
-  - ops/station-bin/_bunload.sh
-  - ops/station-bin/_bunloadtest.sh
-  - ops/station-bin/_bunsloth.sh
-  - ops/station-bin/_c2_verify.py
-  - ops/station-bin/_chkA.sh
-  - ops/station-bin/_chkN.sh
-  - ops/station-bin/_complexity_route_test.ps1
-  - ops/station-bin/_connAB.sh
-  - ops/station-bin/_copyn.sh
-  - ops/station-bin/_cpp_astatus.sh
-  - ops/station-bin/_cpp_gitinit.sh
-  - ops/station-bin/_cpp_gitinit2.sh
-  - ops/station-bin/_cpp_precheck.sh
-  - ops/station-bin/_cpp_venv_provision.sh
-  - ops/station-bin/_cpp_zhcheck.sh
-  - ops/station-bin/_ctx_overflow_probe.py
-  - ops/station-bin/_davidau_adopt.sh
-  - ops/station-bin/_davidau_download.sh
-  - ops/station-bin/_davidau_probe.sh
-  - ops/station-bin/_davidau_sha.sh
-  - ops/station-bin/_davidau_start.sh
-  - ops/station-bin/_env_openrouter.ps1
   - ops/station-bin/_fm_golden_test.ps1
-  - ops/station-bin/_mema.sh
-  - ops/station-bin/_o09_probe.py
-  - ops/station-bin/_o17_rwlock_probe.sh
   # 2026-09-22: 原在**仓库根** `_o26_reverify_loader.ps1`（O-11 L2 薄加载器工装）—— 根级脚本不在
   #   `scripts` 门禁治理圈 ⇒ 与卡片/附件**互为引用的活体**却无人看管。按决策简报分类处置：整组迁入
   #   受治理位置（卡片→spec/d6-agent-standard/test-cards/、附件→ops/station-bin/attach-test/），
   #   并把硬编码绝对路径改为由脚本位置推算仓库根。
-  - ops/station-bin/_o26_reverify_loader.ps1
-  - ops/station-bin/_opencode_bump.py
-  - ops/station-bin/_probeN_A.sh
-  - ops/station-bin/_probeN_B.sh
-  - ops/station-bin/_probe_arch.sh
-  - ops/station-bin/_probe_ctx3.sh
   - ops/station-bin/_probe_fallback.ps1
-  - ops/station-bin/_probe_glm2.sh
-  - ops/station-bin/_probe_glm_A.sh
-  - ops/station-bin/_probe_glm_arch_A.sh
-  - ops/station-bin/_probe_glm_env.sh
-  - ops/station-bin/_probe_glm_files.sh
-  - ops/station-bin/_probe_glm_relocate.sh
-  - ops/station-bin/_probe_opencode_provider.sh
-  - ops/station-bin/_zen_pty_pilot.sh
-  - ops/station-bin/_zen_stability_sample.sh
-  - ops/station-bin/_qwen27_build.sh
-  - ops/station-bin/_qwen27_download.sh
-  - ops/station-bin/_qwen27_enginecheck.sh
-  - ops/station-bin/_qwen27_full.sh
-  - ops/station-bin/_qwen27_mtp_chk.sh
-  - ops/station-bin/_qwen27_mtpcheck.sh
-  - ops/station-bin/_qwen27_mtpflag.sh
-  - ops/station-bin/_qwen27_probe.sh
-  - ops/station-bin/_qwen27_regverify.sh
-  - ops/station-bin/_qwen27_resume.sh
-  - ops/station-bin/_qwen27_serve.sh
-  - ops/station-bin/_qwen27_sha.sh
-  - ops/station-bin/_qwen27_stalecheck.sh
-  - ops/station-bin/_qwen27_test.sh
-  - ops/station-bin/_qwen27_verifybuild.sh
-  - ops/station-bin/_r_sympy_provision.sh
-  - ops/station-bin/_reload_ctx.sh
-  - ops/station-bin/_runA.sh
   # 2026-09-25 (O-63): ts **取号**的跨进程并发夹具。**为何不能并入入口** (ADR-0004 要求写明理由):
   #   它判的正是"**独立进程**同时抢占同一 ts" —— 必须 `Start-Process` 起 N 个**真进程** + 共同释放时刻
   #   屏障, 才能复现 OS 级竞态; 同一 Python 进程内的子命令**物理上不可能**制造出这个竞态 ⇒ 归 ③ 类。
@@ -291,15 +181,6 @@ frozen_ops_scripts:
   - ops/station-bin/_scrubber_coverage_test.ps1
   - ops/station-bin/_switch_qwen_flavor.ps1
   - ops/station-bin/_switch_qwen_flavor.sh
-  - ops/station-bin/_tmp_parse_check.ps1
-  - ops/station-bin/_tmp_verify_heredoc.ps1
-  - ops/station-bin/_vgpu.sh
-  - ops/station-bin/_vgver.sh
-  - ops/station-bin/_vklead.sh
-  - ops/station-bin/_vllcpp.sh
-  - ops/station-bin/_vllcpp2.sh
-  - ops/station-bin/_vllcpp3.sh
-  - ops/station-bin/_vllcpp4.sh
   - ops/station-bin/a5-nextday-verify.sh
   - ops/station-bin/agent-cli-smoke.sh
   - ops/station-bin/ars-migrate-verify.sh

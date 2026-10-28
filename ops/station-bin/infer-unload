@@ -1,6 +1,6 @@
 #!/bin/bash
 # infer-unload — 停两站全部推理实例 (systemd llama + vllm + unsloth + ds4) + RPC worker, 等 GTT 释放
-set -uo pipefail
+set -euo pipefail
 log() { echo "[infer-unload] $(date '+%H:%M:%S') $*"; }
 log "停 B 站 llama-server@*..."
 sudo systemctl stop 'llama-server@*' 2>/dev/null || true
@@ -41,14 +41,14 @@ sudo systemctl stop 'rpc-server@*' 2>/dev/null || true
 #    **不能**因此报 WARN —— 那会让常规 unload 看起来像出错。
 NODES_ENV_F="${NODES_ENV:-/etc/llama-instances/nodes.env}"
 RPC_WAS_ACTIVE=""
-[ "$LOCAL_RPC_WAS" = "active" ] && RPC_WAS_ACTIVE="本站"
+if [ "$LOCAL_RPC_WAS" = "active" ]; then RPC_WAS_ACTIVE="本站"; fi
 if [ -f "$NODES_ENV_F" ]; then
   NODES_LIST="$("${RPC_NODES_BIN:-/usr/local/bin/rpc-nodes}" --all 2>/dev/null || true)"
-  [ -z "$NODES_LIST" ] && log "WARN: 有 ${NODES_ENV_F} 但取不到节点清单 (rpc-nodes --all 失败)"
+  if [ -z "$NODES_LIST" ]; then log "WARN: 有 ${NODES_ENV_F} 但取不到节点清单 (rpc-nodes --all 失败)"; fi
   for node in $NODES_LIST; do
     ip="${node%%:*}"
     log "停远端 worker ${node} 的 rpc-server@*..."
-    was=$("${SSHX[@]}" "$ip" "systemctl list-units 'rpc-server@*' --state=active --no-legend 2>/dev/null | grep -q . && echo active || echo inactive; sudo systemctl stop 'rpc-server@*' 2>/dev/null" 2>/dev/null | head -1)
+    was=$("${SSHX[@]}" "$ip" "systemctl list-units 'rpc-server@*' --state=active --no-legend 2>/dev/null | grep -q . && echo active || echo inactive; sudo systemctl stop 'rpc-server@*' 2>/dev/null" 2>/dev/null | head -1 || true)
     # 本机 IP 会自 ssh 失败 (见上 ①) —— 那不算错误, 已由本地分支处理
     if [ "$was" = "active" ]; then RPC_WAS_ACTIVE="$RPC_WAS_ACTIVE ${node}"
     elif [ -z "$was" ]; then log "WARN: ${ip} 不可达 —— 该 worker 是否仍在跑**无法确认** (不假装已停)"; fi
@@ -59,17 +59,17 @@ fi
 
 wait_gtt() {  # $1=tag, $2=ip (缺省=本站)
   for i in $(seq 1 90); do
-    if [ -n "$2" ]; then used=$("${SSHX[@]}" "$2" "cat /sys/class/drm/card*/device/mem_info_gtt_used 2>/dev/null | head -1")
-    else used=$(cat /sys/class/drm/card*/device/mem_info_gtt_used 2>/dev/null | head -1); fi
-    [ -z "$used" ] && used=0
-    [ "$used" -lt 2000000000 ] && { log "$1 GTT released (${used}B)"; return 0; }
+    if [ -n "$2" ]; then used=$("${SSHX[@]}" "$2" "cat /sys/class/drm/card*/device/mem_info_gtt_used 2>/dev/null | head -1" || true)
+    else used=$(cat /sys/class/drm/card*/device/mem_info_gtt_used 2>/dev/null | head -1 || true); fi
+    if [ -z "$used" ]; then used=0; fi
+    if [ "$used" -lt 2000000000 ]; then log "$1 GTT released (${used}B)"; return 0; fi
     sleep 2
   done
   log "WARN: $1 GTT 未完全释放"
 }
 wait_gtt "本站" ""
 for tag in $RPC_WAS_ACTIVE; do
-  [ "$tag" = "本站" ] && continue
+  if [ "$tag" = "本站" ]; then continue; fi
   wait_gtt "RPC ${tag}" "${tag%%:*}"
 done
 log "UNLOADED ✓ (两站内存回收)"

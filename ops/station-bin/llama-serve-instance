@@ -3,7 +3,7 @@
 # systemd EnvironmentFile 无法表达条件参数 (RPC 有无), 故用 wrapper
 # B5q-1: RPC_TARGET 哨兵语义 — auto=运行时调 rpc-nodes 展开; 空=单机(现行语义不变); 显式值原样
 # 测试缝隙: CONF_DIR / LLAMA_SERVER_BIN (tests/b5q/test_rpc_target.sh)
-set -u
+set -euo pipefail
 ALIAS="$1"
 CONF="${CONF_DIR:-/etc/llama-instances}/${ALIAS}.env"
 [ -f "$CONF" ] || { echo "FATAL: conf missing: $CONF"; exit 1; }
@@ -26,7 +26,7 @@ fi
 # B5q-1 哨兵: auto → rpc-nodes 存活列表 (无存活节点回退单机并告警)
 if [ "${RPC_TARGET:-}" = "auto" ]; then
   RPC_TARGET="$(rpc-nodes 2>/dev/null || true)"
-  [ -z "$RPC_TARGET" ] && echo "[warn] rpc-nodes 无存活节点, 回退单机" >&2
+  if [ -z "$RPC_TARGET" ]; then echo "[warn] rpc-nodes 无存活节点, 回退单机" >&2; fi
 fi
 
 RPC_ARGS=""
@@ -34,7 +34,7 @@ if [ -n "${RPC_TARGET:-}" ]; then
   # 等 RPC server 就绪 (A 站 rpc-server@<alias> 可能仍在启动)
   HOST_P="${RPC_TARGET%%:*}"; PORT_P="${RPC_TARGET##*:}"
   for i in $(seq 1 90); do
-    (exec 3<>"/dev/tcp/${HOST_P}/${PORT_P}") 2>/dev/null && { exec 3>&- 3<&-; break; }
+    if (exec 3<>"/dev/tcp/${HOST_P}/${PORT_P}") 2>/dev/null; then exec 3>&- 3<&-; break; fi
     echo "[wait-rpc] ${RPC_TARGET} not ready (${i})..."
     sleep 2
   done
@@ -46,7 +46,7 @@ fi
 #   而 `-ngl 999` 恰是 9/8 V4-Flash 单机全量持有 → kernel panic 事故里被点名的形态。
 #   ⇒ 缺省**不传**(回归引擎 auto), 需要钉死时在实例 conf 写 `N_GPU_LAYERS=<N>`。
 NGL_ARGS=""
-[ -n "${N_GPU_LAYERS:-}" ] && NGL_ARGS="-ngl ${N_GPU_LAYERS}"
+if [ -n "${N_GPU_LAYERS:-}" ]; then NGL_ARGS="-ngl ${N_GPU_LAYERS}"; fi
 # EXTRA_FLAGS 有意不加引号 (word-split 展开)
 # --host 绑定 (2026-10-03): 原为硬编码 `0.0.0.0` —— 那是旧双机/网关时代的默认,
 #   而本仓规范已定目标值: 「`--host 0.0.0.0` → 可跨机访问（**D6 不跨机, 现状保留 `127.0.0.1`**）」

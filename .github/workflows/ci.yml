@@ -48,6 +48,9 @@ jobs:
             ops/station-bin/load-gate \
             ops/station-bin/load-mem-gate \
             ops/station-bin/wait-gtt-release \
+            ops/station-bin/cluster-watchdog \
+            ops/station-bin/ocrun \
+            ops/station-bin/backup-memories.sh \
             ops/station-bin/model-locate.sh \
             ops/station-bin/conf-lib.sh \
             ops/station-bin/conf-get

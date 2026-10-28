@@ -45,6 +45,7 @@
 | [2026-10-27_GLM1M_Qwen1M_启动与cc-switch接入.md](2026-10-27_GLM1M_Qwen1M_启动与cc-switch接入.md) | **H 类 执行记录**（A+B GLM-5.3-Flash **1M** + C halogen qwen3.8-flash-next **1M** 启动；`N_CPU_MOE=8` 解决 worker Vulkan device lost；cc-switch 4 provider + 18081/18082 SSH 隧道 + 用户启动脚本；**§6 层切分不均优化方案**（`--tensor-split` / `N_CPU_MOE` / q4 取舍）；**§9 DS4 1M 追加测试**（A 110.6G / B 84.0G，gates +6G）；含回退手册） |
 | [2026-10-27_P1四条修复实施记录.md](2026-10-27_P1四条修复实施记录.md) | **H 类 执行记录**（原始评审 P1 四条 TDD 实施：#10 Web token 常量时间/引导 Cookie/日志脱敏 · #4 conf 引号转义与原子写 · #3 模型定位共享库 · #7 ds4 `--pp-listen` 安全默认；含先验红→后验绿、三站部署 md5、`py-tests 59/59`、回滚） |
 | [research/2026-10-27_原始评审P2小批次_社区外部锚点调研.md](research/2026-10-27_原始评审P2小批次_社区外部锚点调研.md) | **H 类 调研**（P2 小批次 #6 遗留 systemd 段位 / #9 活跃运行时身份收敛 / CI；含站上活单元实测、systemd `User=`/`%u` 锚点、GitHub Actions runner 预装事实、最小契约与先验红；#5/#8 明确另立） |
+| [research/2026-10-28_原始评审P2大项_社区外部锚点调研.md](research/2026-10-28_原始评审P2大项_社区外部锚点调研.md) | **H 类 调研**（P2 大项 #5 `set -euo` / #8 拆文件与 station-bin 分层：11 个执行件 prologue 实测、195 个 .sh 的 7.7% 覆盖率、三文件行数与 180 符号/43 测试/55 文档行号依赖面、173 个 `_` 件的引用普查；含 BashFAQ/105、SC2310/2311、FHS libexec 锚点与分期结论） |
 | DEV-LOG-* | F 类 DevLog |
 | 三机推理集群使用手册.md（2026-09-09 由"双机推理集群使用手册.md"改名）/ 分布式推理.md / SSH_OPENCODE_SETUP.md 等 | F 类手册/运维文档 |
 

@@ -1,6 +1,7 @@
 #!/bin/bash
 # load-mem-gate <需要GB> — 加载模型前调用: MemAvailable 不足则等待/拒绝
 # 返回 0=可加载, 1=超时拒绝; 单位: AVAIL 为 MB, 显示时 /1024 为 G
+set -euo pipefail
 NEED_MB=$(( ${1:?用法: load-mem-gate <需要GB>} * 1024 ))
 SAFETY_MB=$(( 12 * 1024 ))
 WAITED=0

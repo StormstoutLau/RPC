@@ -5,6 +5,7 @@
 # 边界: 不自动拉起模型(零自加载); 对端故障不远程处置(M3/M4 冻结域外无处置能力)
 # 维护: 先改仓库 ops/station-bin/ 再同步上站 (station-bin 约定)
 # 差异: 两站仅下行 PEER 不同 — A 站=192.168.10.32, B 站=192.168.10.33 (管理 LAN)
+set -euo pipefail
 
 PEER="${PEER:-192.168.10.33}"            # 缺省 B 站(peer A)；A 站部署改 PEER=192.168.10.32
 SERVICE_USER="${SERVICE_USER:-scott-lau}"
@@ -32,11 +33,11 @@ inst_port() {
   alias="${svc#llama-server@}"
   alias="${alias%.service}"                 # systemctl 单元名带 .service, env 名裸别名
   e="/etc/llama-instances/${alias}.env"
-  p=$(grep -E '^PORT=[0-9]' "$e" 2>/dev/null | head -1 | cut -d= -f2 | tr -d '"')
+  p=$(grep -E '^PORT=[0-9]' "$e" 2>/dev/null | head -1 | cut -d= -f2 | tr -d '"' || true)
   [ -n "$p" ] && echo "$p" || echo 8080
 }
 
-ACTIVE=$(systemctl list-units 'llama-server@*' --state=active --no-legend 2>/dev/null | awk '{print $1}' | head -1)
+ACTIVE=$(systemctl list-units 'llama-server@*' --state=active --no-legend 2>/dev/null | awk '{print $1}' | head -1 || true)
 LOADING=$(pgrep -f 'infer-load|infer-unload|load-mem-gate' >/dev/null 2>&1 && echo yes || echo no)
 
 # ── 探测 1: 本机服务冻结 (M2, 处置) ────────────────────
@@ -50,7 +51,7 @@ else
     save_ctr fail.local 0
   else
     n=$(($(load_ctr fail.local)+1)); save_ctr fail.local "$n"
-    [ "$n" -ge "$WARN_AFTER" ] && log "WARN: 本机服务无响应 x${n} ($ACTIVE) [M2]"
+    if [ "$n" -ge "$WARN_AFTER" ]; then log "WARN: 本机服务无响应 x${n} ($ACTIVE) [M2]"; fi
     if [ "$n" -ge "$ACT_AFTER" ]; then
       if systemctl is-active --quiet "$ACTIVE" 2>/dev/null; then
         log "ACT: restart $ACTIVE [M2 处置]"
@@ -63,14 +64,17 @@ fi
 
 # ── 探测 2: 本机 GTT 残留 (M5, 只告警) ────────────────
 if [ -z "$ACTIVE" ]; then
-  used=$(cat /sys/class/drm/card*/device/mem_info_gtt_used 2>/dev/null | head -1)
+  used=$(cat /sys/class/drm/card*/device/mem_info_gtt_used 2>/dev/null | head -1 || true)
   if [ -n "$used" ] && [ "$used" -gt "$GTT_WARN_BYTES" ]; then
     log "WARN: GTT 残留 $((used/1024/1024/1024))G (无 active 实例) [M5: LM Studio GUI 或孤儿进程?]"
   fi
 fi
 
 # ── 探测 3: 对端三态 (M3/M4 通知, 不处置) ──────────────
-PEER_STATE=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$PEER_USER@$PEER" '
+# ⚠ 远端脚本用**引用型 heredoc**（`<<'PEER_EOF'`）：此前是单引号串里又写 `awk '{print $1}'`，
+#   外层引号被内层 `'` 提前闭合 ⇒ `$1` 在**本地**展开（2026-10-28 开 `-u` 后当场暴露
+#   `行 84: $1: 未绑定的变量`；此前只是静默把它展成空串、远端 awk 少一个字段）。
+PEER_STATE=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$PEER_USER@$PEER" bash -s <<'PEER_EOF'
   A=$(systemctl list-units "llama-server@*" --state=active --no-legend 2>/dev/null | awk '{print $1}' | head -1)
   if [ -z "$A" ]; then
     echo IDLE
@@ -80,7 +84,9 @@ PEER_STATE=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$PEER_USER@$PEER" '
     HP=$(grep -aE "^PORT=[0-9]" "$E" 2>/dev/null | head -1 | cut -d= -f2 | tr -d "\"")
     HP=${HP:-8080}
     if curl -sf -m 8 "http://127.0.0.1:${HP}/health" >/dev/null 2>&1; then echo OK; else echo FROZEN; fi
-  fi' 2>/dev/null)
+  fi
+PEER_EOF
+) || true
 
 case "$PEER_STATE" in
   OK|IDLE)
@@ -89,5 +95,5 @@ case "$PEER_STATE" in
     log "WARN: 对端 $PEER 服务冻结 (SSH OK + health 挂) — 对端本机看门狗自治 [对端 M2]" ;;
   *)
     n=$(($(load_ctr fail.peer)+1)); save_ctr fail.peer "$n"
-    [ "$n" -ge "$WARN_AFTER" ] && log "WARN: 对端 $PEER 主机失联 x${n} [M3/M4] — 若 A 站: 遗言见 B:/var/log/netconsole-a.log" ;;
+    if [ "$n" -ge "$WARN_AFTER" ]; then log "WARN: 对端 $PEER 主机失联 x${n} [M3/M4] — 若 A 站: 遗言见 B:/var/log/netconsole-a.log"; fi ;;
 esac

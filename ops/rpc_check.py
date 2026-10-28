@@ -6956,6 +6956,206 @@ def check_inbox(ctx):
     return ("FAIL" if n_bad else "PASS"), note, bad
 
 
+# ── review-p2-big（2026-10-28）：站上 shell 严格模式 + station-bin 布局 ──────────
+# 两项都是"契约登记在 inventory/ops.yaml、判据在本函数"的形态：门禁与单测读**同一份**真值，
+# 避免第二份清单（本仓头号失败形态）。详见 spec/review-p2-big/DESIGN.md §4.1-§4.3。
+SHELL_STRICT_KEY = "shell_strict"
+STATION_LAYOUT_KEY = "station_bin_layout"
+SHELL_STRICT_PROLOGUE = "set -euo pipefail"
+SHELL_STRICT_SCAN_LINES = 20
+STATION_PROBE_GLOB = re.compile(r"^ops/station-bin/_[^/]+$")
+
+
+def _load_ops_inv():
+    """读 `inventory/ops.yaml`；不可读/缺 pyyaml 返回 None（调用方判 FAIL，不静默放行）。"""
+    try:
+        import yaml
+    except Exception:                                        # noqa: BLE001
+        return None
+    try:
+        return yaml.safe_load(OPS_INV.read_text(encoding="utf-8")) or {}
+    except Exception:                                        # noqa: BLE001
+        return None
+
+
+def _shell_prologue(text):
+    """前 N 行里**第一条**非注释、非空行（即 prologue 的判据位）。"""
+    for ln in (text or "").splitlines()[:SHELL_STRICT_SCAN_LINES]:
+        s = ln.strip()
+        if not s or s.startswith("#"):
+            continue
+        return s
+    return ""
+
+
+def _lib_set_line(text):
+    """库里第一条 `set +-...` 行（含函数内）；空 = 合规。"""
+    for ln in (text or "").splitlines():
+        s = ln.strip()
+        if not s or s.startswith("#"):
+            continue
+        if re.match(r"^set\s+[+-]", s):
+            return s
+    return ""
+
+
+def validate_shell_strict(doc, read_text):
+    """纯函数：`shell_strict` 段自洽 + 13 执行件 prologue + 2 库无 set + 豁免命中。
+
+    `read_text(rel)` 返回文本或 None（文件不存在）。空 problems = PASS。
+    """
+    bad, notes = [], []
+    if not isinstance(doc, dict):
+        return ["缺 `shell_strict` 段（或不是映射）"], notes
+
+    execs = doc.get("exec")
+    libs = doc.get("libs")
+    allow = doc.get("allow") or []
+    if not isinstance(execs, list) or not execs:
+        bad.append("`shell_strict.exec` 为空或不是列表")
+        execs = []
+    if not isinstance(libs, list):
+        bad.append("`shell_strict.libs` 不是列表")
+        libs = []
+    if not isinstance(allow, list):
+        bad.append("`shell_strict.allow` 不是列表")
+        allow = []
+    execs = [str(x).strip() for x in execs if str(x).strip()]
+    libs = [str(x).strip() for x in libs if str(x).strip()]
+
+    dup = sorted({p for p in execs if execs.count(p) > 1})
+    if dup:
+        bad.append(f"exec 内重复: {dup}")
+    overlap = sorted(set(execs) & set(libs))
+    if overlap:
+        bad.append(f"同一文件同时列入 exec 与 libs（双列）: {overlap}")
+
+    strict_n = 0
+    for rel in execs:
+        text = read_text(rel)
+        if text is None:
+            bad.append(f"执行件不存在: {rel}")
+            continue
+        pro = _shell_prologue(text)
+        if pro != SHELL_STRICT_PROLOGUE:
+            bad.append(f"prologue 不是 `{SHELL_STRICT_PROLOGUE}`: {rel}（实测 `{pro}`）")
+        else:
+            strict_n += 1
+
+    for rel in libs:
+        text = read_text(rel)
+        if text is None:
+            bad.append(f"库不存在: {rel}")
+            continue
+        line = _lib_set_line(text)
+        if line:
+            bad.append(f"库不得改调用方 shell 选项: {rel}（实测 `{line}`）")
+
+    for i, a in enumerate(allow):
+        if not isinstance(a, dict):
+            bad.append(f"allow[{i}] 不是映射")
+            continue
+        f = str(a.get("file") or "").strip()
+        why = str(a.get("why") or "").strip()
+        if not f:
+            bad.append(f"allow[{i}] 缺 `file`")
+            continue
+        if not why:
+            bad.append(f"allow[{i}] 缺 `why`: {f}")
+        if f in execs:
+            bad.append(f"豁免与 exec 重叠（同一文件既要求严格又豁免）: {f}")
+            continue
+        text = read_text(f)
+        if text is None:
+            bad.append(f"豁免文件不存在: {f}")
+            continue
+        if _shell_prologue(text) == SHELL_STRICT_PROLOGUE:
+            bad.append(f"豁免未命中（文件已是严格模式）⇒ 删除该条: {f}")
+
+    notes.append(f"执行件 {len(execs)}（严格 {strict_n}）· 库 {len(libs)} · 豁免 {len(allow)}")
+    return bad, notes
+
+
+def check_shell_strict(ctx):
+    """review-p2-big #5：站上 shell 严格模式（真值 = `inventory/ops.yaml` 的 `shell_strict`）。"""
+    doc = _load_ops_inv()
+    if doc is None:
+        return "FAIL", "inventory/ops.yaml 不可读（本断言的登记依据）", []
+
+    def _read(rel):
+        p = ROOT / rel
+        return _read_text(p) if p.is_file() else None
+
+    bad, notes = validate_shell_strict(doc.get(SHELL_STRICT_KEY), _read)
+    return ("FAIL" if bad else "PASS"), " · ".join(notes), bad
+
+
+def validate_station_layout(doc, root_files, archive_files, frozen_paths):
+    """纯函数：根目录 `_*` ⊆ 白名单、归档非空、无同名复制、登记无根级探针残留。"""
+    bad, notes = [], []
+    if not isinstance(doc, dict):
+        return ["缺 `station_bin_layout` 段（或不是映射）"], notes
+
+    probes_dir = str(doc.get("probes_dir") or "").strip()
+    keep = doc.get("root_keep")
+    if not probes_dir:
+        bad.append("缺 `probes_dir`")
+    if not isinstance(keep, list) or not keep:
+        bad.append("`root_keep` 为空或不是列表")
+        keep = []
+    keep = {str(x).strip() for x in keep if str(x).strip()}
+
+    if probes_dir and not archive_files:
+        bad.append(f"归档目录为空或不存在: {probes_dir}")
+
+    stray = sorted(n for n in root_files if n.startswith("_") and n not in keep)
+    if stray:
+        bad.append(f"根目录有未登记的一次性件 {len(stray)} 个: {stray[:5]}")
+
+    missing = sorted(k for k in keep if k not in root_files)
+    if missing:
+        bad.append(f"root_keep 指向已不存在的文件（白名单腐化）: {missing}")
+
+    # 只对 `_*` 件判重名：README 等文档在根/归档各有一份是正常的（内容不同）。
+    dup = sorted(n for n in (set(root_files) & set(archive_files)) if n.startswith("_"))
+    if dup:
+        bad.append(f"根目录与归档目录同名（复制而非移动）: {dup[:5]}")
+
+    # 根级探针残留：白名单里的 9 个在跑件**允许**继续登记（它们不是探针，是夹具/运行时件）
+    residue = [p for p in frozen_paths
+               if STATION_PROBE_GLOB.match(p) and Path(p).name not in keep]
+    if residue:
+        bad.append(f"登记表残留根级探针 {len(residue)} 条: {residue[:5]}")
+
+    notes.append(f"根目录 `_*` {sum(1 for n in root_files if n.startswith('_'))} · "
+                 f"归档 {len(archive_files)} · 白名单 {len(keep)}")
+    return bad, notes
+
+
+def check_station_layout(ctx):
+    """review-p2-big #8A：`station-bin` 根目录只放部署件/运行时件/在跑夹具。
+
+    范围 = **git 跟踪文件**（`_iter_source_files`）—— 工作区里未跟踪的运行时残留
+    （如 `_dogfood_*.log`）不属于"仓库布局"，不参与判定。
+    """
+    doc = _load_ops_inv()
+    if doc is None:
+        return "FAIL", "inventory/ops.yaml 不可读（本断言的登记依据）", []
+    sec = doc.get(STATION_LAYOUT_KEY)
+    probes_dir = str((sec or {}).get("probes_dir") or "").strip() if isinstance(sec, dict) else ""
+    root_files, archive_files = [], []
+    for rel, _p in _iter_source_files():
+        if rel.startswith("ops/station-bin/") and rel.count("/") == 2:
+            root_files.append(Path(rel).name)
+        elif probes_dir and rel.startswith(probes_dir + "/"):
+            rest = rel[len(probes_dir) + 1:]
+            if "/" not in rest:
+                archive_files.append(rest)
+    frozen = [str(x) for x in (doc.get("frozen_ops_scripts") or [])]
+    bad, notes = validate_station_layout(sec, sorted(root_files), sorted(archive_files), frozen)
+    return ("FAIL" if bad else "PASS"), " · ".join(notes), bad
+
+
 # ── 断言清单 (加校验 = 在此加一条 + 写一个函数) ─────────────────────
 # fix 字段 = 该项失败/警告时的**处置建议** (健康引擎要求"红灯必须给出下一步", 而不是
 # 只报"哪里不对")。main() 在结论区按严重度打印。
@@ -9553,6 +9753,16 @@ CHECKS = [
     {"id": "scripts", "title": "脚本治理", "fn": check_scripts, "quick": True,
      "fix": "管理操作请走统一入口 (ops/cluster.py <sub> / web 卡片), 不要新增一次性脚本; "
             "确需独立脚本则在 inventory/ops.yaml 登记并在提交信息里说明理由 (ADR-0004)"},
+    {"id": "shell-strict", "title": "站上 shell 严格模式", "fn": check_shell_strict, "quick": True,
+     "fix": "review-p2-big #5：把 prologue 改成 `set -euo pipefail`，并给『业务上容忍失败』的命令补显式守卫"
+            "（逻辑或短路 / `if !` / 取值兜底）；被 `source` 的库不得改调用方选项；"
+            "确需豁免（如报告型门禁 `load-gate`）⇒ 在 `inventory/ops.yaml` 的 `shell_strict.allow` 登记 why。"
+            "⚠ 报『豁免未命中』= 该文件已变严格 ⇒ **删掉那条豁免**（防腐化）"},
+    {"id": "station-layout", "title": "station-bin 布局", "fn": check_station_layout, "quick": True,
+     "fix": "review-p2-big #8A：`ops/station-bin/` 根目录只放部署件 / 入口运行时件 / 在跑夹具；"
+            "一次性 `_*` 探针请 `git mv` 到 `archive/station-bin-probes/`（不改内容），并从 "
+            "`inventory/ops.yaml` 的 `frozen_ops_scripts` 删登记；确需在根目录新增 `_*` ⇒ 先改 "
+            "`station_bin_layout.root_keep` 并说明理由；⚠ 报『白名单腐化』= 该文件已不存在 ⇒ 删掉白名单项"},
     {"id": "deps", "title": "cluster 模块依赖方向", "fn": check_cluster_deps, "quick": True,
      "fix": "P2-1: ① 新 `ops/cluster_*.py` 模块 ⇒ 必须在 `inventory/ops.yaml` 的 `cluster_layers` 登记层次; "
             "② 模块级 import 成环 ⇒ 拆环，或把其中一条改成**函数内懒加载**（并登记 `cluster_lazy_allow`）; "

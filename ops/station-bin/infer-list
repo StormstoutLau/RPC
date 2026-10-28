@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # infer-list — 模型清单: alias / 位置 / 大小 / 建议后端 / CONF
 #
 # ── 2026-09-15 重写(修两处结构性问题) ──────────────────────────────
@@ -78,9 +79,9 @@ scan() {
   # 非 GGUF 权重 (vLLM AWQ 分片目录); 现役已无, 保留以识别历史引用
   for d in /data/models/*/; do
     case "$d" in */gguf/) continue ;; esac
-    ST=$(find -L "$d" -name '*.safetensors' 2>/dev/null | wc -l)
-    [ "$ST" -gt 0 ] && printf '%s|%s|%s|%s\n' "m27-awq" "$(basename "$d")" \
-                                              "$(du -m "$d" | cut -f1)" "$d"
+    ST=$(find -L "$d" -name '*.safetensors' 2>/dev/null | wc -l || true)
+    if [ "$ST" -gt 0 ]; then printf '%s|%s|%s|%s\n' "m27-awq" "$(basename "$d")" \
+                                              "$(du -m "$d" | cut -f1)" "$d"; fi
   done
 }
 
@@ -96,7 +97,7 @@ $(declare -f scan)
 scan"
   for addr in ${NODE[$1]}; do
     out=$(printf '%s\n' "$payload" | ssh -o BatchMode=yes -o ConnectTimeout=6 "$addr" bash -s)
-    [ -n "$out" ] && { printf '%s\n' "$out"; return 0; }
+    if [ -n "$out" ]; then printf '%s\n' "$out"; return 0; fi
   done
   return 1
 }
@@ -107,7 +108,7 @@ esac
 
 PEERS=("$@")
 if [ ${#PEERS[@]} -eq 0 ]; then
-  for s in "${ORDER[@]}"; do [ "$s" != "$SELF" ] && PEERS+=("$s"); done
+  for s in "${ORDER[@]}"; do if [ "$s" != "$SELF" ]; then PEERS+=("$s"); fi; done
 fi
 # 去重, 且**剔除本站** —— 本站的模型由本地 scan 覆盖; ssh 自己不仅多余, 还会因为
 # 自己的 host key 通常不在本站 known_hosts 里而报 "Host key verification failed",
@@ -115,19 +116,19 @@ fi
 declare -A _SEEN
 _UNIQ=()
 for p in "${PEERS[@]}"; do
-  [ -z "$p" ] && continue
-  [ "$p" = "$SELF" ] && continue
-  [ -n "${_SEEN[$p]:-}" ] && continue
+  if [ -z "$p" ]; then continue; fi
+  if [ "$p" = "$SELF" ]; then continue; fi
+  if [ -n "${_SEEN[$p]:-}" ]; then continue; fi
   _SEEN[$p]=1
   _UNIQ+=("$p")
 done
 PEERS=()
-[ ${#_UNIQ[@]} -gt 0 ] && PEERS=("${_UNIQ[@]}")
-[ "$SELF" = "?" ] && echo "[警告] 未能由 hostname 判定本站代号, 位置列不可信" >&2
+if [ ${#_UNIQ[@]} -gt 0 ]; then PEERS=("${_UNIQ[@]}"); fi
+if [ "$SELF" = "?" ]; then echo "[警告] 未能由 hostname 判定本站代号, 位置列不可信" >&2; fi
 
 # ── 采集 ────────────────────────────────────────────────────────
 SELF_LIST=""
-[ "$SELF" != "?" ] && SELF_LIST=$(scan)
+if [ "$SELF" != "?" ]; then SELF_LIST=$(scan); fi
 
 declare -A PEER_LIST
 FAILED=()
@@ -136,7 +137,7 @@ for p in "${PEERS[@]}"; do
     echo "[警告] 未知站代号 '$p' (可选: ${ORDER[*]})" >&2
     continue
   fi
-  out=$(peer_scan "$p")
+  out=$(peer_scan "$p" || true)
   if [ -z "$out" ]; then
     FAILED+=("$p")
   else
@@ -149,7 +150,7 @@ declare -A LOC SZPICK REPOPICK MAINPICK
 add() {   # $1=站代号  $2=清单
   local a repo sz f
   while IFS='|' read -r a repo sz f; do
-    [ -z "$a" ] && continue
+    if [ -z "$a" ]; then continue; fi
     case "${LOC[$a]:-}" in *"$1"*) ;; *) LOC["$a"]="${LOC[$a]:-}$1" ;; esac
     if [ -z "${SZPICK[$a]:-}" ]; then
       SZPICK["$a"]="$sz"; REPOPICK["$a"]="$repo"; MAINPICK["$a"]="$f"
@@ -163,7 +164,7 @@ for p in "${!PEER_LIST[@]}"; do add "$p" "${PEER_LIST[$p]}"; done
 printf "%-38s %-6s %-7s %-12s %s\n" "ALIAS" "位置" "大小" "建议后端" "CONF"
 printf "%-38s %-6s %-7s %-12s %s\n" "-----" "----" "----" "--------" "----"
 for a in $(printf '%s\n' "${!LOC[@]}" | sort); do
-  [ -z "$a" ] && continue
+  if [ -z "$a" ]; then continue; fi
   # <1024MB 显示 MB: 旧实现一律 sz/1024, 于是 embedding 这类小模型显示成 "0G"(误导)
   sz=${SZPICK[$a]:-0}
   if [ "$sz" -lt 1024 ]; then SIZE="${sz}M"; else SIZE="$(( sz / 1024 ))G"; fi

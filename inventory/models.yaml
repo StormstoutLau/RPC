@@ -162,7 +162,7 @@ models:
     stations: []
     conf: [B]
     note: |
-      有 conf 但模型库无条目。engine_id 由 ops/station-bin/_davidau_download.sh 的
+      有 conf 但模型库无条目。engine_id 由 archive/station-bin-probes/_davidau_download.sh 的
       repo 引用推定, **未经引擎实测确认** —— 标为待核实。
 
 # ── 非模型 conf (同目录, 但 infer-load 不用它) ──────────────────────

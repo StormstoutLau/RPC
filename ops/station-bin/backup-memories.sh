@@ -6,7 +6,7 @@
 #       轮换: 保留最近 7 份
 # 用法: bash backup-memories.sh   (建议纳入手动纪律: 每周或大变更前)
 # ============================================================================
-set -u
+set -euo pipefail
 TS=$(date +%Y%m%d-%H%M)
 DIR=~/backups
 TMP=/tmp/mem-backup-$TS
@@ -33,9 +33,9 @@ tar -czf "$DIR/memories-$TS.tar.gz" -C "$TMP" .
 ls -lh "$DIR/memories-$TS.tar.gz" | awk '{print "  " $5, $9}'
 
 echo '=== 4. 轮换 (保留最近 7 份):'
-ls -t "$DIR"/memories-*.tar.gz 2>/dev/null | tail -n +8 | xargs -r rm -v | sed 's/^/  删除: /'
+ls -t "$DIR"/memories-*.tar.gz 2>/dev/null | tail -n +8 | xargs -r rm -v | sed 's/^/  删除: /' || true
 echo '  现存备份:'
-ls -t "$DIR"/memories-*.tar.gz 2>/dev/null | head -7 | sed 's/^/    /'
+ls -t "$DIR"/memories-*.tar.gz 2>/dev/null | head -7 | sed 's/^/    /' || true
 
 rm -rf "$TMP"
 echo '=== 完成'

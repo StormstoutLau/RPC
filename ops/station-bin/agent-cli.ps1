@@ -470,7 +470,7 @@ function Invoke-StationReady {
         [string]$Alias
     )
     if (-not (Test-RemoteReach $HostName)) { throw "NETFAIL: station unreachable: $HostName" }
-    $local = 'D:\RPC\ops\station-bin\_station_ready.sh'
+    $local = Join-Path $Script:REPO_ROOT 'ops\station-bin\_station_ready.sh'
     $tmp = Join-Path $Script:TMP_ROOT '_station_ready.sh'
     New-Item -ItemType Directory -Path $Script:TMP_ROOT -Force | Out-Null
     Copy-Item $local $tmp -Force | Out-Null   # ⚠ 归零纪律: 本函数返回哈希表, 非返回值输出必须吸收(见 Invoke-RemoteScript 注)
@@ -514,7 +514,7 @@ function Invoke-SlotGate {
     if (-not (Test-RemoteReach $HostName)) { return $na }
     $tmp = Join-Path $Script:TMP_ROOT '_slot_gate.sh'
     New-Item -ItemType Directory -Path $Script:TMP_ROOT -Force | Out-Null
-    Copy-Item 'D:\RPC\ops\station-bin\_slot_gate.sh' $tmp -Force | Out-Null   # ⚠ 归零纪律(见 Invoke-RemoteScript 注)
+    Copy-Item (Join-Path $Script:REPO_ROOT 'ops\station-bin\_slot_gate.sh') $tmp -Force | Out-Null   # ⚠ 归零纪律(见 Invoke-RemoteScript 注)
     scp -q -o BatchMode=yes -o ConnectTimeout=10 $tmp "${HostName}:/tmp/_slot_gate.sh"
     if ($LASTEXITCODE -ne 0) { return $na }
     try {
@@ -3535,7 +3535,7 @@ exit `$FINAL_RC
     #   `usage.source=unavailable` 并告警 —— **绝不把 0 当作"用了 0 token"**。
     #   纪律: 遥测**不参与成败判定**(失败只告警, 不改 rc), 与 .meta/.progress 同属"站上原件"。
     try {
-        $localSm = 'D:\RPC\ops\station-bin\_oc_session_meta.sh'
+        $localSm = Join-Path $Script:REPO_ROOT 'ops\station-bin\_oc_session_meta.sh'
         $tmpSm = Join-Path $Script:TMP_ROOT '_oc_session_meta.sh'
         New-Item -ItemType Directory -Path $Script:TMP_ROOT -Force | Out-Null
         Copy-Item $localSm $tmpSm -Force | Out-Null
@@ -3775,7 +3775,7 @@ exit `$FINAL_RC
     # 8) ledger line FIRST (G13) -- fixed to sandbox-writable d:\RPC zone (O-04: projRoot not
     #     sandbox-safe). Run ledger before any agent-out write so a collect crash (startup-
     #     injected sandbox whitelist w/o D:\Paper\agent-out) never loses the run record.
-    $ledger = 'd:\RPC\ops\station-bin\agent-runs.log'
+    $ledger = Join-Path $Script:REPO_ROOT 'ops\station-bin\agent-runs.log'
     # 批B / 缺口6 (2026-09-18): 原为硬编码 `0,0` ⇒ 台账 queue_s/run_s **恒 0**, 与 run.json
     #   和 .meta 直接矛盾(已被 ADR-0007 阶段 0.5 夹具当场复现: 台账 `0,0` 而 .meta=QUEUE_S=2/RUN_S=19)。
     #   `$queue_s/$run_s` 在上方 meta 解析段(L1165-1183)已就绪; META_STALE 时二者已被主动归零,
@@ -5112,7 +5112,7 @@ mkdir -p "$stWorkDir/.attach/$nm2"
     $code = $rc
     if ($code -eq 9) { $code = 1 }   # 兼容: 9 仅本地语义保留, 原生 rc 走下面映射
     $finalCode = if ($rc -eq 0 -and $acceptOk -eq 1 -and $acceptGoldenOk -eq 1) { 0 } elseif ($rc -eq 6) { 6 } else { 1 }
-    $ledger = 'd:\RPC\ops\station-bin\agent-runs.log'
+    $ledger = Join-Path $Script:REPO_ROOT 'ops\station-bin\agent-runs.log'
     $line = "$ts,$proj,$execModel,$sens,$finalCode,0,$runS"
     if (-not (Add-LedgerLine -Path $ledger -Line $line -GuardSink $d7t)) { Write-Host "LEDGER_WARN: append failed after 10 retries (F-4)" }
 
