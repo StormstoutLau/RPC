@@ -17,7 +17,7 @@
 set -euo pipefail
 AWORK="$(id -un)@10.10.10.1"
 
-PREFIX=""; BACKEND=""; PORT=""; CTX=""; THREADS=""; CLI_ENGINE=""; CLI_RPC_TARGET=""; CLI_PP_LISTEN=""
+PREFIX=""; BACKEND=""; PORT=""; CTX=""; THREADS=""; CLI_ENGINE=""; CLI_RPC_TARGET=""; CLI_PP_LISTEN=""; KEEP=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --backend) BACKEND="$2"; shift 2 ;;
@@ -27,10 +27,11 @@ while [ $# -gt 0 ]; do
     --port) PORT="$2"; shift 2 ;;
     --ctx) CTX="$2"; shift 2 ;;
     --threads) THREADS="$2"; shift 2 ;;
+    --keep) KEEP=1; shift ;;         # O-179: 只停本别名, 保留同站其它模型
     *) PREFIX="$1"; shift ;;
   esac
 done
-[ -n "$PREFIX" ] || { echo "用法: infer-load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] [--engine <变体名|绝对路径>] [--rpc-target <ip:port>] [--pp-listen <ip>] [--port N]"; exit 1; }
+[ -n "$PREFIX" ] || { echo "用法: infer-load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] [--engine <变体名|绝对路径>] [--rpc-target <ip:port>] [--pp-listen <ip>] [--port N] [--keep]"; exit 1; }
 
 log() { echo "[infer-load] $(date '+%H:%M:%S') $*"; }
 
@@ -308,6 +309,20 @@ else
 fi
 
 # ---- [3] 互斥: 停另一后端 (systemd llama + vllm + unsloth + ds4) ----
+# ★ 2026-10-29（O-179）：`--keep` ⇒ **只停本别名**，同站其它模型保持不动。
+#   为什么必须在**这里**也做：`cluster.py load --keep` 只把回收收窄到同名别名，
+#   但本条一旦无条件执行，仍会把同站的 unsloth/llama 全杀 —— 实测（G1 首跑）：
+#   B 站的 gpt-oss-20b(unsloth) 就是被这一条干掉的，`--keep` 在站内被打回原形。
+#   unsloth / vllm / ds4 **没有 alias 归属** ⇒ keep 模式下不碰（与 infer-unload 同一纪律）。
+if [ -n "$KEEP" ]; then
+  log "停旧实例: --keep ⇒ 只停 llama-server@${ALIAS}（同站其它模型保持不动）"
+  sudo systemctl stop "llama-server@${ALIAS}" 2>/dev/null || true
+  for _i in $(seq 1 30); do
+    systemctl is-active --quiet "llama-server@${ALIAS}" 2>/dev/null || break
+    sleep 1
+  done
+  log "本别名已停（keep 模式跳过全站 GTT 等待：同站其它模型仍持显存）"
+else
 log "停旧实例 (llama/vllm/unsloth/ds4)..."
 sudo systemctl stop 'llama-server@*' 2>/dev/null || true
 # 清理 unsloth studio 进程 (命令行含 'unsloth studio run') 与底层 llama-server (防自匹配)
@@ -327,6 +342,7 @@ fi
 #     ⇒ '[d]s4 --role' 这个**连续子串**永不命中 (2026-09-28 首跑实测: 假阴性, 清理失效)。
 pkill -9 -f '[d]s4-server' 2>/dev/null || true
 pkill -9 -f '[d]s4 .*--role' 2>/dev/null || true
+fi   # ← --keep 分支到此结束（非 keep 才会走到上面的全量清扫）
 
 wait_gtt() {
   for i in $(seq 1 90); do
@@ -341,7 +357,11 @@ wait_gtt() {
   done
   log "WARN: $1 GTT 180s 未释放"
 }
-wait_gtt "B" ""
+if [ -n "$KEEP" ]; then
+  log "站点 GTT 等待跳过（keep: 同站其它模型本就占着显存, 等<2G 是必假阴性）"
+else
+  wait_gtt "B" ""
+fi
 if [ -n "${RPC_TARGET:-}" ]; then
   # ★ 2026-10-22: 等**本次实际 worker** 的 GTT，而非恒等 A —— 单 worker 指派到 C 时，
   #   等 A 是错的（C 上的旧引擎仍占着显存，rpc-server 会在加载中途 OOM）。

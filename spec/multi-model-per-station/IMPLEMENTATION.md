@@ -95,14 +95,18 @@ RESULT: ALL PASS                       # test_cluster_pure.py
 3. **容量门只覆盖 gguf 模型**：容器模型（halogen）直接放行（DESIGN §4.2 / §8-3）。属登记过的缺口，不是遗漏。
 4. **⚠ 站上脚本漂移（P2-余 期间发现，已修）**：P1 的 `infer-unload <alias>` 只进了仓库，**没部署** —— 三站 `/usr/local/bin/infer-unload` 仍是 2026-10-28 09:04 的旧版，而旧版**不解析参数**。后果不是「功能没生效」，而是**语义反了**：`cluster.py unload --alias X` 会退化成**全站清空**。已按「备份 → sftp → `bash -n` → install → grep 核对」部署到 A/B/C（`infer-load` 同批，因 `--port` 落 conf 也在站上脚本里），并做了一次**空动作验证**（`infer-unload __nonexistent_alias__` 后 deepseek 仍 active）。
    ⇒ 教训（已写进 CHECKLIST §6）：**改站上脚本 ≠ 改仓库**；凡 `cluster.py` 依赖的新语义，落地清单必须含「部署 + 站上核对」两步，否则本地门禁全绿而线上行为相反。
+5. **⚠ `--keep` 在站内被打回原形（G1 首跑实测，已修）**：`cluster.py load --keep` 只把**外层**回收收窄到同名别名，但站内 `infer-load` 的 `[3] 互斥`段**无条件** `systemctl stop 'llama-server@*'` + `pkill unsloth/vllm/ds4` ⇒ B 站的 `gpt-oss-20b`(unsloth) 照样被杀。已给 `infer-load` 加 `--keep`：只停 `llama-server@<本别名>`、跳过全站 GTT 等待（同站有别的模型时「等 GTT<2G」是**必假阴性**，会白等 180s 再 WARN），unsloth/vllm/ds4 因**无 alias 归属**一律不碰。`_build_infer_load_cmd` 同步透传。
+6. **⚠ `--station` 路径吞掉 `--engine`（本次实测，已修）**：`cmd_load_on` 原本没有 `engine` 形参，`load ... --station B --engine X` 会静默用 conf 里的旧引擎。已补形参 + 白名单校验 + 透传 + CLI 接线。
+7. **⚠ B 站 `qwen3.8-27b-mtp.env` 引擎路径悬空（现场缺陷，已由 `--engine` 落 conf 修正）**：B 写的是 `/home/scott-lau/llama.cpp/build/bin/llama-server`（**不存在**，status=127），C 是 `/opt/llama.cpp/llama-server`。**更值得记的是失败方式**：exit 127 之后 `infer-load` 仍等满 **15min** 健康超时才报错 ⇒ 一次配置笔误 = 15 分钟空等。建议后续把「单元已 failed ⇒ 立刻失败」加进就绪循环（未做，登记 §5）。
 
 ---
 
 ## 5. 未做（交 Step 5 / 后续阶段）
 
-| # | 项 | 为什么没做 |
+| # | 项 | 状态 / 为什么没做 |
 |---|---|---|
-| 1 | **真站共存实测**（B 站先 `load gpt-oss-20b`，再 `load qwen3.8-27b-mtp-b --keep`，两个 `/health` 均 200） | 需要**先卸掉生产 deepseek**（B 站当前 84 GB / 125.8 GB，装不下这两者）⇒ 属破坏性操作，须由用户择时执行 |
-| 2 | `18080` 未登记 `inventory/ports.yaml` | P2；现在登记会把「未实测端口」写进真值表 |
-| 3 | 客户端寻址第二模型 | P3 |
-| 4 | worker 站叠加第二个 head | DESIGN D-2：`--keep` 对 RPC 直接拒绝 |
+| 1 | ~~真站共存实测~~ | ✅ **已做**（2026-10-29 02:47，见 CHECKLIST §2-G1）：B 站 `gpt-oss-20b`(:18081) + `qwen3.8-27b-mtp`(:18080) 同跑，GTT 44.2/117.2 |
+| 2 | ~~`18080` 未登记 `ports.yaml`~~ | ✅ **已做**（P2） |
+| 3 | 客户端寻址第二模型（opencode/claude 的 baseURL 仍是 `127.0.0.1:8080`） | P3 网关解决；**不要在 P3 之前改客户端** —— 逐个改 baseURL 会让两个模型抢同一地址 |
+| 4 | worker 站叠加第二个 head | DESIGN D-2：`--keep` 对 RPC 直接 exit 1 |
+| 5 | **`infer-load` 就绪循环不识别「单元已 failed」** | G1 首跑实测：引擎路径悬空 ⇒ exit 127，但脚本仍等满 **15min** 健康超时。建议在等待循环里加 `systemctl is-failed` 早退（未做） |

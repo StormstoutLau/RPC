@@ -680,9 +680,6 @@ chk("O-179 --port: 落进 infer-load 命令",
 chk("O-179 --port: 未给 ⇒ 命令里不出现 --port",
     "--port" not in C._build_infer_load_cmd("x", "llama-single"))
 
-chk("O-179 端口门: 显式 --port 优先于 conf（撞口照样拦）",
-    C._guard_port("B", "x", port=8080) == 5)
-
 
 def _guard_port_with(others, port=None):
     _r = _swap("_station_model_ports", lambda st, exclude=None: (True, others))
@@ -690,6 +687,10 @@ def _guard_port_with(others, port=None):
         return C._guard_port("B", "x", port=port)
     finally:
         _r()
+
+
+chk("O-179 端口门: 显式 --port 优先于 conf（撞口照样拦）",
+    _guard_port_with({"a": 8080}, port=8080) == 5)
 
 
 chk("O-179 端口门: 显式 18081 与站上 8080 不撞 ⇒ 放行",
@@ -706,6 +707,38 @@ chk("O-179 探测端口: 按 alias 取 conf PORT；显式值优先",
     f"alias={_ep} explicit={_ep_expl}")
 chk("O-179 探测端口: 无 alias ⇒ 站默认 8080",
     C._engine_port("B") == (8080, "default"))
+
+# ── O-179 G1：`--keep` 必须透传到**站内** infer-load（2026-10-29 首跑实测）──────
+# 现场：`cluster.py load qwen --keep` 只把**外层**回收收窄到同名别名，而站内 infer-load
+# 的 [3] 互斥段仍无条件 `systemctl stop 'llama-server@*'` + pkill unsloth/vllm/ds4 ⇒
+# B 站的 gpt-oss-20b(unsloth) 照样被杀，`--keep` 在站内被打回原形。
+chk("O-179 G1: keep ⇒ 站内命令带 --keep",
+    "--keep" in C._build_infer_load_cmd("x", "llama-single", None, keep=True))
+chk("O-179 G1: 默认（不带 keep）⇒ 命令不含 --keep",
+    "--keep" not in C._build_infer_load_cmd("x", "llama-single"))
+
+
+def _load_on_keep(keep):
+    calls = []
+    _r1 = _swap("reclaim_and_unload",
+                lambda st, al=None: calls.append((st, al)) or {"ok": True, "steps": []})
+    _r2 = _swap("ssh_stream", lambda st, cmd: 0)
+    _r3 = _swap("_engine_port", lambda st, al=None, explicit=None: (8080, "conf"))
+    _r4 = _swap("_guard_capacity", lambda st, al: 0)
+    _r5 = _swap("_guard_port", lambda st, al, port=None: 0)
+    try:
+        rc = C.cmd_load_on("B", "qwen3.8-27b-mtp", None, None, keep)
+    finally:
+        for _f in (_r5, _r4, _r3, _r2, _r1):
+            _f()
+    return rc, calls
+
+
+_rc_k, _c_k = _load_on_keep(True)
+_rc_n, _c_n = _load_on_keep(False)
+chk("O-179 G1: cmd_load_on --keep 只回收同名别名；不带 keep 则整站",
+    _rc_k == 0 and _c_k == [("B", "qwen3.8-27b-mtp")] and _c_n == [("B", None)],
+    f"keep={_c_k} 默认={_c_n}")
 
 
 def _est_str(p):

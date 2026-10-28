@@ -643,7 +643,7 @@ def _cmd_load_c(alias: str, backend: str = None, engine: str = None, keep: bool 
     if not _rc_c["ok"]:
         print(f"[cluster] C 站回收/卸载失败 ⇒ 中止: {_rc_c['steps']}")
         return 1
-    cmd = _build_infer_load_cmd(alias, backend, engine, port=port)
+    cmd = _build_infer_load_cmd(alias, backend, engine, port=port, keep=keep)
     rc = ssh_stream("C", cmd)
     if rc != 0:
         print(f"[cluster] C 站加载失败 (rc={rc})。")
@@ -709,7 +709,7 @@ def _pp_listen_ip(coord: str, worker: str) -> str:
 
 def _build_infer_load_cmd(matched: str, backend: str, engine: str = None,
                           rpc_target: str = None, pp_listen: str = None,
-                          port: int = None) -> str:
+                          port: int = None, keep: bool = False) -> str:
     """拼装远端 infer-load 命令。backend 来自白名单校验(枚举), engine 来自 _engine_ok(), 均无注入风险。
     engine(引擎变体) 见 infer-load 的 --engine 说明: 名 -> /opt/llama.cpp-<名>/, 或绝对路径。
     rpc_target: 仅 RPC 类使用；worker 站 letter 经 RPC_WORKER_IPS 映射后传入（已在调用方校验）。
@@ -731,6 +731,10 @@ def _build_infer_load_cmd(matched: str, backend: str, engine: str = None,
         if not (isinstance(port, int) and 1 <= port <= 65535):
             raise ValueError(f"非法 port: {port!r}")
         cmd += f" --port {port}"
+    if keep:
+        # O-179 G1：**必须传**——站内 infer-load 的 [3] 互斥段会无条件停全站
+        # (llama+unsloth+vllm+ds4)，只在外层收窄回收范围会让 `--keep` 在站内被打回原形。
+        cmd += " --keep"
     return cmd
 
 
@@ -1446,7 +1450,7 @@ def cmd_load(alias: str, backend: str = None, engine: str = None, worker: str = 
         print(f"[cluster] {station} 站回收/卸载失败 ⇒ 中止: {_r1['steps']}")
         return 1
     print(f"[cluster] 加载中 (站内 load-mem-gate 自动护航) ...")
-    rc = ssh_stream(station, _build_infer_load_cmd(matched, backend, engine, port=port))
+    rc = ssh_stream(station, _build_infer_load_cmd(matched, backend, engine, port=port, keep=keep))
     if rc != 0:
         print(f"[cluster] 加载失败 (rc={rc})。")
         return 1
@@ -1785,12 +1789,17 @@ def _load_ds4_pp(alias: str, coord: str, worker: str, port: int = None) -> int:
     return 0
 
 
-def cmd_load_on(station: str, alias: str, backend: str = None, port: int = None) -> int:
-    """在**指定站**加载模型 (跳过别名路由) —— 供 web 按站操作使用。
+def cmd_load_on(station: str, alias: str, backend: str = None, port: int = None,
+                keep: bool = False, engine: str = None) -> int:
+    """在**指定站**加载模型 (跳过别名路由) —— 供 web / CLI `--station` 使用。
 
     与 cmd_load 的唯一区别: 不做 resolve_alias, 因为调用方已明确目标站
     (用户在下拉里选定了"哪个站加载哪个模型")。其余语义完全一致:
     仍走站内 infer-load (含互斥清理 / load-mem-gate 内存门禁 / 释放等待)。
+
+    `keep=True`（2026-10-29，O-179 G1）：**只回收同名别名**，并同样过容量门 + 端口门。
+    为什么需要：别名路由把 `qwen3.8-27b-mtp` 固定指到 C，而共存实验要在 **B** 把
+    `gpt-oss-20b`(18081) 与它(18080) 并置 —— 没有这条路就只能改路由表或绕过 CLI。
     """
     if station not in STATIONS:
         print(f"[cluster] 未知站 '{station}' (可选: {', '.join(STATIONS)})")
@@ -1798,6 +1807,18 @@ def cmd_load_on(station: str, alias: str, backend: str = None, port: int = None)
     if backend is not None and backend not in BACKENDS:
         print(f"[cluster] 非法 --backend '{backend}'. 可选: {', '.join(sorted(BACKENDS))} (exit 1)")
         return 1
+    if engine is not None and not _engine_ok(engine):
+        print(f"[cluster] 非法 --engine '{engine}' (仅允许 字母/数字/./_/-//; 例: glm5next-20260928 或 /opt/llama.cpp/llama-server) (exit 1)")
+        return 1
+    if port is not None:
+        try:
+            port = int(port)
+        except (TypeError, ValueError):
+            print(f"[cluster] 非法 --port '{port}'（需 1-65535 的整数）(exit 1)")
+            return 1
+        if not (1 <= port <= 65535):
+            print(f"[cluster] 非法 --port {port}（需 1-65535 的整数）(exit 1)")
+            return 1
     # 容器化模型 (CONTAINER_MODELS): 与 cmd_load 同一分派判据 (显式别的后端 ⇒ 保留回退路径)。
     if alias in CONTAINER_MODELS and backend in (None, CONTAINER_MODELS[alias]["backend"]):
         return _load_container_model(alias, station)
@@ -1805,14 +1826,22 @@ def cmd_load_on(station: str, alias: str, backend: str = None, port: int = None)
         print(f"[cluster] '{alias}' 不在 CONTAINER_MODELS 中, 无 halogen 容器配方 (exit 1)")
         return 1
     print(f"[cluster] 指定站加载: {alias} -> {station} 站 ({STATIONS[station]['host']})")
+    if keep:
+        _cap = _guard_capacity(station, alias)
+        if _cap:
+            return _cap
+        _p = _guard_port(station, alias, port)
+        if _p:
+            return _p
     # ★ 2026-10-21: 同 cmd_load —— 老后端路径必须先回收容器 (infer-unload 看不见 docker)。
     #   2026-10-26: 回收 + 卸载合并为无条件一步，失败即中止。
-    _r1 = reclaim_and_unload(station)
+    #   ★ 2026-10-29（O-179 G1）：`keep` ⇒ **只**回收同名别名（与 cmd_load --keep 同语义）。
+    _r1 = reclaim_and_unload(station, alias if keep else None)
     if not _r1["ok"]:
         print(f"[cluster] {station} 站回收/卸载失败 ⇒ 中止: {_r1['steps']}")
         return 1
     print(f"[cluster] 加载中 (站内 load-mem-gate 自动护航) ...")
-    rc = ssh_stream(station, _build_infer_load_cmd(alias, backend, port=port))
+    rc = ssh_stream(station, _build_infer_load_cmd(alias, backend, engine, port=port, keep=keep))
     if rc != 0:
         print(f"[cluster] 加载失败 (rc={rc})。")
         return 1

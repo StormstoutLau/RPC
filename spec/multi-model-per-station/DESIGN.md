@@ -189,12 +189,13 @@ cluster.py unload [--alias <alias>] [--station A|B|C]
 |---|---|---|
 | P2 | **端口预留记录**：真值 = 各别名站上 conf 的 `PORT`（不造 alias→port 第二张表）+ 加载前**端口门**（`_port_clash` / `_model_port` / `_station_model_ports` / `_guard_port`，撞口 ⇒ exit 5）+ `ports.yaml` 登记 `18080` 暴露面 + 派生视图重渲染 | ✅ **已做（2026-10-29）** |
 | P2-余 | **`load --port N`** + 探测按 alias 取端口：`_engine_port`（显式 > conf > 站默认）接到 `_cmd_load_c` / 通用路径 / `_load_rpc` / ds4 PP / `cmd_load_on` / `cmd_e2e`（后两者逐条探） | ✅ **已做（2026-10-29）** —— `--port` 由 `infer-load` **落 conf**（与 `--engine` 同因：systemd 单元会重新 source conf）；两个站上脚本已部署到 A/B/C（备份 `*.bak-o179-20261029`） |
+| P2-里 | **`load --station A/B/C`（可配 `--keep`/`--port`/`--engine`）** + **站内 `infer-load --keep`**：只停 `llama-server@<本别名>`、跳过全站 GTT 等待、不 pkill unsloth/vllm/ds4 | ✅ **已做（2026-10-29，G1 首跑倒逼）** —— 没有它，别名路由把 qwen 固定指到 C，无法在 B 做同站叠加；且外层 `--keep` 会被站内 `[3]` 互斥段打回原形 |
 | P3 | 网关寻址（llama-swap 优先）：站上 8080 由网关占，按 model 名转 18080/18081 | 未做 |
 | P4 | `COEXIST_GROUPS`：对标 llama-swap `groups`，默认互斥、显式允许 | 未做 |
 | P5 | 上游 router 模式（`--models-dir/--models-max`） | 未做 |
 
 > **P2 为什么不做 GPUStack 式的「动态分配 + generation 乐观重试」**：那套是给「起容器前不知道端口、需要协商」的场景用的；本仓端口由 conf 静态定义且 `llama-serve-instance` 直接消费 —— 做动态分配器会与 conf 抢真值，并引入持久化依赖。这里取它的**判据精神**（判「谁的端口」而不是「有没有人占」），落地为「读同站已运行别名各自的 conf PORT 再比对」。
-> **P2 实测发现**：`gpt-oss-20b.env` 的 `PORT=8080` 与 deepseek 相同 ⇒ 「gpt-oss-20b + qwen3.8-27b-mtp 共存」必须先给前者换端口（改 conf 或用 P2-余 的 `--port`），这正是端口门第一次真跑就报出 `exit 5` 的原因。
+> **P2 实测发现**：`gpt-oss-20b.env` 的 `PORT=8080` 与 deepseek 相同 ⇒ 「gpt-oss-20b + qwen3.8-27b-mtp 共存」必须先给前者换端口。**已在 G1 解决**：`load gpt-oss-20b --port 18081` 把 `PORT=18081` **落进 conf**（持久化），后续端口门/探测都从 conf 读，不再有第二处数字。
 
 ---
 

@@ -248,8 +248,12 @@ def main() -> int:
         return cmd_status("--html" in args[1:], "--frames" in args[1:], "--all" in args[1:])
     if sub == "load":
         tail = args[1:]
-        rest, backend, engine, worker, force, keep, port, i = [], None, None, None, False, False, None, 0
+        rest, backend, engine, worker, force, keep, port, station, i = [], None, None, None, False, False, None, None, 0
         while i < len(tail):
+            if tail[i] == "--station" and i + 1 < len(tail):
+                station = tail[i + 1]   # O-179 G1: 跳过别名路由, 直接在指定站加载（可与 --keep 组合）
+                i += 2
+                continue
             if tail[i] == "--backend" and i + 1 < len(tail):
                 backend = tail[i + 1]   # 提取值并跳过, 避免污染 alias 前缀
                 i += 2
@@ -278,8 +282,11 @@ def main() -> int:
             i += 1
         if not rest:
             print("用法: cluster.py load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] "
-                  "[--engine <变体名|绝对路径>] [--worker A|C] [--port N] [--force] [--keep]")
+                  "[--engine <变体名|绝对路径>] [--worker A|C] [--station A|B|C] [--port N] [--force] [--keep]")
             return 1
+        if station:
+            # 按站加载：不做别名路由；--keep 时只回收同名别名（O-179 G1）
+            return cmd_load_on(station, " ".join(rest), backend, port, keep, engine)
         return cmd_load(" ".join(rest), backend, engine, worker, force, keep, port)
     if sub == "frames":
         return cmd_frames()

@@ -41,14 +41,14 @@ upstream: null
 4. ☑ `infer-unload` alias 分支（位置参数、不 pkill、无参逐字不变）
 5. ☑ `reclaim_and_unload` / `_reclaim_containers` 的 `alias` 形参（默认值保旧语义）
 6. ☑ `_capacity_ok` 纯函数 + `_guard_capacity` 编排（exit 4）
-7. ☑ `cluster.py load --keep`、`cluster.py unload --alias/--station`
-8. ☑ 测试：`test_cluster_pure.py` **19 条** + `test_infer_unload_alias.py` 9 条
+7. ☑ `cluster.py load --keep`、`load --station A/B/C`（可组合）、`load --port N`、`cluster.py unload --alias/--station`
+8. ☑ 测试：`test_cluster_pure.py` **22 条** + `test_infer_unload_alias.py` 9 条
 
 ## 2. 真站行为（M2）
 
 | # | 判据 | 结论 |
 |---|---|---|
-| G1 | B 站 `load gpt-oss-20b` → `load qwen3.8-27b-mtp-b --keep`，两个 `llama-server@` 同时 active、8080 与 18080 各自 `/health` 200 | ◐ **未跑** —— 需先卸生产 deepseek（B 站 84/125.8 GB），属破坏性操作，须用户择时 |
+| G1 | B 站同跑两个模型：`gpt-oss-20b` + `qwen3.8-27b-mtp` 同时 active，各自 `/health` 200 | ☑ **已完成（2026-10-29 02:47:47）** —— B 站 `load gpt-oss-20b --port 18081` → `load qwen3.8-27b-mtp --station B --keep --engine /opt/llama.cpp/llama-server`。终态：`llama-server@qwen3.8-27b-mtp` running + unsloth `gpt-oss-20b` 同在；`ss` 见 **18080**(llama-server) 与 **18081**(unsloth) 各自 LISTEN；GTT **44.2 / 117.2 GiB**（两模型同时常驻）；`/health` 18080 = `{"status":"ok"}`、18081 = unsloth 代理（`{"detail":"API endpoint not found"}`，该后端无 /health）。容量门读数 `alloc 97.4 GiB ≥ need 30.4 GiB`；端口门 18080 vs 18081 无冲突。**附带**：C 站同时存在 `halogen` 容器(:8080) + `llama-server@qwen3.8-27b-mtp`(:18080)，GTT 52.0/117.2 —— 容器与进程共存也实测成立。⚠ 首跑两处倒逼修复见 IMPLEMENTATION §4-5/6/7（站内 `--keep`、`--station` 吞 `--engine`、B 站引擎路径悬空） |
 | G2 | 容量不足 ⇒ exit 4 且**未发**任何 `systemctl stop` / `docker rm` / `rpc-nodes --start` | ☑ 单测（`_cap("NO_FIT")==4` / `"UNKNOWN"==4` / `ok=False==4`）；顺序由 `cmd_load` 中「预检在分派之前」保证 |
 | G3 | `infer-unload <alias>` 只停该别名（静态 9 条判据） | ☑ ALL PASS |
 | G4 | 反向冲突预检仍先于容量门 | ☑ 真站只读复核 `A + gpt-oss-120b ⇒ 3` |
@@ -59,7 +59,7 @@ upstream: null
 2. ☑ `cmd_unload()` 无参 ⇒ 三站全停，顺序 B 先 / A·C 并行不变
 3. ☑ `infer-unload` 无参路径逐字保留（`@*` 通配 + pkill 仍在）
 4. ☑ `_load_rpc` 未改（`--keep` 在入口 exit 1）
-5. ☑ `cmd_load_on`（web 按站路径）未改
+5. ☑ `cmd_load_on`（web/`--station` 按站路径）**默认路径不变**（`reclaim_and_unload(station)`）；仅新增可选 `port` / `keep`（G1 需要）
 6. ☑ 基线 69 个测试全过（现 70 个）
 
 ## 4. 判据与边界（M4）
@@ -92,12 +92,14 @@ upstream: null
 
 ## 6. 残留与风险（M6）
 
-1. 真站共存未跑（G1）⇒ 达标结论仅覆盖「机制正确」，**不覆盖**「两模型真能同时 READY」
-2. `18080` 未进 `ports.yaml` ⇒ `ports` 门禁站上对账会黄（P2）
-3. 客户端只认 `127.0.0.1:8080` ⇒ 第二个模型暂只能 `ssh + curl :18080`（P3）
-4. 端口撞车无前置判据 ⇒ 靠 `llama-server` 绑定失败 + 健康检查超时**响亮失败**（P2）
+1. ~~真站共存未跑（G1）~~ ⇒ **已跑通**（2026-10-29 02:47，§2-G1），机制与真站两条都覆盖
+2. ~~`18080` 未进 `ports.yaml`~~ ⇒ ✅ 已登记（P2）
+3. 客户端只认 `127.0.0.1:8080` ⇒ 第二个模型暂只能 `ssh + curl :18080`（P3 网关解决；**P3 前不要改客户端**）
+4. ~~端口撞车无前置判据~~ ⇒ ✅ 已有 `_guard_port`（exit 5）；判不了（ssh 失败）仍留痕放行
 5. worker 站禁止 `--keep`（D-2）⇒ 「单站多模型」当前只覆盖 head 站/独立站
 6. 事故已恢复：误发 `glm-5.3-flash` 已由 `load deepseek-v4-flash-0731` 复原；三条加固判据见 IMPLEMENTATION §4
+7. **配置漂移无护栏**：B 站 qwen conf 的引擎路径指向不存在的旧目录，`load` 不会预检 ⇒ status=127 后**空等 15min**。已登记为待做（IMPLEMENTATION §5-5），当前靠 `--engine` 显式指定绕过
+8. **站上脚本与仓库是两份**：`infer-load` / `infer-unload` 改完必须部署 + 站上核对（本次两次踩到，见 IMPLEMENTATION §4-4/5）
 
 ---
 
@@ -116,4 +118,9 @@ upstream: null
 | 2026-10-29 | **P2 端口预留记录**：端口门（exit 5）+ `ports.yaml` 登记 18080 + 派生视图重渲染 | 真站：B 在跑 deepseek@8080；qwen 18080 放行(0)；gpt-oss-20b 8080 撞 deepseek(5) |
 | 2026-10-29 | **P2-余**：`load --port N`（infer-load 落 conf）+ 6 处探测改按 alias 取 + `cmd_e2e` 逐别名探 | 单测 ALL PASS；`--port` 落 conf 让 systemd 单元路径也生效 |
 | 2026-10-29 | ⚠ **发现站上脚本漂移并修复**：P1 的 `infer-unload <alias>` 未部署 ⇒ `unload --alias` 会退化成全站清空 | 三站已部署（备份 `*.bak-o179-20261029`）+ 空动作验证（deepseek 仍 active） |
+| 2026-10-29 02:08 | G1 准备：`unload --station B` 后 `load gpt-oss-20b --port 18081` | READY 02:08:14，`--port` 落 conf=18081；GTT 11.8 |
+| 2026-10-29 02:25 | G1 首跑 **失败**（配置缺陷，非代码）：B 的 qwen conf 引擎指向不存在的 `/home/scott-lau/llama.cpp/build/bin/llama-server` ⇒ status=127，且**空等 15min** 健康超时 | 首跑同时暴露「外层 `--keep` 被站内 `[3]` 互斥段打回原形」⇒ 补 `infer-load --keep` 并部署（38587B/三站） |
+| 2026-10-29 02:47:47 | **G1 通过**：`load qwen3.8-27b-mtp --station B --keep --engine /opt/llama.cpp/llama-server` | B 站 18080 `{"status":"ok"}` + 18081 unsloth 同时在线；GTT **44.2/117.2 GiB** |
+| 2026-10-29 02:48 | 收尾：`unload --alias qwen --station C` + `unload --station B`，随后重载生产 deepseek | 见下方还原记录 |
+| 2026-10-29 02:55:16 | **生产已还原**：`load deepseek-v4-flash-0731` | B `READY :8080`（1M ctx, 6m37s）· A `rpc-server@deepseek` worker · C 仅 `halogen` 容器（:8080 `{"status":"ok","model":"halogen-qwen3.8-flash-next"}`，GTT 24.6/117.2） |
 
