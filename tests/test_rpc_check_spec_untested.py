@@ -283,7 +283,7 @@ def test_triage_repo_end_to_end():
 
 def test_triage_wiring_is_visible_in_gate():
     """接线：门禁必须**报出**分诊分布（覆盖率），且用的是这个纯函数（不是另写一份判据）。"""
-    src = (ROOT / "ops" / "rpc_check.py").read_text(encoding="utf-8")
+    src = "\n".join(p.read_text(encoding="utf-8") for p in sorted((ROOT / "ops").glob("rpc_*.py")))
     assert "summarize_untested_triage(" in src
     assert "索引分诊" in src, "门禁 note 里必须带上分诊分布（否则消费者=隐形）"
 

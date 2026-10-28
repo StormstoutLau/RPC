@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "ops"))
 
 import rpc_check as R  # noqa: E402
+import rpc_d6  # noqa: E402  （8B-2：判据本体已搬，常量在其模块里改）
 
 
 def _runtime_ignored(rel: str) -> bool:
@@ -211,12 +212,12 @@ def main() -> int:
             "not_a_ledger: [{glob: '**/review.json', why: because}]\n"
             "scan: {globs: ['docs/*.md'], exclude_dirs: ['.git']}\n"
             "unverified: [{item: a, why: b}]\n", encoding="utf-8")
-        saved = R.LEDGERS_INV
+        saved = rpc_d6.LEDGERS_INV
         try:
-            R.LEDGERS_INV = alt
+            rpc_d6.LEDGERS_INV = alt
             alt_hits = R._scan_ledger_hits()
         finally:
-            R.LEDGERS_INV = saved
+            rpc_d6.LEDGERS_INV = saved
         moved = bool(alt_hits) and all(h.startswith("docs/") and h.endswith(".md") for h in alt_hits) \
             and alt_hits != hits
         print(f"  ok   结构护栏：换掉 yaml 的 `scan.globs` ⇒ 扫描结果随之改变"

@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT / "ops"))
 
 import derived_view as dv  # noqa: E402
 import rpc_check as R  # noqa: E402
+import rpc_docs  # noqa: E402  （8B-2：判据本体已搬，常量在其模块里改）
 
 
 # ── 夹具脚手架：在临时根上重建"真值 + 落档视图"这一对 ────────────────────────
@@ -190,12 +191,12 @@ def test_gate_end_to_end_on_real_repo():
 
 def test_gate_warns_when_script_absent(monkeypatch=None):
     """渲染器不在 ⇒ **WARN**（登记依据没了，不谎报 PASS，也不硬 FAIL）。"""
-    old = R.DERIVED_VIEW
+    old = rpc_docs.DERIVED_VIEW
     try:
-        R.DERIVED_VIEW = ROOT / "ops" / "__不存在__.py"
+        rpc_docs.DERIVED_VIEW = ROOT / "ops" / "__不存在__.py"
         st, note, _ = R.check_derived_view(None)
     finally:
-        R.DERIVED_VIEW = old
+        rpc_docs.DERIVED_VIEW = old
     assert st == "WARN", f"缺脚本应为 WARN，实际 {st}: {note}"
 
 

@@ -73,6 +73,12 @@ upstream: null
    - `rpc_check.py`：移除已搬节点；顶部加 `from rpc_common import ...` 与本阶段模块的显式重导出。
 6. 跑 `py-tests` + `rpc_check --quick`；绿了提交。
 
+> **⚠ 共享 `CHECKS` 必须幂等填充**（8B-2 实测）：`CHECKS` 搬进 `rpc_common` 后是**共享可变列表**，
+> 而门面在**脚本方式**跑时模块名是 `__main__`；若过程中又有模块 `import rpc_check`（`cluster.py`
+> 有惰性 import），模块体执行第二遍 ⇒ `CHECKS` 52 → **104 条、id 全重复**，表现为 `mirror` 的
+> O-50 断言计数对不上。故门面尾部固定写成 `if not CHECKS: CHECKS.extend([...])`，
+> 并由 `test_rpc_check_modules.py` 用"二次加载"断言守住。
+
 > 为什么不用 `import *`：`_read_text` 等私有名不会被星号导出，而 45 个测试按 `R._read_text` 取用；显式清单还能让"漏导出"在 import 时**立刻**报错。
 
 ---

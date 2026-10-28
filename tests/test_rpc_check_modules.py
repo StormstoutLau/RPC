@@ -46,6 +46,20 @@ def main() -> int:
     fixture = "# 注释里 import rpc_check 不算\nimport rpc_check\n"
     chk("负向夹具：反向 import 能被抓到", bad_imports(fixture) == ["import rpc_check"], bad_imports(fixture))
 
+    # ── ★ 共享列表幂等：脚本跑（`__main__`）+ 再被 import = 模块体执行两遍 ──────────
+    #   8B-2 实测：`CHECKS` 搬进 `rpc_common` 后，未加保护时二次执行 ⇒ 104 条 / id 全重复，
+    #   直接表现是 `mirror` 的 O-50 断言计数对不上（52 → 104）。此断言守住该形态。
+    import importlib.util
+    import rpc_common
+    import rpc_check  # noqa: F401  （第一次执行模块体）
+    n0 = len(rpc_common.CHECKS)
+    spec = importlib.util.spec_from_file_location("rpc_check_second_load", OPS / "rpc_check.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)                      # 第二次执行模块体
+    ids = [c["id"] for c in rpc_common.CHECKS]
+    chk("二次加载不重复注册 CHECKS（幂等）",
+        len(ids) == n0 == len(set(ids)), f"{n0} → {len(ids)} · uniq {len(set(ids))}")
+
     inv = yaml.safe_load((ROOT / "inventory" / "ops.yaml").read_text(encoding="utf-8")) or {}
     entry = set(inv.get("entry_modules") or [])
     for m in existing:

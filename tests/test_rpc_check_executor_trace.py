@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "ops"))
 
 import rpc_check as R  # noqa: E402
+import rpc_docs  # noqa: E402  （8B-2：判据本体已搬，常量在其模块里改）
 
 
 # ── 脚手架：把 `R.AGENT_CLI` 指向临时文件（判据读的是模块全局，故须临时改）────────
@@ -33,17 +34,17 @@ class _TempCli:
         self.old = None
 
     def __enter__(self):
-        self.old = R.AGENT_CLI
-        R.AGENT_CLI = self.path
+        self.old = rpc_docs.AGENT_CLI
+        rpc_docs.AGENT_CLI = self.path
         return self.path
 
     def __exit__(self, *exc):
-        R.AGENT_CLI = self.old
+        rpc_docs.AGENT_CLI = self.old
         return False
 
 
 def _real_cli_text() -> str:
-    return R.AGENT_CLI.read_text(encoding="utf-8-sig", errors="replace")
+    return rpc_docs.AGENT_CLI.read_text(encoding="utf-8-sig", errors="replace")
 
 
 def _write_cli(text: str) -> Path:
@@ -207,12 +208,12 @@ def test_gate_end_to_end_on_real_repo():
 
 
 def test_missing_cli_is_red():
-    old = R.AGENT_CLI
+    old = rpc_docs.AGENT_CLI
     try:
-        R.AGENT_CLI = ROOT / "ops" / "__不存在__.ps1"
+        rpc_docs.AGENT_CLI = ROOT / "ops" / "__不存在__.ps1"
         st, note, _ = R.check_executor_trace(None)
     finally:
-        R.AGENT_CLI = old
+        rpc_docs.AGENT_CLI = old
     assert st == "FAIL", f"缺 agent-cli.ps1 必须 FAIL（不可判 ≠ 通过），实际 {st}: {note}"
 
 

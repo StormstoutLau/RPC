@@ -72,7 +72,7 @@ v = R.cross_input_verdict("sha256:aaa", None)
 chk("D3 缺一侧 ⇒ unknown", v["verdict"] == "unknown")
 
 # ── E. 接线的**如实边界**（这两条判据**当前无本仓消费者**：对象在站上 runDir）──
-src = (ROOT / "ops" / "rpc_check.py").read_text(encoding="utf-8")
+src = "\n".join(p.read_text(encoding="utf-8") for p in sorted((ROOT / "ops").glob("rpc_*.py")))
 chk("E1 两个判定本体在 rpc_check（纯函数，可离线测）",
     "def cross_family_verdict(" in src and "def cross_input_verdict(" in src)
 chk("E2 ⚠ 且**未**登记进 CHECKS（无本仓对象 ⇒ 空判会让它假绿）",

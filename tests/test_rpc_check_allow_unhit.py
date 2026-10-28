@@ -36,7 +36,7 @@ def main() -> int:
         print("  ok   重复命中 ⇒ 仍算命中（set 去重）")
 
     # ④ 消费者：两处都接进了（改坏任一 ⇒ 该清单重新开始腐化）
-    src = (ROOT / "ops" / "rpc_check.py").read_text(encoding="utf-8", errors="replace")
+    src = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in sorted((ROOT / "ops").glob("rpc_*.py")))
     n_call = src.count("allow_unhit(")
     ok4 = n_call >= 3          # 1 处定义 + 2 处消费
     print(f"  {'ok  ' if ok4 else 'FAIL'} [消费者] allow_unhit 定义+消费 = {n_call} 处（期望 ≥3）")

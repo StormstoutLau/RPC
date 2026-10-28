@@ -275,7 +275,7 @@ def main() -> int:
     # O-29 / D6-P1-1：`framework_version` 必须**成对**（写入侧 + 消费者），且 key 分桶必须**默认不改旧形状**。
     #   两半缺一即禁止（本会话已把它写成 P1-1 检查项："新字段必须核对消费者"）。
     cl = (ROOT / "ops" / "cluster.py").read_text(encoding="utf-8", errors="replace")
-    rc = (ROOT / "ops" / "rpc_check.py").read_text(encoding="utf-8", errors="replace")
+    rc = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in sorted((ROOT / "ops").glob("rpc_*.py")))
     w_side = "framework_version = '2'" in src
     c_const = "FRAMEWORK_SUBJECTS_VERSION" in cl
     c_use = "_fwver_set(" in cl and "_FWVER_SCOPE" in cl
