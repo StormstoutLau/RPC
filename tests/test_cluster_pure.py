@@ -668,6 +668,45 @@ chk("O-179 端口门: 端口不撞 ⇒ 放行",
 chk("O-179 端口门: 判不了（ssh 失败）不阻断，但留痕",
     _port_guard(8080, {}, ok=False) == 0)
 
+# ── O-179 P2-余：`load --port N` + 健康探测「按 alias 取端口」（2026-10-29）────
+# 为什么必须做：`_cmd_load_c` / 通用路径 / `cmd_load_on` / ds4 / e2e 都写死 `127.0.0.1:8080`。
+# 第二个模型绑 18080 后，这些探测会问候**别的模型**（或空端口），把失败伪装成超时。
+chk("O-179 --port: 非法端口 ⇒ exit 1（且不碰网络）",
+    C.cmd_load("glm-5.3-flash", None, None, None, port=70000) == 1)
+chk("O-179 --port: 非数字 ⇒ exit 1",
+    C.cmd_load("glm-5.3-flash", None, None, None, port="abc") == 1)
+chk("O-179 --port: 落进 infer-load 命令",
+    "--port 18081" in C._build_infer_load_cmd("x", "llama-single", None, port=18081))
+chk("O-179 --port: 未给 ⇒ 命令里不出现 --port",
+    "--port" not in C._build_infer_load_cmd("x", "llama-single"))
+
+chk("O-179 端口门: 显式 --port 优先于 conf（撞口照样拦）",
+    C._guard_port("B", "x", port=8080) == 5)
+
+
+def _guard_port_with(others, port=None):
+    _r = _swap("_station_model_ports", lambda st, exclude=None: (True, others))
+    try:
+        return C._guard_port("B", "x", port=port)
+    finally:
+        _r()
+
+
+chk("O-179 端口门: 显式 18081 与站上 8080 不撞 ⇒ 放行",
+    _guard_port_with({"a": 8080}, port=18081) == 0)
+
+_r = _swap("_model_port", lambda st, al: (18080, "conf"))
+try:
+    _ep = C._engine_port("B", "qwen3.8-27b-mtp")
+    _ep_expl = C._engine_port("B", "qwen3.8-27b-mtp", 18081)
+finally:
+    _r()
+chk("O-179 探测端口: 按 alias 取 conf PORT；显式值优先",
+    _ep == (18080, "conf") and _ep_expl == (18081, "cli"),
+    f"alias={_ep} explicit={_ep_expl}")
+chk("O-179 探测端口: 无 alias ⇒ 站默认 8080",
+    C._engine_port("B") == (8080, "default"))
+
 
 def _est_str(p):
     return str(_est(p)) if _est else "<缺 _egress_station_today>"

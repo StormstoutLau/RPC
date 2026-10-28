@@ -205,6 +205,16 @@ _set_conf_key() {  # _set_conf_key <KEY> <VALUE> — 幂等写/改实例 conf �
   # 旧实现的 sed -i 非原子、$2 未转义；"末行无换行导致追加粘连"(Bug C) 也由整文件重写结构性消除。
   conf_set_kv "$CONF" "$1" "$2" || { log "ERROR: conf 写入失败 ($1, rc=$?)"; exit 1; }
 }
+# ★ 2026-10-29（O-179 P2-余）：`--port` **必须落 conf** —— 与 `--engine` 同因：
+#   llama-rpc / llama-single 走 systemd 单元 `llama-server@<alias>`，单元经
+#   `llama-serve-instance` **重新 source 同一 conf** ⇒ 只改本进程的 PORT 变量对单元**无效**
+#   （同族实测：`--ctx` 曾因 source 覆盖而完全不生效）。落 conf 后 PORT 仍是唯一真值，
+#   `cluster.py` 的端口门与健康探测都从 conf 读，不复算。
+if [ -n "$CLI_PORT" ] && [ "$CLI_PORT" != "${PORT:-}" ] && [ "${CLI_BACKEND:-}" != "ds4" ]; then
+  _set_conf_key PORT "$CLI_PORT"
+  PORT="$CLI_PORT"
+  log "PORT 落 conf: ${CLI_PORT}（覆盖会持久化，conf 仍是唯一真值）"
+fi
 if [ -n "$ENGINE_BIN" ] && [ "${CLI_BACKEND:-}" != "ds4" ]; then
   _set_conf_key LLAMA_SERVER_BIN "$ENGINE_BIN"
   LLAMA_SERVER_BIN="$ENGINE_BIN"

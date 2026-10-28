@@ -188,7 +188,7 @@ cluster.py unload [--alias <alias>] [--station A|B|C]
 | # | 内容 | 状态 |
 |---|---|---|
 | P2 | **端口预留记录**：真值 = 各别名站上 conf 的 `PORT`（不造 alias→port 第二张表）+ 加载前**端口门**（`_port_clash` / `_model_port` / `_station_model_ports` / `_guard_port`，撞口 ⇒ exit 5）+ `ports.yaml` 登记 `18080` 暴露面 + 派生视图重渲染 | ✅ **已做（2026-10-29）** |
-| P2-余 | 6 处写死 `127.0.0.1:8080` 的探针/客户端改按 alias 取；`load --port N` 暴露（现在只能改站上 conf） | 未做（与 P3 一起做更省：网关定下来后这些点会变） |
+| P2-余 | **`load --port N`** + 探测按 alias 取端口：`_engine_port`（显式 > conf > 站默认）接到 `_cmd_load_c` / 通用路径 / `_load_rpc` / ds4 PP / `cmd_load_on` / `cmd_e2e`（后两者逐条探） | ✅ **已做（2026-10-29）** —— `--port` 由 `infer-load` **落 conf**（与 `--engine` 同因：systemd 单元会重新 source conf）；两个站上脚本已部署到 A/B/C（备份 `*.bak-o179-20261029`） |
 | P3 | 网关寻址（llama-swap 优先）：站上 8080 由网关占，按 model 名转 18080/18081 | 未做 |
 | P4 | `COEXIST_GROUPS`：对标 llama-swap `groups`，默认互斥、显式允许 | 未做 |
 | P5 | 上游 router 模式（`--models-dir/--models-max`） | 未做 |

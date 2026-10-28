@@ -183,7 +183,7 @@ from cluster_flow import (  # noqa: E402
 
 # ── runtime 域（2026-10-28 拆分；重导出 ⇒ 外部 `cluster.*` 调用点不变）──────
 from cluster_runtime import (  # noqa: E402
-    AliasError, FRAME_CMD, RPC_WORKER_STATIONS, _ENGINE_CHARS, _KV_BPE, _METRICS_CMD, _active_rpc_workers, _build_infer_load_cmd, _capacity_ok, _cmd_load_c, _conf_rpc_target, _container_cleanup_cmd, _engine_ok, _fallback_conf, _frame_status, _guard_capacity, _guard_port, _guard_worker_conflict, _host_path_for, _load_container_model, _load_ds4_pp, _load_rpc, _model_port, _parse_conf, _planes_compact, _port_clash, _pp_listen_ip, _probe_map, _reclaim_containers, _station_gtt, _station_mem, _station_model_ports, _uma_fit, _worker_conflict, classify_container_assets, classify_worker_probe, cmd_estimate, cmd_frames, cmd_load, cmd_load_on, cmd_status, cmd_unload, cmd_unload_on, collect_frames, collect_status, containers_plan, estimate_load, parse_worker_busy, preflight_container, probe_frames, probe_metrics, probe_worker_state, reclaim_and_unload, render_html, resolve_alias, resolve_rpc_worker, sh_single_quote,
+    AliasError, FRAME_CMD, RPC_WORKER_STATIONS, _ENGINE_CHARS, _KV_BPE, _METRICS_CMD, _active_rpc_workers, _build_infer_load_cmd, _capacity_ok, _cmd_load_c, _conf_rpc_target, _container_cleanup_cmd, _engine_ok, _engine_port, _fallback_conf, _frame_status, _guard_capacity, _guard_port, _guard_worker_conflict, _host_path_for, _load_container_model, _load_ds4_pp, _load_rpc, _model_port, _parse_conf, _planes_compact, _port_clash, _pp_listen_ip, _probe_map, _reclaim_containers, _station_gtt, _station_mem, _station_model_ports, _uma_fit, _worker_conflict, classify_container_assets, classify_worker_probe, cmd_estimate, cmd_frames, cmd_load, cmd_load_on, cmd_status, cmd_unload, cmd_unload_on, collect_frames, collect_status, containers_plan, estimate_load, parse_worker_busy, preflight_container, probe_frames, probe_metrics, probe_worker_state, reclaim_and_unload, render_html, resolve_alias, resolve_rpc_worker, sh_single_quote,
 )
 
 # ── catalog 域（2026-10-28 拆分；重导出 ⇒ 外部 `cluster.*` 调用点不变）──────
@@ -248,7 +248,7 @@ def main() -> int:
         return cmd_status("--html" in args[1:], "--frames" in args[1:], "--all" in args[1:])
     if sub == "load":
         tail = args[1:]
-        rest, backend, engine, worker, force, keep, i = [], None, None, None, False, False, 0
+        rest, backend, engine, worker, force, keep, port, i = [], None, None, None, False, False, None, 0
         while i < len(tail):
             if tail[i] == "--backend" and i + 1 < len(tail):
                 backend = tail[i + 1]   # 提取值并跳过, 避免污染 alias 前缀
@@ -260,6 +260,10 @@ def main() -> int:
                 continue
             if tail[i] == "--worker" and i + 1 < len(tail):
                 worker = tail[i + 1]    # 单 worker 指派 (A|C); head 固定权重站 B
+                i += 2
+                continue
+            if tail[i] == "--port" and i + 1 < len(tail):
+                port = tail[i + 1]      # O-179 P2-余: 仅本次加载的端口覆盖（infer-load 会落 conf）
                 i += 2
                 continue
             if tail[i] == "--force":     # O-178: 越过"反向冲突"预检（目标站在给别人当 worker）
@@ -274,9 +278,9 @@ def main() -> int:
             i += 1
         if not rest:
             print("用法: cluster.py load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] "
-                  "[--engine <变体名|绝对路径>] [--worker A|C] [--force] [--keep]")
+                  "[--engine <变体名|绝对路径>] [--worker A|C] [--port N] [--force] [--keep]")
             return 1
-        return cmd_load(" ".join(rest), backend, engine, worker, force, keep)
+        return cmd_load(" ".join(rest), backend, engine, worker, force, keep, port)
     if sub == "frames":
         return cmd_frames()
     if sub == "unload":

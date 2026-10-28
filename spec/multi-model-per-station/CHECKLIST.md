@@ -76,6 +76,9 @@ upstream: null
 10. ☑ **P2**：`_port_clash` 四条（撞口点名 / 不撞 / 空表 / 两个别名同口）
 11. ☑ **P2**：端口门三种结局 —— 撞口 exit 5 · 不撞放行 · 判不了（ssh 失败）留痕放行
 12. ☑ **P2**：`ports.yaml` 登记 18080 后 `ports` 与 `inventory` 门禁仍绿；派生视图已重渲染（`--emit`）
+13. ☑ **P2-余**：`--port` 非法/非数字 ⇒ exit 1（不碰网络）；合法值落进 `infer-load` 命令；未给则不出现
+14. ☑ **P2-余**：`_engine_port` 三级优先级（显式 > conf > 站默认）；`_guard_port` 用显式端口仍能拦撞口
+15. ☑ **P2-余**：三站脚本已部署且**逐字节同尺寸**；`infer-unload <bogus>` 真站空动作（deepseek 未受影响）
 
 ## 5. 门禁与回归（M5）
 
@@ -111,4 +114,6 @@ upstream: null
 | 2026-10-28 | GPUStack 可复用性分析落档（[docs/research](../../docs/research/2026-10-28_gpustack可复用性分析.md)） | 三块可复用：UMA 口径 / 端口簿记 / 路由语义；整体不可 pip 复用 |
 | 2026-10-28 | **P0 补强**：`_uma_fit` + `_station_gtt` + `STATION_RESERVED_GIB=8` | 真站读数 A 103.1/117.2（alloc 6.1）· B 78.3（30.9）· C 24.6（84.6）GiB |
 | 2026-10-29 | **P2 端口预留记录**：端口门（exit 5）+ `ports.yaml` 登记 18080 + 派生视图重渲染 | 真站：B 在跑 deepseek@8080；qwen 18080 放行(0)；gpt-oss-20b 8080 撞 deepseek(5) |
+| 2026-10-29 | **P2-余**：`load --port N`（infer-load 落 conf）+ 6 处探测改按 alias 取 + `cmd_e2e` 逐别名探 | 单测 ALL PASS；`--port` 落 conf 让 systemd 单元路径也生效 |
+| 2026-10-29 | ⚠ **发现站上脚本漂移并修复**：P1 的 `infer-unload <alias>` 未部署 ⇒ `unload --alias` 会退化成全站清空 | 三站已部署（备份 `*.bak-o179-20261029`）+ 空动作验证（deepseek 仍 active） |
 

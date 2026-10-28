@@ -48,7 +48,8 @@ from cluster_console import (  # noqa: E402
     disp_width as _dw, pad as _pad,
 )
 from cluster_runtime import (  # noqa: E402
-    AliasError, cmd_load, cmd_load_on, cmd_unload, estimate_load, probe_metrics, resolve_alias,
+    AliasError, _station_model_ports, cmd_load, cmd_load_on, cmd_unload, estimate_load,
+    probe_metrics, resolve_alias,
 )
 from cluster_secrets import (  # noqa: E402
     _secrets_verdict, cmd_secrets, probe_secrets,
@@ -56,18 +57,26 @@ from cluster_secrets import (  # noqa: E402
 
 # ── e2e ────────────────────────────────────────────────
 def cmd_e2e() -> int:
-    """三站引擎在线冒烟 (直连 :8080, 不经 LiteLLM 网关——2026-09-13 网关已退役)。
-    ssh 站内 curl :8080/health 返回 HTTP JSON 即引擎在线。exit 0 全在线; 任一离线 exit 1 并提示 load。"""
-    rc = 0
+    """三站引擎在线冒烟（**按站上在跑别名各自的端口**探；无别名才回退 :8080）。
+
+    2026-10-29（O-179 P2-余）：原为写死 `127.0.0.1:8080` —— 单站多模型后，第二个模型绑
+    18080，写死 8080 会问候**另一个模型**（或空端口），把「引擎在线」判成引擎离线。
+    exit 0 全在线；任一离线 exit 1 并提示 load。
+    """
+    online, offline = [], []
     for st in ("A", "B", "C"):
-        ok, out = ssh_run(st, "curl -s --max-time 5 http://127.0.0.1:8080/health")
-        alive = ok and out.strip().startswith("{")   # HTTP JSON 响应 = 引擎在线 (connection refused 不命中)
-        if alive:
-            print(f"[e2e] {st} 站 :8080 ✓ 引擎在线  {out.strip()[:40]}")
-        else:
-            print(f"[e2e] {st} 站 :8080 ✗ 引擎离线 — python ops/cluster.py load <该站模型>")
-            rc = 1
-    return rc
+        ok_m, models = _station_model_ports(st)
+        targets = sorted(set(models.values())) if (ok_m and models) else [STATION_PORT.get(st, 8080)]
+        for p in targets:
+            ok, out = ssh_run(st, f"curl -s --max-time 5 http://127.0.0.1:{p}/health")
+            alive = ok and out.strip().startswith("{")   # HTTP JSON 响应 = 引擎在线
+            if alive:
+                print(f"[e2e] {st} 站 :{p} ✓ 引擎在线  {out.strip()[:40]}")
+                online.append((st, p))
+            else:
+                print(f"[e2e] {st} 站 :{p} ✗ 引擎离线 — python ops/cluster.py load <该站模型>")
+                offline.append((st, p))
+    return 0 if not offline else 1
 
 
 # ── reqlog: 引擎请求/时延/token 统计 (2026-09-15, 方案 v2 P2-3) ────

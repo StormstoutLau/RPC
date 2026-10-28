@@ -39,6 +39,10 @@ upstream: null
 | [ops/cluster_runtime.py](../../ops/cluster_runtime.py#L1235-L1312) | **P2**：`_port_clash`（纯函数）· `_model_port`（读站上 conf 的 `PORT`）· `_station_model_ports`（列站上在跑别名各自的 conf PORT）· `_guard_port`（撞口 ⇒ exit 5）；`cmd_load` 在容量门之后接线（仅 `--keep`） | 新增 + 接线 |
 | [inventory/ports.yaml](../../inventory/ports.yaml#L83-L99) | **P2**：登记 `18080` 暴露面（`mode: on_demand`；注释写明「本表只登记端口号，alias→port 真值在站上 conf」） | 真值表 |
 | [docs/派生视图_端口分配.md](../../docs/派生视图_端口分配.md) | `derived_view.py --emit` 重渲染（ports.yaml 改动后必须重出，否则 `derived-view` 门禁红） | 生成物 |
+| [ops/cluster_runtime.py](../../ops/cluster_runtime.py#L1297-L1308) | **P2-余**：`_engine_port(station, alias, explicit)`（显式 > conf > 站默认）；`_build_infer_load_cmd(..., port=)`；`_guard_port(..., port=)`；`cmd_load(..., port=)` 校验 1–65535；`_cmd_load_c` / `_load_rpc` / `_load_ds4_pp` / `cmd_load_on` / 通用路径的**健康探测改按 alias 取端口** | 新增 + 接线 |
+| [ops/cluster_flow.py](../../ops/cluster_flow.py#L58-L78) | **P2-余**：`cmd_e2e` 从「三站各探 :8080」改为「探每个在跑别名各自的端口」，无别名才回退站默认 | 改写 |
+| [ops/station-bin/infer-load](../../ops/station-bin/infer-load#L208-L217) | **P2-余**：`--port` **落 conf**（`_set_conf_key PORT`），理由同 `--engine`：单元会重新 source conf；ds4 命名空间跳过 | 站上脚本 |
+| [ops/cluster.py](../../ops/cluster.py#L265-L268) | `load --port N` 解析 + 用法；门面重导出 `_engine_port` | CLI |
 
 **未改**（刻意）：`cmd_load_on`（web 按站路径，不支持 `--keep`）、`_load_rpc`（保持全站回收）、客户端 baseURL（P3）。
 
@@ -73,6 +77,8 @@ RESULT: ALL PASS                       # test_cluster_pure.py
 | 真站只读复核 | `A + gpt-oss-120b ⇒ 3`（O-178 反向冲突仍生效）、`A + deepseek ⇒ 0` |
 | 真站 GTT 读数（P0 补强） | `A ok=True used=103.1 total=117.2 alloc=6.1` · `B 78.3/117.2 alloc=30.9` · `C 24.6/117.2 alloc=84.6`（GiB，已扣预留 8） |
 | 真站端口读数（P2） | `B 在跑 {'deepseek-v4-flash-0731': 8080}` · `qwen3.8-27b-mtp conf PORT=18080` · `gpt-oss-20b conf PORT=8080` ⇒ 端口门：qwen 放行（0）、gpt-oss-20b 撞 deepseek（5） |
+| 站上脚本部署（P2-余） | A/B/C 三站 `infer-load` 37320B · `infer-unload` 5978B，与仓库**逐字节同尺寸**；`bash -n` 通过后才 install；备份 `*.bak-o179-20261029` |
+| 真站 alias 卸载验证 | B 站 `infer-unload __nonexistent_alias__` ⇒ 只打 alias 分支日志、**空动作**；随后 `llama-server@deepseek` 仍 active、`:8080 {"status":"ok"}` |
 
 ---
 
@@ -87,6 +93,8 @@ RESULT: ALL PASS                       # test_cluster_pure.py
      · `cmd_unload` 用例先断言 `cluster_runtime.reclaim_and_unload is <桩>` 再调用，桩没落到实现模块就**不调用**（返回 99）。
 2. **三处既有桩需跟进签名**：`_reclaim_containers` 多了可选 `alias`，测试里 3 个 `lambda st:` 桩改成 `lambda st, al=None:`（否则 `TypeError`）。这是**签名扩展的必然连带**，不是行为改动。
 3. **容量门只覆盖 gguf 模型**：容器模型（halogen）直接放行（DESIGN §4.2 / §8-3）。属登记过的缺口，不是遗漏。
+4. **⚠ 站上脚本漂移（P2-余 期间发现，已修）**：P1 的 `infer-unload <alias>` 只进了仓库，**没部署** —— 三站 `/usr/local/bin/infer-unload` 仍是 2026-10-28 09:04 的旧版，而旧版**不解析参数**。后果不是「功能没生效」，而是**语义反了**：`cluster.py unload --alias X` 会退化成**全站清空**。已按「备份 → sftp → `bash -n` → install → grep 核对」部署到 A/B/C（`infer-load` 同批，因 `--port` 落 conf 也在站上脚本里），并做了一次**空动作验证**（`infer-unload __nonexistent_alias__` 后 deepseek 仍 active）。
+   ⇒ 教训（已写进 CHECKLIST §6）：**改站上脚本 ≠ 改仓库**；凡 `cluster.py` 依赖的新语义，落地清单必须含「部署 + 站上核对」两步，否则本地门禁全绿而线上行为相反。
 
 ---
 

@@ -627,7 +627,8 @@ def resolve_alias(alias: str) -> tuple:
     return DEFAULT_STATION, alias, alias in RPC_MODELS, "default"
 
 
-def _cmd_load_c(alias: str, backend: str = None, engine: str = None, keep: bool = False) -> int:
+def _cmd_load_c(alias: str, backend: str = None, engine: str = None, keep: bool = False,
+                port: int = None) -> int:
     """C 站 load：与 A/B 同路径 (infer-load 已补装, 含 pkill 兜底管理手动引擎)。
 
     ⚠ 2026-10-12 修 Bug A：原签名只收 (alias, backend) ⇒ **`--engine` 在 C 站被静默丢弃**
@@ -642,14 +643,15 @@ def _cmd_load_c(alias: str, backend: str = None, engine: str = None, keep: bool 
     if not _rc_c["ok"]:
         print(f"[cluster] C 站回收/卸载失败 ⇒ 中止: {_rc_c['steps']}")
         return 1
-    cmd = _build_infer_load_cmd(alias, backend, engine)
+    cmd = _build_infer_load_cmd(alias, backend, engine, port=port)
     rc = ssh_stream("C", cmd)
     if rc != 0:
         print(f"[cluster] C 站加载失败 (rc={rc})。")
         return 1
-    ok, out = ssh_run("C", "curl -s --max-time 8 http://127.0.0.1:8080/health")
+    _cp, _csrc = _engine_port("C", alias, port)
+    ok, out = ssh_run("C", f"curl -s --max-time 8 http://127.0.0.1:{_cp}/health")
     if ok and out.strip():
-        print(f"[cluster] C 站引擎 :8080 响应: {out.strip()[:60]}")
+        print(f"[cluster] C 站引擎 :{_cp} 响应: {out.strip()[:60]}")
     print(f"[cluster] C 站引擎 READY ✓ (站内 infer-load 判定, rc=0)")
     return 0
 
@@ -706,11 +708,14 @@ def _pp_listen_ip(coord: str, worker: str) -> str:
 
 
 def _build_infer_load_cmd(matched: str, backend: str, engine: str = None,
-                          rpc_target: str = None, pp_listen: str = None) -> str:
+                          rpc_target: str = None, pp_listen: str = None,
+                          port: int = None) -> str:
     """拼装远端 infer-load 命令。backend 来自白名单校验(枚举), engine 来自 _engine_ok(), 均无注入风险。
     engine(引擎变体) 见 infer-load 的 --engine 说明: 名 -> /opt/llama.cpp-<名>/, 或绝对路径。
     rpc_target: 仅 RPC 类使用；worker 站 letter 经 RPC_WORKER_IPS 映射后传入（已在调用方校验）。
-    pp_listen: 仅 ds4 coordinator 使用；由 _pp_listen_ip 从直连段取值并在此二次校验。"""
+    pp_listen: 仅 ds4 coordinator 使用；由 _pp_listen_ip 从直连段取值并在此二次校验。
+    port: O-179 P2-余 —— 仅本次加载的端口覆盖（infer-load 会**落 conf**，理由见其 `--engine`
+      段：systemd 单元会重新 source conf，只改本进程环境对单元无效）。"""
     cmd = f"infer-load '{matched}'" + (f" --backend {backend}" if backend else "")
     if engine:
         cmd += f" --engine '{engine}'"
@@ -722,6 +727,10 @@ def _build_infer_load_cmd(matched: str, backend: str, engine: str = None,
         except ValueError as e:
             raise ValueError(f"非法 pp_listen: {pp_listen!r}") from e
         cmd += f" --pp-listen '{pp_listen}'"
+    if port is not None:
+        if not (isinstance(port, int) and 1 <= port <= 65535):
+            raise ValueError(f"非法 port: {port!r}")
+        cmd += f" --port {port}"
     return cmd
 
 
@@ -1287,7 +1296,21 @@ def _station_model_ports(station: str, exclude: str = None):
     return True, d
 
 
-def _guard_port(station: str, alias: str) -> int:
+def _engine_port(station: str, alias: str = None, explicit: int = None) -> tuple:
+    """健康探测用端口 ⇒ `(port, source)`：**显式 > 该别名 conf 的 PORT > 站默认 8080**。
+
+    为什么探测必须按 alias 取：第二个模型绑 18080 之后，`curl 127.0.0.1:8080` 问候的是
+    **另一个模型**（或空端口）—— 那会把「加载失败」伪装成「超时」，也会把「别的模型健康」
+    当成「本次加载成功」（O-179 P2-余）。
+    """
+    if explicit is not None:
+        return int(explicit), "cli"
+    if alias:
+        return _model_port(station, alias)
+    return STATION_PORT.get(station, 8080), "default"
+
+
+def _guard_port(station: str, alias: str, port: int = None) -> int:
     """`--keep` 时的**端口门**：目标端口若已被同站另一个模型占用 ⇒ exit 5。
 
     为什么只在 `--keep` 判：默认路径会先停掉该站**全部** `llama-server@*`，端口自然释放，
@@ -1295,7 +1318,7 @@ def _guard_port(station: str, alias: str) -> int:
     判不了（ssh 失败 / 读不到 conf）**不阻断**，但必须留痕 —— 与容量门「GTT 读不到回退」
     同一条纪律：不假装知道，也不因缺读数就挡掉合法加载。
     """
-    port, src = _model_port(station, alias)
+    port, src = _engine_port(station, alias, port)
     ok, others = _station_model_ports(station, exclude=alias)
     if not ok:
         print(f"[cluster] ⚠ 无法判定 {station} 站已运行模型的端口 —— 继续；若与 '{alias}' 撞口，"
@@ -1313,10 +1336,20 @@ def _guard_port(station: str, alias: str) -> int:
 
 
 def cmd_load(alias: str, backend: str = None, engine: str = None, worker: str = None,
-             force: bool = False, keep: bool = False) -> int:
+             force: bool = False, keep: bool = False, port: int = None) -> int:
     if backend is not None and backend not in BACKENDS:
         print(f"[cluster] 非法 --backend '{backend}'. 可选: {', '.join(sorted(BACKENDS))} (exit 1)")
         return 1
+    # O-179 P2-余：--port 与 --backend/--engine 同为"先校验再动手"的参数。
+    if port is not None:
+        try:
+            port = int(port)
+        except (TypeError, ValueError):
+            print(f"[cluster] 非法 --port '{port}'（需 1-65535 的整数）(exit 1)")
+            return 1
+        if not (1 <= port <= 65535):
+            print(f"[cluster] 非法 --port {port}（需 1-65535 的整数）(exit 1)")
+            return 1
     if engine is not None and not _engine_ok(engine):
         print(f"[cluster] 非法 --engine '{engine}' (仅允许 字母/数字/./_/-; 例: glm5next-20260928) (exit 1)")
         return 1
@@ -1355,7 +1388,7 @@ def cmd_load(alias: str, backend: str = None, engine: str = None, worker: str = 
         if _cap:
             return _cap
         # ★ O-179 P2：端口门（同一 --keep 语义）—— 同站叠加要求两个模型端口不同。
-        _port = _guard_port(station or DEFAULT_STATION, matched)
+        _port = _guard_port(station or DEFAULT_STATION, matched, port)
         if _port:
             return _port
     # 容器化模型 (halogen, CONTAINER_MODELS): 不走 infer-load ⇒ 必须在 **C 站分支之前**分派。
@@ -1365,6 +1398,9 @@ def cmd_load(alias: str, backend: str = None, engine: str = None, worker: str = 
             print(f"[cluster] 按站路由: {alias} -> {station} 站, 容器编排 {matched}")
         if engine:
             print(f"[cluster] ⚠ --engine '{engine}' 对容器化模型无意义, 已忽略。")
+        if port:
+            print(f"[cluster] ⚠ --port {port} 对容器化模型无意义（publish 面固定 "
+                  f"{CONTAINER_MODELS[matched].get('publish')}）, 已忽略。")
         return _load_container_model(matched, station, keep)
     if backend == "halogen":     # 非容器模型没有 halogen 配方 ⇒ 响亮拒绝, 不让 infer-load 报"未知后端"
         print(f"[cluster] '{matched}' 不在 CONTAINER_MODELS 中, 无 halogen 容器配方 "
@@ -1375,7 +1411,7 @@ def cmd_load(alias: str, backend: str = None, engine: str = None, worker: str = 
         # 自己是靠按站路由名进来的 (A/B 路径的标注在下面 tag 处)。
         if how == "station":
             print(f"[cluster] 按站路由: {alias} -> C 站, 站上别名 {matched}")
-        return _cmd_load_c(matched, backend, engine, keep)
+        return _cmd_load_c(matched, backend, engine, keep, port)
     # llama-rpc 双机类: 显式 --backend 单机后端(非 llama-rpc) 视为强制单机加载, 走正常路径;
     # 否则走 RPC 编排 (见 _load_rpc) —— 2026-09-15 落地方案 v2 P0-3, 原为"打印手动步骤 exit 2"。
     if is_rpc:
@@ -1386,11 +1422,11 @@ def cmd_load(alias: str, backend: str = None, engine: str = None, worker: str = 
             station = station or DEFAULT_STATION
             print(f"[cluster] '{matched}' 为 RPC 双机类, --backend {backend} 视为强制单机加载 (退化为 {station} 站单机)。")
         else:
-            return _load_rpc(matched, station or DEFAULT_STATION, engine, worker)
+            return _load_rpc(matched, station or DEFAULT_STATION, engine, worker, port)
     # ds4 双机 PP: 别名在 DS4_PP_MODELS 且显式 --backend ds4 ⇒ 走双机编排 (值 = (coordinator 站, worker 站))。
     # 单机 ds4 (别名不在表里, 或未显式指定 backend) 落到下面的普通路径 (`infer-load --backend ds4`)。
     if backend == "ds4" and matched in DS4_PP_MODELS:
-        return _load_ds4_pp(matched, *DS4_PP_MODELS[matched])
+        return _load_ds4_pp(matched, *DS4_PP_MODELS[matched], port=port)
     st_host = STATIONS[station]["host"]
     # 把"匹配方式"显式打印: default 分支意味着别名未在路由表中, 只是落到了默认站 ——
     # 若站上并无该别名, infer-load 才会失败; 不这样标出来会让它与正常路由外观一致 (见 resolve_alias 注释)。
@@ -1410,16 +1446,17 @@ def cmd_load(alias: str, backend: str = None, engine: str = None, worker: str = 
         print(f"[cluster] {station} 站回收/卸载失败 ⇒ 中止: {_r1['steps']}")
         return 1
     print(f"[cluster] 加载中 (站内 load-mem-gate 自动护航) ...")
-    rc = ssh_stream(station, _build_infer_load_cmd(matched, backend, engine))
+    rc = ssh_stream(station, _build_infer_load_cmd(matched, backend, engine, port=port))
     if rc != 0:
         print(f"[cluster] 加载失败 (rc={rc})。")
         return 1
     # 站内 infer-load 已针对不同后端 (llama/unsloth/vllm) 做真实 READY 判定 (实测 rc=0 即就绪)。
     # 不再用 {"status" 前缀复核——unsloth OpenAI 后端 /health 返回 {"detail":...} 会误判为未就绪。
-    ok, out = ssh_run(station, "curl -s --max-time 5 http://127.0.0.1:8080/health")
+    _ep, _esrc = _engine_port(station, matched, port)
+    ok, out = ssh_run(station, f"curl -s --max-time 5 http://127.0.0.1:{_ep}/health")
     if ok and out.strip():
-        print(f"[cluster] {station} 站引擎 :8080 响应: {out.strip()[:60]}")
-    print(f"[cluster] READY ✓ (站内 infer-load 判定, rc=0)")
+        print(f"[cluster] {station} 站引擎 :{_ep} 响应: {out.strip()[:60]}")
+    print(f"[cluster] READY ✓ (站内 infer-load 判定, rc=0; :{_ep} / {_esrc})")
     return 0
 
 
@@ -1569,7 +1606,8 @@ def resolve_rpc_worker(conf_target=None, candidates=None, probe=None,
             "reason": f"conf 不在候选/未知且无空闲 ⇒ 用 {t}（回收它）"}
 
 
-def _load_rpc(alias: str, station: str, engine: str = None, worker: str = None) -> int:
+def _load_rpc(alias: str, station: str, engine: str = None, worker: str = None,
+              port: int = None) -> int:
     """RPC 双机类加载编排 (2026-09-15, 方案 v2 P0-3)。
 
     把原先"打印手动步骤并 exit 2"升级为**一条命令端到端**。零件全部复用既有资产:
@@ -1686,19 +1724,21 @@ def _load_rpc(alias: str, station: str, engine: str = None, worker: str = None) 
     #   `backend == "llama-rpc"` 仍走 _load_rpc, 而本行恒传 None ⇒ 无论用户怎么传都落到 unsloth。
     #   ⇒ 这便是"RPC 类模型只能手工起"的真因, 不是能力缺失。
     #   兄弟函数 _load_ds4_pp 传的是 "ds4"(见下方), 本处漏传属**不一致**, 非设计。
-    rc = ssh_stream(station, _build_infer_load_cmd(alias, "llama-rpc", engine, rpc_target))
+    rc = ssh_stream(station, _build_infer_load_cmd(alias, "llama-rpc", engine, rpc_target,
+                                                   port=port))
     if rc != 0:
         print(f"[cluster] 加载失败 (rc={rc}) → 可用 journalctl -u 'llama-server@*' 排查。")
         return 1
 
-    ok, hl = ssh_run(station, "curl -s --max-time 5 http://127.0.0.1:8080/health")
+    _rp, _rsrc = _engine_port(station, alias, port)
+    ok, hl = ssh_run(station, f"curl -s --max-time 5 http://127.0.0.1:{_rp}/health")
     if ok and hl.strip():
-        print(f"[cluster] {station} 站引擎响应: {hl.strip()[:60]}")
+        print(f"[cluster] {station} 站引擎 :{_rp} 响应: {hl.strip()[:60]}")
     print(f"[cluster] RPC READY ✓  ({alias} 已跨机加载; 收尾用 cluster.py unload)")
     return 0
 
 
-def _load_ds4_pp(alias: str, coord: str, worker: str) -> int:
+def _load_ds4_pp(alias: str, coord: str, worker: str, port: int = None) -> int:
     """ds4 (DwarfStar) 双机 PP 加载编排 (2026-09-28, 见 spec/ds4-backend/DESIGN.md)。
 
     与 _load_rpc 同构 (零件复用: 站上 infer-load / infer-unload), 但序**不可反**:
@@ -1731,20 +1771,21 @@ def _load_ds4_pp(alias: str, coord: str, worker: str) -> int:
         return 1
 
     print(f"[cluster] [2/3] 再在 coordinator={coord} 站起 ds4 (--pp-listen {pp_ip}) ...")
-    rc = ssh_stream(coord, _build_infer_load_cmd(alias, "ds4", pp_listen=pp_ip))
+    rc = ssh_stream(coord, _build_infer_load_cmd(alias, "ds4", pp_listen=pp_ip, port=port))
     if rc != 0:
         print(f"[cluster] coordinator 启动失败 (rc={rc}) → 中止。")
         return 1
 
     print("[cluster] [3/3] 探活 coordinator /v1/models (ds4 无 /health 端点) ...")
-    ok, out = ssh_run(coord, "curl -s --max-time 5 http://127.0.0.1:8080/v1/models")
+    _dp, _dsrc = _engine_port(coord, alias, port)
+    ok, out = ssh_run(coord, f"curl -s --max-time 5 http://127.0.0.1:{_dp}/v1/models")
     if ok and out.strip():
-        print(f"[cluster] {coord} 站引擎响应: {out.strip()[:60]}")
+        print(f"[cluster] {coord} 站引擎 :{_dp} 响应: {out.strip()[:60]}")
     print(f"[cluster] ds4 PP READY ✓  ({alias} 已跨机 PP 加载; worker={worker} + coordinator={coord}; 收尾用 cluster.py unload)")
     return 0
 
 
-def cmd_load_on(station: str, alias: str, backend: str = None) -> int:
+def cmd_load_on(station: str, alias: str, backend: str = None, port: int = None) -> int:
     """在**指定站**加载模型 (跳过别名路由) —— 供 web 按站操作使用。
 
     与 cmd_load 的唯一区别: 不做 resolve_alias, 因为调用方已明确目标站
@@ -1771,11 +1812,12 @@ def cmd_load_on(station: str, alias: str, backend: str = None) -> int:
         print(f"[cluster] {station} 站回收/卸载失败 ⇒ 中止: {_r1['steps']}")
         return 1
     print(f"[cluster] 加载中 (站内 load-mem-gate 自动护航) ...")
-    rc = ssh_stream(station, _build_infer_load_cmd(alias, backend))
+    rc = ssh_stream(station, _build_infer_load_cmd(alias, backend, port=port))
     if rc != 0:
         print(f"[cluster] 加载失败 (rc={rc})。")
         return 1
-    print(f"[cluster] {station} 站 READY ✓ (站内 infer-load 判定, rc=0)")
+    _ep, _esrc = _engine_port(station, alias, port)
+    print(f"[cluster] {station} 站 READY ✓ (站内 infer-load 判定, rc=0; :{_ep} / {_esrc})")
     return 0
 
 
