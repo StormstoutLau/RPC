@@ -90,3 +90,17 @@ upstream: null
 4. 端口撞车无前置判据 ⇒ 靠 `llama-server` 绑定失败 + 健康检查超时**响亮失败**（P2）
 5. worker 站禁止 `--keep`（D-2）⇒ 「单站多模型」当前只覆盖 head 站/独立站
 6. 事故已恢复：误发 `glm-5.3-flash` 已由 `load deepseek-v4-flash-0731` 复原；三条加固判据见 IMPLEMENTATION §4
+
+---
+
+## 7. 进度记录（append-only）
+
+| 时间 | 事件 | 读数 |
+|---|---|---|
+| 2026-10-28 | 调研 + DESIGN（仓库盘点 / 社区案例 / 容量算账） | B 站 GTT 125.8G；gpt-oss-20b 11.5G + qwen3.8-27b 29.5G = 41G 权重 |
+| 2026-10-28 | P0 容量门 + P1 alias 级卸载落地（先验红 → 实现） | `run_py_tests` **70/70** · `rpc_check --quick` **41 绿 / 2 黄 / 0 红** |
+| 2026-10-28 23:22 | ⚠ 测试误发 `glm-5.3-flash`（`keep` 位置参数写成 `force`），生产 deepseek 被换 | 只读探测确认 B/A 已变 glm |
+| 2026-10-28 23:31 | 恢复完成：`load deepseek-v4-flash-0731` | B `READY ✓ :8080`（1M ctx）· A `rpc-server@deepseek` · C qwen 容器全程未动 |
+| 2026-10-28 | 提交 `8541c04b`（未推送） | 9 文件 +730/−38；工作区干净 |
+| 待办 | G1 真站共存（`gpt-oss-20b` + `qwen3.8-27b-mtp-b --keep`） | 需先卸生产 deepseek（B 站 84/125.8G），**等用户择时** |
+
