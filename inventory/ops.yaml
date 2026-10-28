@@ -25,6 +25,8 @@ entry:
 # 为什么单列而不塞进 entry: entry 的语义是"入口", 塞模块会让"入口 4"这种计数失去意义。
 # 拆分方案见 docs/2026-09-23_cluster.py模块化重构_调研与方案.md (阶段 1 逐批抽取)。
 entry_modules:
+  - ops/rpc_common.py
+  - ops/rpc_protocol.py
   - ops/cluster_const.py
   - ops/cluster_console.py
   - ops/cluster_ssh.py
