@@ -1232,6 +1232,86 @@ def _guard_capacity(station: str, alias: str) -> int:
     return 0
 
 
+# ── O-179 P2：端口预留记录（2026-10-29）─────────────────────────────────
+# 为什么需要：两个别名的 conf 可能都写 `PORT=8080`（gpt-oss-20b 与 deepseek 就是），
+# `--keep` 叠加时第二个会 bind 失败，只能等 15min 健康检查超时才暴露。
+# **真值只有一个**：各别名站上 conf 的 `PORT`（`llama-serve-instance` 读它 —— 它才是
+# 引擎真正绑的值）。仓库侧不另造 alias→port 表；`inventory/ports.yaml` 只登记**端口号**
+# 的暴露面（谁在用、绑哪个地址），两者维度不同、互不抄写。
+def _port_clash(target_port: int, others: dict) -> str:
+    """纯函数：`others` 里第一个与 `target_port` 相同的别名；无冲突 ⇒ ""。"""
+    for al, p in (others or {}).items():
+        try:
+            if int(p) == int(target_port):
+                return str(al)
+        except (TypeError, ValueError):
+            continue
+    return ""
+
+
+def _model_port(station: str, alias: str) -> tuple:
+    """别名将绑的端口 ⇒ `(port, source)`，source ∈ {"conf", "default"}。
+
+    conf 缺失/不可解析 ⇒ 回退 `STATION_PORT`（引擎默认 8080），并**如实标注**来源。
+    """
+    ok, txt = ssh_run(station, f"cat {sh_single_quote(f'/etc/llama-instances/{alias}.env')} "
+                               f"2>/dev/null")
+    if ok and (txt or "").strip():
+        try:
+            return int(_parse_conf(txt).get("PORT") or 8080), "conf"
+        except (TypeError, ValueError):
+            pass
+    return STATION_PORT.get(station, 8080), "default"
+
+
+def _station_model_ports(station: str, exclude: str = None):
+    """站上**在跑**的 `llama-server@<alias>` 各自 conf 的 PORT ⇒ `(ok, {alias: port})`。
+
+    为什么不用 `ss`：`ss` 只说「这个口有人占」，说不出「是哪个别名」；而这里要判的正是
+    「同站另一个**模型**是否已经用了这个端口」。真值就在各别名 conf 里，直接读。
+    """
+    cmd = ("for u in $(systemctl list-units 'llama-server@*' --state=active --no-legend "
+           "2>/dev/null | awk '{print $1}'); do "
+           "a=${u#llama-server@}; a=${a%.service}; "
+           "p=$(sed -n 's/^PORT=//p' /etc/llama-instances/$a.env 2>/dev/null | tail -1); "
+           "echo \"$a=${p:-8080}\"; done")
+    ok, out = ssh_run(station, cmd)
+    if not ok:
+        return False, {}
+    d = {}
+    for line in (out or "").splitlines():
+        k, _, v = line.strip().partition("=")
+        v = v.strip()
+        if k and v.isdigit() and not (exclude and k == exclude):
+            d[k] = int(v)
+    return True, d
+
+
+def _guard_port(station: str, alias: str) -> int:
+    """`--keep` 时的**端口门**：目标端口若已被同站另一个模型占用 ⇒ exit 5。
+
+    为什么只在 `--keep` 判：默认路径会先停掉该站**全部** `llama-server@*`，端口自然释放，
+    此时判「占着」是必然的假阴性。
+    判不了（ssh 失败 / 读不到 conf）**不阻断**，但必须留痕 —— 与容量门「GTT 读不到回退」
+    同一条纪律：不假装知道，也不因缺读数就挡掉合法加载。
+    """
+    port, src = _model_port(station, alias)
+    ok, others = _station_model_ports(station, exclude=alias)
+    if not ok:
+        print(f"[cluster] ⚠ 无法判定 {station} 站已运行模型的端口 —— 继续；若与 '{alias}' 撞口，"
+              f"加载只会在健康检查阶段超时失败（O-179 P2）")
+        return 0
+    hit = _port_clash(port, others)
+    if hit:
+        print(f"[cluster] ⛔ 端口冲突: {station} 站 '{hit}' 已占 :{port}，'{alias}'（{src}）也会绑它")
+        print(f"[cluster]    同站叠加要求两个模型**不同端口**：改 {alias} 的 conf PORT，"
+              f"或先 `cluster.py unload --alias {hit}` (exit 5)")
+        return 5
+    print(f"[cluster] PORT ok: {station} 站 '{alias}' → :{port}（{src}；"
+          f"站上其它模型端口 {others or '无'}）")
+    return 0
+
+
 def cmd_load(alias: str, backend: str = None, engine: str = None, worker: str = None,
              force: bool = False, keep: bool = False) -> int:
     if backend is not None and backend not in BACKENDS:
@@ -1274,6 +1354,10 @@ def cmd_load(alias: str, backend: str = None, engine: str = None, worker: str = 
         _cap = _guard_capacity(station or DEFAULT_STATION, matched)
         if _cap:
             return _cap
+        # ★ O-179 P2：端口门（同一 --keep 语义）—— 同站叠加要求两个模型端口不同。
+        _port = _guard_port(station or DEFAULT_STATION, matched)
+        if _port:
+            return _port
     # 容器化模型 (halogen, CONTAINER_MODELS): 不走 infer-load ⇒ 必须在 **C 站分支之前**分派。
     # 显式 `--backend unsloth` 等其它后端时**不**分派 —— 保留既有回退路径 (load ... --backend unsloth)。
     if matched in CONTAINER_MODELS and backend in (None, CONTAINER_MODELS[matched]["backend"]):

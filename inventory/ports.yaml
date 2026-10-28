@@ -80,6 +80,24 @@ managed:
       是 **docker 发布路径**（实测进程名见 rpc_check 的 `_OCCUPANT_KINDS`），不是 studio/llama-server;
       回退到 unsloth 仍用 `cluster.py load <别名> --backend unsloth`。
 
+  - port: 18080
+    proto: http
+    purpose: "同站第二模型的引擎 API 面（per-alias 端口；当前 = qwen3.8-27b-mtp）"
+    scope: [B, C]
+    bind: 127.0.0.1
+    expect_bind: 127.0.0.1
+    owner: llama-server (按 alias conf 的 PORT)
+    mode: on_demand
+    consumers: [ops/cluster.py]
+    note: |
+      ★ 2026-10-29（O-179 P2）：单站多模型共存时，第二个模型必须与第一个**不同端口**。
+      端口真值**只在站上 conf**（`/etc/llama-instances/<alias>.env` 的 `PORT=`，
+      `llama-serve-instance` 读它并传给 `--port`）—— 本表只登记「这个端口号属于我们、
+      绑 loopback、按需启停」的**暴露面**，不登记 alias→port 映射（否则就是第二张真值表）。
+      加载前由 `cluster.py load --keep` 的端口门（`_guard_port`）比对同站已运行别名各自的
+      conf PORT：撞口 ⇒ exit 5，不再等 15min 健康检查超时才暴露。
+      现状：B / C 的 `qwen3.8-27b-mtp.env` 均为 `PORT=18080`（未加载时不监听 ⇒ on_demand）。
+
   - port: 32837
     proto: http
     purpose: unsloth studio 内部第二 llama-server (--parallel 4)

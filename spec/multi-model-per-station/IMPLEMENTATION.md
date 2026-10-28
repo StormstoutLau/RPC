@@ -36,6 +36,9 @@ upstream: null
 | [ops/cluster_const.py](../../ops/cluster_const.py#L108-L117) | **P0 补强**：新增 `STATION_RESERVED_GIB = 8.0`（站级预留，理由=10-26 两次 device-lost 都发生在余 15~24G） | 新增常量 |
 | [ops/cluster_runtime.py](../../ops/cluster_runtime.py#L1129-L1176) | **P0 补强**：`_uma_fit`（UMA 单池 `alloc = total − used − reserved`）+ `_station_gtt`（读 sysfs GTT 实账）；`_guard_capacity` 加**第 2 道**判据（estimate 之后），读不到 GTT ⇒ 回退并留痕 | 新增 + 接线 |
 | [ops/cluster.py](../../ops/cluster.py#L155-L159) | 门面重导出 `_uma_fit` / `_station_gtt` / `STATION_RESERVED_GIB` | 重导出 |
+| [ops/cluster_runtime.py](../../ops/cluster_runtime.py#L1235-L1312) | **P2**：`_port_clash`（纯函数）· `_model_port`（读站上 conf 的 `PORT`）· `_station_model_ports`（列站上在跑别名各自的 conf PORT）· `_guard_port`（撞口 ⇒ exit 5）；`cmd_load` 在容量门之后接线（仅 `--keep`） | 新增 + 接线 |
+| [inventory/ports.yaml](../../inventory/ports.yaml#L83-L99) | **P2**：登记 `18080` 暴露面（`mode: on_demand`；注释写明「本表只登记端口号，alias→port 真值在站上 conf」） | 真值表 |
+| [docs/派生视图_端口分配.md](../../docs/派生视图_端口分配.md) | `derived_view.py --emit` 重渲染（ports.yaml 改动后必须重出，否则 `derived-view` 门禁红） | 生成物 |
 
 **未改**（刻意）：`cmd_load_on`（web 按站路径，不支持 `--keep`）、`_load_rpc`（保持全站回收）、客户端 baseURL（P3）。
 
@@ -69,6 +72,7 @@ RESULT: ALL PASS                       # test_cluster_pure.py
 | `py -3.12 ops\rpc_check.py --quick` | 41 绿 / 2 黄 / **0 红**（`doclinks` 因缺 CHECKLIST 曾红 1 次，补文件后复绿） |
 | 真站只读复核 | `A + gpt-oss-120b ⇒ 3`（O-178 反向冲突仍生效）、`A + deepseek ⇒ 0` |
 | 真站 GTT 读数（P0 补强） | `A ok=True used=103.1 total=117.2 alloc=6.1` · `B 78.3/117.2 alloc=30.9` · `C 24.6/117.2 alloc=84.6`（GiB，已扣预留 8） |
+| 真站端口读数（P2） | `B 在跑 {'deepseek-v4-flash-0731': 8080}` · `qwen3.8-27b-mtp conf PORT=18080` · `gpt-oss-20b conf PORT=8080` ⇒ 端口门：qwen 放行（0）、gpt-oss-20b 撞 deepseek（5） |
 
 ---
 

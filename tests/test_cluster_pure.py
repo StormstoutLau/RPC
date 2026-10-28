@@ -637,6 +637,37 @@ chk("O-179 容量门(GTT): 读不到 GTT ⇒ 回退 estimate 的 verdict（放�
 chk("O-179 容量门(GTT): estimate 已判 NO_FIT ⇒ 不因 GTT 空闲而放行",
     _cap_gtt("NO_FIT", (True, 0.0, 125.8), need=41.0) == 4)
 
+# ── O-179 P2：端口预留记录（真值 = 各别名 conf 的 PORT，不造第二张表）──────
+# 现场缺口：两个别名的 conf 都写 PORT=8080（gpt-oss-20b / deepseek），`--keep` 叠加时
+# 第二个会 bind 失败，只能靠 15min 健康超时发现。判据 = **同站已运行别名各自的 conf PORT**
+# 与目标端口比对（不读 ss 猜占用者：ss 只知道"有人占"，不知道"是谁"）。
+chk("O-179 端口冲突: 目标 8080 已被 'gpt-oss-20b' 占 ⇒ 报出该别名",
+    C._port_clash(8080, {"gpt-oss-20b": 8080, "qwen3.8-27b-mtp": 18080}) == "gpt-oss-20b")
+chk("O-179 端口冲突: 18080 无重叠 ⇒ 空",
+    C._port_clash(18080, {"gpt-oss-20b": 8080}) == "")
+chk("O-179 端口冲突: 站上没别的模型 ⇒ 空",
+    C._port_clash(8080, {}) == "")
+chk("O-179 端口冲突: 两个别名撞同一端口 ⇒ 也报（不只看第一个）",
+    C._port_clash(18080, {"a": 18080, "b": 8080}) == "a")
+
+
+def _port_guard(target, others, ok=True):
+    _r1 = _swap("_model_port", lambda st, al: (target, "conf"))
+    _r2 = _swap("_station_model_ports", lambda st, exclude=None: (ok, others))
+    try:
+        return C._guard_port("B", "qwen3.8-27b-mtp")
+    finally:
+        _r2()
+        _r1()
+
+
+chk("O-179 端口门: 与站上其它模型撞口 ⇒ exit 5",
+    _port_guard(8080, {"gpt-oss-20b": 8080}) == 5)
+chk("O-179 端口门: 端口不撞 ⇒ 放行",
+    _port_guard(18080, {"gpt-oss-20b": 8080}) == 0)
+chk("O-179 端口门: 判不了（ssh 失败）不阻断，但留痕",
+    _port_guard(8080, {}, ok=False) == 0)
+
 
 def _est_str(p):
     return str(_est(p)) if _est else "<缺 _egress_station_today>"

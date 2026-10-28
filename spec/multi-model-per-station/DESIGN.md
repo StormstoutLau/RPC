@@ -185,12 +185,16 @@ cluster.py unload [--alias <alias>] [--station A|B|C]
 
 ## 6. 后续（本轮不做，只登记）
 
-| # | 内容 | 为何现在不做 |
+| # | 内容 | 状态 |
 |---|---|---|
-| P2 | per-alias 端口真值：`ports.yaml` 补 `18080` 与「模型端口」段；6 处 `127.0.0.1:8080` 改按 alias 取 | 先拿到共存能力，再动门禁口径；改了会连带 `ports`/`engine`/`stations` 三条判据 |
-| P3 | 网关寻址（llama-swap 优先）：站上 8080 由网关占，按 model 名转 18080/18081 | 需新进程与新配置面；且 `ports.yaml` 的 8080 语义要改 |
-| P4 | `COEXIST_GROUPS`：对标 llama-swap `groups`，默认互斥、显式允许 | 需要多个真实共存组合的运维经验才定得准 |
-| P5 | 上游 router 模式（`--models-dir/--models-max`） | 与 RPC worker / TTL / 门禁的组合未验证 |
+| P2 | **端口预留记录**：真值 = 各别名站上 conf 的 `PORT`（不造 alias→port 第二张表）+ 加载前**端口门**（`_port_clash` / `_model_port` / `_station_model_ports` / `_guard_port`，撞口 ⇒ exit 5）+ `ports.yaml` 登记 `18080` 暴露面 + 派生视图重渲染 | ✅ **已做（2026-10-29）** |
+| P2-余 | 6 处写死 `127.0.0.1:8080` 的探针/客户端改按 alias 取；`load --port N` 暴露（现在只能改站上 conf） | 未做（与 P3 一起做更省：网关定下来后这些点会变） |
+| P3 | 网关寻址（llama-swap 优先）：站上 8080 由网关占，按 model 名转 18080/18081 | 未做 |
+| P4 | `COEXIST_GROUPS`：对标 llama-swap `groups`，默认互斥、显式允许 | 未做 |
+| P5 | 上游 router 模式（`--models-dir/--models-max`） | 未做 |
+
+> **P2 为什么不做 GPUStack 式的「动态分配 + generation 乐观重试」**：那套是给「起容器前不知道端口、需要协商」的场景用的；本仓端口由 conf 静态定义且 `llama-serve-instance` 直接消费 —— 做动态分配器会与 conf 抢真值，并引入持久化依赖。这里取它的**判据精神**（判「谁的端口」而不是「有没有人占」），落地为「读同站已运行别名各自的 conf PORT 再比对」。
+> **P2 实测发现**：`gpt-oss-20b.env` 的 `PORT=8080` 与 deepseek 相同 ⇒ 「gpt-oss-20b + qwen3.8-27b-mtp 共存」必须先给前者换端口（改 conf 或用 P2-余 的 `--port`），这正是端口门第一次真跑就报出 `exit 5` 的原因。
 
 ---
 
@@ -199,7 +203,7 @@ cluster.py unload [--alias <alias>] [--station A|B|C]
 | 风险 | 处置 |
 |---|---|
 | 内存紧张时 worker 侧 `vk::DeviceLostError`（O-178 A/B 类，10-26 两次） | 容量门用 `estimate_load` 的 `pad_gib`（默认 12G）；`TIGHT` 放行但打印告警；worker 站本轮禁止 `--keep` |
-| 端口撞车（新别名 conf `PORT` 与已在监听端口相同） | 本轮**不拦**：`llama-server` 绑定失败 ⇒ infer-load 健康检查超时 ⇒ 响亮失败，非静默；P2 补端口真值后转成前置判据 |
+| 端口撞车（新别名 conf `PORT` 与同站已运行模型相同） | **P2 已转前置判据**：`--keep` 时 `_guard_port` 比对同站已运行别名各自的 conf PORT，撞口 ⇒ exit 5 并点名是谁占着；判不了（ssh 失败）⇒ 留痕放行，仍由健康检查兜底 |
 | 别名大小写/连字符注入到站上命令 | `sh_single_quote` 包裹（既有序言） |
 | 回滚 | 两刀各自独立：`--keep` 不被使用时行为与基线**完全一致**；`infer-unload` 无参数路径逐字未改 |
 
