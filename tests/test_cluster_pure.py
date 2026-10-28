@@ -323,7 +323,7 @@ def _rpc_reclaim_probe(worker=None, conf_target="", probe=None, reclaim=None,
         return (True, decl) if cmd.startswith("rpc-nodes --all") else (True, alive)
 
     restores = [
-        _swap("_reclaim_containers", lambda st: (True, "")),
+        _swap("_reclaim_containers", lambda st, al=None: (True, "")),
         _swap("reclaim_and_unload", _reclaim_and_unload),
         _swap("ssh_stream", lambda *a, **k: 0),
         _swap("ssh_run", _ssh_run),
@@ -465,12 +465,24 @@ chk("O-178/O-175 冲突判定: 没有 rpc-server ⇒ 无冲突",
 
 _restore = _swap("_active_rpc_workers",
                  lambda st: (True, ["rpc-server@deepseek-v4-flash-0731.service"]))
+# ★ 安全网：即使"预检"回归失效，也**绝不**落到真加载（2026-10-28 实测教训：桩错位
+#   会把 `force` 当成 `keep`，真的向 B 站派发 load 并换掉生产模型）。这里把加载与回收
+#   全部钉死成"记录+立即返回"，判据只看退出码。
+_load_calls, _reclaim_dummy = [], []
+_safe = [
+    _swap("reclaim_and_unload", lambda st, al=None: (
+        _reclaim_dummy.append((st, al)), {"station": st, "ok": True, "steps": []})[1]),
+    _swap("ssh_stream", lambda st, cmd: (0)),
+    _swap("_guard_capacity", lambda st, al: 0),
+]
 try:
     _rc_g = C._guard_worker_conflict("A", "gpt-oss-120b")
     _rc_gf = C._guard_worker_conflict("A", "gpt-oss-120b", True)
     _rc_gs = C._guard_worker_conflict("A", "deepseek-v4-flash-0731")
     _rc_gl = C.cmd_load("gpt-oss-120b-a", None, None, None)      # 按站路由到 A
 finally:
+    for _r in reversed(_safe):
+        _r()
     _restore()
 chk("O-178/O-175 预检: 冲突 ⇒ exit 3 · --force 放行 · 同一模型放行",
     _rc_g == 3 and _rc_gf == 0 and _rc_gs == 0,
@@ -485,6 +497,102 @@ finally:
     _restore()
 chk("O-178/O-175 预检: 判不了（ssh 失败）不阻断加载，但必须留痕",
     _rc_unk == 0, f"rc={_rc_unk}")
+
+# ── O-179 单站多模型：P0 容量门 + P1 alias 级卸载（2026-10-28）───────────
+# 准则从「同站禁止叠加」改为「按容量准入」：带 --keep 时才走 alias 级回收 + 容量门。
+# 不带 --keep ⇒ 行为必须与基线逐字一致（69 个既有测试即判据）。
+chk("O-179 容量判据: FITS/TIGHT 放行 · NO_FIT/UNKNOWN 拒绝（判不了≠通过）",
+    C._capacity_ok("FITS") and C._capacity_ok("TIGHT")
+    and not C._capacity_ok("NO_FIT") and not C._capacity_ok("UNKNOWN"))
+
+
+def _cap(verdict, ok=True):
+    """桩掉 estimate_load，只验判据到退出码的映射（不碰网络）。"""
+    _r = _swap("estimate_load", lambda st, al: {
+        "ok": ok, "verdict": verdict, "need_gib": 60.0, "mem": {"free": 20.0},
+        "reasons": ["合成理由"], "advice": ["合成建议"]})
+    try:
+        return C._guard_capacity("B", "qwen3.8-27b-mtp")
+    finally:
+        _r()
+
+
+chk("O-179 容量门: NO_FIT ⇒ exit 4",
+    _cap("NO_FIT") == 4)
+chk("O-179 容量门: UNKNOWN ⇒ exit 4",
+    _cap("UNKNOWN") == 4)
+chk("O-179 容量门: ok=False（缺 conf/元数据）⇒ exit 4",
+    _cap("FITS", ok=False) == 4)
+chk("O-179 容量门: FITS ⇒ 放行",
+    _cap("FITS") == 0)
+chk("O-179 容量门: 容器模型不走 estimate（放行，P2 再补）",
+    C._guard_capacity("C", "qwen3.8-flash-next") == 0)
+
+# ★★ 这条**必须完全隔离**：`keep=True` 是关键字参数（曾用位置参数把 force 当成 keep ⇒
+#   真的向 B 站派发 load，换掉了生产 deepseek）。同时把 `_load_rpc` 钉成哨兵：
+#   万一"RPC 不支持 keep"那条判据被回退，结果是 99 而不是一次真加载。
+_rpc_calls = []
+_r1 = _swap("_active_rpc_workers", lambda st: (True, []))
+_r2 = _swap("_load_rpc", lambda *a, **k: (_rpc_calls.append(a), 99)[1])
+try:
+    _rc_kr = C.cmd_load("glm-5.3-flash", None, None, None, keep=True)
+finally:
+    _r2()
+    _r1()
+chk("O-179 --keep 对 RPC 双机: 拒绝且**不落到真加载**",
+    _rc_kr == 1 and not _rpc_calls, f"rc={_rc_kr} load_calls={_rpc_calls}")
+
+_seen = {}
+_r1 = _swap("_reclaim_containers", lambda st, al=None: (_seen.__setitem__("containers_alias", al), (True, ""))[1])
+_r2 = _swap("ssh_stream", lambda st, cmd: (_seen.__setitem__("cmd", cmd), 0)[1])
+try:
+    C.reclaim_and_unload("B", "glm-5.3-flash")
+    _seen["with_alias"] = True
+    C.reclaim_and_unload("B")
+    _seen["full_cmd"] = _seen["cmd"]
+finally:
+    _r2()
+    _r1()
+chk("O-179 alias 级卸载: 透传 infer-unload <alias>，无参仍是全停",
+    _seen.get("cmd") is not None and _seen["full_cmd"] == "infer-unload"
+    and _seen["containers_alias"] is None,
+    f"_seen={_seen}")
+
+_sent = []
+_r = _swap("ssh_run", lambda st, cmd, timeout=None: (_sent.append(cmd), (True, ""))[1])
+try:
+    _ok_skip, _d_skip = C._reclaim_containers("B", "glm-5.3-flash")
+    _n_after_skip = len(_sent)                       # 跳过必须发生在发命令**之前**
+    _ok_cont, _ = C._reclaim_containers("B", "qwen3.8-flash-next")
+    _n_after_container = len(_sent)
+finally:
+    _r()
+chk("O-179 容器步: keep 下非容器别名不碰 docker；容器别名照常回收",
+    _ok_skip and _n_after_skip == 0 and _ok_cont and _n_after_container == 1
+    and "skipped" in _d_skip,
+    f"ok_skip={_ok_skip} detail={_d_skip} sent(skip)={_n_after_skip} "
+    f"sent(total)={_n_after_container}")
+
+_unl = []
+
+
+def _fake_reclaim(st, al=None):
+    _unl.append((st, al))
+    return {"station": st, "ok": True, "steps": []}
+
+
+# ★ 先证明桩**真落到了实现所在模块**再调用 —— 否则一次"静默未生效"就是三站真卸载。
+import cluster_runtime as _CR  # noqa: E402
+_r = _swap("reclaim_and_unload", _fake_reclaim)
+try:
+    _stub_ok = _CR.reclaim_and_unload is _fake_reclaim
+    _rc_u = C.cmd_unload("glm-5.3-flash") if _stub_ok else 99
+finally:
+    _r()
+chk("O-179 unload --alias: 三站都只卸该别名",
+    _stub_ok and _rc_u == 0 and len(_unl) == 3
+    and all(a == "glm-5.3-flash" for _, a in _unl),
+    f"stub_ok={_stub_ok} rc={_rc_u} calls={_unl}")
 
 
 def _est_str(p):
@@ -677,7 +785,7 @@ chk("T9: 端口未释放 ⇒ (False, 'port8080-still-busy')",
 # ── E6/E7：reclaim_and_unload 的异常隔离与跳过语义（Step 10 验收补测）────
 def _rau_e7():
     """容器步失败 ⇒ 跳过 unload（不发第二个写动作）。"""
-    r1 = _swap("_reclaim_containers", lambda st: (False, "ssh:boom"))
+    r1 = _swap("_reclaim_containers", lambda st, al=None: (False, "ssh:boom"))
     ran = {"stream": False}
 
     def _fake_stream(st, cmd):
@@ -700,7 +808,7 @@ chk("E7: 容器步失败 ⇒ steps[1].detail 含 skipped，且未发 infer-unloa
 
 def _rau_e6():
     """infer-unload 连接异常 ⇒ 就地捕获，不抛出。"""
-    r1 = _swap("_reclaim_containers", lambda st: (True, ""))
+    r1 = _swap("_reclaim_containers", lambda st, al=None: (True, ""))
 
     def _boom(st, cmd):
         raise RuntimeError("connection reset")

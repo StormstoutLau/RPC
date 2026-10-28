@@ -5,9 +5,9 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
 
 用法:
     python ops/cluster.py status [--html] [--frames]
-    python ops/cluster.py load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] [--engine <变体名|绝对路径>] [--worker A|C]
+    python ops/cluster.py load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] [--engine <变体名|绝对路径>] [--worker A|C] [--force] [--keep]
     python ops/cluster.py frames
-    python ops/cluster.py unload
+    python ops/cluster.py unload [--alias <别名>] [--station A|B|C]
     python ops/cluster.py estimate <alias> [--station A|B|C] [--ctx N] [--parallel N] [--ctk q8_0] [--ctv q8_0]  # 事前预估 (内存/耗时)
     python ops/cluster.py models {list|orphan|link|prune|verify|meta|fetch} [--station A|B|C] [--go]  # 模型全生命周期 (fetch=下发下载任务)
     python ops/cluster.py versions                                         # 引擎版本矩阵 (RPC/单机/LM Studio/opencode/内核)
@@ -60,8 +60,11 @@ cluster.py — 三机推理集群聚合操作 CLI (主控站)
               `rpc-server@<别的模型>` (= 正在给某个 head 当 worker), 默认**拒绝**
               (exit 3) —— 因为 load 的第一步 `infer-unload` 会停掉它, 对面 head 会
               `GGML_ABORT`(core-dump)。确要牺牲那个 head 才加 --force。
+            --keep 允许**同站叠加** (O-179, 2026-10-28): 只替换同名 alias（不做全站清空），
+              并且**先过容量门** —— 站上剩余内存装不下就 exit 4 并给出卸谁/改哪个参数的建议。
+              不给 --keep ⇒ 仍按"同站互斥"全站清空（旧行为，默认）。RPC 双机本轮不支持。
     frames   三站框架级运行状态一览 (llama-server/unsloth/vllm/litellm/opencode), 恒 exit 0
-    unload   三站并行幂等卸载
+    unload   三站并行幂等卸载；--alias 只卸该别名（保留同站其它模型），--station 只卸一站
     estimate 事前预估 (P1-1): 给定 alias 预估加载后的内存/耗时, 不实际加载 (只读)。
              支持 --station/--ctx/--parallel/--ctk/--ctv 覆盖 conf 推测值。
     models   模型全生命周期 (P1-2): list=按 (repo,模型目录) 聚合的清单(体积/量化/conf/是否已加载);
@@ -180,7 +183,7 @@ from cluster_flow import (  # noqa: E402
 
 # ── runtime 域（2026-10-28 拆分；重导出 ⇒ 外部 `cluster.*` 调用点不变）──────
 from cluster_runtime import (  # noqa: E402
-    AliasError, FRAME_CMD, RPC_WORKER_STATIONS, _ENGINE_CHARS, _KV_BPE, _METRICS_CMD, _active_rpc_workers, _build_infer_load_cmd, _cmd_load_c, _conf_rpc_target, _container_cleanup_cmd, _engine_ok, _fallback_conf, _frame_status, _guard_worker_conflict, _host_path_for, _load_container_model, _load_ds4_pp, _load_rpc, _parse_conf, _planes_compact, _pp_listen_ip, _probe_map, _reclaim_containers, _station_mem, _worker_conflict, classify_container_assets, classify_worker_probe, cmd_estimate, cmd_frames, cmd_load, cmd_load_on, cmd_status, cmd_unload, cmd_unload_on, collect_frames, collect_status, containers_plan, estimate_load, parse_worker_busy, preflight_container, probe_frames, probe_metrics, probe_worker_state, reclaim_and_unload, render_html, resolve_alias, resolve_rpc_worker, sh_single_quote,
+    AliasError, FRAME_CMD, RPC_WORKER_STATIONS, _ENGINE_CHARS, _KV_BPE, _METRICS_CMD, _active_rpc_workers, _build_infer_load_cmd, _capacity_ok, _cmd_load_c, _conf_rpc_target, _container_cleanup_cmd, _engine_ok, _fallback_conf, _frame_status, _guard_capacity, _guard_worker_conflict, _host_path_for, _load_container_model, _load_ds4_pp, _load_rpc, _parse_conf, _planes_compact, _pp_listen_ip, _probe_map, _reclaim_containers, _station_mem, _worker_conflict, classify_container_assets, classify_worker_probe, cmd_estimate, cmd_frames, cmd_load, cmd_load_on, cmd_status, cmd_unload, cmd_unload_on, collect_frames, collect_status, containers_plan, estimate_load, parse_worker_busy, preflight_container, probe_frames, probe_metrics, probe_worker_state, reclaim_and_unload, render_html, resolve_alias, resolve_rpc_worker, sh_single_quote,
 )
 
 # ── catalog 域（2026-10-28 拆分；重导出 ⇒ 外部 `cluster.*` 调用点不变）──────
@@ -245,7 +248,7 @@ def main() -> int:
         return cmd_status("--html" in args[1:], "--frames" in args[1:], "--all" in args[1:])
     if sub == "load":
         tail = args[1:]
-        rest, backend, engine, worker, force, i = [], None, None, None, False, 0
+        rest, backend, engine, worker, force, keep, i = [], None, None, None, False, False, 0
         while i < len(tail):
             if tail[i] == "--backend" and i + 1 < len(tail):
                 backend = tail[i + 1]   # 提取值并跳过, 避免污染 alias 前缀
@@ -263,17 +266,37 @@ def main() -> int:
                 force = True
                 i += 1
                 continue
+            if tail[i] == "--keep":      # O-179: 允许同站叠加（alias 级回收 + 容量门）
+                keep = True
+                i += 1
+                continue
             rest.append(tail[i])
             i += 1
         if not rest:
             print("用法: cluster.py load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] "
-                  "[--engine <变体名|绝对路径>] [--worker A|C] [--force]")
+                  "[--engine <变体名|绝对路径>] [--worker A|C] [--force] [--keep]")
             return 1
-        return cmd_load(" ".join(rest), backend, engine, worker, force)
+        return cmd_load(" ".join(rest), backend, engine, worker, force, keep)
     if sub == "frames":
         return cmd_frames()
     if sub == "unload":
-        return cmd_unload()
+        tail, alias, only = args[1:], None, None
+        i = 0
+        while i < len(tail):
+            if tail[i] == "--alias" and i + 1 < len(tail):
+                alias = tail[i + 1]
+                i += 2
+                continue
+            if tail[i] == "--station" and i + 1 < len(tail):
+                only = tail[i + 1]
+                i += 2
+                continue
+            print(f"[cluster] unload 不认识的参数 '{tail[i]}' "
+                  f"(用法: unload [--alias <别名>] [--station A|B|C]) (exit 1)")
+            return 1
+        if only:
+            return cmd_unload_on(only, alias)
+        return cmd_unload(alias)
     if sub == "estimate":
         return cmd_estimate(args[1:])
     if sub == "models":

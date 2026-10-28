@@ -627,7 +627,7 @@ def resolve_alias(alias: str) -> tuple:
     return DEFAULT_STATION, alias, alias in RPC_MODELS, "default"
 
 
-def _cmd_load_c(alias: str, backend: str = None, engine: str = None) -> int:
+def _cmd_load_c(alias: str, backend: str = None, engine: str = None, keep: bool = False) -> int:
     """C 站 load：与 A/B 同路径 (infer-load 已补装, 含 pkill 兜底管理手动引擎)。
 
     ⚠ 2026-10-12 修 Bug A：原签名只收 (alias, backend) ⇒ **`--engine` 在 C 站被静默丢弃**
@@ -638,7 +638,7 @@ def _cmd_load_c(alias: str, backend: str = None, engine: str = None) -> int:
     # ★ 2026-10-22 实测：C 站分支在 cmd_load 里**先于**通用路径 return ⇒ 必须在此单独回收容器。
     #   漏掉它的表现（C 站连续复现）：halogen 容器继续占 8080/GTT ⇒ 新 studio 落到 **8081**，
     #   两个引擎同抢 ~90 GB ⇒ 容器随后 OOM `Exited (1)`。
-    _rc_c = reclaim_and_unload("C")
+    _rc_c = reclaim_and_unload("C", alias if keep else None)
     if not _rc_c["ok"]:
         print(f"[cluster] C 站回收/卸载失败 ⇒ 中止: {_rc_c['steps']}")
         return 1
@@ -771,7 +771,7 @@ def _container_cleanup_cmd() -> str:
     return "; ".join(parts)
 
 
-def _reclaim_containers(station: str) -> tuple:
+def _reclaim_containers(station: str, alias: str = None) -> tuple:
     """回收站上已登记的容器，返回 `(ok, detail)`。**必须先于 `infer-unload`** —— 反之
     infer-unload 的 wait_gtt 会因容器仍持 ~90 GB GTT 每站白等满 180 s (90×2s) 才 WARN 退出。
 
@@ -781,7 +781,13 @@ def _reclaim_containers(station: str) -> tuple:
     ★ 2026-10-26 缺口 3：旧版返回裸 bool 且只 `print` 端口未释放 ⇒ 调用方**无法区分**
     "删干净了" / "端口还占着" / "SSH 都连不上"，于是静默继续加载。现在三者都用
     `(ok, detail)` 显式表达，detail 供上层原样打印（不吞）。
+
+    ★★ O-179（2026-10-28）：`alias` 非 None 且**不是**容器模型 ⇒ **跳过**（`skipped: keep`）。
+    这是 `--keep`（同站叠加）的核心语义：为了装 B 模型去 `docker rm -f` A 模型的容器，
+    等于换了名字继续全站清空。
     """
+    if alias is not None and alias not in CONTAINER_MODELS:
+        return True, "skipped: keep (非容器别名，不动站上容器)"
     ok, out = ssh_run(station, _container_cleanup_cmd(), timeout=540)
     if not ok:
         return False, f"ssh:{(out or '').strip()[:160]}"
@@ -792,7 +798,7 @@ def _reclaim_containers(station: str) -> tuple:
     return True, ""
 
 
-def reclaim_and_unload(station: str) -> dict:
+def reclaim_and_unload(station: str, alias: str = None) -> dict:
     """回收容器 + 卸载引擎，返回结构化结果（**不抛异常**）。
 
     steps 恒为两项，名称固定 `containers` / `infer-unload`：
@@ -802,8 +808,12 @@ def reclaim_and_unload(station: str) -> dict:
     ★ 容器步失败 ⇒ **跳过** infer-unload：ok=False 只有两种来源——SSH 已断（再发必然
     同样失败）或端口未释放（容器已删，`infer-unload` 无进程可杀）。两者都无收益，
     跳过并记 `skipped: containers failed`，不做无意义写动作。
+
+    ★★ O-179（2026-10-28）：`alias` 非 None ⇒ **只卸这个别名**（`infer-unload <alias>`，
+    只停该别名的 `llama-server@` 与各站 `rpc-server@`，不 pkill）。`alias=None` 逐字保留
+    旧语义（全站全停）—— 默认路径的兼容性就靠这条。
     """
-    ok_c, detail_c = _reclaim_containers(station)
+    ok_c, detail_c = _reclaim_containers(station, alias)
     steps = [{"name": "containers", "ok": ok_c, "detail": detail_c}]
     if not ok_c:
         steps.append({"name": "infer-unload", "ok": False, "rc": None,
@@ -811,8 +821,9 @@ def reclaim_and_unload(station: str) -> dict:
         return {"station": station, "ok": False, "steps": steps}
 
     rc, ok_u, detail_u = None, False, ""
+    cmd = "infer-unload" if alias is None else f"infer-unload {sh_single_quote(alias)}"
     try:
-        rc = ssh_stream(station, "infer-unload")
+        rc = ssh_stream(station, cmd)
         ok_u = rc == 0
         detail_u = "" if ok_u else f"rc={rc}"
     except Exception as e:          # 连接级异常（超时/认证/端口不可达）
@@ -953,7 +964,7 @@ def preflight_container(alias: str, station: str) -> dict:
     return {"ok": not problems, "problems": problems, "image_missing": not image_present}
 
 
-def _load_container_model(alias: str, station: str) -> int:
+def _load_container_model(alias: str, station: str, keep: bool = False) -> int:
     """容器化模型的加载编排 (2026-10-21, ADR-0014 D7 落地)。
 
     与 `_load_rpc` / `_load_ds4_pp` 同构的"别名 -> 特殊编排"分支, 但**不经 infer-load**:
@@ -990,9 +1001,9 @@ def _load_container_model(alias: str, station: str) -> int:
         return 1
     print(f"[cluster] PREFLIGHT {alias}@{station} ok=True")
 
-    # [1/4] 回收 + 卸载 (互斥: 同站禁止叠加加载)
+    # [1/4] 回收 + 卸载 (O-179: 默认互斥=全站清空; --keep 时只替换同名 alias)
     print(f"[cluster] [1/4] 回收站内既有引擎/容器 ...")
-    _r1 = reclaim_and_unload(station)
+    _r1 = reclaim_and_unload(station, alias if keep else None)
     if not _r1["ok"]:
         print(f"[cluster] [1/4] 回收/卸载失败 ⇒ 中止: {_r1['steps']}")
         return 1
@@ -1115,8 +1126,48 @@ def _guard_worker_conflict(station: str, alias: str, force: bool = False) -> int
     return 3
 
 
+def _capacity_ok(verdict: str) -> bool:
+    """纯函数：`estimate_load` 的结论 → 是否放行叠加加载。
+
+    `TIGHT` 与 `cmd_estimate` 同口径（那里也 `return 0`）：余量紧但能装上，
+    由调用方打印告警；`UNKNOWN`/`NO_FIT` 一律拒 —— **判不了 ≠ 通过**。
+    """
+    return str(verdict or "").strip().upper() in ("FITS", "TIGHT")
+
+
+def _guard_capacity(station: str, alias: str) -> int:
+    """`--keep`（允许同站叠加）时的**容量门**：算不下就不动手（exit 4）。
+
+    为什么只在 `--keep` 时判：默认路径会先把该站清空，此时 `estimate_load` 读到的
+    used/free 是**卸载前**的读数 ⇒ 拿它判"装不下"是假阴性（会挡住本来合法的替换加载）。
+
+    为什么容器模型直接放行：容器走 `.hgn` 配方、没有 `/etc/llama-instances/<alias>.env`，
+    `estimate_load` 取不到 MODEL_PATH/元数据（它自己的兜底也只认 gguf 模型库）。
+    容器内存由 halogen 的 `LOWERING THE POOL` 自管 ⇒ 本轮登记为 P2 待办，不在这里猜。
+    """
+    if alias in CONTAINER_MODELS:
+        print(f"[cluster] CAPACITY n/a: '{alias}' 是容器模型（内存由 halogen 自管，O-179 P2 再补）")
+        return 0
+    est = estimate_load(station, alias)
+    if not est.get("ok") or not _capacity_ok(est.get("verdict")):
+        free = (est.get("mem") or {}).get("free")
+        print(f"[cluster] ⛔ 容量不足: {station} 站装不下 '{alias}' "
+              f"(verdict={est.get('verdict')} need={est.get('need_gib')}G"
+              + (f" free={free}G" if free is not None else "") + ")")
+        for r in (est.get("reasons") or [])[:4]:
+            print(f"[cluster]    原因: {r}")
+        for a in (est.get("advice") or [])[:4]:
+            print(f"[cluster]    建议: {a}")
+        print("[cluster]    处置: 先 `cluster.py unload --alias <占着内存的模型>`，或按建议改 conf；"
+              "确要硬上请去掉 --keep（会先全站清空）(exit 4)")
+        return 4
+    print(f"[cluster] CAPACITY ok: {station} 站 verdict={est.get('verdict')} "
+          f"need={est.get('need_gib')}G（叠加加载）")
+    return 0
+
+
 def cmd_load(alias: str, backend: str = None, engine: str = None, worker: str = None,
-             force: bool = False) -> int:
+             force: bool = False, keep: bool = False) -> int:
     if backend is not None and backend not in BACKENDS:
         print(f"[cluster] 非法 --backend '{backend}'. 可选: {', '.join(sorted(BACKENDS))} (exit 1)")
         return 1
@@ -1139,12 +1190,24 @@ def cmd_load(alias: str, backend: str = None, engine: str = None, worker: str = 
     if worker and not is_rpc:
         print(f"[cluster] --worker 仅适用于 RPC 双机类模型 ({', '.join(sorted(RPC_MODELS))}) (exit 1)")
         return 1
+    # ★ O-179（2026-10-28）：`--keep` = 允许同站叠加（只替换同名 alias + 过容量门）。
+    #   RPC 双机本轮不开放：head 与 worker 的 GTT 同池竞争（O-175/O-178）还没算清，
+    #   放行等于用一个未验证的内存模型去赌生产 head。
+    if keep and is_rpc:
+        print(f"[cluster] --keep 暂不支持 RPC 双机类 ({', '.join(sorted(RPC_MODELS))})："
+              f"head/worker 的 GTT 同池竞争未算清 (O-179 D-2) (exit 1)")
+        return 1
     # ★ O-178/O-175：反向冲突预检 —— 目标站若正给**别的**模型当 RPC worker，加载会
     #   （经 reclaim_and_unload ⇒ infer-unload）停掉那个 worker，对面 head 直接 ABORT。
     #   放在所有分派之前：容器化/按站路由/RPC 三条路都会先回收该站。
     _guard = _guard_worker_conflict(station or DEFAULT_STATION, matched, force)
     if _guard:
         return _guard
+    # ★ O-179 P0：容量门只在 --keep 时判（默认路径会先清空该站，读数会是卸载前的假阴性）。
+    if keep:
+        _cap = _guard_capacity(station or DEFAULT_STATION, matched)
+        if _cap:
+            return _cap
     # 容器化模型 (halogen, CONTAINER_MODELS): 不走 infer-load ⇒ 必须在 **C 站分支之前**分派。
     # 显式 `--backend unsloth` 等其它后端时**不**分派 —— 保留既有回退路径 (load ... --backend unsloth)。
     if matched in CONTAINER_MODELS and backend in (None, CONTAINER_MODELS[matched]["backend"]):
@@ -1152,7 +1215,7 @@ def cmd_load(alias: str, backend: str = None, engine: str = None, worker: str = 
             print(f"[cluster] 按站路由: {alias} -> {station} 站, 容器编排 {matched}")
         if engine:
             print(f"[cluster] ⚠ --engine '{engine}' 对容器化模型无意义, 已忽略。")
-        return _load_container_model(matched, station)
+        return _load_container_model(matched, station, keep)
     if backend == "halogen":     # 非容器模型没有 halogen 配方 ⇒ 响亮拒绝, 不让 infer-load 报"未知后端"
         print(f"[cluster] '{matched}' 不在 CONTAINER_MODELS 中, 无 halogen 容器配方 "
               f"(已登记: {', '.join(sorted(CONTAINER_MODELS))}) (exit 1)")
@@ -1162,7 +1225,7 @@ def cmd_load(alias: str, backend: str = None, engine: str = None, worker: str = 
         # 自己是靠按站路由名进来的 (A/B 路径的标注在下面 tag 处)。
         if how == "station":
             print(f"[cluster] 按站路由: {alias} -> C 站, 站上别名 {matched}")
-        return _cmd_load_c(matched, backend, engine)
+        return _cmd_load_c(matched, backend, engine, keep)
     # llama-rpc 双机类: 显式 --backend 单机后端(非 llama-rpc) 视为强制单机加载, 走正常路径;
     # 否则走 RPC 编排 (见 _load_rpc) —— 2026-09-15 落地方案 v2 P0-3, 原为"打印手动步骤 exit 2"。
     if is_rpc:
@@ -1192,7 +1255,7 @@ def cmd_load(alias: str, backend: str = None, engine: str = None, worker: str = 
     #   再用 `/health` 有无响应决定是否 unload。但容器被 `docker rm -f` 后 HTTP 服务已消失、
     #   GTT 仍可能被 docker-proxy/命名空间持有（本仓 C 站实测 8080 释放约 4m18s）⇒ 那个条件
     #   恰好漏掉"容器已删但资源未释放"这一格。`infer-unload` 幂等且含 wait_gtt，无条件执行更正确。
-    _r1 = reclaim_and_unload(station)
+    _r1 = reclaim_and_unload(station, matched if keep else None)
     if not _r1["ok"]:
         print(f"[cluster] {station} 站回收/卸载失败 ⇒ 中止: {_r1['steps']}")
         return 1
@@ -1566,21 +1629,28 @@ def cmd_load_on(station: str, alias: str, backend: str = None) -> int:
     return 0
 
 
-def cmd_unload_on(station: str) -> int:
-    """只卸载**指定站** (web 按站操作; 三站并行卸载仍用 cmd_unload)。"""
+def cmd_unload_on(station: str, alias: str = None) -> int:
+    """只卸载**指定站** (web 按站操作; 三站并行卸载仍用 cmd_unload)。
+
+    `alias` 非 None ⇒ 只卸该别名（O-179 P1）；None ⇒ 整站清空（旧语义）。
+    """
     if station not in STATIONS:
         print(f"[cluster] 未知站 '{station}'")
         return 1
     # ★ 容器**必须先回收** —— 否则 infer-unload 的 wait_gtt 会因容器仍持 ~90 GB GTT
     #   在站上白等满 180 s (90×2s) 才 WARN。
-    _r = reclaim_and_unload(station)
-    print(f"[cluster] {station} 站 " + "; ".join(
+    _r = reclaim_and_unload(station, alias)
+    _what = f" {alias}" if alias else ""
+    print(f"[cluster] {station} 站{_what} " + "; ".join(
         f"{s['name']}={'OK' if s['ok'] else (s['detail'] or 'FAIL')}" for s in _r["steps"]))
     return 0 if _r["ok"] else 1
 
 
-def cmd_unload() -> int:
-    """三站并行卸载。★ 单站连不上**只记该站失败** —— 不吞掉其余站的结论, 也不让整条命令崩。"""
+def cmd_unload(alias: str = None) -> int:
+    """三站并行卸载。★ 单站连不上**只记该站失败** —— 不吞掉其余站的结论, 也不让整条命令崩。
+
+    `alias` 非 None ⇒ 三站都只卸这个别名（`cluster.py unload --alias <alias>`，O-179 P1）。
+    """
     results = {}
     threads = []
 
@@ -1590,7 +1660,7 @@ def cmd_unload() -> int:
         # (2026-09-29 实测形态: C 站 LAN 192.168.1.37 不通 —— 命令直接 traceback, 只回显了 A/B。
         #  与 P1-4「解析失败不能表现成业务全错」同一原则。)
         try:
-            _r = reclaim_and_unload(st)   # 同为 wait_gtt 前置; 且是"卸载"该有的语义
+            _r = reclaim_and_unload(st, alias)   # 同为 wait_gtt 前置; 且是"卸载"该有的语义
             results[st] = 0 if _r["ok"] else _r
         except Exception as e:          # 连接级异常: 超时 / 认证 / 端口不可达
             results[st] = f"{type(e).__name__}: {e}"

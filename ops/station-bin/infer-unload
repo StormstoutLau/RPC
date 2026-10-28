@@ -2,6 +2,41 @@
 # infer-unload — 停两站全部推理实例 (systemd llama + vllm + unsloth + ds4) + RPC worker, 等 GTT 释放
 set -euo pipefail
 log() { echo "[infer-unload] $(date '+%H:%M:%S') $*"; }
+
+# ---- worker 通道（两种模式共用；2026-09-15 修）----------------------------
+# ⚠ ssh 必须用**持有节点密钥的服务用户**: 以 root 跑本脚本时 root 无密钥 (与 infer-load 真因①同源)。
+RPC_USER="${RPC_USER:-$(id -un)}"
+if [ "$(id -u)" = "0" ]; then SSHX=(sudo -u "$RPC_USER" ssh -o BatchMode=yes)
+else SSHX=(ssh -o BatchMode=yes); fi
+NODES_ENV_F="${NODES_ENV:-/etc/llama-instances/nodes.env}"
+NODES_LIST=""
+if [ -f "$NODES_ENV_F" ]; then
+  NODES_LIST="$("${RPC_NODES_BIN:-/usr/local/bin/rpc-nodes}" --all 2>/dev/null || true)"
+fi
+
+# ---- O-179（2026-10-28）: **alias 级卸载** --------------------------------
+# 用法: `infer-unload <alias>` 只停这一个别名；无参数 = 全站清空（旧语义，逐字保留在下面）。
+# 为什么必须单列一条路: 老实现只会 `systemctl stop 'llama-server@*'` —— 一个通配就把同站
+# 其它模型一起杀了，"单站多模型共存"根本立不住。
+# 为什么不 pkill unsloth/ds4/vllm: 那些进程**没有 alias 归属**，在 alias 模式下照杀
+# 等于换个名字继续全站清空（设计 O-179 D-7）。宁可漏杀，也不越界。
+ALIAS="${1:-}"
+if [ -n "$ALIAS" ]; then
+  log "只卸别名 ${ALIAS}（同站其它模型保持不动）"
+  sudo systemctl stop "llama-server@${ALIAS}" 2>/dev/null || true
+  sudo systemctl stop "rpc-server@${ALIAS}" 2>/dev/null || true
+  if [ -n "$NODES_LIST" ]; then
+    for node in $NODES_LIST; do
+      ip="${node%%:*}"
+      log "停远端 worker ${node} 的 rpc-server@${ALIAS}..."
+      "${SSHX[@]}" "$ip" "sudo systemctl stop 'rpc-server@${ALIAS}' 2>/dev/null" 2>/dev/null || true
+    done
+  fi
+  log "alias 模式: 跳过 unsloth/ds4/vllm 清扫（它们没有 alias 归属）"
+  exit 0
+fi
+
+# ---- 以下为**无参全停**（旧行为，逐字保留）--------------------------------
 log "停 B 站 llama-server@*..."
 sudo systemctl stop 'llama-server@*' 2>/dev/null || true
 log "停 B 站 unsloth 实例..."
@@ -25,11 +60,7 @@ fi
 # 原先只 ssh A 站停 rpc-server。C 站 2026-09-15 起也是 worker (nodes.env 的 RPC_NODES 声明 A+C)
 # ⇒ 每轮双机加载都会在 C 留下常驻 `rpc-server@<alias>`, 让集群门禁 engine 项长期黄灯
 # (实测 "C 站引擎在服务: 端口 50052 · RSS 0G / 有端口在听但 RSS 仅 121M")。
-# ⚠ ssh 必须用**持有节点密钥的服务用户**: 以 root 跑本脚本时 root 无密钥 (与 infer-load 真因①同源)。
-RPC_USER="${RPC_USER:-$(id -un)}"
-if [ "$(id -u)" = "0" ]; then SSHX=(sudo -u "$RPC_USER" ssh -o BatchMode=yes)
-else SSHX=(ssh -o BatchMode=yes); fi
-
+# (RPC_USER / SSHX / NODES_ENV_F / NODES_LIST 已在文件头统一解析 —— alias 模式共用)
 # ① 本站就地停 —— 不经 ssh: 避开"自 ssh 到本机 USB4 IP"的 host key 坑 (实测 A/C 均 Host key verification failed),
 #    也让"单独在某台 worker 上跑 infer-unload"真能停掉它自己的 rpc-server。
 log "停本站 rpc-server@*..."
@@ -39,11 +70,9 @@ sudo systemctl stop 'rpc-server@*' 2>/dev/null || true
 # ② master 侧停**远端** worker: 清单取自 nodes.env (rpc-nodes --all), 不在脚本里再抄一份 IP。
 #    nodes.env 只在 master 存在 ⇒ 非 master 站查不到清单属正常, 静默跳过 (停 worker 由 master 负责),
 #    **不能**因此报 WARN —— 那会让常规 unload 看起来像出错。
-NODES_ENV_F="${NODES_ENV:-/etc/llama-instances/nodes.env}"
 RPC_WAS_ACTIVE=""
 if [ "$LOCAL_RPC_WAS" = "active" ]; then RPC_WAS_ACTIVE="本站"; fi
 if [ -f "$NODES_ENV_F" ]; then
-  NODES_LIST="$("${RPC_NODES_BIN:-/usr/local/bin/rpc-nodes}" --all 2>/dev/null || true)"
   if [ -z "$NODES_LIST" ]; then log "WARN: 有 ${NODES_ENV_F} 但取不到节点清单 (rpc-nodes --all 失败)"; fi
   for node in $NODES_LIST; do
     ip="${node%%:*}"
