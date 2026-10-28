@@ -88,6 +88,9 @@ upstream: null
 | 当前 B 站（deepseek 1M 占 84.0 GB） | 余 ~41.8 GB ⇒ **放不下这两者** |
 | 当前 A 站（deepseek worker 占 110.7 GB） | 余 15.2 GB ⇒ **任何叠加都不行** |
 
+> **单位口径**（P0 补强实测校准）：`mem_info_gtt_total` = 125 829 120 000 B ⇒ **125.8 GB = 117.2 GiB**。
+> 容量门内部一律按 **GiB**（`/1024³`），文案也标 `GiB`；上表的 GB 只用于与模型体积（`du` 输出）对齐。
+
 ⇒ 「在容量允许的条件下」必须是**机器判据**：这就是 P0 存在的理由。
 
 ---
@@ -103,6 +106,7 @@ upstream: null
 | D-5 | 反向冲突预检（`--force`，exit 3）**先于**容量门 | 「会崩别人」比「放不下」更严重；两条拒绝面互不替代 |
 | D-6 | `infer-unload` 用**位置参数**而非 `--alias` | 站上是 bash 脚本、无参数解析器；`infer-unload <alias>` 与 `systemctl stop unit` 的肌肉记忆一致，且旧调用（无参）零改动 |
 | D-7 | `infer-unload <alias>` **不**执行 `pkill`（unsloth / ds4 / vllm）与远端全量清扫 | 那些没有 alias 归属；alias 模式下照杀等于**换个名字继续全站清空**，与目标相反 |
+| D-8 | 容量门用**两道判据**：`estimate_load` 的 verdict（算「要多少」）+ 站上 **GTT 实账**（算「还剩多少」）+ 站级预留 8 GiB；GTT 读不到 ⇒ 回退 verdict 并留痕 | UMA 下 `MemAvailable` 把可回收缓存算成空闲（偏乐观）；而 10-26 两次 `vk::DeviceLostError` 都发生在 GTT 余 15~24G ⇒ 「塞得进」≠「跑得稳」。同族做法见 GPUStack `system_reserved`（[调研 §5](../../docs/research/2026-10-28_gpustack可复用性分析.md)） |
 
 ---
 
@@ -112,8 +116,13 @@ upstream: null
 
 ```python
 def _capacity_ok(verdict: str) -> bool
+def _uma_fit(total_gib, used_gib, reserved_gib, need_gib) -> tuple   # (放得下?, 可用 GiB)
+def _station_gtt(station: str) -> tuple                              # (ok, used_gib, total_gib)
 ```
-`FITS` / `TIGHT` ⇒ True；`NO_FIT` / `UNKNOWN` / 其它 ⇒ False。**不读环境**，可直接单测。
+`_capacity_ok`：`FITS` / `TIGHT` ⇒ True；`NO_FIT` / `UNKNOWN` / 其它 ⇒ False。
+`_uma_fit`：`alloc = max(total − used − reserved, 0)`，`放得下 = need ≤ alloc`。
+`_station_gtt`：读 `/sys/class/drm/card*/device/mem_info_gtt_{used,total}`；解析失败 ⇒ `ok=False`。
+三者**都不读全局状态**，可直接单测。
 
 ### 4.2 编排函数
 
@@ -121,8 +130,9 @@ def _capacity_ok(verdict: str) -> bool
 def _guard_capacity(station: str, alias: str) -> int
 ```
 - 别名属于 `CONTAINER_MODELS` ⇒ 打一行「容器模型换算不走 estimate」并返回 0（容器内存由 halogen 自行下调，属 P2）
-- 调 `estimate_load(station, alias)`；`ok=False` 或 verdict ∈ {NO_FIT, UNKNOWN} ⇒ 打印 `need_gib / mem / verdict / reasons / advice`，返回 **4**
-- 放行时打印一行 `CAPACITY ok verdict=… need=…G free=…G`
+- **第 1 道**：调 `estimate_load(station, alias)`；`ok=False` 或 verdict ∈ {NO_FIT, UNKNOWN} ⇒ 打印 `need_gib / mem / verdict / reasons / advice`，返回 **4**
+- **第 2 道（P0 补强，D-8）**：读站上 GTT 实账，`_uma_fit(total, used, STATION_RESERVED_GIB=8, need)`；不 fit ⇒ 打印 `total/used/reserved/alloc/need` 并返回 **4**；GTT 读不到 ⇒ **回退第 1 道**并打印留痕（不因缺读数而拒绝，也不假装精确）
+- 放行时打印 `CAPACITY ok verdict=… need=…GiB`（若第 2 道跑过，其读数已在上一行）
 
 ### 4.3 调用点（唯一）
 

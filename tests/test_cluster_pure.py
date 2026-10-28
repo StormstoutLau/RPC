@@ -507,13 +507,18 @@ chk("O-179 容量判据: FITS/TIGHT 放行 · NO_FIT/UNKNOWN 拒绝（判不了�
 
 
 def _cap(verdict, ok=True):
-    """桩掉 estimate_load，只验判据到退出码的映射（不碰网络）。"""
+    """桩掉 estimate_load + GTT 读数，只验 estimate 判据到退出码的映射（不碰网络）。
+
+    GTT 单独桩成「读不到」⇒ 走回退分支（GTT 门槛另有 `_cap_gtt` 覆盖）。
+    """
     _r = _swap("estimate_load", lambda st, al: {
         "ok": ok, "verdict": verdict, "need_gib": 60.0, "mem": {"free": 20.0},
         "reasons": ["合成理由"], "advice": ["合成建议"]})
+    _rg = _swap("_station_gtt", lambda st: (False, 0.0, 0.0))
     try:
         return C._guard_capacity("B", "qwen3.8-27b-mtp")
     finally:
+        _rg()
         _r()
 
 
@@ -593,6 +598,44 @@ chk("O-179 unload --alias: 三站都只卸该别名",
     _stub_ok and _rc_u == 0 and len(_unl) == 3
     and all(a == "glm-5.3-flash" for _, a in _unl),
     f"stub_ok={_stub_ok} rc={_rc_u} calls={_unl}")
+
+# ── O-179 P0 补强：UMA 单池口径 + 站级预留（借鉴 GPUStack §2.1/§2.2）────────
+# 为什么是 (ok, alloc) 而不是 (ok, free)：判据要同时回答「放不放得下」和「还剩多少」，
+# 后者在拒绝文案里必须能直接给出来（否则用户只能自己算）。
+chk("O-179 UMA 口径: 空站 125.8G − 预留 8G ≥ 41G ⇒ 放行",
+    C._uma_fit(125.8, 0.0, 8.0, 41.0) == (True, 117.8),
+    f"{C._uma_fit(125.8, 0.0, 8.0, 41.0)}")
+chk("O-179 UMA 口径: 已占 84G 再放 41G ⇒ 拒绝（alloc 33.8）",
+    C._uma_fit(125.8, 84.0, 8.0, 41.0) == (False, 33.8),
+    f"{C._uma_fit(125.8, 84.0, 8.0, 41.0)}")
+chk("O-179 UMA 口径: 预留先吃掉余量 ⇒ 拒绝（alloc 7.8）",
+    C._uma_fit(125.8, 110.0, 8.0, 8.0) == (False, 7.8),
+    f"{C._uma_fit(125.8, 110.0, 8.0, 8.0)}")
+chk("O-179 UMA 口径: 已用超过总量 ⇒ alloc 夹到 0（不返回负数）",
+    C._uma_fit(125.8, 200.0, 8.0, 1.0) == (False, 0.0),
+    f"{C._uma_fit(125.8, 200.0, 8.0, 1.0)}")
+
+
+def _cap_gtt(verdict, gtt, need=60.0):
+    _r1 = _swap("estimate_load", lambda st, al: {
+        "ok": True, "verdict": verdict, "need_gib": need, "mem": {"free": 100.0},
+        "reasons": [], "advice": []})
+    _r2 = _swap("_station_gtt", lambda st: gtt)
+    try:
+        return C._guard_capacity("B", "qwen3.8-27b-mtp")
+    finally:
+        _r2()
+        _r1()
+
+
+chk("O-179 容量门(GTT): estimate 说 FITS 但 GTT 余量不足 ⇒ 仍拒（exit 4）",
+    _cap_gtt("FITS", (True, 84.0, 125.8), need=60.0) == 4)
+chk("O-179 容量门(GTT): GTT 足够 ⇒ 放行",
+    _cap_gtt("FITS", (True, 0.0, 125.8), need=41.0) == 0)
+chk("O-179 容量门(GTT): 读不到 GTT ⇒ 回退 estimate 的 verdict（放行但留痕）",
+    _cap_gtt("FITS", (False, 0.0, 0.0), need=41.0) == 0)
+chk("O-179 容量门(GTT): estimate 已判 NO_FIT ⇒ 不因 GTT 空闲而放行",
+    _cap_gtt("NO_FIT", (True, 0.0, 125.8), need=41.0) == 4)
 
 
 def _est_str(p):

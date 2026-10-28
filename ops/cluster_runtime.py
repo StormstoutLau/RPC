@@ -30,7 +30,7 @@ import paramiko
 from cluster_const import (  # noqa: E402
     STATIONS, STATION_PORT, ROUTE, STATION_ROUTES, BACKENDS,
     DEFAULT_STATION, RPC_MODELS, RPC_WORKER_IPS, DS4_PP_MODELS, CONTAINER_MODELS,
-    HTML_OUT, SSH_TIMEOUT, PANELS, SERVICE_USER, REPO_ROOT,
+    HTML_OUT, SSH_TIMEOUT, PANELS, SERVICE_USER, REPO_ROOT, STATION_RESERVED_GIB,
 )
 
 
@@ -1126,6 +1126,56 @@ def _guard_worker_conflict(station: str, alias: str, force: bool = False) -> int
     return 3
 
 
+def _uma_fit(total_gib, used_gib, reserved_gib, need_gib) -> tuple:
+    """纯函数：UMA **单池**口径 —— 返回 `(放得下?, 可用 GiB)`。
+
+    口径来源（GPUStack `policies/resource_view.py` 的 UMA 分支 +
+    `candidate_selectors/gguf_resource_fit_selector.py` 的 fit 判据）：
+        allocatable = max(total − used − reserved, 0)
+    本集群是 AMD 8060S（UMA）：权重、KV、预分配 buffer 与「显存」落**同一个池**（GTT），
+    所以不需要像独显那样分 ram/vram 两本账 —— 只要 `need ≤ allocatable`。
+
+    ⚠ 为什么**必须**扣 reserved（见 `cluster_const.STATION_RESERVED_GIB`）：
+      2026-10-26 两次 worker 侧 `vk::DeviceLostError` 都发生在余 15~24G 的区间，
+      即「算得下但一跑就崩」—— 判据要表达的是**跑得稳**，不是**塞得进**。
+    """
+    alloc = max(float(total_gib) - float(used_gib) - float(reserved_gib), 0.0)
+    return (float(need_gib) <= alloc), round(alloc, 1)
+
+
+def _station_gtt(station: str):
+    """站上 **GTT** 已用/总量（GiB）。返回 `(ok, used, total)`；读不到 ⇒ `ok=False`。
+
+    为什么不用 `/proc/meminfo`：UMA 下模型权重落 GTT（`ps` RSS 只有几百 MB，
+    实测 77G 模型 RSS 仅 217MB / GTT 54.6G）。`estimate_load` 仍用 meminfo 算
+    「这个模型要多少」，但「还剩多少」必须读 GTT，否则会把缓存当空闲。
+    """
+    cmd = ("for f in /sys/class/drm/card*/device/mem_info_gtt_used; do "
+           "[ -f \"$f\" ] && { echo \"USED=$(cat $f)\"; break; }; done; "
+           "for f in /sys/class/drm/card*/device/mem_info_gtt_total; do "
+           "[ -f \"$f\" ] && { echo \"TOTAL=$(cat $f)\"; break; }; done")
+    ok, out = ssh_run(station, cmd)
+    if not ok:
+        return False, 0.0, 0.0
+    u = t = None
+    for line in (out or "").splitlines():
+        line = line.strip()
+        if line.startswith("USED="):
+            try:
+                u = int(line.split("=", 1)[1])
+            except ValueError:
+                return False, 0.0, 0.0
+        elif line.startswith("TOTAL="):
+            try:
+                t = int(line.split("=", 1)[1])
+            except ValueError:
+                return False, 0.0, 0.0
+    if u is None or not t:
+        return False, 0.0, 0.0
+    g = 1024.0 ** 3
+    return True, round(u / g, 1), round(t / g, 1)
+
+
 def _capacity_ok(verdict: str) -> bool:
     """纯函数：`estimate_load` 的结论 → 是否放行叠加加载。
 
@@ -1161,6 +1211,22 @@ def _guard_capacity(station: str, alias: str) -> int:
         print("[cluster]    处置: 先 `cluster.py unload --alias <占着内存的模型>`，或按建议改 conf；"
               "确要硬上请去掉 --keep（会先全站清空）(exit 4)")
         return 4
+    # ★ O-179 P0 补强（2026-10-28）：再用**站上 GTT 实账**复核一遍。
+    #   estimate 用 /proc/meminfo 算「要多少」，但 UMA 下「还剩多少」只有 GTT 说得准
+    #   （MemAvailable 会把可回收缓存算成空闲 ⇒ 偏乐观）。两者都过才放行。
+    need = float(est.get("need_gib") or 0.0)
+    ok_g, used, total = _station_gtt(station)
+    if ok_g:
+        fit, alloc = _uma_fit(total, used, STATION_RESERVED_GIB, need)
+        print(f"[cluster] CAPACITY(GTT): {station} total={total}GiB used={used}GiB "
+              f"reserved={STATION_RESERVED_GIB}GiB alloc={alloc}GiB need={need}GiB")
+        if not fit:
+            print(f"[cluster] ⛔ 容量不足(GTT): 可用 {alloc}GiB < 需要 {need}GiB ⇒ 拒绝"
+                  f"（先 unload 一个、或降 ctx / 换小量化档）(exit 4)")
+            return 4
+    else:
+        print(f"[cluster] ⚠ 读不到 {station} 站 GTT 读数 —— 回退 estimate 的 meminfo 口径；"
+              f"该口径偏乐观（把可回收缓存当空闲），故此处留痕")
     print(f"[cluster] CAPACITY ok: {station} 站 verdict={est.get('verdict')} "
           f"need={est.get('need_gib')}G（叠加加载）")
     return 0

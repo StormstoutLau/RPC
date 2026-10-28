@@ -33,6 +33,9 @@ upstream: null
 | [ops/cluster.py](../../ops/cluster.py#L246-L296) | `load` 解析 `--keep`；`unload` 解析 `--alias` / `--station`（未知参数 exit 1）；门面重导出 `_capacity_ok` / `_guard_capacity`；用法与 `--keep` 说明 | CLI |
 | [tests/test_cluster_pure.py](../../tests/test_cluster_pure.py#L489-L591) | 新增 11 条：容量判据 1 · `_guard_capacity` 4 · `--keep` RPC 拒绝 1 · alias 透传 1 · 容器步跳过/照常 1 · `unload --alias` 1（另含 O-178 段的安全网） | 测试 |
 | [tests/test_infer_unload_alias.py](../../tests/test_infer_unload_alias.py) | 新文件 9 条静态判据：位置参数、alias 分支停 `@${ALIAS}`（不是 `@*`）、alias 分支**不含 pkill**、无参路径逐字保留 | 测试 |
+| [ops/cluster_const.py](../../ops/cluster_const.py#L108-L117) | **P0 补强**：新增 `STATION_RESERVED_GIB = 8.0`（站级预留，理由=10-26 两次 device-lost 都发生在余 15~24G） | 新增常量 |
+| [ops/cluster_runtime.py](../../ops/cluster_runtime.py#L1129-L1176) | **P0 补强**：`_uma_fit`（UMA 单池 `alloc = total − used − reserved`）+ `_station_gtt`（读 sysfs GTT 实账）；`_guard_capacity` 加**第 2 道**判据（estimate 之后），读不到 GTT ⇒ 回退并留痕 | 新增 + 接线 |
+| [ops/cluster.py](../../ops/cluster.py#L155-L159) | 门面重导出 `_uma_fit` / `_station_gtt` / `STATION_RESERVED_GIB` | 重导出 |
 
 **未改**（刻意）：`cmd_load_on`（web 按站路径，不支持 `--keep`）、`_load_rpc`（保持全站回收）、客户端 baseURL（P3）。
 
@@ -65,6 +68,7 @@ RESULT: ALL PASS                       # test_cluster_pure.py
 | `py -3.12 tests\test_infer_unload_alias.py` | ALL PASS（9/9） |
 | `py -3.12 ops\rpc_check.py --quick` | 41 绿 / 2 黄 / **0 红**（`doclinks` 因缺 CHECKLIST 曾红 1 次，补文件后复绿） |
 | 真站只读复核 | `A + gpt-oss-120b ⇒ 3`（O-178 反向冲突仍生效）、`A + deepseek ⇒ 0` |
+| 真站 GTT 读数（P0 补强） | `A ok=True used=103.1 total=117.2 alloc=6.1` · `B 78.3/117.2 alloc=30.9` · `C 24.6/117.2 alloc=84.6`（GiB，已扣预留 8） |
 
 ---
 

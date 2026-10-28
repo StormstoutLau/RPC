@@ -42,7 +42,7 @@ upstream: null
 5. ☑ `reclaim_and_unload` / `_reclaim_containers` 的 `alias` 形参（默认值保旧语义）
 6. ☑ `_capacity_ok` 纯函数 + `_guard_capacity` 编排（exit 4）
 7. ☑ `cluster.py load --keep`、`cluster.py unload --alias/--station`
-8. ☑ 测试：`test_cluster_pure.py` 11 条 + `test_infer_unload_alias.py` 9 条
+8. ☑ 测试：`test_cluster_pure.py` **19 条** + `test_infer_unload_alias.py` 9 条
 
 ## 2. 真站行为（M2）
 
@@ -71,6 +71,8 @@ upstream: null
 5. ☑ alias 经 `sh_single_quote` 进站上命令（防注入）
 6. ☑ `keep` + `is_rpc` ⇒ exit 1（head/worker GTT 同池未算清）
 7. ☑ 同一 alias 的重载不算「叠加」：`--keep` 停掉同名实例后再加载（`_reclaim_containers` 对非容器别名返回 `skipped: keep`）
+8. ☑ **P0 补强**：`_uma_fit` 四条边界（空站放行 / 已占 84G 拒绝 / 预留吃掉余量 / 已用超总量夹 0）
+9. ☑ **P0 补强**：GTT 第 2 道 —— estimate 说 FITS 但 GTT 不足仍拒；GTT 足够放行；GTT 读不到回退 verdict；estimate 已 NO_FIT 时不因 GTT 空闲而放行
 
 ## 5. 门禁与回归（M5）
 
@@ -103,4 +105,6 @@ upstream: null
 | 2026-10-28 23:31 | 恢复完成：`load deepseek-v4-flash-0731` | B `READY ✓ :8080`（1M ctx）· A `rpc-server@deepseek` · C qwen 容器全程未动 |
 | 2026-10-28 | 提交 `8541c04b`（未推送） | 9 文件 +730/−38；工作区干净 |
 | 待办 | G1 真站共存（`gpt-oss-20b` + `qwen3.8-27b-mtp-b --keep`） | 需先卸生产 deepseek（B 站 84/125.8G），**等用户择时** |
+| 2026-10-28 | GPUStack 可复用性分析落档（[docs/research](../../docs/research/2026-10-28_gpustack可复用性分析.md)） | 三块可复用：UMA 口径 / 端口簿记 / 路由语义；整体不可 pip 复用 |
+| 2026-10-28 | **P0 补强**：`_uma_fit` + `_station_gtt` + `STATION_RESERVED_GIB=8` | 真站读数 A 103.1/117.2（alloc 6.1）· B 78.3（30.9）· C 24.6（84.6）GiB |
 
