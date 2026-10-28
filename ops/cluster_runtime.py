@@ -1356,9 +1356,15 @@ def _load_rpc(alias: str, station: str, engine: str = None, worker: str = None) 
     # ★ 2026-10-22 修「8080 假绿」：RPC 加载原先只做 `infer-unload`，不回收 docker 容器。
     #   2026-10-25 收窄：只回收 **head(B) + 选中 worker**；非 worker 站的 qwen 不动。
     #   （B 的 8080 仍被先回收 ⇒ READY 不会命中旧容器。）
-    reclaim = sorted({station, worker_station})
-    print(f"[cluster] 回收范围: {'/'.join(reclaim)}（非 worker 站的 qwen 保留）")
-    for st in reclaim:
+    # ★★ 2026-10-28（O-178）：**顺序承重** —— 必须先停 head、再停 worker。
+    #   旧写法 `sorted({station, worker})` 恰好先回收 worker（A < B）⇒ head 在退出清理
+    #   （`common_memory_breakdown_print` → `ggml_backend_rpc_get_device_memory`）时发现对端没了，
+    #   ggml-rpc 把"对端崩溃/畸形响应"当**致命** ⇒ `GGML_ABORT` ⇒ SIGABRT（status=6，core-dump）。
+    #   实测：B 站 deepseek 30 天内 7 次 core-dump，7 次都带 `Remote RPC server crashed`。
+    #   ⇒ head 必须**先**停并等其进程真正退出（`systemctl stop` 同步），之后才动 worker。
+    head_first = [station] + [w for w in sorted({worker_station or ""}) if w and w != station]
+    print(f"[cluster] 回收范围: {'/'.join(head_first)}（head 先停；非 worker 站的 qwen 保留）")
+    for st in head_first:
         _r = reclaim_and_unload(st)
         if not _r["ok"]:
             print(f"[cluster] {st} 站回收/卸载未完成 → 中止: {_r['steps']}")
@@ -1521,7 +1527,12 @@ def cmd_unload() -> int:
         except Exception as e:          # 连接级异常: 超时 / 认证 / 端口不可达
             results[st] = f"{type(e).__name__}: {e}"
 
-    for st in ("A", "B", "C"):
+    # ★★ 2026-10-28（O-178）：**B 先停、再并行 A/C**。RPC 模型的 head 固定落在 B（权重所在站），
+    #   若三站并发，A 的 worker 可能在 B 的 head 走完退出清理之前就没了 ⇒ head 的
+    #   `common_memory_breakdown_print` 去取 worker 显存 ⇒ ggml-rpc 判"对端崩溃"⇒ ABORT/core-dump。
+    #   非 RPC 场景下"先停 B"只是顺序变化，语义不变。
+    run("B")
+    for st in ("A", "C"):
         t = threading.Thread(target=run, args=(st,))
         t.start(); threads.append(t)
     for t in threads:

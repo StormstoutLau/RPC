@@ -344,8 +344,8 @@ def _rpc_reclaim_probe(worker=None, conf_target="", probe=None, reclaim=None,
 
 
 _rc_rpc, _reclaim_calls, _built, _runs = _rpc_reclaim_probe()
-chk("RPC load 默认(无 conf): 自动选 A，回收范围 = A+B（非 worker C 保留）",
-    _rc_rpc == 0 and _reclaim_calls == ["A", "B"] and _built
+chk("RPC load 默认(无 conf): 自动选 A，**head(B) 先停、worker(A) 后停**（O-178），非 worker C 保留",
+    _rc_rpc == 0 and _reclaim_calls == ["B", "A"] and _built
     and _built[-1][0][3] == "10.10.10.1:50052"
     and "rpc-nodes --start 'glm-5.3-flash' '10.10.10.1:50052'" in _runs,
     f"rc={_rc_rpc} calls={_reclaim_calls} built={_built} runs={_runs}")
@@ -378,15 +378,15 @@ chk("RPC load --worker C: 映射 10.10.11.3:50052 并透传 --rpc-target（回�
     and "rpc-nodes --start 'glm-5.3-flash' '10.10.11.3:50052'" in _runs_w,
     f"rc={_rc_w} calls={_calls_w} built={_built_w} runs={_runs_w}")
 _rc_wa, _calls_wa, _built_wa, _runs_wa = _rpc_reclaim_probe(worker="A")
-chk("RPC load --worker A: 映射 10.10.10.1:50052（回收 A/B）",
-    _rc_wa == 0 and _calls_wa == ["A", "B"]
+chk("RPC load --worker A: 映射 10.10.10.1:50052（回收 B 先、A 后，O-178）",
+    _rc_wa == 0 and _calls_wa == ["B", "A"]
     and _built_wa and _built_wa[-1][0][3] == "10.10.10.1:50052",
     f"rc={_rc_wa} calls={_calls_wa} built={_built_wa}")
 
 # 无 --worker 时从 conf 读出的单 worker 目标也应约束预启动与 infer-load。
 _rc_c, _calls_c, _built_c, _runs_c = _rpc_reclaim_probe(conf_target="10.10.10.1:50052")
-chk("RPC load 默认: conf 单 worker A ⇒ 预启动与 --rpc-target 都只带 A（回收 A/B）",
-    _rc_c == 0 and _calls_c == ["A", "B"] and _built_c
+chk("RPC load 默认: conf 单 worker A ⇒ 预启动与 --rpc-target 都只带 A（回收 B 先、A 后，O-178）",
+    _rc_c == 0 and _calls_c == ["B", "A"] and _built_c
     and _built_c[-1][0][3] == "10.10.10.1:50052"
     and "rpc-nodes --start 'glm-5.3-flash' '10.10.10.1:50052'" in _runs_c,
     f"rc={_rc_c} calls={_calls_c} built={_built_c} runs={_runs_c}")
