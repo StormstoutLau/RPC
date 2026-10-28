@@ -3366,6 +3366,10 @@ $gTmp170 = Join-Path $env:TEMP 'agent-cli-g170-test'
 Remove-Item -LiteralPath $gTmp170 -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path (Join-Path $gTmp170 'out') -Force | Out-Null
 [IO.File]::WriteAllText((Join-Path $gTmp170 '.run-marker'), '')
+# ⚠ 2026-10-28（CI 实跑抓到的**时钟粒度**假阴性）：marker 与 note-1 若落在同一秒，
+#   `find -newer` 在 NTFS/Git-Bash 上会判"不更新" ⇒ 窗口 0 件 ⇒ g170② 假 FAIL（本地快、runner 慢）。
+#   显式把 marker 压到 5 分钟前：glob-probe(-10) < marker(-5) < note(now)，三档互不重叠。
+(Get-Item -LiteralPath (Join-Path $gTmp170 '.run-marker')).LastWriteTime = (Get-Date).AddMinutes(-5)
 [IO.File]::WriteAllText((Join-Path $gTmp170 'out/glob-probe.txt'), 'GLOB_PROBE_OK')
 (Get-Item -LiteralPath (Join-Path $gTmp170 'out/glob-probe.txt')).LastWriteTime = (Get-Date).AddMinutes(-10)
 [IO.File]::WriteAllText((Join-Path $gTmp170 'out/note-1.txt'), 'GLOB_PROBE_OK')
