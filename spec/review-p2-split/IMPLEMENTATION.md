@@ -4,21 +4,21 @@
 
 id: review-p2-split-IMPLEMENTATION
 type: design
-version: 1.0
-status: draft
+version: 1.1
+status: verified
 date: 2026-10-28
 depends: [review-p2-split-DESIGN]
 upstream: null
 
 ---
 
-> **Feature**: 按 [DESIGN](./DESIGN.md) 把 `rpc_check.py` 拆为「common + 5 域 + 门面」，把 `agent-cli.ps1` 抽出 3 个 dot-source lib；公共面逐项不变。
+> **Feature**: 按 [DESIGN](./DESIGN.md) 把 `rpc_check.py` 拆为「common + 5 域 + 注册表 + 门面」，把 `agent-cli.ps1` 抽出 3 个 dot-source lib；公共面逐项不变。
 > **创建日期**: 2026-10-28
-> **状态**: draft（Step 3）
-> **Spec 步骤**: Step 3（IMPLEMENTATION）
-> **基于设计**: [DESIGN.md](./DESIGN.md)
+> **状态**: verified（Step 3 完成；验收见 [CHECKLIST](./CHECKLIST.md)）
+> **Spec 步骤**: Step 3（IMPLEMENTATION）→ Step 5（验收）
+> **基于设计**: [DESIGN.md](./DESIGN.md)（v1.1，含 §10 设计评审）
 > **基于调研**: [8B/8C 调研](../../docs/research/2026-10-28_原始评审P2拆分_8B8C_调研.md)
-> **代码基线**: `54ecba42`（`main`；行号为该基线快照）
+> **代码基线**: `54ecba42`（`main`；行号为该基线快照）→ 实施 `e04d996c` / `44d1fddb` / `392b8484` / `345e589a`
 
 ---
 
@@ -32,13 +32,14 @@ upstream: null
 | T4 | D6/D7 域 | `ops/rpc_d6.py` | 新增 |
 | T5 | 站上/资产域 | `ops/rpc_stations.py` | 新增 |
 | T6 | 治理域 | `ops/rpc_governance.py` | 新增 |
-| T7 | 门面 | `ops/rpc_check.py` | 缩到 ≤ 500 行 |
-| T8 | 登记 | `inventory/ops.yaml` `entry_modules` +6 | 修改 |
-| T9 | 3 个新测试 | `tests/test_rpc_check_facade.py` / `test_rpc_check_modules.py` / `test_agent_cli_libs.py` | 新增 |
-| T10 | 3 个 lib | `ops/station-bin/agent-cli-lib/{10-tables,20-scrub,30-d7}.ps1` | 新增 |
-| T11 | 入口改造 | `agent-cli.ps1`：`$Script:AGENT_CLI_LIBS` + 循环 dot-source | 修改 |
-| T12 | 夹具拼接 | `_fm_golden_test.ps1` / `_probe_fallback.ps1`：读"入口 + 3 lib" | 修改 |
-| T13 | 行号政策 | `agent-cli-lib/README.md` + 活文档改函数名 | 新增/修改 |
+| T7 | 注册表（`CHECKS` 唯一填充点） | `ops/rpc_registry.py` | 新增（实施时补：见 DESIGN §2.1 与 §10 D-1） |
+| T8 | 门面 | `ops/rpc_check.py` | 缩到 ≤ 500 行（实测 321） |
+| T9 | 登记 | `inventory/ops.yaml` `entry_modules` +7 py +3 ps1 lib | 修改 |
+| T10 | 3 个新测试 | `tests/test_rpc_check_split_facade.py` / `test_rpc_check_modules.py` / `test_agent_cli_libs.py` | 新增 |
+| T11 | 3 个 lib | `ops/station-bin/agent-cli-lib/{10-tables,20-scrub,30-d7}.ps1` + `README.md` | 新增 |
+| T12 | 入口改造 | `agent-cli.ps1`：`$Script:AGENT_CLI_LIBS` + 循环 dot-source | 修改 |
+| T13 | 夹具拼接 | `_fm_golden_test.ps1` / `_probe_fallback.ps1` / `_scrubber_coverage_test.ps1`：读"入口 + 3 lib" | 修改 |
+| T14 | 行号政策 | `agent-cli-lib/README.md` + 活文档改函数名 | 新增/修改 |
 
 **边界**：见 DESIGN §1.2（不搬主流程、不批量改历史行号、不动站上 shell）。
 
@@ -51,7 +52,7 @@ upstream: null
 | Python | 3.12；模块平铺；`from rpc_common import ...` 显式清单（**不用** `import *`） |
 | 门面 | 显式重导出**全部**顶层名（含 `_` 私有）—— 45 个测试按 `R.<name>` 取用 |
 | PowerShell | PS 5.1；lib 含非 ASCII ⇒ UTF-8 **BOM**；LF；dot-source 用 `$Script:REPO_ROOT` |
-| 提交 | 每阶段一提交（8B-1 / 8B-2 / 8B-3 / 8C-1 / 8C-2 / 8C-3），红了即回滚 |
+| 提交 | 每阶段一提交（8B-1 / 8B-2 / 8B-3 / 8C），红了即回滚；8C 三块合为一刀（DESIGN §3.4 偏差） |
 | 门禁 | 每阶段跑 `py-tests` + `rpc_check --quick` +（8C）`ps1-golden` |
 
 ---
@@ -89,7 +90,7 @@ upstream: null
 |---|---|---|---|
 | **8B-1** | L885-L3178（U-2/U-1/U-3/U-4/D7/U-5/O-66 判据库） | `rpc_protocol.py` | `rpc_check.py` ≈ 8100 行；协议测试全绿 |
 | **8B-2** | L3532-L3620 doclinks · L3836-L3897 spec-untested · L8933-L8971 doc-status · L9255-L9433 md-tables · L9433-L9602 determinism · L9602-L9636 derived-view · L9636-L10378 executor-trace · L6193-L6638 evidence · L6850-L6959 inbox · L7162-L7289 ps1-golden · L7289-L7471 ledger · L7471-L7615 review-catalog · L7615-L8031 memory-gates · L8031-L8380 multi-round · L8380-L8602 interruption · L8602-L8933 rubric · L3279-L3532 mirror | `rpc_docs.py` / `rpc_d6.py` | 两模块各 ≈ 1500-2900 行 |
-| **8B-3** | L4479-L4972 ports/plugins/impact/aliases · L4972-L5177 halogen · L5012-L5860 stations · L5177-L6016 LAN · L5860-L6193 engine · L6016-L6324 gates · L6324-L6638 usb4 · L6638-L6850 backend · L38-L885 secrets/syntax/scripts · L3621-L3774 deps · L3774-L3836 adr · L4355-L4479 inventory · L3179-L3279 facade · L6959-L7159 shell-strict/station-layout · L7159-L7180 CHECKS 前的常量 | `rpc_stations.py` / `rpc_governance.py` / `rpc_registry.py` | 门面 ≤500 行（实测 **320**）；stations 2294 · governance 1414 · registry 488 |
+| **8B-3** | L4479-L4972 ports/plugins/impact/aliases · L4972-L5177 halogen · L5012-L5860 stations · L5177-L6016 LAN · L5860-L6193 engine · L6016-L6324 gates · L6324-L6638 usb4 · L6638-L6850 backend · L38-L885 secrets/syntax/scripts · L3621-L3774 deps · L3774-L3836 adr · L4355-L4479 inventory · L3179-L3279 facade · L6959-L7159 shell-strict/station-layout · L7159-L7180 CHECKS 前的常量 | `rpc_stations.py` / `rpc_governance.py` / `rpc_registry.py` | 门面 ≤500 行（实测 **321**）；stations 2294 · governance 1414 · **registry 488** |
 
 > 行号会随上一阶段漂移 ⇒ 每个阶段开始前**重新用段标记定位**（`# ──` 标题），不硬编码行号。
 
