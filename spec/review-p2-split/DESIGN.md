@@ -31,8 +31,8 @@ upstream: null
 | G1 | `rpc_check.py` 拆为 **7 个模块 + 1 个门面** | 每模块 ≤ 3000 行；`rpc_check.py` 门面 ≤ 500 行（8B-3 实测 320） |
 | G2 | **公共面零变化**：178 个 `R.*` 符号、52 个 `CHECKS` id、CLI 参数与输出 | 新测试 `test_rpc_check_facade.py` 全覆盖；既有 65 测试不改一行 |
 | G3 | 域模块**不得反向 import 门面** | 新测试 `test_rpc_check_modules.py` 静态扫描 import |
-| G4 | `agent-cli.ps1` 抽出 **3 个 lib**（表 / scrub / D7 判据） | 入口从 7406 行降到 ≤ 6000；lib 均带 UTF-8 BOM |
-| G5 | 两个单文件 AST 夹具改为**有序拼接**解析 | `ps1-golden` 仍 663/0；`_probe_fallback.ps1` 仍 PASS |
+| G4 | `agent-cli.ps1` 抽出 **3 个 lib**（表 / scrub / D7 判据） | 入口 7406 → **7045** 行（lib 合计 393 行；只搬 9 函数 + 2 表，分派主体不动）；lib 均带 UTF-8 BOM |
+| G5 | 单文件 AST 夹具改为**有序拼接**解析 | `ps1-golden` 仍 663/0；`_probe_fallback.ps1` 仍 PASS（仍提取 116 函数）；`_scrubber_coverage_test.ps1` 43/0 |
 | G6 | 行号引用政策可执行 | 历史文档不改（加注记）；活文档（手册/README/INDEX）改为"函数名 + 文件"引用 |
 
 ### 1.2 非目标

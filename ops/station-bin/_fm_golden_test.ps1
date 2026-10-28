@@ -15,9 +15,18 @@ if (-not (Test-Path $tmpCards)) { New-Item -ItemType Directory -Path $tmpCards -
 # .NET ReadAllText 默认按 UTF-8 解码（无 BOM 也按 UTF8），ParseFile 则按系统 ANSI (GBK) 解码
 # 中文注释会乱码导致假解析错误 —— 故用 ReadAllText + ParseInput（IMPL §2.3 PS5.1 UTF-8 纪律）。
 $content = [System.IO.File]::ReadAllText($cli, [System.Text.UTF8Encoding]::new($false))
+# ★ 2026-10-28（review-p2-split 8C）：判据库已拆到 `agent-cli-lib\` ⇒ **单文件解析不再完整**。
+#   拼接顺序 = 入口 `$Script:AGENT_CLI_LIBS` 的**声明顺序**（三处清单由 `tests/test_agent_cli_libs.py` 钉死逐项相同）。
+#   ⚠ `$content` 仍**只含入口**（下方大量文本断言按"入口里有什么"判）；AST 用 `$allSrc`。
+$libNames = @('10-tables.ps1', '20-scrub.ps1', '30-d7.ps1')
+$libSrc = ''
+foreach ($n in $libNames) {
+    $libSrc += "`n" + [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "agent-cli-lib\$n"), [System.Text.UTF8Encoding]::new($false))
+}
+$allSrc = $content + $libSrc
 $tokens = $null; $errors = $null
-$ast = [System.Management.Automation.Language.Parser]::ParseInput($content, [ref]$tokens, [ref]$errors)
-if ($errors -and $errors.Count -gt 0) { throw "agent-cli.ps1 parse errors: $($errors | Out-String)" }
+$ast = [System.Management.Automation.Language.Parser]::ParseInput($allSrc, [ref]$tokens, [ref]$errors)
+if ($errors -and $errors.Count -gt 0) { throw "agent-cli.ps1(+lib) parse errors: $($errors | Out-String)" }
 $fns = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
 Write-Host "DEBUG fns count=$(@($fns).Count)"
 $fn = @($fns) | Where-Object { $_.Name -eq 'Get-FrontMatter' } | Select-Object -First 1
@@ -2322,9 +2331,9 @@ Assert-True "b2⑬: 接线 —— P5 在**两处** review 写出点，且 L2 没
     ([regex]::Matches($content, [regex]::Escape('Get-D7Adjudication -L1Section'))).Count -eq 2 -and
     $content.Contains('-L2Ran $false'))
 Assert-True "b2⑭: 接线 —— 三个判据入口都被调（envelope / block / transition **各至少一处**）" (
-    ([regex]::Matches($content, [regex]::Escape('--d7-envelope'))).Count -ge 1 -and
-    ([regex]::Matches($content, [regex]::Escape('--d7-block'))).Count -ge 2 -and
-    ([regex]::Matches($content, [regex]::Escape('--d7-transition'))).Count -ge 1)
+    ([regex]::Matches($allSrc, [regex]::Escape('--d7-envelope'))).Count -ge 1 -and
+    ([regex]::Matches($allSrc, [regex]::Escape('--d7-block'))).Count -ge 2 -and
+    ([regex]::Matches($allSrc, [regex]::Escape('--d7-transition'))).Count -ge 1)
 # ★ 先验红自证（同源对照）：**同一份信封**，只多一个 `verdict` 键 ⇒ 两者必须不同
 #   （= 证明 b2② 那条断言**真的在看**这个键，而不是恒真）。
 $rrCopy = [ordered]@{}
@@ -2378,10 +2387,10 @@ Assert-True "b3⑩: `Resolve-D7Hosts` 三态 —— 站空 ⇒ 产出==裁决（
     $hA.exec_host -eq (Get-TargetHost 'A') -and $hB.exec_host -eq (Get-TargetHost 'B') -and
     $hZ.exec_host -eq '' -and [bool]$hZ.arbiter_host)
 Assert-True "b3⑪(★不堆在 P5 · 主判据): 四条 `--d7-block` **各恰一处**调用点（I1 事件流写点 / I6 决策点 / PRM·PRW 角色动作点）" (
-    ([regex]::Matches($content, [regex]::Escape("@('--d7-block', 'I1')"))).Count -eq 1 -and
-    ([regex]::Matches($content, [regex]::Escape("@('--d7-block', 'I6')"))).Count -eq 1 -and
-    ([regex]::Matches($content, [regex]::Escape("@('--d7-block', 'PRM')"))).Count -eq 1 -and
-    ([regex]::Matches($content, [regex]::Escape("@('--d7-block', 'PRW')"))).Count -eq 1)
+    ([regex]::Matches($allSrc, [regex]::Escape("@('--d7-block', 'I1')"))).Count -eq 1 -and
+    ([regex]::Matches($allSrc, [regex]::Escape("@('--d7-block', 'I6')"))).Count -eq 1 -and
+    ([regex]::Matches($allSrc, [regex]::Escape("@('--d7-block', 'PRM')"))).Count -eq 1 -and
+    ([regex]::Matches($allSrc, [regex]::Escape("@('--d7-block', 'PRW')"))).Count -eq 1)
 Assert-True "b3⑫: `I-1` 判据在**重试循环之前** ⇒ 只跑一次（放进循环会让重试次数变成判据调用次数）" (
     $content.IndexOf("@('--d7-block', 'I1')") -gt 0 -and
     $content.IndexOf("@('--d7-block', 'I1')") -lt $content.IndexOf('for ($i = 0; $i -lt 10; $i++) {'))
@@ -2391,10 +2400,10 @@ Assert-True "b3⑬: `PRH` 两侧事实落在**两处** `.agent-run.json` 写出�
     ([regex]::Matches($content, [regex]::Escape('$run[''exec_host''] ='))).Count -eq 2 -and
     ([regex]::Matches($content, [regex]::Escape('$run[''arbiter_host''] ='))).Count -eq 2)
 Assert-True "b3⑭: `--d7-host-sep` 已接 + **自家先判空**（argv 空值不可表达 ⇒ 不许把空串交给 CLI）+ 三态分支齐" (
-    $content.IndexOf('if (-not $ExecHost -or -not $arb)') -gt 0 -and
-    $content.IndexOf('if (-not $ExecHost -or -not $arb)') -lt $content.IndexOf("@('--d7-host-sep'") -and
-    $content.Contains('D7_PRH_UNDECIDABLE') -and $content.Contains('D7_PRH_SAME') -and
-    $content.Contains('D7_PRH_SEPARATE'))
+    $allSrc.IndexOf('if (-not $ExecHost -or -not $arb)') -gt 0 -and
+    $allSrc.IndexOf('if (-not $ExecHost -or -not $arb)') -lt $allSrc.IndexOf("@('--d7-host-sep'") -and
+    $allSrc.Contains('D7_PRH_UNDECIDABLE') -and $allSrc.Contains('D7_PRH_SAME') -and
+    $allSrc.Contains('D7_PRH_SEPARATE'))
 Assert-True "b3⑮(先验红·同源对照): 四条分支产出**互不相同**（含 'Z' ⇒ ''）⇒ b3⑩ 非恒真（恒真桩会三态同值）" (
     $hEmpty.exec_host -ne $hA.exec_host -and $hA.exec_host -ne $hB.exec_host -and
     $hZ.exec_host -ne $hB.exec_host -and $hZ.exec_host -eq '' -and $hZ.station -eq 'Z')
@@ -2464,11 +2473,11 @@ Assert-True "b3⑳(★O-139 甲·主判据): Verdict 段在**两处**写盘点**
     $inj.Count -eq 2 -and $wrt.Count -eq 2 -and
     $inj[0].Index -lt $wrt[0].Index -and $inj[1].Index -lt $wrt[1].Index)
 Assert-True "b3㉑(★O-139 甲): 组装点**只有一个**（`New-Verdict` 仅在 `Get-D7Adjudication` 内被调），且段**逐字取既有事实**" (
-    ([regex]::Matches($content, [regex]::Escape('$d7v = New-Verdict -ExitCode'))).Count -eq 1 -and
-    ([regex]::Matches($content, [regex]::Escape('Get-D7Adjudication -L1Section $l1Section -CcSection $ccSection'))).Count -eq 2 -and
-    $content.Contains("return `$d7v['verdict']") -and
+    ([regex]::Matches($allSrc, [regex]::Escape('$d7v = New-Verdict -ExitCode'))).Count -eq 1 -and
+    ([regex]::Matches($allSrc, [regex]::Escape('Get-D7Adjudication -L1Section $l1Section -CcSection $ccSection'))).Count -eq 2 -and
+    $allSrc.Contains("return `$d7v['verdict']") -and
     # ★ 改名要**收干净**：旧名不许再作为**调用**出现（注释里提到旧名不算 —— 故钉 ` -L1Section`）
-    ([regex]::Matches($content, [regex]::Escape('Write-D7Adjudication -L1Section'))).Count -eq 0)
+    ([regex]::Matches($allSrc, [regex]::Escape('Write-D7Adjudication -L1Section'))).Count -eq 0)
 # ★ 先验红·同源对照：把**旧顺序**（先写盘、后裁决）放进样本 ⇒ 同一条顺序判据必须**当场为假**
 #   ⇒ 证明 b3⑳ 真的在看顺序，而不是恒真。
 $oldOrder = "`$review | ConvertTo-Json -Depth 8 | Set-Content `$reviewPath`n`$review['d7_verdict'] = Get-D7Adjudication -L1Section `$l1Section"
@@ -2549,18 +2558,18 @@ _sinkProbeFn -Sink $sinkProbe
 Assert-True "b3㉝(★口径自证): PS 引用语义成立 —— 被调方写 sink，**调用方看得见**（否则全部落点是空的假绿）" (
     ($sinkProbe['k'] -eq 7) -and ($sinkProbe -is [System.Collections.IDictionary]))
 Assert-True "b3㉞(★类型坑): sink 形参必须是 `IDictionary` —— `[ordered]@{}` **不是** `[hashtable]`（写错会绑定失败）" (
-    $content.Contains('[System.Collections.IDictionary]$GuardSink') -and
-    -not $content.Contains('[hashtable]$GuardSink'))
+    $allSrc.Contains('[System.Collections.IDictionary]$GuardSink') -and
+    -not $allSrc.Contains('[hashtable]$GuardSink'))
 Assert-True "b3㉟(★记录点齐): 九台判据各有一处入 sink（transition 记两键 + RL2/RL1/PRM/PRW/PRH + 信封·I6 由汇报壳记）" (
-    ([regex]::Matches($content, '\$GuardSink\[')).Count -ge 8 -and
-    $content.Contains("`$GuardSink['transition.rejected']") -and
-    $content.Contains("`$GuardSink['completed'] = 1") -and
+    ([regex]::Matches($allSrc, '\$GuardSink\[')).Count -ge 8 -and
+    $allSrc.Contains("`$GuardSink['transition.rejected']") -and
+    $allSrc.Contains("`$GuardSink['completed'] = 1") -and
     # ★ 汇报壳两处入 sink（envelope / i6）—— 靠 `$Tag` 前缀区分用具名 tag
-    ([regex]::Matches($content, [regex]::Escape('$GuardSink["$Tag.envelope"]')).Count -eq 1) -and
-    ([regex]::Matches($content, [regex]::Escape('$GuardSink["$Tag.i6"]')).Count -eq 1))
+    ([regex]::Matches($allSrc, [regex]::Escape('$GuardSink["$Tag.envelope"]')).Count -eq 1) -and
+    ([regex]::Matches($allSrc, [regex]::Escape('$GuardSink["$Tag.i6"]')).Count -eq 1))
 Assert-True "b3㊱(★假绿防护): 报「跑完了」的 `completed` 标记**只在函数末尾** ⇒ 聚合能分开「没跑」与「跑了且全 ok」" (
-    $content.IndexOf("`$GuardSink['completed'] = 1") -gt $content.IndexOf("`$GuardSink['PRH'] =") -and
-    $content.IndexOf("`$GuardSink['completed'] = 1") -lt $content.IndexOf('return $d7v[''verdict'']'))
+    $allSrc.IndexOf("`$GuardSink['completed'] = 1") -gt $allSrc.IndexOf("`$GuardSink['PRH'] =") -and
+    $allSrc.IndexOf("`$GuardSink['completed'] = 1") -lt $allSrc.IndexOf('return $d7v[''verdict'']'))
 # ⚠⚠ **必须判【顺序】，不能只判【存在】**（2026-10-01 真跑当场抓到）：首版把注入行写在
 #   `Get-D7Adjudication` **之前** ⇒ 那时 sink 还空 ⇒ `Count -gt 0` 为假 ⇒ **什么都没落盘**；
 #   而**只计数**的断言照样全绿 —— 这就是"**假绿**"的教科书形态（同 `O-139` 的"顺序承重"家族）。

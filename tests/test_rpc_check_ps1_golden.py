@@ -13,6 +13,17 @@ import rpc_check as R  # noqa: E402
 
 FIX = ROOT / "ops" / "station-bin" / "_fm_golden_test.ps1"
 CLI = ROOT / "ops" / "station-bin" / "agent-cli.ps1"
+LIB_DIR = ROOT / "ops" / "station-bin" / "agent-cli-lib"
+
+# 8C 起判据库拆到 `agent-cli-lib\` ⇒ "入口某行还在不在" 必须按**拼接后**的全文判
+# （否则函数一搬家，判据就会假红/假绿）。清单 = 入口 `$Script:AGENT_CLI_LIBS`（`test_agent_cli_libs.py` 钉死）。
+LIB_NAMES = ["10-tables.ps1", "20-scrub.ps1", "30-d7.ps1"]
+
+
+def _all_cli_src() -> str:
+    parts = [CLI.read_text(encoding="utf-8-sig", errors="replace")]
+    parts += [(LIB_DIR / n).read_text(encoding="utf-8-sig", errors="replace") for n in LIB_NAMES]
+    return "\n".join(parts)
 
 
 def main() -> int:
@@ -40,7 +51,7 @@ def main() -> int:
             fails.append(f"夹具缺用例 {label}（needle={needle!r}）")
 
     # ③ fail-closed 判据仍在：只有 `local/` 不出网，其余（含未知/空）一律视为出网
-    ok3 = "-not ($id -match '^local/')" in CLI.read_text(encoding="utf-8", errors="replace")
+    ok3 = "-not ($id -match '^local/')" in _all_cli_src()
     print(f"  {'ok  ' if ok3 else 'FAIL'} [fail-closed] Get-BackendEgress 仍是「只有 local/ 不出网」")
     if not ok3:
         fails.append("Get-BackendEgress 的 fail-closed 判据不见了")

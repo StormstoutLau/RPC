@@ -20,12 +20,22 @@
 #   它们计入**覆盖率分母**并显式列出 —— 免得"以为覆盖了"。修不修是**决策**(加规则有误伤风险)。
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$cli = 'd:\RPC\ops\station-bin\agent-cli.ps1'
+# 路径从本文件位置派生（CI checkout 根不是 `d:\RPC`；写死绝对路径会让夹具在 runner 上崩）
+$cli = Join-Path $PSScriptRoot 'agent-cli.ps1'
 
 # --- 与 _fm_golden_test.ps1 同族的 AST 提取(不执行主入口) ---
+# ★ 2026-10-28（review-p2-split 8C）：三条 scrub 规则函数已搬到 `agent-cli-lib\20-scrub.ps1`
+#   ⇒ **必须拼接**（顺序 = 入口 `$Script:AGENT_CLI_LIBS` 的声明顺序；三处清单由
+#   `tests/test_agent_cli_libs.py` 钉死逐项相同）。用 ReadAllText + ParseInput 以避免
+#   `ParseFile` 按系统 ANSI(GBK) 解码中文注释产生的假解析错误（与 _fm_golden_test 同纪律）。
+$libNames = @('10-tables.ps1', '20-scrub.ps1', '30-d7.ps1')
+$src = [System.IO.File]::ReadAllText($cli, [System.Text.UTF8Encoding]::new($false))
+foreach ($n in $libNames) {
+    $src += "`n" + [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "agent-cli-lib\$n"), [System.Text.UTF8Encoding]::new($false))
+}
 $tok = $null; $errs = $null
-$ast = [System.Management.Automation.Language.Parser]::ParseFile($cli, [ref]$tok, [ref]$errs)
-if ($errs.Count -gt 0) { throw "agent-cli.ps1 解析失败: $($errs[0].Message)" }
+$ast = [System.Management.Automation.Language.Parser]::ParseInput($src, [ref]$tok, [ref]$errs)
+if ($errs.Count -gt 0) { throw "agent-cli.ps1(+lib) 解析失败: $($errs[0].Message)" }
 $fns = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
 # ⚠ 2026-09-21: 规则清单抽到 `Get-ScrubRules`(单一真值源) 后, 被提取的函数由 1 个变 3 个 ——
 #   缺任何一个都会让夹具"跑不起来", 或更糟: 跑的是**半套**(旧定义 + 新调用点)。故按名单提取 + 缺则显式抛错。

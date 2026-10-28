@@ -58,6 +58,16 @@ $Script:TMP_ROOT = Join-Path $env:TEMP 'agent-cli'
 #   （空表 ⇒ `unknown/missing project ... (registered: )`）。⇒ **父进程经 env 传根**（`Start-Process` 继承 env）：
 #   有 `AGENT_CLI_REPO_ROOT` 则**优先**用它；⚠ 无 env ⇒ **逐字回退旧算法**（常规调用/站上**零变化**）。
 $Script:REPO_ROOT = if ($env:AGENT_CLI_REPO_ROOT) { [string]$env:AGENT_CLI_REPO_ROOT } else { Split-Path (Split-Path $PSScriptRoot -Parent) -Parent }
+
+# ---------------- 8C: dot-source 判据库（顺序的**唯一真值**） ----------------
+# ★ `$Script:AGENT_CLI_LIBS` 是**唯一顺序真值**：入口 dot-source 与两个夹具（_fm_golden_test /
+#   _probe_fallback / _scrubber_coverage_test）的拼接都按这一份清单走（`tests/test_agent_cli_libs.py` 钉死三处逐项相同）。
+# ⚠ lib 内**不得**用 `$PSScriptRoot` 互相找：`split` 的 BOM 副本落在 TEMP ⇒ 根会算错（O-161 同源）。
+# ⚠ 必须排在上面的 `$Script:REPO_ROOT` **之后**。
+$Script:AGENT_CLI_LIBS = @('10-tables.ps1', '20-scrub.ps1', '30-d7.ps1')
+foreach ($libName in $Script:AGENT_CLI_LIBS) {
+    . (Join-Path $Script:REPO_ROOT "ops\station-bin\agent-cli-lib\$libName")
+}
 # V2 concurrency (O-11 L2/O-26): 单控制台并发调用时, TMP_ROOT 用 per-invocation token 子目录,
 #   避免固定名临时脚本 (agent-cli-attach-mkdir.sh 等) 被并发进程互撞 (shared-temp race)。
 $Script:RUN_TOKEN = [Guid]::NewGuid().ToString('N')
@@ -90,116 +100,6 @@ $Script:STATION_POOL = @('A', 'B', 'C')
 #     新增默认出网别名时**须同步**本清单（夹具 `o147-egress⑪` 钉住"清单里每个别名都存在且是出网"）。
 $Script:EGRESS_MULTI_ALIASES = @('ultra', 'free-1m', 'lightning')
 
-# ---------------- ROUTE_TABLE (BP-2 alias->full-id, T3 task uses; fixed here) ----------------
-# NOTE (2026-09-16): provider 名已统一为 `local`（三站 opencode.jsonc 实况: 仅 local + openrouter）。
-# 旧名 'cluster-litellm/*' 已不存在 —— 沿用会让 _station_ready.sh 注入 ERR_INJECT exit 11、整条派发门挂掉。
-# 模型 id 现为 `local/<flavor>`，flavor 与 local.models 声明键一一对应（保留风味/站点语义）。
-$Script:ROUTE_TABLE = @{
-    # alias -> @{ id=full-id; station=target }
-    'nemotron'   = @{ id = 'local/nemotron';                          station = 'B' }
-    'qwen'       = @{ id = 'local/qwen';                              station = 'B' }
-    'gpt-oss'    = @{ id = 'local/gpt-oss';                           station = 'A' }
-    'gpt-oss-20b'= @{ id = 'local/gpt-oss-20b';                       station = 'B' }   # O-13 sympy 收口卡 (B 站 20b, 2026-09-14)
-    # ⚠⚠ **2026-09-24 实测修正（推翻 2026-09-21 的"缺凭据"归因）：zen（`opencode/*`）不是缺凭据，而是"需要 tty"**。
-    #   证据①（非 tty ⇒ 挂死）：`printf '只回复一个词: ZEN_OK' | timeout 45 opencode run -m opencode/nemotron-3.5-lightning-free`
-    #     ⇒ `RC=124`（45s 零产出）；DEBUG 日志显示请求**已发出**（`llm runtime selected llm.provider=opencode`），
-    #     且**无任何 401/403/credential 报错** ⇒ **不是凭据问题**（三站 `auth.json` 为空/不存在，`auth list` = 0 credentials）。
-    #   证据②（伪 tty ⇒ 可用）：**同一模型**套 `script -qec "opencode run -m <zen-id>"` ⇒ **`RC=0`，43s 返回 `ZEN_OK`**。
-    #   证据③（对照组）：`openrouter/*` **普通管道**即 `RC=0`（≈16s）⇒ **只有 zen 这一路要 tty**；TUI 能用亦因它是真 tty。
-    #   ⇒ **恢复 zen 不需要登录/凭据**，只需让**非交互派发路径**提供伪 tty（`script -qec`，或 `ssh -tt`）。
-    #   ⚠ 但 `script` 会把 PTY 回显（banner + ANSI 控制字符 + "脚本启动于…"）混入 stdout ⇒ 会污染
-    #     `out/.agent-output.txt`（连带 O-37 的字节计数与产物解析）⇒ **改运行时前须先设计输出净化**。
-    #   ⚠ 复验工具：`_probe_opencode_provider.sh` 只测**非 tty**形态 ⇒ 对 zen **恒报 `RC=124`**，
-    #     **不能用来判 zen 死活**；判 zen 须用**伪 tty 对照**（实验组 `script -qec` + 对照组 `openrouter` 普通管道）。
-    #   ⚠⚠ **运行时路由结论（2026-09-24，稳定性采样 + 社区佐证）**：**不建议把 zen 免费档接回本表**。
-    #     采样（`_zen_stability_sample.sh` 7 轮）zen 仅 **1/5 成功**，其后连续 4 次 152s 零输出（限流/空闲流卡死）；
-    #     **官方标注这些免费模型"限时提供·收集反馈"**（`Nemotron 3.5 Lightning Free` 等 = 限时实验资产、随时可下架）
-    #     ⇒ 稳定性无保证，不进运行时路由。三档**维持 openrouter**（`harness_priority` 前两档），zen 仅**人工试点偶用**。
-    #     详见台账 O-43。
-    #   新 id 取 `secrets/openrouter.conf` 的 **`harness_priority` 前两档**（该键是**权威真值**，本表只镜像，
-    #   **不新立模型清单**）—— 与 `claude`/`claude-opus` 同源；站上 `openrouter` provider 已有 key 且实测可用。
-    #   ⚠ **别名命名的是"档位"（快 / 高保真 / 1M），不是厂商** —— 故重指不改名、调用方零改动。
-    #   ⚠ `free-1m` 的"1M"是**原 zen 型号的属性**，新 id 的 ctx **未核**（JUDGE_TABLE 里那个 ctx 字段同此）。
-    'lightning'  = @{ id = 'openrouter/thinkingmachines/inkling:free';            station = 'B' }   # 快档 (原 zen: opencode/nemotron-3.5-lightning-free)
-    'ultra'      = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';   station = 'B' }   # 高保真档 (原 zen: opencode/nemotron-3-ultra-free)
-    'free-1m'    = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';   station = 'B' }  # alias of ultra
-    # 2026-09-24 (D3 / P2-3): per-station 出网档别名 —— 解锁**跨站并行**（O-18 安全区：跨站各 1 并发）。
-    #   与既有 `m27-q4ks-a/-b` **同构**（**同一 id**、不同 station）⇒ 不违"本表只镜像、不新立模型清单"
-    #   （该纪律禁的是新立**模型**；此处未引入新模型 id）。
-    #   用途：**O-20 / O-28 RC① 的正解** —— task 的目标站只能由本表决定（`-HostName` 对 task 无效），
-    #   故"要指定站"唯一通道就是 per-station 别名。
-    #   ★★ **O-147（2026-10-20 就地更正）**：上句有**一个例外** —— **默认出网档**
-    #      （`$Script:EGRESS_MULTI_ALIASES` = `ultra` / `free-1m` / `lightning`）的站位**改由
-    #      【候选站排序】定**（依据 = 本地按站计数，用得少在前；读不到 ⇒ fail-closed 按站轮转）⇒
-    #      ★ 上句"只能由本表决定"**只对【非默认出网档】成立**；★ **要指定站**仍只认 per-station 别名
-    #      （它们**不进候选** —— 这正是本批刻意分开的那条界）。
-    #   前提核查（2026-09-24 实测，已过）：三站 `opencode` 1.18.25 一致 · `~/.config/opencode/opencode.jsonc`
-    #   **md5 全一致**(755975db…) · `~/.config/rpc/openrouter.key` **三站各异**（独立账户 ⇒ 限流互不干扰）。★ 但见 `O-148`（2026-10-08 就地更正）：账户独立 ✓，而 **A / C 站上 `openrouter.ai` 出网【间歇性】失败**（DNS 错误应答）⇒ ★「限流互不干扰」**不等于**「跨站腿随时可用」。
-    'ultra-a'    = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';   station = 'A' }
-    'ultra-c'    = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';   station = 'C' }
-    # `O-147` 甲（2026-10-07）：**补 `ultra-b`** —— ★ 三站里原先只有 A / C 有 per-station 句柄 ⇒
-    #   **连"轮询句柄"都不齐**（配额负载均衡 乙/丙 的前置）。⇒ 补齐 = **纯登记**（同 id、`station='B'`，
-    #   与上面的 `ultra` **等价**）· ★ **不改调度 / 零行为变化**（站位仍由本表唯一决定）。
-    'ultra-b'    = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free';   station = 'B' }
-    # ── 2026-09-24 采样用别名（`harness_priority` 档 1/3/4/5）**已撤除**（Scott 裁定）──────────
-    #   采样结论**已入台账 O-49**：5 档在 opencode harness 路径下**全部可用**（档4 `super-120b` 最快 23s）——
-    #   且 conf 注记的"harness-only(403) / laguna 限流(429)"**两条在 harness 路径均不适用**。
-    #   故**不需要**常驻别名：要用时按 O-49 的 id 临时加回（或直接 `-Model` 走已定稳定档 `ultra`）。
-    #   ⚠ 撤除的是**本表条目**，**不是模型清单**（`harness_priority` 是权威真值，未动）。
-    # C 站 (seaviv) 2026-09-09: gpt-oss 本地引擎已注入 8080; nemotron 模型已传待启
-    'gpt-oss-c'  = @{ id = 'local/gpt-oss';                           station = 'C' }
-    'nemotron-c' = @{ id = 'local/nemotron';                          station = 'C' }
-    # 2026-09-16: m27-q4ks (MiniMax-M2.7) / qwen3.8-flash-next UD-IQ4_XS 三站齐备 (C 源 -> A/B 已同步)
-    # ⚠ 别名必须用站上 infer-load alias 空间真值 (m27-q4ks), 不是模型技术名 (minimax-m2.7) —— 见 cluster.py ROUTE 注
-    'm27-q4ks'       = @{ id = 'local/m27-q4ks';                      station = 'C' }
-    'm27-q4ks-a'     = @{ id = 'local/m27-q4ks';                      station = 'A' }
-    'm27-q4ks-b'     = @{ id = 'local/m27-q4ks';                      station = 'B' }
-    'flash-next'     = @{ id = 'local/qwen3.8-flash-next';            station = 'C' }
-    'flash-next-a'   = @{ id = 'local/qwen3.8-flash-next';            station = 'A' }
-    'flash-next-b'   = @{ id = 'local/qwen3.8-flash-next';            station = 'B' }
-    # full id directly (M3 dual representation)
-    'local/nemotron'              = @{ id = 'local/nemotron';              station = 'B' }
-    'local/qwen'                  = @{ id = 'local/qwen';                  station = 'B' }
-    'local/gpt-oss'               = @{ id = 'local/gpt-oss';               station = 'A' }
-    'local/m27-q4ks'              = @{ id = 'local/m27-q4ks';              station = 'C' }
-    'local/qwen3.8-flash-next'    = @{ id = 'local/qwen3.8-flash-next';    station = 'C' }
-    'opencode/nemotron-3.5-lightning-free'  = @{ id = 'opencode/nemotron-3.5-lightning-free';  station = 'B' }
-    'opencode/nemotron-3-ultra-free'        = @{ id = 'opencode/nemotron-3-ultra-free';        station = 'B' }
-    # (上面两条 zen full-id **仅作 full-id 解析之用**; ⚠⚠ 触发条件**不是凭据** —— 2026-09-24 实测:
-    #  非 tty ⇒ RC=124 挂死 / 伪 tty(script -qec) ⇒ RC=0, 且 DEBUG 显示请求已发出、**无 401/403**;
-    #  三站 auth.json 空或不存在、auth list = 0 credentials(2026-09-30 复测仍 0)
-    #  ⇒ **它要的是 tty, 不是登录**。原文"补 opencode auth login 即可用"是**已推翻**的旧归因
-    #  (见本表上方 2026-09-24 段, 以及台账 O-43 / O-07 的 2026-09-30 收口)。)
-    # 站上 openrouter 的两个档位 full-id (与上面 local/* 同例: 使 `--model <id>` 与 env AGENT_FALLBACK_MODEL 可解析)
-    'openrouter/thinkingmachines/inkling:free'          = @{ id = 'openrouter/thinkingmachines/inkling:free';          station = 'B' }
-    'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free' = @{ id = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free'; station = 'B' }
-    # O-15 claude 备通道 (2026-09-12): 控制台本地执行, station 空 = 不走 ssh. cli=claude 选中本地执行器.
-    #   id = 传给 `claude -p --model` 的型号。
-    #   ⚠ **2026-09-21 修正（实测，阻断级）**: 原为 **Claude 原生 id**(claude-sonnet-4-5 / claude-opus-4-1) ——
-    #     控制台 claude 已切 **OpenRouter** 后，这些 id 会被 OpenRouter **路由到真实 Anthropic 上游** ⇒
-    #     **必 403 `This model is not available in your region.`**（实测三个 Claude 原生 id 全 403；
-    #     `thinkingmachines/*:free` 与 `nvidia/*:free` 均 `OK`）。⇒ 免登录只解决认证、**不解决可用性**。
-    #   现 id 取 `secrets/openrouter.conf` 的 **`harness_priority`** 前两档（该键是权威真值，三处消费方从此镜像；
-    #     本表只镜像其前两项，**不新立模型清单**）。
-    #   别名 `claude` / `claude-opus` **保留原名** —— 它们命名的是**备通道档位**(默认/高保真)，不是厂商。
-    'claude'       = @{ id = 'thinkingmachines/inkling:free';          station = ''; cli = 'claude' }   # 默认备份型号
-    'claude-opus'  = @{ id = 'nvidia/nemotron-3-ultra-550b-a55b:free'; station = ''; cli = 'claude' }   # 高保真备路
-    # full id 直传 (与上面 local/* 同例): 使 `--model <openrouter-id>` 与 env `AGENT_FALLBACK_MODEL` 可解析
-    'thinkingmachines/inkling:free'          = @{ id = 'thinkingmachines/inkling:free';          station = ''; cli = 'claude' }
-    'nvidia/nemotron-3-ultra-550b-a55b:free' = @{ id = 'nvidia/nemotron-3-ultra-550b-a55b:free'; station = ''; cli = 'claude' }
-    # ── 2026-09-25: **站上 claude + OpenRouter** per-station 别名 ─────────────────────────────
-    #   解锁的"锁": P3(2026-09-21) 把 claude 通道收窄成「local-only ⇒ 站上 + 站上本地引擎」/
-    #   「其余 ⇒ 主控本地 spawn(OpenRouter)」⇒ 站上 claude **永远配不了 OpenRouter**。
-    #   而 design 表里 `public`/`sanitized` 那一行本就写着"站上跑 claude + OpenRouter(按站独立 key)"
-    #   (见 docs/research/2026-09-21_D6备路站上化与sensitivity设闸调研与方案.md §3.1) —— 那一支从未落地。
-    #   与 `ultra-a`/`ultra-c` **同构**(同一 id、不同 station ⇒ 不新立模型清单)。
-    #   用途: ① 三站各 1 并发且**各有独立 OpenRouter 账户** ⇒ 限流互不干扰;
-    #         ② 绕开主控单点(3 个 claude 挤一台机器 + 一个账户)。
-    #   ⚠ 站不可用 ⇒ **不作静默换站**(用户裁定 2026-09-25): 拒跑并**列出可用替代站**供裁定。
-    'claude-a'     = @{ id = 'thinkingmachines/inkling:free';          station = 'A'; cli = 'claude' }
-    'claude-b'     = @{ id = 'thinkingmachines/inkling:free';          station = 'B'; cli = 'claude' }
-    'claude-c'     = @{ id = 'thinkingmachines/inkling:free';          station = 'C'; cli = 'claude' }
-}
 
 # ---------------- .agentsync four-type templates (T1, F3) ----------------
 $Script:AGENTSYNC_TEMPLATES = @{
@@ -1521,14 +1421,6 @@ function Invoke-D7Cli {
     return @{ code = $code; ok = ($code -eq 0); line = $line }
 }
 
-function Test-D7Envelope {
-    # ★ B 段：三信封校验 ⇒ **唯一的消费点**（判据本体 = `ops/rpc_check.py` 的 `validate_envelope`）。
-    param([string]$Kind, $Obj, [string]$Card = '')
-    $r = Invoke-D7Cli -Argv @('--d7-envelope', $Kind) -Json $Obj
-    $r['card'] = $Card
-    return $r
-}
-
 function Write-D7Report {
     # **共享汇报壳**：把"产信封 → 调判据 → 如实报出（含 gaps）"这一段收敛到**一处**
     #   （P0/P3 各有两处调用点 ⇒ 不复制四份）。
@@ -1742,105 +1634,6 @@ function Resolve-D7HardReject {
     param([string]$Tag)
     $hard = @{ 'CONTRACT' = $true; 'RUNREPORT' = $true; 'VERDICT' = $true }
     return [bool]$hard[$Tag]
-}
-
-function Get-D7Adjudication {
-    # ── ★★ B 段（2026-10-01）：**P4a/P4b/P5 接线** —— 状态机 + 红线 1/2 + Verdict 登记 ────────
-    # ★ 只**消费既有事实**（`$L1Section` / `$CcSection` / review 的 exit code），**不改任何判定**：
-    #   `review` 仍是 **advisory**（本函数只打印 + 调判据，**不影响退出码**）。
-    # ⚠ **有副作用**（子进程）⇒ 不进离线夹具（纯的那半 = `Resolve-D7PhaseChain` / `New-Verdict` 已离线测）。
-    # ★★ **甲（2026-10-01，用户裁定）：本函数【返回】段，由调用方在 `review.json` 写盘前调** ──────
-    #   为什么改（`O-139`，C 段真跑查出）：旧名 `Write-D7Adjudication` 跑在 `Set-Content` **之后**
-    #   ⇒ 判据校验过的那个 `Verdict` **只活在 stdout**，磁盘上找不到 ⇒ 契约把 P5 叫「裁决**登记**」
-    #   而**登记面是空的**。现改为「先组装 → 注入 `$review['d7_verdict']` → **一次写盘**」。
-    #   ⇒ 改名 `Get-*`（PS 的 `Get-Verb` 它已合规）：**名实相符** —— 它确实是"取一段事实"，不是"写"。
-    # ★★ **该段是【派生段】，不是第二份真值**：`l1_results` / `l2_marks` / `verdict` **逐字取**
-    #   `review.json` 已有的 `l1` 段 / `contract` 段 / `metadata.call_code` ⇒ 它只是把**同一次裁决**
-    #   收成一个**可指对象**（"登记面"），**不引入任何新事实**。
-    # ⚠⚠ **生命周期边界（写死，防下一个人把它当账本读）**：`review.json` 已登记 `not_a_ledger`
-    #   （`inventory/conclusion-ledgers.yaml`：glob `**/review.json`，why「一次派发一份的产物，**不追加**」）
-    #   ⇒ 本段是「**最新裁决**」，**不是「裁决流水」**：重评（`--overwrite`）会**覆盖**它
-    #   （`recorded_at` 随之更新）—— 要流水须先升格账本，那是**另一步**（见 `O-139` 的升级路径）。
-    # ⚠ 诚实：`actor` 在本架构里**恒为 `master`**（外壳只在主控跑）⇒ 红线 1 的实用价值是
-    #   **防将来有人把 P5 搬到站上**（届时 `actor` 变 ⇒ 判据立刻拦）—— **不是**"已拦过真实动作"。
-    # ★ B3（2026-10-01）新增 `-ExecHost`：**产出机**（run 记录里的 `exec_host`）—— `PRH` 需要它。
-    #   ⚠ 收的是 **host 串**（不是站字母）：本函数的两个调用点在 `Invoke-Review` 里，那里**只有** run
-    #     记录可读（`$l1Record.exec_host`），**没有**站字母 ⇒ 传 host 才是**事实直传**（传字母要反查，
-    #     反查不到又会回落成"本地"⇒ **假报同机**）。缺 = 空串 ⇒ 判"不可判"（见 ⑤）。
-    param($L1Section, $CcSection, [int]$ExitCode, [bool]$L2Ran = $true, [string]$Card = '',
-          [string]$ExecHost = '', [System.Collections.IDictionary]$GuardSink = $null)
-    $actor = 'master'
-    # ★ 报数落点（2026-10-01）：`-GuardSink` = 可选收集器，记**本趟 review** 每台判据的三态码
-    #   ⇒ 「每千次 review 拦了多少」才算得出来（此前这些行只走 stdout = 与 `O-139` 同病）。
-    #   ⚠ 只记**可计数的三态码**，不记理由文本（理由在 stdout；复制一份 = 第二份真值）。
-    # ① 状态机（P4a→P4b 可选→P5）**逐跳调判据** —— 非法跳（如跳过 L1）会当场报 reject
-    $chain = Resolve-D7PhaseChain -L1Verdict ([string]$L1Section['verdict']) -L2Ran $L2Ran
-    $hopRej = 0
-    for ($i = 0; $i -lt $chain.states.Count - 1; $i++) {
-        $t = Invoke-D7Cli -Argv @('--d7-transition', $chain.states[$i], $chain.states[$i + 1], $actor)
-        if ($t['code'] -ne 0) {
-            $hopRej++
-            Write-Host ("D7_PHASE_REJECT: " + $t['line'] + " ⇒ **灰度期：不阻断**")
-        }
-    }
-    if ($GuardSink) { $GuardSink['transition.hops'] = [int]($chain.states.Count - 1); $GuardSink['transition.rejected'] = [int]$hopRej }
-    Write-Host ("D7_PHASES: " + ($chain.states -join ' -> '))
-    # ② 红线 2（L1 先于 L2 且 L2 无权改写）：L1 事实与 L2 结论**分开存** ⇒ 结构上不改写；
-    #    可审计凭据 = `$L1Section.record_sha256`（回算 run 记录即可比对）
-    $rb2 = Invoke-D7Cli -Argv @('--d7-block', 'RL2') -Json @{
-        l1_results = @($L1Section); l2_marks = @($CcSection); l2_rewrites_l1 = $false }
-    if ($rb2['code'] -ne 0) { Write-Host ("D7_" + 'RL2_REJECT' + ": " + $rb2['line'] + " ⇒ **灰度期：不阻断**") }
-    if ($GuardSink) { $GuardSink['RL2'] = [int]$rb2['code'] }
-    # ③ 红线 1（完成信号权只在主控站）
-    $rb1 = Invoke-D7Cli -Argv @('--d7-block', 'RL1') -Json @{ actor = $actor }
-    if ($rb1['code'] -ne 0) { Write-Host ("D7_RL1_REJECT: " + $rb1['line'] + " ⇒ **灰度期：不阻断**") }
-    if ($GuardSink) { $GuardSink['RL1'] = [int]$rb1['code'] }
-    # ④ P5 裁决登记：Verdict 信封（`verdict` = review 的 exit code）
-    $d7v = New-Verdict -ExitCode $ExitCode -Phase 'P5' -L1Section $L1Section `
-                       -L2Marks $(if ($L2Ran) { @($CcSection) } else { $null })
-    Write-D7Report -Kind 'Verdict' -Obj $d7v['verdict'] -Gaps $d7v['gaps'] -Tag 'VERDICT' -Card $Card `
-                   -GuardSink $GuardSink      # ★ 顺带记 `VERDICT.envelope` / `VERDICT.i6`（缺省 $null ⇒ 无副作用）
-    # ── ★★ B3（2026-10-01）：角色禁项 `PRM` / `PRW` —— **角色动作点**（契约 §1.6「不堆在 P5 一处」）──
-    # ⚠ 为什么是**这里**：本函数正是"**谁执行 / 谁裁决**"两个角色事实**第一次相遇**的地方（③ 之后）。
-    #   · `PRM` 的动作 = `execute_task` ⇒ 执行由 **worker 角色**登记 —— 裁【甲】（契约 §1.4）：§1.4 的
-    #     「主控站/工作站」= **角色**（不是机器）⇒ 主控机器上的出网通道也以 `worker` 登记 ⇒ **不触** PRM；
-    #     ★ "同一台机器既产出又裁决"这件事由下面的 `PRH` 负责**看见**（报数，不阻断）。
-    #     ⇒ ⚠ 这里**不**按机器归属推 actor（裁【甲】第 2 句逐字：**不由机器归属推**）。
-    #   · `PRW` 的动作 = `write_verdict` ⇒ 在此**动作点**由 `$actor`（master）驱动 ⇒ 不触 PRW
-    #     （PRW 约束的是 worker：不自评/不写 verdict/不重派/不合并）。价值 = **防将来把 P5 搬到站上**。
-    $rpm = Invoke-D7Cli -Argv @('--d7-block', 'PRM') -Json @{ actor = 'worker'; action = 'execute_task' }
-    if ($rpm['code'] -ne 0) { Write-Host ("D7_PRM_REJECT: " + $rpm['line'] + " ⇒ **灰度期：不阻断**") }
-    if ($GuardSink) { $GuardSink['PRM'] = [int]$rpm['code'] }
-    $rpw = Invoke-D7Cli -Argv @('--d7-block', 'PRW') -Json @{ actor = $actor; action = 'write_verdict' }
-    if ($rpw['code'] -ne 0) { Write-Host ("D7_PRW_REJECT: " + $rpw['line'] + " ⇒ **灰度期：不阻断**") }
-    if ($GuardSink) { $GuardSink['PRW'] = [int]$rpw['code'] }
-    # ── ★★ B3（2026-10-01）：`PRH` 同机可见性 —— **报数不阻断**（契约 §1.6 ②）──────────────────
-    # ★ 判据 = `d7_host_separation`（**不属于**那 8 条拦截 ⇒ 单独调 `--d7-host-sep`，不进 `--d7-block`）。
-    # ★ 两侧事实：产出机 = `-ExecHost`（run 记录里的 `exec_host`）· 裁决机 = `$env:COMPUTERNAME`。
-    # ⚠⚠ **argv 空值不可表达**（PS 与 argparse 都吃空串 ⇒ `argparse` 直接退 2）⇒ **自家先判空**并报
-    #    "不可判"，**不要**把空串交给 CLI（契约 §1.6「已知 argv 限制」逐字）—— 而"判不了"**不许**读成"不同机"。
-    $arb = [string]$env:COMPUTERNAME
-    if (-not $ExecHost -or -not $arb) {
-        Write-Host ("D7_PRH_UNDECIDABLE: 缺 host（exec=" + $ExecHost + " / arbiter=" + $arb +
-                    "）⇒ **不可判**（判不了 ≠ 不同机）⇒ 灰度期不阻断")
-    } else {
-        $hsep = Invoke-D7Cli -Argv @('--d7-host-sep', $ExecHost, $arb)
-        if ($hsep['code'] -eq 1) {
-            Write-Host ("D7_PRH_SAME: " + $hsep['line'] + " ⇒ **WARN（不阻断；★ 已定档 2026-10-10 = 维持报数 · O-136 裁② 终点）**")
-        }
-        elseif ($hsep['code'] -eq 0) { Write-Host ("D7_PRH_SEPARATE: " + $hsep['line']) }
-        else { Write-Host ("D7_PRH_UNDECIDABLE: " + $hsep['line'] + " ⇒ 灰度期不阻断") }
-        # ★ 报数：`PRH` 的**三态**原样入 sink（`0` 分离 / `1` 同机 / `2` 不可判 —— 与 CLI 一致，不另立编码）。
-        if ($GuardSink) { $GuardSink['PRH'] = [int]$hsep['code'] }
-    }
-    # ★ 报数：能走到这里 = 本趟 review 的**三态全跑过** ⇒ 记一个"完成"标记，
-    #   使聚合侧能区分「**这段根本没跑**」与「跑了但全 ok」（否则两者都表现为"没有 reject"，是假绿）。
-    if ($GuardSink) { $GuardSink['completed'] = 1 }
-    # ★ 甲（2026-10-01）：**把段还给调用方**（由它在 `$review | ConvertTo-Json | Set-Content` **之前**注入）。
-    #   ⚠ 位置在**函数末尾**（不许提前 return —— 那会跳过上面的 PRM/PRW/PRH 三条角色检查）。
-    #   ⚠ 归零纪律：本函数其余输出一律 `Write-Host`（不占管道）⇒ 这里的 return 是**唯一**进管道的对象；
-    #     调用方**必须**具名赋值（`$review['d7_verdict'] = Get-D7Adjudication …`），**不许裸跑**。
-    return $d7v['verdict']
 }
 
 function Test-CardSafetyDeclared([string]$card, $cardId, [string]$sensitive) {
@@ -2203,83 +1996,6 @@ function Resolve-ExitCode {
     return [int]$v
 }
 
-function Get-ScrubRules {
-    # 2026-09-21 · scrubber 规则扩充裁定（docs/security/2026-09-21_scrubber规则扩充裁定与影响面.md）：
-    # ★ **规则的单一真值源** —— `Invoke-Scrubber`(抹) 与 `Get-ScrubBlockReason`(拒) 都从这里取，
-    #   免得"同一个模式两处各写一遍"然后漂移（本项目反复栽在这个形态上）。
-    # 本次按裁定 §3 由 3 条扩到 9 条：加 6 条**凭据类**（固定前缀锚定 ⇒ 可判性高、误伤≈0）。
-    # ★ **刻意不加**那 8 条身份与拓扑类（内网 IP / .local 主机名 / Linux 绝对路径 / UNC /
-    #   用户名 / 手机号 / 身份证 / 银行卡），理由见裁定 §3，一句话：
-    #     · 前三类是**项目自己的日常寻址方式**（`.local` 212 处 / `/home/<user>/` 211 处 /
-    #       内网 IP 是 `inventory/net.yaml` 的权威真值）⇒ 抹掉它们 = 抹掉任务可执行性；
-    #     · 手机号/身份证/银行卡的**长度判据会命中本仓 run ID**（`yyyyMMddHHmmssffff` 恰好
-    #       18 位数字、全仓 204 处）；要加也只能用**校验位**（GB 11643 / Luhn）—— 见裁定 §2.3/§6-P5；
-    #     · 裸用户名**不可判**。那 8 项的正确防线是**档位**（含 PII/拓扑的卡走 local-only），不是正则。
-    # block=$true ⇒ 命中时**拒发**（不是抹掉继续）—— 见 `Get-ScrubBlockReason` 的注释。
-    return @(
-        # —— 凭据类：固定前缀锚定 ——
-        @{ name = 'private-key'; block = $true;  re = '-----BEGIN [A-Z ]*PRIVATE KEY[A-Z ]*-----';                repl = '[REDACTED-PRIVATE-KEY]' },
-        @{ name = 'github-pat';  block = $false; re = '\b(?:github_pat_[A-Za-z0-9_]{22,}|gh[pousr]_[A-Za-z0-9]{36,})'; repl = '[REDACTED-GH-PAT]' },
-        @{ name = 'aws-ak';      block = $false; re = '\b(?:AKIA|ASIA|A3T[A-Z0-9]|AGPA|AIDA|AROA|AIPA|ANPA|ANVA)[A-Z0-9]{16}\b'; repl = '[REDACTED-AWS-KEY]' },
-        @{ name = 'slack';       block = $false; re = '\bxox[abprs]-[A-Za-z0-9\-]{10,}';                          repl = '[REDACTED-SLACK-TOKEN]' },
-        @{ name = 'jwt';         block = $false; re = '\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}'; repl = '[REDACTED-JWT]' },
-        @{ name = 'api-key';     block = $false; re = 'sk-[A-Za-z0-9_\-]{16,}';                                   repl = '[REDACTED-KEY]' },
-        # bearer **刻意收窄**（裁定 §3-5）：泛模式会吃掉任何长不透明串 ⇒ 只在 `Bearer ` 上下文里认 + 长度 ≥20。
-        @{ name = 'bearer';      block = $false; re = '(?i)\bbearer\s+[A-Za-z0-9._~+/=\-]{20,}';                   repl = '[REDACTED-BEARER]' },
-        @{ name = 'email';       block = $false; re = '[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}';          repl = '[REDACTED-EMAIL]' },
-        # win-path —— 两条**已被夹具实测钉死**的取舍（改动前先读夹具 §2b/§4b）：
-        # ⚠ 不能是 `\S+`：空格即断 ⇒ `C:\Program Files\Git\bin\bash.exe` 只吃掉 `C:\Program`，
-        #   **残留** `Files\Git\bin\bash.exe` —— 而"看起来已处理过"的残留比不处理更危险。
-        # ⚠ 也不能是"段内一律允许空格"（`(?:\\[^\\]+)+`）：贪心会把**路径后面的普通词一起吃**
-        #   （`C:\RPC\out.txt done` → 整段变 `[REDACTED-PATH]`）—— 本机 prompt 里句中路径极常见
-        #   ⇒ 那是**误伤任务输入**（静默破坏，同族于静默降级）。
-        # 取舍：只有当段后**还有 `\`**（即能证明它仍是路径）时才允许段内含空格；末段遇空格即停。
-        #   代价 = "末段含空格"形态会**残留**（已知缺口，见夹具 §4b），消除它需再加规则=决策。
-        @{ name = 'win-path';    block = $false; re = '(?i)\b[A-Z]:\\(?:[^\\/:*?"<>|\r\n\t]+\\+)*[^\\/:*?"<>|\r\n\t\s]*'; repl = '[REDACTED-PATH]' }
-    )
-}
-
-function Invoke-Scrubber {
-    # D6 audit P1 (2026-09-03): regex-only sanitizer for sensitivity=sanitized (IMPL T2 scope).
-    # Runs on console BEFORE the prompt leaves (invariant 2: scrub on console, remote only
-    # receives sanitized text). R4: prints masked previews of hit lines for human confirmation;
-    # no whitelist in MVP. **规则清单已抽到 `Get-ScrubRules`（单一真值源，2026-09-21）。**
-    param([string]$text)
-    $hits = 0
-    foreach ($r in (Get-ScrubRules)) {
-        $ms = [regex]::Matches($text, $r['re'])
-        if ($ms.Count -gt 0) {
-            $hits += $ms.Count
-            foreach ($m in $ms) {
-                $preview = if ($m.Value.Length -gt 8) { $m.Value.Substring(0, 8) + '...' } else { $m.Value }
-                Write-Host "SCRUB[$($r['name'])] hit: $preview (len=$($m.Value.Length)) -> $($r['repl'])"
-            }
-            $text = [regex]::Replace($text, $r['re'], $r['repl'])
-        }
-    }
-    if ($hits -gt 0) { Write-Host "SCRUB total hits: $hits (sanitized gate active)" }
-    return $text
-}
-
-function Get-ScrubBlockReason {
-    # 2026-09-21 · scrubber 规则扩充裁定 §5-1：把"**命中即拦截**"与"**脱敏后继续**"的二分钉死
-    #   （此前 DESIGN §193 写"命中即拦截"、而 §2.1 三档定义写"sanitized→**脱敏后**远端"，
-    #     两句张力一直没被处置）。二分依据 = **能不能安全抹除**：
-    #   · 凭据类（key/email/路径/PAT/…）⇒ **抹掉继续**：抹掉后卡仍自洽，且下游（证据流/归档/
-    #     验收/基线）看到的就是"已消毒"的 prompt，语义与 `public` 档一致。
-    #   · **私钥块** ⇒ **拒发（fail-closed）**：卡里贴了整把私钥说明**这张卡本身就不该出网**；
-    #     抹掉它会让一张本该被作者修掉的卡**看起来正常** —— 与"看起来处理过了"同族。
-    # 返回 '' = 放行 / 否则原因 token（与 `Get-SensitivityBackendReject` 同约定）。
-    # ⚠ 模式**不在此处重复写**：从 `Get-ScrubRules` 里取 `block=$true` 的那几条（单一真值源）。
-    # 纯函数 ⇒ 夹具可按名提取离线单测（与 `Test-FallbackEligible` 同族）。
-    param([string]$text)
-    if (-not $text) { return '' }
-    foreach ($r in (Get-ScrubRules)) {
-        if ($r['block'] -and [regex]::IsMatch($text, $r['re'])) { return "scrub-unsafe:$($r['name'])" }
-    }
-    return ''
-}
-
 function Resolve-ReviewPrompt {
     # W1b 裁定 A（2026-09-22）: **review 出网也要过同一套 scrub + block**。
     # 为什么（决定性判据 = **档位语义一致性**）: `sanitized` 这一档的**定义**就是"含可机判敏感项 ⇒
@@ -2436,60 +2152,6 @@ function Resolve-CardBackendLocal {
 #   实际后端由 P3/D7 决定（`local-only` ⇒ 站上本地引擎 = 不出网；其余 ⇒ OpenRouter = 出网），
 #   由 `Invoke-Task-Claude` 以 `-backendEgress (-not $backendLocal)` 按**运行时**判。此处若按 route id 判会**误杀 P3**。
 
-function Get-BackendEgress {
-    # route id 用它自己跑时会不会出网。规则刻意**反转为 fail-closed 默认**：
-    #   **只有站内本地引擎（`local/<flavor>`）不出网，其余一律视为出网**（含未知/空 id）。
-    param([string]$id)
-    if ([string]::IsNullOrWhiteSpace($id)) { return $true }
-    return -not ($id -match '^local/')
-}
-
-function Get-JudgeEgress {
-    # judge 会不会出网 —— **优先读 `JUDGE_TABLE` 声明的 `egress` 字段**（真值源就在表里）；
-    #   未声明时**回退按 `type` 推**，仍无法判定 ⇒ **视为出网**（fail-closed）。
-    #   为什么以声明字段为主: `type='http'` 是 **ENV 注入**的外部 /v1 —— 若调用方把它指向**本地**端点,
-    #   那它就不出网, 而 type 推不出来（故 `commercial` 那一行注释要求"改一处就同时改另一处"）。
-    #   type 语义: 'local'(控制台 CLI) / 'http-local'(站上引擎) ⇒ 不出网; 'egress'(云) / 'http'(外部) ⇒ 出网。
-    param($judge)
-    if (-not $judge) { return $true }
-    if ($judge.ContainsKey('egress')) { return [bool]$judge['egress'] }
-    $t = [string]$judge['type']
-    if ($t -eq 'local' -or $t -eq 'http-local') { return $false }
-    return $true
-}
-
-function Get-JudgeComplianceReject {
-    # **接线 `JUDGE_TABLE.compliance`** —— 该字段此前全仓只有声明、**无任何读取点**（= 假防线，
-    #   见 OPEN-ISSUES「消毒面 ≠ 出网面」缺口③）。语义：该 judge **允许承载的 sensitivity 列表**；
-    #   `all` = 全部允许；**未声明 ⇒ 拒**（fail-closed，别让"忘写字段"变成"默认放行"）。
-    # 返回 '' = 放行 / 否则 = 拒绝原因 token（纯函数，与 Get-SensitivityBackendReject 同族）。
-    param($judge, [string]$sensitivity)
-    if (-not $judge) { return 'judge-unknown' }
-    $c = [string]$judge['compliance']
-    if ([string]::IsNullOrWhiteSpace($c)) { return 'judge-compliance-undeclared' }
-    if ($c.Trim().ToLower() -eq 'all') { return '' }
-    $allow = @($c.Split(',') | ForEach-Object { $_.Trim().ToLower() })
-    if ($allow -contains ([string]$sensitivity).ToLower()) { return '' }
-    return 'judge-compliance'
-}
-
-function Get-AttachEgressReject {
-    # W4 裁定 B（2026-09-22）: **附件默认不出网 + 显式放行**。返回 '' = 放行 / 否则原因 token。
-    # 为什么附件与卡正文**不同规矩**（§5.5.2 的决定性判据 = **可判性**）:
-    #   · 卡正文是文本 ⇒ 能建**可测的覆盖率**（14 项探测形态 + 9 条规则）⇒ **抹后可出网**（= `sanitized` 档定义）；
-    #   · **附件形态不可判**（二进制/压缩/base64/UTF-16/未知编码）⇒ **抹不出可测覆盖率** ⇒ 「抹」只产出
-    #     **假防线**（"抹了一半"比"明确不抹"**更难发现**）⇒ 只能靠**不出网**兜底。
-    # 三条全中才拒: ① 有附件 ② 目标后端**会出网** ③ 卡**未**显式声明放行。
-    # 放行通道 = 卡写 `attach-egress: ok|yes|true`（与 `review-model` 同属"**显式接受出网**"家族）。
-    # ⚠ 后端是否出网由调用方按通道给（opencode 通道 = Get-BackendEgress $id；claude 通道 = -not $backendLocal）。
-    # 纯函数 ⇒ 夹具可按名提取离线单测（与 Get-SensitivityBackendReject / Resolve-ReviewPrompt 同族）。
-    param([int]$attachCount, [bool]$backendEgress, [string]$declared)
-    if ($attachCount -le 0) { return '' }
-    if (-not $backendEgress) { return '' }
-    $d = ([string]$declared).Trim().ToLower()
-    if ($d -eq 'ok' -or $d -eq 'yes' -or $d -eq 'true') { return '' }
-    return 'attach-egress-unconfirmed'
-}
 
 function Resolve-ClaudeBudget {
     # P4 (2026-09-21): claude 通道(直接入口 + AUTO_FALLBACK 备路)**自己的**预算选择。纯函数 ⇒ 夹具可离线单测。
@@ -5869,29 +5531,6 @@ exit $RC
 
 $Script:REVIEW_DIR = Join-Path $PSScriptRoot 'review'
 
-# JUDGE_TABLE: review-model alias -> @{type; id; station; ctx; egress; compliance}
-#   type 'egress'      = opencode gateway on B (outbound, NOT for local-only)      [src ② ultra]
-#   type 'local'       = console opencode CLI (npm i -g opencode-ai)               [src ⑤ main]
-#   type 'http'        = OpenAI-compatible /v1 (commercial hook, ENV-injected)     [src ① commercial]
-#   type 'http-local'  = OpenAI-compatible /v1 to station engine (load-gate)       [src ③ rpc / ④ m27]
-# ⚠ **W1a (2026-09-21): `egress` 与 `compliance` 从"声明了但没人读"变成真判据** ——
-#   此前 `compliance` **全仓只有声明、无任何读取点**（假防线，见 OPEN-ISSUES「消毒面 ≠ 出网面」缺口③），
-#   实际生效的是"只挡 local-only"的窄判据。现在两个字段都由真值函数读取：
-#     `Get-JudgeEgress`（读 `egress`；**缺字段 ⇒ 回退按 type 推、仍未知 ⇒ 视为出网**，fail-closed）
-#     `Get-JudgeComplianceReject`（读 `compliance`；`all` = 全放行；**缺字段 ⇒ 拒**，fail-closed）
-#   ⇒ **新增一个 judge 必须同时声明这两个字段**（夹具 `_fm_golden_test.ps1` 有覆盖率断言钉住）。
-$Script:JUDGE_TABLE = @{
-    # 2026-09-21: id 从 zen(`opencode/nemotron-3-ultra-free`, **当前不可用**) 重指到**站上 openrouter**;
-    #   ctx 值经厂商 API 核实 (`/api/v1/models` ⇒ 1000000), 非沿用旧值。见 ROUTE_TABLE 处同一段说明。
-    'ultra'       = @{ type='egress';      id='openrouter/nvidia/nemotron-3-ultra-550b-a55b:free'; station='B'; ctx=1000000; egress=$true;  compliance='public,sanitized'; maxtokens=2500 }
-    'free-1m'     = @{ type='egress';      id='openrouter/nvidia/nemotron-3-ultra-550b-a55b:free'; station='B'; ctx=1000000; egress=$true;  compliance='public,sanitized'; maxtokens=2500 }
-    'main'        = @{ type='local';       id='main-opencode-cli';               station='';  ctx=1000000; egress=$false; compliance='all'; maxtokens=4000 }
-    # `commercial` 是 **ENV 注入**的外部 /v1(K 与 base 都由调用方给) ⇒ 默认按**出网**处理。
-    #   若把它指向**本地**端点: 必须**同时**改 `egress=$false` 与 `compliance='all'`（两处一起改，别只改一处）。
-    'commercial'  = @{ type='http';        id='commercial';                      station='';  ctx=131072;  egress=$true;  compliance='public,sanitized'; maxtokens=2500 }
-    'm27'         = @{ type='http-local';  id='local/m27-q4ks';                  station='C'; ctx=131072;  egress=$false; compliance='all'; maxtokens=8000 }
-    'rpc-v4flash' = @{ type='http-local';  id='cluster-v4flash';                 station='C'; ctx=1000000; egress=$false; compliance='all'; maxtokens=8000 }
-}
 
 $Script:REVIEW_PARTIAL_OUT = ''   # (internal) carries error/marker across helpers on failure path
 

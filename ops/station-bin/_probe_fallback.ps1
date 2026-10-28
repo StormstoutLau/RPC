@@ -22,10 +22,17 @@ $ErrorActionPreference = 'SilentlyContinue'
 $cliPath = Join-Path $PSScriptRoot 'agent-cli.ps1'
 
 # --- parse source (UTF8, BOM-safe) ---
+# ★ 2026-10-28（review-p2-split 8C）：判据库已拆到 `agent-cli-lib\` ⇒ **单文件解析不再完整**
+#   （下面"提取全部函数 / 全部 $Script:* 赋值"会漏掉 lib 里的那 9 个函数与 2 张表）。
+#   拼接顺序 = 入口 `$Script:AGENT_CLI_LIBS` 的**声明顺序**（三处清单由 `tests/test_agent_cli_libs.py` 钉死）。
+$libNames = @('10-tables.ps1', '20-scrub.ps1', '30-d7.ps1')
 $src = [System.IO.File]::ReadAllText($cliPath)
+foreach ($n in $libNames) {
+    $src += "`n" + [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "agent-cli-lib\$n"))
+}
 $tok = $null; $errs = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseInput($src, [ref]$tok, [ref]$errs)
-if ($errs -and $errs.Count -gt 0) { throw "agent-cli.ps1 parse errors: $($errs | Out-String)" }
+if ($errs -and $errs.Count -gt 0) { throw "agent-cli.ps1(+lib) parse errors: $($errs | Out-String)" }
 $fns = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))
 
 # ── 提取**全部**函数定义 (2026-09-22, 取代原"硬编码函数名清单") ──────────────────────────

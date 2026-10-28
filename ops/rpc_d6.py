@@ -29,9 +29,22 @@ from rpc_protocol import (
 # ── D6-P1-2 M-1：`事实源 ↔ 镜像` 一致性（当前 1 处合格镜像：判官行）─────────────────────
 MANUAL = ROOT / "docs" / "三机推理集群使用手册.md"
 AGENT_CLI = ROOT / "ops" / "station-bin" / "agent-cli.ps1"
+# ★ 8C（2026-10-28）：`JUDGE_TABLE` 已搬进 `agent-cli-lib/10-tables.ps1` ⇒ 判据要读**定义处**。
+#   ⚠ 只读 `agent-cli.ps1` 会报「读不出 JUDGE_TABLE['main']（表结构变了？）」—— 那是**假红**，
+#     而更糟的形态是"读成 None 后静默通过"（本判据不静默，故它会喊）。
+AGENT_CLI_TABLES = ROOT / "ops" / "station-bin" / "agent-cli-lib" / "10-tables.ps1"
 # M-5/M-6: 受理状态机「单一真值」及其文档镜像
 INBOX_TRUTH_YAML = ROOT / "inventory" / "inbox.yaml"
 INBOX_README = ROOT / "inbox" / "README.md"
+
+
+def agent_cli_sources_text():
+    """入口 + 表库的拼接全文（8C 起表在 lib 里；夹具/判据/测试**同读这一份**）。"""
+    out = []
+    for p in (AGENT_CLI, AGENT_CLI_TABLES):
+        if p.is_file():
+            out.append(p.read_text(encoding="utf-8", errors="replace"))
+    return "\n".join(out)
 
 
 def read_inbox_truth(path):
@@ -237,8 +250,8 @@ def check_mirror(ctx):
         return "WARN", "缺 agent-cli.ps1 或手册，跳过镜像断言", []
     bad = []
     manual_text = MANUAL.read_text(encoding="utf-8", errors="replace")
-    # ── M-1: 手册 §1.3 判官行 ↔ `JUDGE_TABLE['main']` ─────────────────
-    judge = read_judge_main(AGENT_CLI.read_text(encoding="utf-8", errors="replace"))
+    # ── M-1: 手册 §1.3 判官行 ↔ `JUDGE_TABLE['main']`（8C 起表在 agent-cli-lib/10-tables.ps1）──
+    judge = read_judge_main(agent_cli_sources_text())
     row = next((l for l in manual_text.splitlines() if "JUDGE_TABLE['main']" in l), "")
     if not row:
         bad.append("手册 §1.3 里找不到判官行（`JUDGE_TABLE['main']` 那行）")

@@ -134,6 +134,18 @@ foreach ($n in $libNames) {
 
 > 拼接顺序 = 入口 dot-source 顺序；三处清单由 `test_agent_cli_libs.py` 钉死。
 
+**实测结果（2026-10-28）**
+
+| 文件 | 行数 | 内容 |
+|---|---|---|
+| `agent-cli.ps1` | 7406 → **7045** | 只减不增（9 个函数 + 2 张表搬走）；分派主体（`Invoke-Task` / `Invoke-Review` / `split` 等）不动 |
+| `agent-cli-lib/10-tables.ps1` | 141 | `ROUTE_TABLE`(34 键) / `JUDGE_TABLE`(6 键) |
+| `agent-cli-lib/20-scrub.ps1` | 83 | 三个 scrub 函数（9 条规则） |
+| `agent-cli-lib/30-d7.ps1` | 169 | 6 个 D7 / 出网判据函数 |
+
+函数总数守恒：入口 107 + lib 9 = **116**（拆分前基线），无重名。
+第三个夹具 `_scrubber_coverage_test.ps1` 也按同一份清单拼接（原文写死 `d:\RPC` 绝对路径，一并改为 `$PSScriptRoot` 派生）。
+
 ---
 
 ## 7. 行号政策落地

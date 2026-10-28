@@ -17,7 +17,8 @@ import rpc_check as R  # noqa: E402
 
 
 def _real():
-    judge = R.read_judge_main(R.AGENT_CLI.read_text(encoding="utf-8", errors="replace"))
+    # 8C 起 `JUDGE_TABLE` 住在 `agent-cli-lib/10-tables.ps1` ⇒ 读判据用的**同一份拼接全文**
+    judge = R.read_judge_main(R.agent_cli_sources_text())
     row = next((l for l in R.MANUAL.read_text(encoding="utf-8", errors="replace").splitlines()
                 if "JUDGE_TABLE['main']" in l), "")
     return judge, row
