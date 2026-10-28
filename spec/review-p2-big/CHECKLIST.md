@@ -4,8 +4,8 @@
 
 id: review-p2-big-CHECKLIST
 type: design
-version: 1.1
-status: in-review
+version: 1.2
+status: accepted
 date: 2026-10-28
 depends: [review-p2-big-IMPLEMENTATION, review-p2-big-DESIGN]
 upstream: null
@@ -14,13 +14,13 @@ upstream: null
 
 > **Feature**: 按 [DESIGN](./DESIGN.md) 与 [IMPLEMENTATION](./IMPLEMENTATION.md) 验收 #5（13 个站上执行件 `set -euo pipefail` + 2 个库钉住 + `shell-strict` 门禁）与 #8A（164 个一次性探针归档 + 9 项根目录白名单 + `station-layout` 门禁），外加 `agent-cli.ps1` 5 处路径派生。
 > **创建日期**: 2026-10-28
-> **状态**: in-review（本地与站上全绿；**唯一残留 = CI 首跑**，需推送后验证）
+> **状态**: accepted（2026-10-28：本地 + 站上 + CI 全绿）
 > **Spec 步骤**: Step 5（验收）
 > **基于实施**: [IMPLEMENTATION.md](./IMPLEMENTATION.md)
 > **基于设计**: [DESIGN.md](./DESIGN.md)
 > **基于调研**: [P2 大项社区外部锚点调研](../../docs/research/2026-10-28_原始评审P2大项_社区外部锚点调研.md)
-> **代码基线**: `8dd2f3db`（`main`；改动未提交）
-> **审查轮次**: 第 1 轮单测先验红→后验绿（2026-10-28）· 第 2 轮结构/登记 · 第 3 轮三站部署与冒烟 · 第 4 轮全量门禁（CI 待推送）
+> **代码基线**: `8dd2f3db`（`main`）→ 实施 `522ddf90` → 验收修正 `78bbcfd8`（均已推送）
+> **审查轮次**: 第 1 轮单测先验红→后验绿（2026-10-28）· 第 2 轮结构/登记 · 第 3 轮三站部署与冒烟 · 第 4 轮全量门禁 + CI（run `40633787470` 两 job 绿）
 
 ---
 
@@ -32,7 +32,7 @@ upstream: null
 | M2 | 先验红 → 后验绿 | §2 | 5 | **P0** | 全 ☑ |
 | M3 | 契约与边界 | §3 | 12 | **P0** | 全 ☑ |
 | M4 | 站上部署与冒烟 | §4 | 10 | **P0** | 全 ☑ |
-| M5 | 门禁与回归 | §5 | 8 | **P0** | 7 ☑ / G8 待推送 |
+| M5 | 门禁与回归 | §5 | 8 | **P0** | 全 ☑ |
 | M6 | 不变式 | §6 | 7 | **P1** | 全 ☑ |
 | M7 | 残留、回滚与边界 | §7 | — | P1/P3 | 5 条记录 |
 
@@ -134,7 +134,7 @@ upstream: null
 | G5 | `scripts` | 未登记 0；冻结 29 | `扫描 67 · 入口 4 · 拆分模块 7 · 站上运行时 27 · 冻结存量 29 · 未登记 0` | ☑ |
 | G6 | `doclinks` | 0 失效 | `3962 条 · 已登记例外 2 · 失效 0`（改 3 条归档链接） | ☑ |
 | G7 | `md-tables` | 新增 0 | `表 2467 张 · 违规 28（冻结 28 · 新增 0）` | ☑ |
-| G8 | CI（push 后） | 两 job 绿 | **待推送**（本地无法代替 runner） | ☐ |
+| G8 | CI（push 后） | 两 job 绿 | run [`40633787470`](https://github.com/StormstoutLau/RPC/actions/runs/40633787470)：`py-tests` ✓ · `shellcheck` ✓（首跑 `40633143267` 因夹具时钟粒度假阴性，已修 `78bbcfd8`） | ☑ |
 
 ---
 
@@ -188,9 +188,11 @@ upstream: null
 
 ## 9. 验收结论
 
-**本地 + 站上：通过**（2026-10-28）。
+**通过**（2026-10-28）。
 
-- **M1-M4** 与 **M6** 全 ☑；**M5** 7/8（仅 CI 首跑待推送）。
+- **M1-M6** 全部 ☑；**M5 G8** 由 CI run `40633787470` 闭环（`py-tests` + `shellcheck` 两 job 绿）。
 - 关键读数：`py-tests 65/65` · `quick 41/2/0` · `full 49/3/0` · `gates 36/36` · `scripts 未登记 0 / 冻结 29` · `doclinks 0 失效` · `md-tables 新增 0`。
-- **过程中的真实收获**：开 `-u` 后 `cluster-watchdog` 的远端探测当场暴露「单引号串内嵌 `awk '{print $1}'` ⇒ `$1` 本地展开」的潜伏缺陷 —— 这属于“关键失败被静默吞掉”的同族，已在部署前修复并重新冒烟。
-- **唯一残留**：CI 首跑（需推送）；通过后把 `status` 改 `accepted` 并登记 run 链接。
+- **过程中的真实收获（两个，都是“静默失败”同族）**：
+  1. 开 `-u` 后 `cluster-watchdog` 的远端探测当场暴露「单引号串内嵌 `awk '{print $1}'` ⇒ `$1` 本地展开」的潜伏缺陷 —— 部署前修复并重新冒烟。
+  2. CI 首跑 `g170②` 在 Windows runner 上暴露夹具的**时钟粒度**假阴性（`.run-marker` 与产物同秒 ⇒ `find -newer` 判不更新）—— 显式错开三档 mtime（`78bbcfd8`）后本地与 runner 一致。
+- **提交**：实施 `522ddf90`（195 文件，含 164 条 100% rename）· 验收修正 `78bbcfd8`；均已推送。
