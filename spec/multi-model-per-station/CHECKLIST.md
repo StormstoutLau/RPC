@@ -25,10 +25,10 @@ upstream: null
 | 门 | 内容 | 章节 | 项数 | 级别 | 结论 |
 |---|---|---|---|---|---|
 | M1 | 交付物 | §1 | 8 | **P0** | 全 ☑ |
-| M2 | 真站行为 | §2 | 4 | **P0** | 3 ☑ / 1 ◐（G1 待跑） |
+| M2 | 真站行为 | §2 | 4 | **P0** | 全 ☑ |
 | M3 | 默认行为零变化 | §3 | 6 | **P0** | 全 ☑ |
-| M4 | 判据与边界 | §4 | 7 | **P0** | 全 ☑ |
-| M5 | 门禁与回归 | §5 | 5 | **P0** | 全 ☑ |
+| M4 | 判据与边界 | §4 | 23 | **P0** | 全 ☑ |
+| M5 | 门禁与回归 | §5 | 6 | **P0** | 全 ☑ |
 | M6 | 残留与风险 | §6 | 6 | P1 | 6 条记录 |
 
 ---
@@ -85,14 +85,17 @@ upstream: null
 19. ☑ `_station_model_ports` 能解析 `PORT="18080"` 带引号形态（真站复核 `B → {'deepseek…': 8080}`）
 20. ☑ **unload 二修**：alias 模式按 `MODEL_PATH` 认领 —— 真站 `unload --alias gpt-oss-20b` 命中 `pid=1460299 1460471`（studio + 子进程），18081 立刻消失、GTT 90→78.3、deepseek 仍 `{"status":"ok"}`
 21. ☑ **unload 二修**：负例 `infer-unload qwen3.8-27b-mtp`（没在跑）⇒ 只打「未发现该模型的非 systemd 实例」，不误杀；alias 分支仍**不含全量 pkill**（[test_infer_unload_alias.py](../../tests/test_infer_unload_alias.py) 13 条）
+22. ☑ **就绪循环早退（systemd）**：B 站把 qwen conf 的 `LLAMA_SERVER_BIN` 临时改成 `/bin/false` ⇒ `infer-load qwen3.8-27b-mtp --backend llama-single --keep` **0.411s** 返回 `RC=1`，打印 `Result=exit-code` / `ExecMainStatus=1` + journal 尾部（此前空等 15min 且只报"健康检查超时"）；事后 conf 已还原、`reset-failed`、deepseek 仍 `{"status":"ok"}`
+23. ☑ **就绪循环早退（unsloth）**：C 站把 `MODEL_PATH` 临时指向不存在的 gguf ⇒ studio 5s 内退出，脚本 **10s** 返回 `RC=1` 并打 `ERROR: unsloth studio 已退出（端口未就绪…）` + 日志尾部（`GGUF file not found`）；**同时暴露并修掉**「裸 curl + `$? -eq 0`」在 `set -e` 下以 curl rc=7 静默终止脚本的旧缺陷（[test_infer_load_ready.py](../../tests/test_infer_load_ready.py) 16 条）
 
 ## 5. 门禁与回归（M5）
 
 | 命令 | 读数 |
 |---|---|
-| `tests\run_py_tests.py` | ☑ **70/70** |
+| `tests\run_py_tests.py` | ☑ **72/72** |
 | `tests\test_cluster_pure.py` | ☑ ALL PASS |
-| `tests\test_infer_unload_alias.py` | ☑ 9/9 |
+| `tests\test_infer_unload_alias.py` | ☑ 13/13 |
+| `tests\test_infer_load_ready.py` | ☑ 16/16（就绪循环早退 + `$?` 反模式） |
 | `rpc_check.py --quick` | ☑ 41 绿 / 2 黄 / 0 红 |
 | `deps` / `facade` | ☑ 未新增模块级依赖；门面新增 2 个名字可达（⊇ 296 基线） |
 
@@ -134,4 +137,6 @@ upstream: null
 | 2026-10-29 12:29 | **同别名重载通过**：第二次 `--keep` 停旧启新 22s | 期间发现 `--port` 被拒仍落 conf ⇒ 推迟到端口门之后；连带修引号解析 |
 | 2026-10-29 12:35 | **外部占用早退通过**：`RC=1`、不杀他人、conf 不变 | 测试实例已按 MODEL_PATH 精确清理，deepseek 未受影响 |
 | 2026-10-29 13:04 | **unload 二修通过**：`unload --alias gpt-oss-20b` 真的停掉了 unsloth（此前"成功但什么都没停"） | 命中 studio+子进程两个 pid；18081 关闭、GTT 78.3、deepseek `{"status":"ok"}`；负例不误杀 |
+| 2026-10-29 15:07 | **就绪循环早退（systemd）**：B 站临时 `/bin/false` ⇒ **0.411s** `RC=1`，打出 `Result=exit-code` / `ExecMainStatus=1` + journal 尾部（此前空等 15min 且只报超时） | conf 已还原、`reset-failed`、deepseek `{"status":"ok"}` |
+| 2026-10-29 15:19 | **就绪循环早退（unsloth）**：C 站临时无效 gguf ⇒ studio 5s 退出、脚本 **10s** `RC=1` 并直出 `GGUF file not found`；顺带修掉「裸 curl + `$?`」在 `set -e` 下以 rc=7 静默终止脚本的旧缺陷 | 三站部署（备份 `*.bak-o179-ready2-20261029`，44096B/`a423db86`）；C 站 conf 已还原、halogen 与 :8080 正常 |
 

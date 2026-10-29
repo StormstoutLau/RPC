@@ -97,11 +97,16 @@ RESULT: ALL PASS                       # test_cluster_pure.py
    ⇒ 教训（已写进 CHECKLIST §6）：**改站上脚本 ≠ 改仓库**；凡 `cluster.py` 依赖的新语义，落地清单必须含「部署 + 站上核对」两步，否则本地门禁全绿而线上行为相反。
 5. **⚠ `--keep` 在站内被打回原形（G1 首跑实测，已修）**：`cluster.py load --keep` 只把**外层**回收收窄到同名别名，但站内 `infer-load` 的 `[3] 互斥`段**无条件** `systemctl stop 'llama-server@*'` + `pkill unsloth/vllm/ds4` ⇒ B 站的 `gpt-oss-20b`(unsloth) 照样被杀。已给 `infer-load` 加 `--keep`：只停 `llama-server@<本别名>`、跳过全站 GTT 等待（同站有别的模型时「等 GTT<2G」是**必假阴性**，会白等 180s 再 WARN），unsloth/vllm/ds4 因**无 alias 归属**一律不碰。`_build_infer_load_cmd` 同步透传。
 6. **⚠ `--station` 路径吞掉 `--engine`（本次实测，已修）**：`cmd_load_on` 原本没有 `engine` 形参，`load ... --station B --engine X` 会静默用 conf 里的旧引擎。已补形参 + 白名单校验 + 透传 + CLI 接线。
-7. **⚠ B 站 `qwen3.8-27b-mtp.env` 引擎路径悬空（现场缺陷，已由 `--engine` 落 conf 修正）**：B 写的是 `/home/scott-lau/llama.cpp/build/bin/llama-server`（**不存在**，status=127），C 是 `/opt/llama.cpp/llama-server`。**更值得记的是失败方式**：exit 127 之后 `infer-load` 仍等满 **15min** 健康超时才报错 ⇒ 一次配置笔误 = 15 分钟空等。建议后续把「单元已 failed ⇒ 立刻失败」加进就绪循环（未做，登记 §5）。
+7. **⚠ B 站 `qwen3.8-27b-mtp.env` 引擎路径悬空（现场缺陷，已由 `--engine` 落 conf 修正）**：B 写的是 `/home/scott-lau/llama.cpp/build/bin/llama-server`（**不存在**，status=127），C 是 `/opt/llama.cpp/llama-server`。**更值得记的是失败方式**：exit 127 之后 `infer-load` 仍等满 **15min** 健康超时才报错 ⇒ 一次配置笔误 = 15 分钟空等。已在 §4-12 修掉（`systemctl is-failed` 早退，真站 0.411s）。
 8. **⚠ `set -euo pipefail` + 赋值语句里的 grep（keep 首跑直接 exit 1）**：`_self_pids=$(ps … | grep … | grep … | awk …)` 在没有旧实例时 grep 返回 1 ⇒ **pipefail 让整条管道非 0 ⇒ 赋值失败 ⇒ 脚本退出**。日志只停在「停旧实例」，看起来像"keep 被拒"。已加 `|| true`，并写成静态判据（`test_infer_load_keep.py` 第 5 条）。**同族坑**：凡"探测可能为空"的 `$( … | grep … )` 都要显式兜底。
 9. **⚠ 归属判据不能用进程名/日志名（实测）**：日志里 studio 叫 `gpt-oss(gpt-oss-20b)`，但真实 argv 是 `unsloth studio run --model <…gguf> --port 18081 …`（`ss` 的进程名只是 `unsloth`）—— 按 `(<alias>)` 匹配**永远认不出**，同一 alias 重载就会抢端口。已改为「谁占着本端口 + 其 `/proc/<pid>/cmdline` 是否含本模型的 `MODEL_PATH`」，并连带 `pkill -P` 杀 studio 子进程。
 10. **⚠ `--port` 落 conf 早于端口门 ⇒ 被拒绝也改了持久状态（实测）**：`infer-load <别的模型> --keep --port <被占端口>` 明明 exit 1，qwen 的 conf 却被写成 18081。已把 `_set_conf_key PORT` **推迟到 [3] 端口门之后**（内存先替换，通过才落盘），并加静态判据。**连带修**：`_station_model_ports` 用 `sed` 读 `PORT=` 时没剥引号，而 `conf_set_kv` 写的是 `PORT="18080"` ⇒ 该别名会被**静默跳过**；已加 `tr -d '"'`，真站复核 `B → {'deepseek-v4-flash-0731': 8080}`。
 11. **⚠ `infer-unload <alias>` 卸不掉 unsloth（原设计取舍的副作用，已修）**：D-7 原写「alias 模式一律不 pkill」（unsloth 无 alias 归属）⇒ `unload --alias gpt-oss-20b` 会"成功"却**一个进程都没停**。归属其实可得：conf 的 `MODEL_PATH` 与进程 argv 的 `--model/-m` 是同一路径。已改为按路径认领（连带 `pkill -P`），判不出（conf 缺失）只 WARN。**真站验证**：`unload --alias gpt-oss-20b` 命中 `pid=1460299 1460471`（studio + 子进程），18081 立刻消失、GTT 90→78.3、deepseek 仍 `{"status":"ok"}`；负例 `infer-unload qwen3.8-27b-mtp`（没在跑）只打「未发现该模型的非 systemd 实例」，生产无损。
+12. **⚠ 就绪循环不判死活 + 裸 curl 踩 `set -e`（三处，已修）**：真站实测暴露三个同族缺陷：
+    · **systemd 路径**：`[7]` 只 curl `/health` 300×3s。conf 的 `LLAMA_SERVER_BIN` 指向不存在引擎时单元 `exit 127` 立刻 failed，脚本仍等满 **15min**，最后只报"健康检查超时"——真因（`ExecMainStatus=127`）只在 journal 里。
+    · **unsloth 端口解析**：`[6a]` 的 40×3s 循环也不判活。`MODEL_PATH` 不存在时 studio 5s 内退出，仍白等 2min。
+    · **unsloth 健康循环**：写成「裸 curl + `if [ $? -eq 0 ]`」⇒ `set -euo pipefail` 下首次连接失败（curl rc=**7** = `CURLE_COULDNT_CONNECT`）**直接终止整个脚本**：无任何 ERROR，退出码 7 还会被误读成 `[5]` 的"RPC 节点失败"。
+    **修法**：`[6a]` 提取 `_un_dead()`（`! kill -0 $UN_PID && ! pgrep -f '[u]nsloth studio run'`，两条都成立才算死，避免 studio fork/重执行误判），端口循环与健康循环都调用并 `tail -n 20` 打日志尾部；curl 改 `|| _ok=0`（不再依赖 `$?`）。`[7]` 加 `systemctl is-failed --quiet` 早退，并打 `Result`/`ExecMainStatus` + `journalctl -n 20`。**真站读数**：B 站 `/bin/false` 场景 **0.411s** `RC=1`；C 站无效 gguf 场景 **10s** `RC=1` 并直出 `GGUF file not found`。两站事后均已还原（conf 原值、`reset-failed`、生产 `{"status":"ok"}`）。
 
 ---
 
@@ -113,5 +118,5 @@ RESULT: ALL PASS                       # test_cluster_pure.py
 | 2 | ~~`18080` 未登记 `ports.yaml`~~ | ✅ **已做**（P2） |
 | 3 | 客户端寻址第二模型（opencode/claude 的 baseURL 仍是 `127.0.0.1:8080`） | P3 网关解决；**不要在 P3 之前改客户端** —— 逐个改 baseURL 会让两个模型抢同一地址 |
 | 4 | worker 站叠加第二个 head | DESIGN D-2：`--keep` 对 RPC 直接 exit 1 |
-| 5 | **`infer-load` 就绪循环不识别「单元已 failed」** | G1 首跑实测：引擎路径悬空 ⇒ exit 127，但脚本仍等满 **15min** 健康超时。建议在等待循环里加 `systemctl is-failed` 早退（未做） |
+| 5 | ~~`infer-load` 就绪循环不识别「单元已 failed」~~ | ✅ **已修**（2026-10-29，见 §4-12）：`[7]` 加 `systemctl is-failed` 早退（真站 0.411s）；同时补 `[6a]` 的两处进程判死与裸 curl 的 `set -e` 陷阱（真站 10s） |
 | 6 | ~~`infer-unload <alias>` 卸不掉 unsloth 后端~~ | ✅ **已修**（2026-10-29，见 §4-11）：按 `MODEL_PATH` 认领；真站 `unload --alias gpt-oss-20b` 命中 studio+子进程，18081 关闭、生产无损 |

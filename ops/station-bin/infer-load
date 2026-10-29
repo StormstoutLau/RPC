@@ -638,12 +638,26 @@ if [ "$BACKEND" = "unsloth" ]; then
     --flash-attn on --no-context-shift -c "${CTX:-32768}" --device "$DEVICE" --kv-unified \
     --cache-type-k q8_0 --cache-type-v q8_0 ${STUDIO_FLAGS:-} \
     > "$UN_LOG" 2>&1 &
-  log "unsloth launched pid=$! log=$UN_LOG"
+  UN_PID=$!
+  log "unsloth launched pid=${UN_PID} log=$UN_LOG"
+  # ★ 2026-10-29（O-179 §5-5）：两轮等待循环都要能回答"它是不是已经死了"。
+  #   判据要两条都成立才算死：父 pid 不在 **且** 没有 `unsloth studio run` 在跑
+  #   —— studio 若 fork/重执行，父 pid 会变，只 `kill -0` 会误报死亡。
+  _un_dead() {
+    ! kill -0 "$UN_PID" 2>/dev/null && ! pgrep -f '[u]nsloth studio run' >/dev/null 2>&1
+  }
   # unsloth 可能改写 --port (占用则自动+1); 从日志解析实际端口
   ACT_PORT="$PORT_NUM"
+  # ★ 端口解析循环也要判死：实测（2026-10-29）`MODEL_PATH` 不存在时 studio 5s 内就退出，
+  #   旧实现仍把 40×3s 走满（白等 2min）才进健康检查。
   for i in $(seq 1 40); do
     P=$(grep -oE "running at http://127.0.0.1:[0-9]+" "$UN_LOG" | head -1 | grep -oE "[0-9]+$" || true)
     if [ -n "$P" ]; then ACT_PORT="$P"; break; fi
+    if _un_dead; then
+      log "ERROR: unsloth studio 已退出（端口未就绪，pid=${UN_PID}）—— 不再空等"
+      tail -n 20 "$UN_LOG" 2>/dev/null | sed 's/^/[infer-load]   /' || true
+      exit 1
+    fi
     sleep 3
   done
   log "unsloth 实际端口: ${ACT_PORT}"
@@ -665,19 +679,32 @@ if [ "$BACKEND" = "unsloth" ]; then
     log "API Key 已落盘 -> ~/.config/rpc/unsloth.key"
   fi
   # 等就绪: /v1/models (unsloth, 带认证) 确认模型可服务
+  # ★ 2026-10-29（O-179 §5-5）：**不能**再写成「裸 curl + `if [ $? -eq 0 ]`」——
+  #   本脚本是 `set -euo pipefail`，studio 尚未监听时首次 curl 返回 7
+  #   （CURLE_COULDNT_CONNECT）⇒ **整个脚本立即终止**，没有任何 ERROR 输出，
+  #   退出码 7 还会被误读成 [5] 的"RPC 节点失败"。实测（C 站 15:10）复现。
   for i in $(seq 1 120); do
+    _ok=1
     if [ -n "$UN_KEY" ]; then
-      curl -sf --max-time 2 -H "Authorization: Bearer ${UN_KEY}" "http://127.0.0.1:${ACT_PORT}/v1/models" >/dev/null 2>&1
+      curl -sf --max-time 2 -H "Authorization: Bearer ${UN_KEY}" "http://127.0.0.1:${ACT_PORT}/v1/models" >/dev/null 2>&1 || _ok=0
     else
-      curl -sf --max-time 2 "http://127.0.0.1:${ACT_PORT}/v1/models" >/dev/null 2>&1
+      curl -sf --max-time 2 "http://127.0.0.1:${ACT_PORT}/v1/models" >/dev/null 2>&1 || _ok=0
     fi
-    if [ $? -eq 0 ]; then
+    if [ "$_ok" = "1" ]; then
       log "READY ✓ :${ACT_PORT} (unsloth ${ALIAS})"
       # 2026-09-16 (a): 原为 `log "API Key: $UN_KEY"` —— 会把引擎 key 明文带进调用方 stdout
       # (cluster.py load / 会话 transcript / 任何 CI 控制台日志)。改为只打长度 + sha8 指纹,
       # 保留"同一把 key"的可关联性而不泄露材料。
       if [ -n "$UN_KEY" ]; then log "API Key ok (len=${#UN_KEY} sha8=$(printf '%s' "$UN_KEY" | sha256sum | cut -c1-8))"; fi
       exit 0
+    fi
+    # ★ 2026-10-29（O-179 §5-5）：进程已死就别再空等 —— 旧实现只轮询 /v1/models，
+    #   studio 若因模型/引擎路径不对而秒退，会白等满 6min 再报"健康检查超时"，
+    #   真因（日志里的 ERROR 行）被埋在 120 轮之后。
+    if _un_dead; then
+      log "ERROR: unsloth studio 已退出 (pid=${UN_PID}) —— 不再空等就绪"
+      tail -n 20 "$UN_LOG" 2>/dev/null | sed 's/^/[infer-load]   /' || true
+      exit 1
     fi
     sleep 3
   done
@@ -699,6 +726,19 @@ for i in $(seq 1 300); do
   if curl -sf --max-time 2 "http://127.0.0.1:${PORT_NUM}/health" >/dev/null 2>&1; then
     log "READY ✓ :${PORT_NUM} (llama-server@${ALIAS})"
     exit 0
+  fi
+  # ★ 2026-10-29（O-179 §5-5）：单元已 failed ⇒ 立刻报真因，不再空等满 15min。
+  #   实测（G1 首跑）：conf 的 LLAMA_SERVER_BIN 指向不存在的引擎 ⇒ 单元 exit 127 秒退，
+  #   旧循环仍 curl 300 次，最后只说"健康检查超时" —— 真因（ExecMainStatus=127）在 journal 里。
+  #   `is-failed` 退出码 0 = 已 failed；单元不存在/正在启动都非 0 ⇒ 不会误判。
+  if sudo systemctl is-failed --quiet "llama-server@${ALIAS}" >/dev/null 2>&1; then
+    log "ERROR: llama-server@${ALIAS} 已 failed（不再空等）—— 退出码与最近日志:"
+    sudo systemctl show -p Result -p ExecMainStatus "llama-server@${ALIAS}" 2>/dev/null \
+      | sed 's/^/[infer-load]   /' || true
+    sudo journalctl -u "llama-server@${ALIAS}" -n 20 --no-pager 2>/dev/null \
+      | sed 's/^/[infer-load]   /' || true
+    log "       提示: ExecMainStatus=127 多为引擎路径悬空 —— 可用 --engine <变体|绝对路径> 覆盖"
+    exit 1
   fi
   sleep 3
 done
