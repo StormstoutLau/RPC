@@ -105,7 +105,7 @@ upstream: null
 | D-4 | `verdict ∈ {FITS, TIGHT}` 放行；`NO_FIT` **exit 4**；`UNKNOWN` **exit 4** | TIGHT 与 [`cmd_estimate`](../../ops/cluster_runtime.py#L1686) 同口径（它 `return 0`）；`UNKNOWN` 不得当作通过 |
 | D-5 | 反向冲突预检（`--force`，exit 3）**先于**容量门 | 「会崩别人」比「放不下」更严重；两条拒绝面互不替代 |
 | D-6 | `infer-unload` 用**位置参数**而非 `--alias` | 站上是 bash 脚本、无参数解析器；`infer-unload <alias>` 与 `systemctl stop unit` 的肌肉记忆一致，且旧调用（无参）零改动 |
-| D-7 | `infer-unload <alias>` **不**执行 `pkill`（unsloth / ds4 / vllm）与远端全量清扫 | 那些没有 alias 归属；alias 模式下照杀等于**换个名字继续全站清空**，与目标相反 |
+| D-7 | ~~`infer-unload <alias>` **不**执行任何 `pkill`~~ → **改为按 `MODEL_PATH` 认领**：只杀「命令行含本别名模型路径」的 unsloth/手起 llama-server/ds4（连带 `pkill -P` 子进程），判不出归属（conf 缺失）⇒ 只 WARN 不猜 | 原判据「unsloth 等无 alias 归属」在**当时**成立，但副作用是 `unload --alias <unsloth模型>` **什么也停不掉**（2026-10-29 实测）。归属其实可得：conf 的 `MODEL_PATH` 与进程 argv 里的 `--model/-m` 是同一路径。**红线不变**：不得退回全量 pkill（那等于换个名字做全站清空） |
 | D-8 | 容量门用**两道判据**：`estimate_load` 的 verdict（算「要多少」）+ 站上 **GTT 实账**（算「还剩多少」）+ 站级预留 8 GiB；GTT 读不到 ⇒ 回退 verdict 并留痕 | UMA 下 `MemAvailable` 把可回收缓存算成空闲（偏乐观）；而 10-26 两次 `vk::DeviceLostError` 都发生在 GTT 余 15~24G ⇒ 「塞得进」≠「跑得稳」。同族做法见 GPUStack `system_reserved`（[调研 §5](../../docs/research/2026-10-28_gpustack可复用性分析.md)） |
 
 ---
@@ -158,7 +158,8 @@ infer-unload <alias>      # 只停：本站 llama-server@<alias>
                           #       本站 rpc-server@<alias>（若存在）
                           #       各远端节点的 rpc-server@<alias>
                           #       该别名的容器（若 alias ∈ CONTAINER_MODELS）
-                          # 不执行 pkill（D-7），并在日志里写明跳过原因
+                          #       **按 MODEL_PATH 认领**的 unsloth / 手起 llama-server / ds4
+                          #       （连带 pkill -P 子进程）；conf 缺失 ⇒ 只 WARN，不猜不越界
 ```
 
 ### 5.2 Python 侧

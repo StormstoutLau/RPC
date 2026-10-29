@@ -101,6 +101,7 @@ RESULT: ALL PASS                       # test_cluster_pure.py
 8. **⚠ `set -euo pipefail` + 赋值语句里的 grep（keep 首跑直接 exit 1）**：`_self_pids=$(ps … | grep … | grep … | awk …)` 在没有旧实例时 grep 返回 1 ⇒ **pipefail 让整条管道非 0 ⇒ 赋值失败 ⇒ 脚本退出**。日志只停在「停旧实例」，看起来像"keep 被拒"。已加 `|| true`，并写成静态判据（`test_infer_load_keep.py` 第 5 条）。**同族坑**：凡"探测可能为空"的 `$( … | grep … )` 都要显式兜底。
 9. **⚠ 归属判据不能用进程名/日志名（实测）**：日志里 studio 叫 `gpt-oss(gpt-oss-20b)`，但真实 argv 是 `unsloth studio run --model <…gguf> --port 18081 …`（`ss` 的进程名只是 `unsloth`）—— 按 `(<alias>)` 匹配**永远认不出**，同一 alias 重载就会抢端口。已改为「谁占着本端口 + 其 `/proc/<pid>/cmdline` 是否含本模型的 `MODEL_PATH`」，并连带 `pkill -P` 杀 studio 子进程。
 10. **⚠ `--port` 落 conf 早于端口门 ⇒ 被拒绝也改了持久状态（实测）**：`infer-load <别的模型> --keep --port <被占端口>` 明明 exit 1，qwen 的 conf 却被写成 18081。已把 `_set_conf_key PORT` **推迟到 [3] 端口门之后**（内存先替换，通过才落盘），并加静态判据。**连带修**：`_station_model_ports` 用 `sed` 读 `PORT=` 时没剥引号，而 `conf_set_kv` 写的是 `PORT="18080"` ⇒ 该别名会被**静默跳过**；已加 `tr -d '"'`，真站复核 `B → {'deepseek-v4-flash-0731': 8080}`。
+11. **⚠ `infer-unload <alias>` 卸不掉 unsloth（原设计取舍的副作用，已修）**：D-7 原写「alias 模式一律不 pkill」（unsloth 无 alias 归属）⇒ `unload --alias gpt-oss-20b` 会"成功"却**一个进程都没停**。归属其实可得：conf 的 `MODEL_PATH` 与进程 argv 的 `--model/-m` 是同一路径。已改为按路径认领（连带 `pkill -P`），判不出（conf 缺失）只 WARN。**真站验证**：`unload --alias gpt-oss-20b` 命中 `pid=1460299 1460471`（studio + 子进程），18081 立刻消失、GTT 90→78.3、deepseek 仍 `{"status":"ok"}`；负例 `infer-unload qwen3.8-27b-mtp`（没在跑）只打「未发现该模型的非 systemd 实例」，生产无损。
 
 ---
 
@@ -113,4 +114,4 @@ RESULT: ALL PASS                       # test_cluster_pure.py
 | 3 | 客户端寻址第二模型（opencode/claude 的 baseURL 仍是 `127.0.0.1:8080`） | P3 网关解决；**不要在 P3 之前改客户端** —— 逐个改 baseURL 会让两个模型抢同一地址 |
 | 4 | worker 站叠加第二个 head | DESIGN D-2：`--keep` 对 RPC 直接 exit 1 |
 | 5 | **`infer-load` 就绪循环不识别「单元已 failed」** | G1 首跑实测：引擎路径悬空 ⇒ exit 127，但脚本仍等满 **15min** 健康超时。建议在等待循环里加 `systemctl is-failed` 早退（未做） |
-| 6 | **`infer-unload <alias>` 卸不掉 unsloth 后端** | unsloth/vllm/ds4 无 alias 归属 ⇒ alias 模式按纪律**不 pkill**，但也没给出替代路径：`unload --alias <unsloth模型>` 会"成功"却什么也没停（实测：`gpt-oss-20b` 的 studio 仍在跑）。当前只能手工按 `MODEL_PATH` 杀；建议给 `infer-unload` 增加同款 MODEL_PATH 归属判定（未做） |
+| 6 | ~~`infer-unload <alias>` 卸不掉 unsloth 后端~~ | ✅ **已修**（2026-10-29，见 §4-11）：按 `MODEL_PATH` 认领；真站 `unload --alias gpt-oss-20b` 命中 studio+子进程，18081 关闭、生产无损 |

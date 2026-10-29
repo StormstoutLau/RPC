@@ -18,13 +18,50 @@ fi
 # 用法: `infer-unload <alias>` 只停这一个别名；无参数 = 全站清空（旧语义，逐字保留在下面）。
 # 为什么必须单列一条路: 老实现只会 `systemctl stop 'llama-server@*'` —— 一个通配就把同站
 # 其它模型一起杀了，"单站多模型共存"根本立不住。
-# 为什么不 pkill unsloth/ds4/vllm: 那些进程**没有 alias 归属**，在 alias 模式下照杀
-# 等于换个名字继续全站清空（设计 O-179 D-7）。宁可漏杀，也不越界。
+# ★ 2026-10-29 二修：旧版 alias 模式**一律不 pkill**（理由"unsloth/vllm/ds4 没有 alias 归属"），
+#   代价是 `unload --alias gpt-oss-20b` **什么也没停** —— studio 仍占着端口与显存，只能手工 kill。
+#   现在归属判据有了：每个别名 conf 有 `MODEL_PATH`，而进程 argv 里带的正是同一个路径
+#   （`unsloth studio run --model <path>` / `llama-server -m <path>`）⇒ 按"命令行是否含本模型
+#   路径"认领，既不停别人、也不再漏杀。
+#   ⚠ 判不出（conf 缺失 / MODEL_PATH 空）⇒ **不猜**：只停 systemd 单元 + 留 WARN，
+#   绝不退回全量 pkill（那等于换个名字做全站清空）。
 ALIAS="${1:-}"
 if [ -n "$ALIAS" ]; then
   log "只卸别名 ${ALIAS}（同站其它模型保持不动）"
+  # ① systemd 单元（llama 系；rpc-server 为 RPC worker 形态）
   sudo systemctl stop "llama-server@${ALIAS}" 2>/dev/null || true
   sudo systemctl stop "rpc-server@${ALIAS}" 2>/dev/null || true
+  # ② 非 systemd 形态：按 **MODEL_PATH** 认领（unsloth studio / 手起 llama-server / ds4）
+  _mp=""
+  for _c in "/etc/llama-instances/${ALIAS}.env" "/etc/ds4-instances/${ALIAS}.env"; do
+    if [ -f "$_c" ]; then
+      _mp=$(sed -n 's/^MODEL_PATH=//p' "$_c" 2>/dev/null | tail -1 | tr -d '"' || true)
+      [ -n "$_mp" ] && break
+    fi
+  done
+  if [ -n "$_mp" ]; then
+    _hits=""
+    for _p in $( { pgrep -f '[u]nsloth studio run' || true; pgrep -f '[l]lama-server' || true; \
+                   pgrep -f '[d]s4-server' || true; pgrep -f '[d]s4 .*--role' || true; } \
+                 | sort -u || true); do
+      _cmd=$(tr '\0' ' ' < "/proc/${_p}/cmdline" 2>/dev/null || true)
+      case "$_cmd" in
+        *"$_mp"*) _hits="$_hits $_p" ;;
+      esac
+    done
+    if [ -n "$_hits" ]; then
+      log "停本模型的非 systemd 实例 (pid=$(printf '%s' "$_hits" | tr -d '\n'))"
+      for _p in $_hits; do
+        pkill -9 -P "$_p" 2>/dev/null || true   # studio 派生的 llama-server 子进程
+        kill -9 "$_p" 2>/dev/null || true
+      done
+    else
+      log "未发现该模型的非 systemd 实例（unsloth / 手起 llama-server / ds4）"
+    fi
+  else
+    log "WARN: 未取到 ${ALIAS} 的 MODEL_PATH —— 只停了 systemd 单元；非 systemd 形态未动（不猜、不越界）"
+  fi
+  # ③ 远端 worker
   if [ -n "$NODES_LIST" ]; then
     for node in $NODES_LIST; do
       ip="${node%%:*}"
@@ -32,7 +69,7 @@ if [ -n "$ALIAS" ]; then
       "${SSHX[@]}" "$ip" "sudo systemctl stop 'rpc-server@${ALIAS}' 2>/dev/null" 2>/dev/null || true
     done
   fi
-  log "alias 模式: 跳过 unsloth/ds4/vllm 清扫（它们没有 alias 归属）"
+  log "alias 模式: 未做 unsloth/vllm/ds4 的**全量**清扫（只按本模型路径认领）"
   exit 0
 fi
 

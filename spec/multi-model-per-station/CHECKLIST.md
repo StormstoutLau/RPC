@@ -83,6 +83,8 @@ upstream: null
 17. ☑ **keep 二修**：外部占用**早退** —— 直接 `infer-load qwen3.8-27b-mtp --keep --port 18081`（被 gpt-oss-20b 占着）⇒ `RC=1` 立即返回、打印占用者 cmdline、**未杀**对方、**未改** qwen conf（仍 `PORT="18080"`）
 18. ☑ **keep 二修**：静态护栏 [test_infer_load_keep.py](../../tests/test_infer_load_keep.py) 12 条（只停本别名 / 按 MODEL_PATH 认领 / `pkill -P` / 不整体 pkill / 端口判定 / 早退 / 不 wait_gtt / 非 keep 路径不变 / PORT 落盘在门之后）
 19. ☑ `_station_model_ports` 能解析 `PORT="18080"` 带引号形态（真站复核 `B → {'deepseek…': 8080}`）
+20. ☑ **unload 二修**：alias 模式按 `MODEL_PATH` 认领 —— 真站 `unload --alias gpt-oss-20b` 命中 `pid=1460299 1460471`（studio + 子进程），18081 立刻消失、GTT 90→78.3、deepseek 仍 `{"status":"ok"}`
+21. ☑ **unload 二修**：负例 `infer-unload qwen3.8-27b-mtp`（没在跑）⇒ 只打「未发现该模型的非 systemd 实例」，不误杀；alias 分支仍**不含全量 pkill**（[test_infer_unload_alias.py](../../tests/test_infer_unload_alias.py) 13 条）
 
 ## 5. 门禁与回归（M5）
 
@@ -131,4 +133,5 @@ upstream: null
 | 2026-10-29 12:25 | keep 二修验证：同别名重载仍失败，`ss` 显示占用者 pid 是 `unsloth` | 查明：studio argv 里**没有** `(<alias>)`，归属判据改为 **MODEL_PATH** |
 | 2026-10-29 12:29 | **同别名重载通过**：第二次 `--keep` 停旧启新 22s | 期间发现 `--port` 被拒仍落 conf ⇒ 推迟到端口门之后；连带修引号解析 |
 | 2026-10-29 12:35 | **外部占用早退通过**：`RC=1`、不杀他人、conf 不变 | 测试实例已按 MODEL_PATH 精确清理，deepseek 未受影响 |
+| 2026-10-29 13:04 | **unload 二修通过**：`unload --alias gpt-oss-20b` 真的停掉了 unsloth（此前"成功但什么都没停"） | 命中 studio+子进程两个 pid；18081 关闭、GTT 78.3、deepseek `{"status":"ok"}`；负例不误杀 |
 
