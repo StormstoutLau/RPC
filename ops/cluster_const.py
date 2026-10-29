@@ -158,8 +158,9 @@ CONTAINER_MODELS = {
         # ★ 2026-10-22 (ADR-0014 #2 裁定【甲】): 按 **digest 钉死** —— tag 保留可读性, digest 才是真值。
         #   三站 `RepoDigests`/`Id` 已实测逐字一致; 更新制品 = 显式改这里的 digest (Docker 官方语义)。
         #   漂移检查 = `rpc_check --only engine` (三站在跑容器的 RepoDigests vs 本串)。
-        "image": "ghcr.nju.edu.cn/peonist-ai/halogen-flash-server:0.18.13"
-                 "@sha256:2e98dc53ed4a43b5600b11a80852eedfa573f4ffc3f10c64da01245f2a3217fc",
+        # ★ 2026-10-29（O-181）：升到 0.18.18（上游 0.18.14–0.18.18，含 #204/#212/#214/#216）。
+        "image": "ghcr.nju.edu.cn/peonist-ai/halogen-flash-server:0.18.18"
+                 "@sha256:d6cb2a7d20211da675cd1f104a02f4bf4cb60e29afffbaadf8b0d495d332cc8a",
         # ★ 2026-10-25 生产权重 = **v2 `.hgn`** (ADR-0014 §V6.4/§V6.6): 只换 checkpoint 实测
         #   decode 58.16 / 54.25 vs BYO GGUF 39.42 / 35.97 (**1.48× / 1.51×**), 驻留 62.1 vs 72.0 GiB。
         #   v2 **自包含** (实测不挂 GGUF 目录即可跑, 见 o138-p3 的 results-v2):
