@@ -79,6 +79,10 @@ upstream: null
 13. ☑ **P2-余**：`--port` 非法/非数字 ⇒ exit 1（不碰网络）；合法值落进 `infer-load` 命令；未给则不出现
 14. ☑ **P2-余**：`_engine_port` 三级优先级（显式 > conf > 站默认）；`_guard_port` 用显式端口仍能拦撞口
 15. ☑ **P2-余**：三站脚本已部署且**逐字节同尺寸**；`infer-unload <bogus>` 真站空动作（deepseek 未受影响）
+16. ☑ **keep 二修**：同别名重载真站通过 —— `load gpt-oss-20b --station B --keep` 连跑两次，第二次 12:28:38 停旧实例、12:29:00 READY（22s），deepseek(:8080) 全程 `{"status":"ok"}`
+17. ☑ **keep 二修**：外部占用**早退** —— 直接 `infer-load qwen3.8-27b-mtp --keep --port 18081`（被 gpt-oss-20b 占着）⇒ `RC=1` 立即返回、打印占用者 cmdline、**未杀**对方、**未改** qwen conf（仍 `PORT="18080"`）
+18. ☑ **keep 二修**：静态护栏 [test_infer_load_keep.py](../../tests/test_infer_load_keep.py) 12 条（只停本别名 / 按 MODEL_PATH 认领 / `pkill -P` / 不整体 pkill / 端口判定 / 早退 / 不 wait_gtt / 非 keep 路径不变 / PORT 落盘在门之后）
+19. ☑ `_station_model_ports` 能解析 `PORT="18080"` 带引号形态（真站复核 `B → {'deepseek…': 8080}`）
 
 ## 5. 门禁与回归（M5）
 
@@ -123,4 +127,8 @@ upstream: null
 | 2026-10-29 02:47:47 | **G1 通过**：`load qwen3.8-27b-mtp --station B --keep --engine /opt/llama.cpp/llama-server` | B 站 18080 `{"status":"ok"}` + 18081 unsloth 同时在线；GTT **44.2/117.2 GiB** |
 | 2026-10-29 02:48 | 收尾：`unload --alias qwen --station C` + `unload --station B`，随后重载生产 deepseek | 见下方还原记录 |
 | 2026-10-29 02:55:16 | **生产已还原**：`load deepseek-v4-flash-0731` | B `READY :8080`（1M ctx, 6m37s）· A `rpc-server@deepseek` worker · C 仅 `halogen` 容器（:8080 `{"status":"ok","model":"halogen-qwen3.8-flash-next"}`，GTT 24.6/117.2） |
+| 2026-10-29 12:22 | keep 二修前首跑：**直接 exit 1**（`set -e`+pipefail 让空 grep 的赋值失败） | 修复：探测管道加 `\|\| true` |
+| 2026-10-29 12:25 | keep 二修验证：同别名重载仍失败，`ss` 显示占用者 pid 是 `unsloth` | 查明：studio argv 里**没有** `(<alias>)`，归属判据改为 **MODEL_PATH** |
+| 2026-10-29 12:29 | **同别名重载通过**：第二次 `--keep` 停旧启新 22s | 期间发现 `--port` 被拒仍落 conf ⇒ 推迟到端口门之后；连带修引号解析 |
+| 2026-10-29 12:35 | **外部占用早退通过**：`RC=1`、不杀他人、conf 不变 | 测试实例已按 MODEL_PATH 精确清理，deepseek 未受影响 |
 

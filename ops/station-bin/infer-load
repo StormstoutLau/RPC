@@ -211,10 +211,12 @@ _set_conf_key() {  # _set_conf_key <KEY> <VALUE> — 幂等写/改实例 conf �
 #   `llama-serve-instance` **重新 source 同一 conf** ⇒ 只改本进程的 PORT 变量对单元**无效**
 #   （同族实测：`--ctx` 曾因 source 覆盖而完全不生效）。落 conf 后 PORT 仍是唯一真值，
 #   `cluster.py` 的端口门与健康探测都从 conf 读，不复算。
+# ⚠ **二修（2026-10-29 实测）**：写 conf 必须**推迟到 [3] 的端口门之后** ——
+#   原先在这里就写，导致 `infer-load X --keep --port <别人占着的口>` **被拒绝也改了 conf**
+#   （实测：qwen 的 conf 被写成 18081）。现在只在内存里替换，通过后再落盘。
 if [ -n "$CLI_PORT" ] && [ "$CLI_PORT" != "${PORT:-}" ] && [ "${CLI_BACKEND:-}" != "ds4" ]; then
-  _set_conf_key PORT "$CLI_PORT"
   PORT="$CLI_PORT"
-  log "PORT 落 conf: ${CLI_PORT}（覆盖会持久化，conf 仍是唯一真值）"
+  _PORT_PENDING=1
 fi
 if [ -n "$ENGINE_BIN" ] && [ "${CLI_BACKEND:-}" != "ds4" ]; then
   _set_conf_key LLAMA_SERVER_BIN "$ENGINE_BIN"
@@ -315,13 +317,49 @@ fi
 #   B 站的 gpt-oss-20b(unsloth) 就是被这一条干掉的，`--keep` 在站内被打回原形。
 #   unsloth / vllm / ds4 **没有 alias 归属** ⇒ keep 模式下不碰（与 infer-unload 同一纪律）。
 if [ -n "$KEEP" ]; then
-  log "停旧实例: --keep ⇒ 只停 llama-server@${ALIAS}（同站其它模型保持不动）"
+  # ★ 目标不是"单元停了"，而是"**本别名的端口能再次绑定**" —— 一律以端口为准。
+  #   2026-10-29 二修（G1 之后实测）：旧实现只 `systemctl stop llama-server@<alias>` 再等
+  #   `is-active` 落下，漏了**同别名的 unsloth 实例**（studio 名 = `<后端>(<alias>)`）⇒
+  #   `load <同一 alias> --keep` 会与上一次的 studio 抢同一端口，然后白等满健康超时（15min）。
+  log "停旧实例: --keep ⇒ 只停本别名 ${ALIAS}（同站其它模型保持不动）"
   sudo systemctl stop "llama-server@${ALIAS}" 2>/dev/null || true
+  # ★ 归属判据 = **模型文件路径**（conf 的 MODEL_PATH），不是 pid 名、也不是日志里的
+  #   `gpt-oss(<alias>)` —— 实测（2026-10-29）studio 的真实 argv 是
+  #   `unsloth studio run --model <...gguf> --port 18081 ...`，**不含** `(<alias>)`；
+  #   而 `ss` 显示进程名只是 `unsloth`。按"谁占着本端口 + 它的命令行是否在跑本模型"判，
+  #   同一个 alias 换端口/换后端都成立。
+  _pids=$(ss -ltnp 2>/dev/null | grep -E "[:.]${PORT_NUM}\b" \
+            | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u || true)
+  _ours=""; _foreign=""
+  for _p in $_pids; do
+    _cmd=$(tr '\0' ' ' < "/proc/${_p}/cmdline" 2>/dev/null || true)
+    if [ -n "${MODEL_PATH:-}" ] && printf '%s' "$_cmd" | grep -qF -- "$MODEL_PATH"; then
+      _ours="$_ours $_p"
+    else
+      _foreign="$_foreign $_p"
+    fi
+  done
+  if [ -n "$_ours" ]; then
+    log "停本别名的旧实例 (pid=$(printf '%s' "$_ours" | tr -d '\n')；判据=命令行含本模型 MODEL_PATH)"
+    for _p in $_ours; do
+      pkill -9 -P "$_p" 2>/dev/null || true   # studio 派生的 llama-server 子进程
+      kill -9 "$_p" 2>/dev/null || true
+    done
+  fi
   for _i in $(seq 1 30); do
-    systemctl is-active --quiet "llama-server@${ALIAS}" 2>/dev/null || break
+    ss -ltn 2>/dev/null | grep -qE "[:.]${PORT_NUM}\b" || break
     sleep 1
   done
-  log "本别名已停（keep 模式跳过全站 GTT 等待：同站其它模型仍持显存）"
+  if ss -ltn 2>/dev/null | grep -qE "[:.]${PORT_NUM}\b"; then
+    echo "[infer-load] ERROR: --keep 下端口 ${PORT_NUM} 仍被**别人**占用（命令行不含本模型）:"
+    ss -ltnp 2>/dev/null | grep -E "[:.]${PORT_NUM}\b" || true
+    for _p in $_foreign; do
+      echo "[infer-load]   pid=$_p $(tr '\0' ' ' < "/proc/${_p}/cmdline" 2>/dev/null | cut -c1-120)"
+    done
+    echo "[infer-load]        处置: 先 unload 占用它的模型, 或换 --port —— 这里**不进入**健康等待（否则空等 15min）"
+    exit 1
+  fi
+  log "本别名已停、端口 ${PORT_NUM} 已空（keep 模式跳过全站 GTT 等待：同站其它模型仍持显存）"
 else
 log "停旧实例 (llama/vllm/unsloth/ds4)..."
 sudo systemctl stop 'llama-server@*' 2>/dev/null || true
@@ -344,6 +382,13 @@ pkill -9 -f '[d]s4-server' 2>/dev/null || true
 pkill -9 -f '[d]s4 .*--role' 2>/dev/null || true
 fi   # ← --keep 分支到此结束（非 keep 才会走到上面的全量清扫）
 
+# ★ 端口覆盖**通过 [3] 的端口门之后**才落 conf（见 [2b] 的二修注释）：
+#   被拒绝的加载不得改任何持久状态 —— 「先验后毁」的反面同样成立。
+if [ -n "${_PORT_PENDING:-}" ]; then
+  _set_conf_key PORT "$PORT"
+  log "PORT 落 conf: ${PORT}（覆盖会持久化，conf 仍是唯一真值）"
+fi
+
 wait_gtt() {
   for i in $(seq 1 90); do
     if [ -n "$2" ]; then
@@ -358,23 +403,23 @@ wait_gtt() {
   log "WARN: $1 GTT 180s 未释放"
 }
 if [ -n "$KEEP" ]; then
-  log "站点 GTT 等待跳过（keep: 同站其它模型本就占着显存, 等<2G 是必假阴性）"
+  log "站点/worker GTT 等待跳过（keep: 别的模型本就占着显存, 等<2G 是必假阴性）"
 else
   wait_gtt "B" ""
-fi
-if [ -n "${RPC_TARGET:-}" ]; then
-  # ★ 2026-10-22: 等**本次实际 worker** 的 GTT，而非恒等 A —— 单 worker 指派到 C 时，
-  #   等 A 是错的（C 上的旧引擎仍占着显存，rpc-server 会在加载中途 OOM）。
-  #   auto 保留旧语义（多 worker 形态，A 是既有代表）；显式值取 <ip>:<port> 的 ip，
-  #   与 cluster.py 的 LAN IPv4 同一地址真值（ADR-0006）。
-  if [ "$RPC_TARGET" = "auto" ]; then
-    wait_gtt "A" "$AWORK"
+  if [ -n "${RPC_TARGET:-}" ]; then
+    # ★ 2026-10-22: 等**本次实际 worker** 的 GTT，而非恒等 A —— 单 worker 指派到 C 时，
+    #   等 A 是错的（C 上的旧引擎仍占着显存，rpc-server 会在加载中途 OOM）。
+    #   auto 保留旧语义（多 worker 形态，A 是既有代表）；显式值取 <ip>:<port> 的 ip，
+    #   与 cluster.py 的 LAN IPv4 同一地址真值（ADR-0006）。
+    if [ "$RPC_TARGET" = "auto" ]; then
+      wait_gtt "A" "$AWORK"
+    else
+      W_IP="${RPC_TARGET%%:*}"
+      wait_gtt "worker(${W_IP})" "$(id -un)@${W_IP}"
+    fi
   else
-    W_IP="${RPC_TARGET%%:*}"
-    wait_gtt "worker(${W_IP})" "$(id -un)@${W_IP}"
+    log "worker GTT 跳过 (单机模式: RPC_TARGET 空, worker 站资源与本加载无关)"
   fi
-else
-  log "worker GTT 跳过 (单机模式: RPC_TARGET 空, worker 站资源与本加载无关)"
 fi
 
 # ---- [4] vLLM 路径 (回退) ----

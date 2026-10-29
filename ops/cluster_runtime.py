@@ -1286,7 +1286,9 @@ def _station_model_ports(station: str, exclude: str = None):
     cmd = ("for u in $(systemctl list-units 'llama-server@*' --state=active --no-legend "
            "2>/dev/null | awk '{print $1}'); do "
            "a=${u#llama-server@}; a=${a%.service}; "
-           "p=$(sed -n 's/^PORT=//p' /etc/llama-instances/$a.env 2>/dev/null | tail -1); "
+           # ⚠ `tr -d '\\"'`：`conf_set_kv` 写的是 `PORT=\"18080\"`（P1 #4 的引号规则），
+           #   不剥引号 ⇒ v.isdigit() 为假 ⇒ 该别名被**静默跳过**（实测 2026-10-29）。
+           "p=$(sed -n 's/^PORT=//p' /etc/llama-instances/$a.env 2>/dev/null | tail -1 | tr -d '\\\"'); "
            "echo \"$a=${p:-8080}\"; done")
     ok, out = ssh_run(station, cmd)
     if not ok:
