@@ -5,10 +5,27 @@ log() { echo "[infer-unload] $(date '+%H:%M:%S') $*"; }
 
 # ---- worker 通道（两种模式共用；2026-09-15 修）----------------------------
 # ⚠ ssh 必须用**持有节点密钥的服务用户**: 以 root 跑本脚本时 root 无密钥 (与 infer-load 真因①同源)。
-RPC_USER="${RPC_USER:-$(id -un)}"
+# ★ 2026-10-29（O-181 二修）：原实现 `RPC_USER="${RPC_USER:-$(id -un)}"` 在 root 下退化成 **root**。
+#   实测（B 站）root 的 ~/.ssh 只有 0 字节 authorized_keys、无 known_hosts ⇒ 远端一律
+#   `Host key verification failed:`；而调用点 `2>/dev/null` 把真因吞掉，只剩一句「不可达」。
+#   解析顺序：显式 RPC_USER > nodes.env 的 RPC_USER= > 本机首个持私钥的非系统用户 > 当前用户。
+NODES_ENV_F="${NODES_ENV:-/etc/llama-instances/nodes.env}"
+if [ -z "${RPC_USER:-}" ] && [ -f "$NODES_ENV_F" ]; then
+  RPC_USER="$(sed -n 's/^RPC_USER=//p' "$NODES_ENV_F" 2>/dev/null | tail -1 | tr -d '"' || true)"
+fi
+if [ -z "${RPC_USER:-}" ] && [ "$(id -u)" = "0" ]; then
+  for _ru in $(getent passwd 2>/dev/null | awk -F: '$3>=1000 && $3<65534 {print $1}' || true); do
+    _ru_home="$(getent passwd "$_ru" 2>/dev/null | awk -F: '{print $6}' || true)"
+    [ -n "$_ru_home" ] || continue
+    if [ -r "${_ru_home}/.ssh/id_ed25519" ] || [ -r "${_ru_home}/.ssh/id_rsa" ]; then
+      RPC_USER="$_ru"; break
+    fi
+  done
+fi
+[ -n "${RPC_USER:-}" ] || RPC_USER="$(id -un)"
+log "worker 通道用户: ${RPC_USER}（root 无节点密钥；须能读 ~/.ssh/id_*）"
 if [ "$(id -u)" = "0" ]; then SSHX=(sudo -u "$RPC_USER" ssh -o BatchMode=yes)
 else SSHX=(ssh -o BatchMode=yes); fi
-NODES_ENV_F="${NODES_ENV:-/etc/llama-instances/nodes.env}"
 NODES_LIST=""
 if [ -f "$NODES_ENV_F" ]; then
   NODES_LIST="$("${RPC_NODES_BIN:-/usr/local/bin/rpc-nodes}" --all 2>/dev/null || true)"
@@ -66,7 +83,12 @@ if [ -n "$ALIAS" ]; then
     for node in $NODES_LIST; do
       ip="${node%%:*}"
       log "停远端 worker ${node} 的 rpc-server@${ALIAS}..."
-      "${SSHX[@]}" "$ip" "sudo systemctl stop 'rpc-server@${ALIAS}' 2>/dev/null" 2>/dev/null || true
+      _err="$(mktemp 2>/dev/null || echo /dev/null)"
+      if ! "${SSHX[@]}" "$ip" "sudo systemctl stop 'rpc-server@${ALIAS}' 2>/dev/null" 2>"$_err"; then
+        log "WARN: ${ip} 停 rpc-server@${ALIAS} 失败（原始错误见下，别当作网络结论）"
+        if [ -s "$_err" ]; then sed 's/^/[infer-unload]   原始错误: /' "$_err" | head -3; fi
+      fi
+      rm -f "$_err"
     done
   fi
   log "alias 模式: 未做 unsloth/vllm/ds4 的**全量**清扫（只按本模型路径认领）"
@@ -114,10 +136,15 @@ if [ -f "$NODES_ENV_F" ]; then
   for node in $NODES_LIST; do
     ip="${node%%:*}"
     log "停远端 worker ${node} 的 rpc-server@*..."
-    was=$("${SSHX[@]}" "$ip" "systemctl list-units 'rpc-server@*' --state=active --no-legend 2>/dev/null | grep -q . && echo active || echo inactive; sudo systemctl stop 'rpc-server@*' 2>/dev/null" 2>/dev/null | head -1 || true)
+    _err="$(mktemp 2>/dev/null || echo /dev/null)"
+    was=$("${SSHX[@]}" "$ip" "systemctl list-units 'rpc-server@*' --state=active --no-legend 2>/dev/null | grep -q . && echo active || echo inactive; sudo systemctl stop 'rpc-server@*' 2>/dev/null" 2>"$_err" | head -1 || true)
     # 本机 IP 会自 ssh 失败 (见上 ①) —— 那不算错误, 已由本地分支处理
     if [ "$was" = "active" ]; then RPC_WAS_ACTIVE="$RPC_WAS_ACTIVE ${node}"
-    elif [ -z "$was" ]; then log "WARN: ${ip} 不可达 —— 该 worker 是否仍在跑**无法确认** (不假装已停)"; fi
+    elif [ -z "$was" ]; then
+      log "WARN: ${ip} 不可达 —— 该 worker 是否仍在跑**无法确认** (不假装已停)"
+      if [ -s "$_err" ]; then sed 's/^/[infer-unload]   原始错误: /' "$_err" | head -3; fi
+    fi
+    rm -f "$_err"
   done
 else
   log "远端 worker: 本站无 ${NODES_ENV_F} (节点清单在 master 站), 由 master 侧的 unload 负责"

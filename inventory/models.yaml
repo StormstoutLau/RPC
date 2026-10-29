@@ -171,7 +171,9 @@ non_model_conf:
   - alias: nodes
     conf: [B]
     purpose: RPC 节点声明清单
-    content: 'RPC_NODES="10.10.10.1:50052 10.10.11.3:50052"'
+    content: |
+      RPC_NODES="10.10.10.1:50052 10.10.11.3:50052"
+      RPC_USER=scott-lau
     owner: /usr/local/bin/rpc-nodes (被其读取)
     note: |
       2026-09-14 查证: 内容是集群 RPC 节点清单 (B5q-1, spec/cluster-bench DESIGN §3),

@@ -571,12 +571,30 @@ fi
 # 长期不可见的根源 (P2-4 路径对比的两条路径就因此都跑成了单机)。
 if [ -n "${RPC_TARGET:-}" ]; then
   RPCCMD="$(command -v rpc-nodes || echo /usr/local/bin/rpc-nodes)"
+  # ★ 2026-10-29（O-181）：身份解析必须与 infer-unload 同源 —— root 下 `id -un` = root，
+  #   root 的 ~/.ssh 无密钥/无 known_hosts ⇒ 起节点必然失败，且错误会被 `|| { exit 7; }` 收成
+  #   一句"节点未就绪"，看不出是身份问题。顺序：显式 RPC_USER > nodes.env > 首个持钥用户 > 当前用户。
+  NODES_ENV_F="${NODES_ENV:-/etc/llama-instances/nodes.env}"
+  if [ -z "${RPC_USER:-}" ] && [ -f "$NODES_ENV_F" ]; then
+    RPC_USER="$(sed -n 's/^RPC_USER=//p' "$NODES_ENV_F" 2>/dev/null | tail -1 | tr -d '"' || true)"
+  fi
+  if [ -z "${RPC_USER:-}" ] && [ "$(id -u)" = "0" ]; then
+    for _ru in $(getent passwd 2>/dev/null | awk -F: '$3>=1000 && $3<65534 {print $1}' || true); do
+      _ru_home="$(getent passwd "$_ru" 2>/dev/null | awk -F: '{print $6}' || true)"
+      [ -n "$_ru_home" ] || continue
+      if [ -r "${_ru_home}/.ssh/id_ed25519" ] || [ -r "${_ru_home}/.ssh/id_rsa" ]; then
+        RPC_USER="$_ru"; break
+      fi
+    done
+  fi
+  [ -n "${RPC_USER:-}" ] || RPC_USER="$(id -un)"
+  log "worker 通道用户: ${RPC_USER}（root 无节点密钥；须能读 ~/.ssh/id_*）"
   # 2026-10-22: 显式 RPC_TARGET ⇒ 只起该 worker（起 = 用）。auto 保持旧语义（起全部声明节点）。
   RPC_FILTER=""
   [ "$RPC_TARGET" = "auto" ] || RPC_FILTER="$RPC_TARGET"
   log "起 RPC 节点 (${RPCCMD} --start ${ALIAS} ${RPC_FILTER:+(仅 ${RPC_FILTER})}, 服务用户身份 + 自带等端口)..."
   if [ "$(id -u)" = "0" ]; then
-    RPC_ALIVE="$(sudo -u "${RPC_USER:-$(id -un)}" "$RPCCMD" --start "${ALIAS}" ${RPC_FILTER:+"$RPC_FILTER"})"
+    RPC_ALIVE="$(sudo -u "$RPC_USER" "$RPCCMD" --start "${ALIAS}" ${RPC_FILTER:+"$RPC_FILTER"})"
   else
     RPC_ALIVE="$("$RPCCMD" --start "${ALIAS}" ${RPC_FILTER:+"$RPC_FILTER"})"
   fi || {
