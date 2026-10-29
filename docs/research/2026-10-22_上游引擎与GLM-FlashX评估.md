@@ -97,7 +97,10 @@
 |---|---|---|
 | **0.18.11** | `sha256:a5797467d2bff173e0c661d9700292bd55eac305faff68c86261ae35385ad6ad` | **升级前**（曾为现役 pin） |
 | **0.18.12** | `sha256:b6403f1d07e22b719fb23d131d16d1ea27650da414dfaff734cfdd4fe18b9ba2` | 中间版（未部署） |
-| **0.18.13** | `sha256:2e98dc53ed4a43b5600b11a80852eedfa573f4ffc3f10c64da01245f2a3217fc` | ✅ **现役**（2026-10-22 升级；created 2026-10-20T23:05Z） |
+| **0.18.13** | `sha256:2e98dc53ed4a43b5600b11a80852eedfa573f4ffc3f10c64da01245f2a3217fc` | **曾为现役**（2026-10-22 → 10-29；created 2026-10-20T23:05Z） |
+| **0.18.18** | `sha256:d6cb2a7d20211da675cd1f104a02f4bf4cb60e29afffbaadf8b0d495d332cc8a` | ✅ **现役**（2026-10-29 升级；上游 0.18.14–0.18.18，含 #204 queued-cancel、#212 /metrics 抓取拖慢短请求、#214 断连暂停占槽、#216 `</tool_call>` 截断） |
+
+> **未单独取证的版本**：0.18.14 / 0.18.15 / 0.18.16 / 0.18.17 未单独部署，也未逐个取 manifest digest（本轮直接由 0.18.13 → 0.18.18）。0.18.18 的 digest 已与 `ghcr.io` 上游**逐字节一致**（南大镜像无改写）。
 
 取数：`ghcr.nju.edu.cn/v2/peonist-ai/halogen-flash-server/manifests/<tag>` 的 `Docker-Content-Digest`。升级前 0.18.11 的仓库 digest 与旧 pin **逐字一致**；升级后 0.18.13 的仓库 digest 与新 pin **逐字一致** ⇒ 两次均未漂移。
 
