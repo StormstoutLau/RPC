@@ -29,9 +29,14 @@ report() { # name status detail
   case "$2" in PASS) PASS=$((PASS+1));; FAIL) FAIL=$((FAIL+1));; SKIP) SKIP=$((SKIP+1));; INFO) INFO=$((INFO+1));; esac
 }
 
+# O-177 #9（2026-10-30）：身份与地址不再写死。默认值与原行为**逐字一致**，可被环境变量覆盖。
+RPC_USER="${RPC_USER:-$(id -un)}"
+HOST_A="${HOST_A:-${RPC_USER}@scott-lau-NEX.local}"
+HOST_B="${HOST_B:-${RPC_USER}@scott-lau-GTR-Pro.local}"
+HOST_C="${HOST_C:-${RPC_USER}@192.168.10.37}"
+
 # ---------------------------------------------------------------- B 站
 if [ "$SCOPE" = "ALL" ] || [ "$SCOPE" = "B" ]; then
-  HOST_B=scott-lau@scott-lau-GTR-Pro.local
   LOADED=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST_B" "pgrep -c -f llama-server" 2>/dev/null || echo 0)
   if [ "${LOADED:-0}" -lt 1 ]; then
     report B-backend SKIP "llama-server 未运行, 先 infer-load nvidia-nemotron-3-super"
@@ -70,7 +75,7 @@ fi
 
 # ---------------------------------------------------------------- A 站
 if [ "$SCOPE" = "ALL" ] || [ "$SCOPE" = "A" ]; then
-  HOST_A=scott-lau@scott-lau-NEX.local
+  : # HOST_A 见文件头（O-177 #9）
   LOADED=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST_A" "pgrep -c -f llama-server" 2>/dev/null || echo 0)
   if [ "${LOADED:-0}" -lt 1 ]; then
     report A-backend SKIP "llama-server 未运行, 先 infer-load gpt-oss-120b"
@@ -109,7 +114,7 @@ fi
 
 # ---------------------------------------------------------------- C 站
 if [ "$SCOPE" = "ALL" ] || [ "$SCOPE" = "C" ]; then
-  HOST_C=scott-lau@192.168.10.37
+  : # HOST_C 见文件头（O-177 #9）
   LOADED=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST_C" "pgrep -c -f llama-server" 2>/dev/null || echo 0)
   if [ "${LOADED:-0}" -lt 1 ]; then
     report C-backend SKIP "llama-server 未运行, 先 cluster.py load gpt-oss-c"
@@ -159,12 +164,12 @@ fi
 # CHECKLIST BP-3 静态断言 `opencode run -m ... < .prompt.txt`），与位置参数是否可用无关。
 # 保留观测的价值：升级窗口人工比对"耗时/结果"与历史记录，作为行为变更的线索。
 if [ "$SCOPE" = "ALL" ] || [ "$SCOPE" = "B" ]; then
-  G10B=$(ssh -o BatchMode=yes -o ConnectTimeout=10 scott-lau@scott-lau-GTR-Pro.local "pgrep -c -f llama-server" 2>/dev/null || echo 0)
+  G10B=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST_B" "pgrep -c -f llama-server" 2>/dev/null || echo 0)
   if [ "${G10B:-0}" -lt 1 ]; then
     report g10-positional SKIP "B backend 未加载 (未加载时位置参数必然失败, 测不出真假)"
   else
     T0=$(date +%s)
-    OUT=$(ssh -o BatchMode=yes -o ConnectTimeout=10 scott-lau@scott-lau-GTR-Pro.local 'bash -s' <<'REMOTE' 2>/dev/null
+    OUT=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST_B" 'bash -s' <<'REMOTE' 2>/dev/null
 cd /tmp
 out=$(timeout 25 opencode run -m local/nemotron 'reply with exactly: OK' 2>/dev/null | tail -1)
 echo "OUT=$out"
@@ -185,7 +190,7 @@ ACF=d:/RPC/ops/station-bin/agent-cli.ps1
 CARD=d:/RPC/spec/d6-agent-standard/test-cards/echo.md
 PS=powershell.exe
 if [ "$SCOPE" = "ALL" ]; then
-  B_BACKEND=$(ssh -o BatchMode=yes -o ConnectTimeout=10 scott-lau@scott-lau-GTR-Pro.local "pgrep -c -f llama-server" 2>/dev/null || echo 0)
+  B_BACKEND=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST_B" "pgrep -c -f llama-server" 2>/dev/null || echo 0)
   if [ "${B_BACKEND:-0}" -lt 1 ]; then
     report d6-task SKIP "B backend 未加载, 先 infer-load (agent-cli 端到端依赖模型)"
     report d6-timeout SKIP "B backend 未加载, 跳过超时注入"

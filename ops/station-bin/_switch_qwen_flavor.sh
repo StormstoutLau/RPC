@@ -56,12 +56,18 @@ echo "deployed CTX: $(grep -E '^CTX=' "$CONF")"
 echo "[mem] stop $UNIT ..."
 sudo systemctl stop "$UNIT" 2>/dev/null || true
 
+# O-177 #9（2026-10-30）：服务用户家目录不再写死 —— 与 O-181 的 RPC_USER 解析同源。
+SU_USER="${RPC_USER:-$(sed -n 's/^RPC_USER=//p' /etc/llama-instances/nodes.env 2>/dev/null | tail -1 | tr -d '"' || true)}"
+[ -n "$SU_USER" ] || SU_USER="$(id -un)"
+SU_HOME="$(getent passwd "$SU_USER" 2>/dev/null | cut -d: -f6)"
+[ -n "$SU_HOME" ] || SU_HOME="$HOME"
+
 # ---- [4] wait-gtt-release (async GTT reclaim; 30-90s typical) ----
 echo "[mem] wait-gtt-release ..."
 if bash "$(dirname "$0")/wait-gtt-release" 2>/dev/null; then
   : # local copy present
-elif [ -f /home/scott-lau/wait-gtt-release ]; then
-  bash /home/scott-lau/wait-gtt-release || { echo "ERR: GTT not released"; exit 3; }
+elif [ -f "$SU_HOME/wait-gtt-release" ]; then
+  bash "$SU_HOME/wait-gtt-release" || { echo "ERR: GTT not released"; exit 3; }
 else
   # inline fallback: poll MemAvailable until >=100G
   for i in $(seq 1 36); do
@@ -76,8 +82,8 @@ fi
 echo "[mem] load-mem-gate ${MEM_GB}G ..."
 if bash "$(dirname "$0")/load-mem-gate" "$MEM_GB" 2>/dev/null; then
   :
-elif [ -f /home/scott-lau/load-mem-gate ]; then
-  bash /home/scott-lau/load-mem-gate "$MEM_GB" || { echo "ERR: mem gate reject"; exit 4; }
+elif [ -f "$SU_HOME/load-mem-gate" ]; then
+  bash "$SU_HOME/load-mem-gate" "$MEM_GB" || { echo "ERR: mem gate reject"; exit 4; }
 else
   AV=$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)
   [ $((AV - MEM_GB*1024)) -ge 12288 ] || { echo "ERR: no gate, AV=${AV}G < ${MEM_GB}+12G"; exit 4; }

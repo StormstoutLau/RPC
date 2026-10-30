@@ -202,6 +202,11 @@ from cluster_model import (  # noqa: E402
 
 # ── 控制台宽度工具（`_dw` / `_pad` 原先在 agent 段内 import，随段搬走 ⇒ 门面补回）
 from cluster_console import disp_width as _dw  # noqa: E402
+
+# ── O-178（2026-10-30）：load/unload 的**跨进程互斥** ─────────────────────────
+#   原因：两个 CLI 并发时，A 站 worker 刚停、B 站 head 就去取显存 ⇒ `GGML_ABORT`（core-dump）。
+#   单进程内的「head 先停」挡不住另一个进程，故在 CLI 入口加锁（exit 6）。
+from cluster_lock import ClusterLocked, cluster_lock, cluster_lock_path  # noqa: E402
 from cluster_console import pad as _pad        # noqa: E402
 
 
@@ -284,10 +289,16 @@ def main() -> int:
             print("用法: cluster.py load <alias前缀> [--backend unsloth|llama-rpc|llama-single|vllm|ds4] "
                   "[--engine <变体名|绝对路径>] [--worker A|C] [--station A|B|C] [--port N] [--force] [--keep]")
             return 1
-        if station:
-            # 按站加载：不做别名路由；--keep 时只回收同名别名（O-179 G1）
-            return cmd_load_on(station, " ".join(rest), backend, port, keep, engine)
-        return cmd_load(" ".join(rest), backend, engine, worker, force, keep, port)
+        try:
+            with cluster_lock(purpose="load " + " ".join(rest)):
+                if station:
+                    # 按站加载：不做别名路由；--keep 时只回收同名别名（O-179 G1）
+                    return cmd_load_on(station, " ".join(rest), backend, port, keep, engine)
+                return cmd_load(" ".join(rest), backend, engine, worker, force, keep, port)
+        except ClusterLocked as exc:
+            print(f"[cluster] 拒绝: {exc} (exit 6)")
+            print(f"[cluster] 锁文件: {cluster_lock_path()}；确认无进程后可删除，或 RPC_NO_LOCK=1 跳过")
+            return 6
     if sub == "frames":
         return cmd_frames()
     if sub == "unload":
@@ -305,9 +316,15 @@ def main() -> int:
             print(f"[cluster] unload 不认识的参数 '{tail[i]}' "
                   f"(用法: unload [--alias <别名>] [--station A|B|C]) (exit 1)")
             return 1
-        if only:
-            return cmd_unload_on(only, alias)
-        return cmd_unload(alias)
+        try:
+            with cluster_lock(purpose="unload " + (alias or "")):
+                if only:
+                    return cmd_unload_on(only, alias)
+                return cmd_unload(alias)
+        except ClusterLocked as exc:
+            print(f"[cluster] 拒绝: {exc} (exit 6)")
+            print(f"[cluster] 锁文件: {cluster_lock_path()}；确认无进程后可删除，或 RPC_NO_LOCK=1 跳过")
+            return 6
     if sub == "estimate":
         return cmd_estimate(args[1:])
     if sub == "models":

@@ -28,19 +28,24 @@ set -euo pipefail
 # 数据源: 与 infer-load 同源 —— find -L /data/models/gguf (聚合视图)。
 # 别名规则须与 cluster.alias_of / 站上 infer-load 一致(含 minimax 重映射)。
 
+# O-177 #9（2026-10-30）：身份与站地址不再写死。默认值与原行为逐字一致，可用环境变量覆盖。
+RPC_USER="${RPC_USER:-$(id -un)}"
+ST_A_IP="${ST_A_IP:-192.168.10.33}"
+ST_B_IP="${ST_B_IP:-192.168.10.32}"
+ST_C_IP="${ST_C_IP:-192.168.10.37}"
 declare -A NODE=(
-  [A]="$(id -un)@192.168.10.33"
-  [B]="$(id -un)@192.168.10.32"
-  [C]="$(id -un)@192.168.10.37"
+  [A]="${RPC_USER}@${ST_A_IP}"
+  [B]="${RPC_USER}@${ST_B_IP}"
+  [C]="${RPC_USER}@${ST_C_IP}"
 )
 ORDER=(A B C)
 
 # 本站判定: hostname -s → 站代号。改名/换机时此处需同步。
 case "$(hostname -s 2>/dev/null)" in
-  scott-lau-NEX)     SELF=A ;;
-  scott-lau-GTR-Pro) SELF=B ;;
-  seaviv)            SELF=C ;;
-  *)                 SELF="?" ;;
+  "${ST_HOST_A:-scott-lau-NEX}")     SELF=A ;;
+  "${ST_HOST_B:-scott-lau-GTR-Pro}") SELF=B ;;
+  "${ST_HOST_C:-seaviv}")            SELF=C ;;
+  *)                                 SELF="?" ;;
 esac
 
 usage() {
