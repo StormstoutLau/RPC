@@ -26,8 +26,8 @@ stores:
   declared_role: primary_key
   reachable: true
   ok: true
-  rows: 598942
-  distinct: 598942
+  rows: 599980
+  distinct: 599980
   is_primary_key: true
   shape:
     sha256[:32] 无前缀: 100000
