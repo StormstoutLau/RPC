@@ -49,6 +49,8 @@ foreach ($nm in @('Get-FrameworkSubjects', 'Get-ClaudeFrameworkSubjects', 'Merge
 # D7-P2-1 (2026-09-26): **机械门先行** 的判定本体（纯函数：只吃已解析的 run 记录 ⇒ 可离线单测）。
 # D7-P2-2 (2026-09-26): **结论契约** —— 三个纯函数（校验器 + 综合器）。
 'Test-FindingShape', 'Test-ConclusionContract', 'Get-AnchorKey', 'Merge-JudgeFindings', 'Resolve-L1Gate',
+# D6⑥⑤ (2026-11-02): 非产出方裁决者 —— 租户独立性门 + 跨租户写出路径（两个纯函数 ⇒ 可离线真跑）。
+'Resolve-AdjudicatorTenantGuard', 'Resolve-ReviewOutputPath',
 # O-141 P0 (2026-10-05): `split` 的**派发计划**（纯函数：容量 = 站 × 腿 + 片→站映射）——
 #   ★ 此前 split **零覆盖**；有了它，"站×腿/映射走 .Count" 才能被**真跑**而不是扫文本。
 'Get-SplitDispatchPlan',
@@ -3454,6 +3456,40 @@ Assert-True "d171(结构): 内核只读聚合单文件 + 租户目录（cluster_
     $caSrc.Contains('AGENT_LEDGER_DIR') -and
     $caSrc.Contains('agent-runs.d') -and
     $caSrc.Contains('def _agent_ledger_files'))
+
+# --- D172: non-producer adjudicator (ADR-0013 D6-6 #5) ---
+Assert-True "d172(结构): review 在判官调用前套租户独立性门（env 桥 + exit 8 + 无 override）" (
+    $content.Contains('AGENT_ADJUDICATOR_TENANT') -and
+    $content.Contains('SELF_ADJUDICATION_BLOCK') -and
+    $content.Contains('Resolve-AdjudicatorTenantGuard') -and
+    -not $content.Contains('AllowSelfAdjudication'))
+Assert-True "d172(结构): 两处 review 产物都按 CrossTenant 选路径 + adjudicator 段留档（2 处）" (
+    $content.Contains('Resolve-ReviewOutputPath') -and
+    $content.Contains('-CrossTenant:$tenantGuard.enabled') -and
+    ([regex]::Matches($content, [regex]::Escape("`$review['adjudicator'] = `$tenantSection")).Count -eq 2) -and
+    ([regex]::Matches($content, [regex]::Escape('Set-Content $reviewPath')).Count -eq 2))
+$tgLegacy = Resolve-AdjudicatorTenantGuard -ProducerTenant 'paper' -AdjudicatorTenant ''
+Assert-True "d172(行为): 未声明裁决方租户 ⇒ legacy 放行（默认关）" (
+    -not $tgLegacy.enabled -and $tgLegacy.ok -and $tgLegacy.verdict -eq 'legacy')
+$tgSelf = Resolve-AdjudicatorTenantGuard -ProducerTenant 'paper' -AdjudicatorTenant 'paper'
+Assert-True "d172(行为): 裁决方 = 产出方 ⇒ self 拒（自产出方不得自裁）" (
+    $tgSelf.enabled -and -not $tgSelf.ok -and $tgSelf.verdict -eq 'self')
+$tgCase = Resolve-AdjudicatorTenantGuard -ProducerTenant 'paper' -AdjudicatorTenant 'PAPER'
+Assert-True "d172(行为): 租户名大小写不同仍判同一租户（self）" (
+    -not $tgCase.ok -and $tgCase.verdict -eq 'self')
+$tgCross = Resolve-AdjudicatorTenantGuard -ProducerTenant 'paper' -AdjudicatorTenant 'kernel'
+Assert-True "d172(行为): 跨租户 ⇒ ok" ($tgCross.enabled -and $tgCross.ok -and $tgCross.verdict -eq 'ok')
+$tgUnknown = Resolve-AdjudicatorTenantGuard -ProducerTenant '' -AdjudicatorTenant 'kernel'
+Assert-True "d172(行为): 产出方读不出 ⇒ fail-closed（unknown 拒）" (
+    -not $tgUnknown.ok -and $tgUnknown.verdict -eq 'unknown')
+$outLegacy = Resolve-ReviewOutputPath -RepoRoot $repoRoot -RunDir 'C:\run' -RunName '20260101000000000000' -ProducerTenant 'paper'
+Assert-True "d172(行为): 默认写 runDir/review.json（逐字不变）" (
+    $outLegacy -eq (Join-Path 'C:\run' 'review.json'))
+$outCross = Resolve-ReviewOutputPath -RepoRoot $repoRoot -RunDir 'C:\run' -RunName '20260101000000000000' `
+    -ProducerTenant 'paper' -CrossTenant
+Assert-True "d172(行为): 跨租户写内核区（不写租户 runDir）" (
+    $outCross -eq (Join-Path $repoRoot 'ops\station-bin\reviews\paper\20260101000000000000.review.json') -and
+    -not $outCross.StartsWith('C:\run'))
 
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"

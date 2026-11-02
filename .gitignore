@@ -58,6 +58,8 @@ ops/station-bin/*.log.err
 ops/station-bin/agent-runs.log
 # ADR-0013 D6⑥④: 分租户台账（运行时数据，内核只读聚合；写者仍只在 agent-cli 侧）
 ops/station-bin/agent-runs.d/
+# ADR-0013 D6⑥⑤: 跨租户裁决件（内核区；目标租户 runDir 只读不写）
+ops/station-bin/reviews/
 ops/station-bin/result_*.jsonl
 ops/station-bin/b6_smoke_*.result.jsonl
 

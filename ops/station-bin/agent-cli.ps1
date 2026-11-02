@@ -6386,6 +6386,50 @@ function Select-Reviewer {
               prefer = $pick.prefer; rejected = $rejected; sensitivity = [string]$Sensitivity }
 }
 
+function Resolve-AdjudicatorTenantGuard {
+    # ── ADR-0013 D6⑥⑤（2026-11-02）：**非产出方裁决者** —— 跨租户裁决的租户独立性门 ──────────
+    # 判什么：显式声明裁决方租户（env `AGENT_ADJUDICATOR_TENANT`）时，
+    #   **裁决方不得等于该 run 的产出方租户**（自产出方不得充当自己 run 的 `P4b`/`P5`）。
+    #   ↳ 依据 = ADR-0013 D4 裁定（"内核提供跨租户只读裁决入口；不新增角色类型"）+ ADR-0009 `B-1` 精神。
+    # ⚠ **默认关**：env 未设 ⇒ `enabled=false / ok=true` ⇒ `review` 现网行为逐字不变。
+    # ⚠ **无 override 通道**：ADR 原文是「不得」，与模型级 `--allow-self-review` **不同层**
+    #   （后者是"同一模型自审"，可显式放行；本门是"同一租户自裁"，不允许放行）。
+    # ⚠ **fail-closed**：声明了裁决方但产出方读不出 ⇒ 拒（读不到 ≠ 不同）。
+    param([string]$ProducerTenant, [string]$AdjudicatorTenant)
+    $enabled = -not [string]::IsNullOrWhiteSpace($AdjudicatorTenant)
+    $facts = [ordered]@{
+        producer_tenant = [string]$ProducerTenant
+        adjudicator_tenant = [string]$AdjudicatorTenant
+        enabled = $enabled
+    }
+    if (-not $enabled) {
+        return @{ enabled = $false; ok = $true; verdict = 'legacy'; reason = ''; facts = $facts }
+    }
+    if ([string]::IsNullOrWhiteSpace($ProducerTenant)) {
+        return @{ enabled = $true; ok = $false; verdict = 'unknown'
+                  reason = '产出方租户读不出（proj 为空）'; facts = $facts }
+    }
+    # 归一：trim + 小写（租户名不区分大小写；不改原值，只用于比较）
+    $p = ([string]$ProducerTenant).Trim().ToLowerInvariant()
+    $a = ([string]$AdjudicatorTenant).Trim().ToLowerInvariant()
+    if ($p -eq $a) {
+        return @{ enabled = $true; ok = $false; verdict = 'self'
+                  reason = "裁决方与产出方同一租户（$p）⇒ 自产出方不得充当自己 run 的 P4b/P5"; facts = $facts }
+    }
+    return @{ enabled = $true; ok = $true; verdict = 'ok'; reason = ''; facts = $facts }
+}
+
+function Resolve-ReviewOutputPath {
+    # ── ADR-0013 D6⑥⑤（2026-11-02）：**跨租户只读裁决**的写出路径 ──────────────────────────
+    # 默认（非跨租户）⇒ 原 `runDir/review.json` 逐字不变。
+    # 跨租户 ⇒ **不写目标租户的 runDir**（那是产出方的证据归档；裁决方只读它），
+    #   裁决件落**内核区** `ops/station-bin/reviews/<producer>/<runId>.review.json`。
+    #   ⇒ "只读"由**写出路径**结构保证，不靠调用方自觉（同 D-48 纪律：隔离靠结构，不靠命名）。
+    param([string]$RepoRoot, [string]$RunDir, [string]$RunName, [string]$ProducerTenant, [switch]$CrossTenant)
+    if (-not $CrossTenant) { return (Join-Path $RunDir 'review.json') }
+    return (Join-Path $RepoRoot ("ops\station-bin\reviews\$ProducerTenant\$RunName.review.json"))
+}
+
 function Resolve-D6D7Boundary {
     # ── A1 / ADR-0009 §2（2026-09-29）：**D6 / D7 层级归属的机械求值**（纯函数）──────────────
     # 判什么：一次派发场景该落 **D6**（**这一次派发内部**的质量门）还是 **D7**
@@ -6482,6 +6526,27 @@ function Invoke-Review {
     if (-not (Test-Path $card)) { Write-Host "card not found: $card"; return 3 }
     $projRoot = $Script:PROJECTS[$proj]
     if (-not $projRoot -or -not (Test-Path $projRoot)) { Write-Host "unknown/missing project: $proj (registered: $($Script:PROJECTS.Keys -join ','))"; return 2 }
+
+    # ── ADR-0013 D6⑥⑤（2026-11-02）：**非产出方裁决者门**（位置在"读产物/建提示词/发请求"之前）──
+    #   为什么这么早：自裁结论一旦产出，就多一份"看起来审过了"的件；且早拦省一次出网。
+    #   ⚠ 默认关（env 未设）⇒ legacy 逐字不变；⚠ 无 override（ADR 原文「不得」）。
+    $tenantGuard = Resolve-AdjudicatorTenantGuard -ProducerTenant $proj `
+        -AdjudicatorTenant ([string]$env:AGENT_ADJUDICATOR_TENANT)
+    if ($tenantGuard.enabled -and -not $tenantGuard['ok']) {
+        Write-Host ("REJECT SELF_ADJUDICATION_BLOCK (" + $tenantGuard['verdict'] + ": " +
+                    $tenantGuard['reason'] + ") exit 8 - " +
+                    "自产出方不得充当自己 run 的 P4b/P5（ADR-0013 D6⑥⑤；无 override 通道）")
+        return 8
+    }
+    $tenantSection = if ($tenantGuard.enabled) {
+        [ordered]@{
+            mode = 'cross-tenant'
+            producer_tenant = [string]$proj
+            adjudicator_tenant = [string]$tenantGuard['facts']['adjudicator_tenant']
+            read_only = $true
+            artifact_scope = 'kernel'
+        }
+    } else { $null }
 
     $fm = Get-FrontMatter $card
     $sens = if ($sensitive) { $sensitive } else { if ($fm['sensitivity']) { $fm['sensitivity'] } else { 'public' } }
@@ -6609,7 +6674,18 @@ function Invoke-Review {
     $product = $pr['path']
 
     # advisory (O-16): review.json is a parallel key; NEVER alters run.json/task accept semantics
-    $reviewPath = Join-Path $runDir 'review.json'
+    # ADR-0013 D6⑥⑤: 跨租户 ⇒ 裁决件落内核区（**不写目标租户 runDir** ⇒ 只读由路径结构保证）。
+    $reviewPath = Resolve-ReviewOutputPath -RepoRoot $Script:REPO_ROOT -RunDir $runDir -RunName $runName `
+        -ProducerTenant $proj -CrossTenant:$tenantGuard.enabled
+    if ($tenantGuard.enabled) {
+        $kernelReviewDir = Split-Path -Parent $reviewPath
+        if (-not (Test-Path -LiteralPath $kernelReviewDir)) {
+            New-Item -ItemType Directory -Path $kernelReviewDir -Force | Out-Null
+        }
+        Write-Host ("ADJUDICATOR_CROSS_TENANT: producer=" + $proj + " adjudicator=" +
+                    [string]$tenantGuard['facts']['adjudicator_tenant'] +
+                    " ⇒ 只读租户产物；裁决件落内核区（不写 runDir）: " + $reviewPath)
+    }
     if ((Test-Path $reviewPath) -and -not $overwrite) {
         Write-Host "REVIEW_IDEMPOTENT: $reviewPath exists (use --overwrite to re-review)"
         Get-Content $reviewPath
@@ -6633,20 +6709,23 @@ function Invoke-Review {
     #     ⇒ 加返回值会往管道吐对象，破本仓**归零纪律**（见 `Write-D7Report` 的参数注释）。
     #   ★ 声明点放在**两条路之前**（失败路 / 正常路都要用）。
     $d7g = [ordered]@{}
-    if ($acChk['chained'] -ne $false) {
-        if (-not $allowAfterChain) {
-            Write-Host ("REJECT REVIEW_AFTER_CHAIN (" + $acChk['reason'] + ") exit 9 - " +
-                        # ⚠ 本仓老坑（`O-136` 记过）：**回退符紧跟双引号**（`` `" ``）= 转义引号 ⇒ 字符串不终止
-                        #   ⇒ 故这里的强调一律用「」，**不在引号前留回退符**（夹具当场抓到过第二次）。
-                        "该 run 已被/将会被钉进证据链 ⇒ 此刻写 review.json 会让门禁 evidence 报「digest 不符」" +
-                        "（O-140 实测）；★ 正确姿势 = **趁它未入链时先 review**；" +
-                        "确要覆盖请显式 --allow-after-chain（会留痕，且事后须按 ADR-0007 恢复该件字节）")
-            return 9
+    # ADR-0013 D6⑥⑤: 跨租户裁决**不写 runDir** ⇒ 不存在"写 review.json 撞链"的问题，无需挡。
+    if (-not $tenantGuard.enabled) {
+        if ($acChk['chained'] -ne $false) {
+            if (-not $allowAfterChain) {
+                Write-Host ("REJECT REVIEW_AFTER_CHAIN (" + $acChk['reason'] + ") exit 9 - " +
+                            # ⚠ 本仓老坑（`O-136` 记过）：**回退符紧跟双引号**（`` `" ``）= 转义引号 ⇒ 字符串不终止
+                            #   ⇒ 故这里的强调一律用「」，**不在引号前留回退符**（夹具当场抓到过第二次）。
+                            "该 run 已被/将会被钉进证据链 ⇒ 此刻写 review.json 会让门禁 evidence 报「digest 不符」" +
+                            "（O-140 实测）；★ 正确姿势 = **趁它未入链时先 review**；" +
+                            "确要覆盖请显式 --allow-after-chain（会留痕，且事后须按 ADR-0007 恢复该件字节）")
+                return 9
+            }
+            Write-Host ("REVIEW_AFTER_CHAIN_ALLOWED: " + $acChk['reason'] +
+                        " ⇒ 显式 --allow-after-chain 放行；⚠ **该 run 的链摘要将与其归档件不符**" +
+                        "（事实写进 review.json.after_chain_guard）")
+            $acSection = [ordered]@{ chained = $acChk['chained']; reason = $acChk['reason']; allowed = $true }
         }
-        Write-Host ("REVIEW_AFTER_CHAIN_ALLOWED: " + $acChk['reason'] +
-                    " ⇒ 显式 --allow-after-chain 放行；⚠ **该 run 的链摘要将与其归档件不符**" +
-                    "（事实写进 review.json.after_chain_guard）")
-        $acSection = [ordered]@{ chained = $acChk['chained']; reason = $acChk['reason']; allowed = $true }
     }
 
     $productText = [System.IO.File]::ReadAllText($product, [System.Text.UTF8Encoding]::new($false))
@@ -6745,6 +6824,7 @@ function Invoke-Review {
         $review['l1'] = $l1Section
         $review['contract'] = $ccSection        # D7-P2-2：判官调用失败也留契约校验结果（多半 ok=false）
         $review['self_review_guard'] = $sgSection   # D7-P3-1：不得自审的事实也留档
+        if ($tenantSection) { $review['adjudicator'] = $tenantSection }   # D6⑥⑤：跨租户事实留档
         # O-140 裁【甲】：走显式通道（对已入链 run 的 review）⇒ **留痕**（"降级 ≠ 隐藏"）。
         #   ⚠ 与 `blind` 段同款：**仅在走通道时才加** ⇒ 不走时 `review.json` schema 与本批之前一致。
         if ($acSection) { $review['after_chain_guard'] = $acSection }
@@ -6857,6 +6937,7 @@ function Invoke-Review {
     $review['contract'] = $ccSection
     # D7-P3-1（2026-09-26）：**不得自审**的事实随产物留档（判官/产出者各自的模型 + 是否放行）
     $review['self_review_guard'] = $sgSection
+    if ($tenantSection) { $review['adjudicator'] = $tenantSection }   # D6⑥⑤：跨租户事实留档（与失败路同一处置）
     # O-140 裁【甲】：显式通道留痕（与失败路**同一处置**；不走通道时 schema 不变）
     if ($acSection) { $review['after_chain_guard'] = $acSection }
 
