@@ -70,6 +70,9 @@ from cluster_flow import (  # noqa: E402
 # 字段命名对齐社区标准 (只为将来接 trace 后端不返工, 不引入依赖):
 #   run ≈ OTel GenAI `invoke_agent` span · 状态 ≈ A2A TaskState (我们原本缺 `working`, 由 live 补上)
 AGENT_LEDGER = Path(__file__).resolve().parent / "station-bin" / "agent-runs.log"
+# ADR-0013 D6⑥④（2026-11-02）：台账分租户 —— 写侧按租户分文件，**内核只读聚合**。
+#   本模块只读：不建目录、不写索引；每条事件流仍单写者（`I-1` 不破）。
+AGENT_LEDGER_DIR = Path(__file__).resolve().parent / "station-bin" / "agent-runs.d"
 AGENT_WS = "$HOME/agent-workspaces"
 AGENT_BEAT_STALE_S = 60          # 节拍 5s 一次; 超 60s 未更新 ⇒ 疑似卡死 (O-25 的"黑盒"信号)
 AGENT_STATUS_BY_CODE = {0: "completed", 6: "timeout", 24: "slot-rejected"}
@@ -163,33 +166,52 @@ def _agent_proj_roots() -> tuple:
     return roots, ""
 
 
+def _agent_ledger_files() -> list:
+    """分租户台账的**只读**源文件清单（ADR-0013 D6⑥④）。
+
+    两种形态并存：默认/存量单文件 `agent-runs.log` + 分租户目录 `agent-runs.d/*.log`。
+    ⚠ 不建目录、不写索引、不改任一事件流 —— 写者仍只在 agent-cli 侧（`I-1` 不破）。
+    """
+    files = []
+    if AGENT_LEDGER.exists():
+        files.append(AGENT_LEDGER)
+    if AGENT_LEDGER_DIR.is_dir():
+        files.extend(sorted(p for p in AGENT_LEDGER_DIR.glob("*.log") if p.is_file()))
+    return files
+
+
 def _agent_ledger_rows(limit: int) -> list:
-    """读派发台账尾部 N 条。跳过标题行 (判据与 make-dashboard 一致: 必须 `^\\d{14,},`)。"""
-    try:
-        lines = AGENT_LEDGER.read_text(encoding="utf-8-sig", errors="replace").splitlines()
-    except OSError:
-        return []
+    """读派发台账尾部 N 条（单文件 + 分租户目录只读合并）。
+
+    跳过标题行 (判据与 make-dashboard 一致: 必须 `^\\d{14,},`)。
+    """
     rows = []
-    for ln in lines:
-        ln = ln.strip()
-        if not re.match(r"^\d{14,},", ln):      # 台账首行是 "RPC_LEDGER_TEST 2026-09-06" 之类的标题
-            continue
-        f = ln.split(",")
-        if len(f) < 7:
-            continue
-        ts, proj, model, sens, code, qs, rs = (x.strip() for x in f[:7])
+    for path in _agent_ledger_files():
         try:
-            label = time.strftime("%m-%d %H:%M:%S",
-                                  time.strptime(ts[:14], "%Y%m%d%H%M%S"))
-        except Exception:
-            label = ts[:14]
-        try:
-            code_i = int(code)
-        except ValueError:
-            code_i = None
-        rows.append({"ts": ts, "label": label, "proj": proj, "model": model, "sens": sens,
-                     "code": code_i, "queue_s": int(qs or 0), "run_s": int(rs or 0),
-                     "status": AGENT_STATUS_BY_CODE.get(code_i, "failed" if code_i is not None else "?")})
+            lines = path.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+        except OSError:
+            continue
+        for ln in lines:
+            ln = ln.strip()
+            if not re.match(r"^\d{14,},", ln):  # 台账首行是 "RPC_LEDGER_TEST 2026-09-06" 之类的标题
+                continue
+            f = ln.split(",")
+            if len(f) < 7:
+                continue
+            ts, proj, model, sens, code, qs, rs = (x.strip() for x in f[:7])
+            try:
+                label = time.strftime("%m-%d %H:%M:%S",
+                                      time.strptime(ts[:14], "%Y%m%d%H%M%S"))
+            except Exception:
+                label = ts[:14]
+            try:
+                code_i = int(code)
+            except ValueError:
+                code_i = None
+            rows.append({"ts": ts, "label": label, "proj": proj, "model": model, "sens": sens,
+                         "code": code_i, "queue_s": int(qs or 0), "run_s": int(rs or 0),
+                         "status": AGENT_STATUS_BY_CODE.get(code_i, "failed" if code_i is not None else "?")})
+    rows.sort(key=lambda r: r["ts"])   # 台账非严格有序（并发反序）；跨文件聚合必须重排
     return rows[-limit:] if limit else rows
 
 

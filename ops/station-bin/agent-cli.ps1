@@ -897,6 +897,29 @@ esac
 
 # ---------------- M2 task full-chain ----------------
 
+function Resolve-LedgerPath {
+    # 2026-11-02 (ADR-0013 D6⑥④): **台账分租户（默认关）** —— 按租户分文件 + 内核只读聚合。
+    #   为什么: 单文件台账在多 master/多租户下是**线性累积的共享写点**；分文件后**每条事件流
+    #   仍单写者**（`I-1` 不破），内核只读合并（`ops/cluster_agent.py` 的 `_agent_ledger_files`）。
+    #   ⚠ **默认关** ⇒ 返回原路径，现网行为逐字不变。
+    #   ⚠ 租户文件名 = proj 净化；**含非安全字符时加 8 位 hash**（防 `a/b` 与 `a_b` 撞同一流）。
+    param([string]$Proj)
+    $legacy = Join-Path $Script:REPO_ROOT 'ops\station-bin\agent-runs.log'
+    if ($env:AGENT_LEDGER_TENANT -ne '1') { return $legacy }
+    $safe = ($Proj -replace '[^A-Za-z0-9._-]', '_')
+    if (-not $safe) { $safe = '_unknown' }
+    if ($safe -ne $Proj) {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $h = -join ($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Proj))[0..3] |
+                        ForEach-Object { $_.ToString('x2') })
+        }
+        finally { $sha.Dispose() }
+        $safe = "$safe-$h"
+    }
+    return (Join-Path $Script:REPO_ROOT ("ops\station-bin\agent-runs.d\$safe.log"))
+}
+
 function Add-LedgerLine {
     # 2026-09-23 (F-4): **并发追加安全** —— 用"打开-写入-关闭 + 冲突重试"代替裸 `Add-Content`。
     #   为什么: 裸 `Add-Content` **无显式互斥**(依赖"单行短于缓冲"的偶然性 —— 实测两进程各写一行
@@ -905,6 +928,12 @@ function Add-LedgerLine {
     #   判据同 BLINDSCAN-v3 §3 的跨条目纪律: 共享路径**要么带 per-invocation 身份、要么走真锁**;
     #   ledger **必须共享**(它是全局台账), 故只能走锁 —— 这里用 `FileShare.Read` 隐式互斥 + 退避重试。
     param([string]$Path, [string]$Line, [System.Collections.IDictionary]$GuardSink = $null)
+    # ADR-0013 D6⑥④: 分租户后**首次写**时目录可能尚不存在 —— 先建父目录，否则首条就丢。
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+        try { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        catch { return $false }
+    }
     # ── ★★ B3（2026-10-01）：`I-1` 单写者 —— **事件流写点**就是它的正确调用点 ──────────────────
     # 契约 §1.6「不堆在 P5 一处」：`I-1` 归**事件流写点**（`Add-LedgerLine`）；四条目各有其位。
     # ★ **放在重试循环之前 ⇒ 只跑一次**（判的是"谁在写"，与本次 append 成功与否无关）——
@@ -3548,7 +3577,7 @@ exit `$FINAL_RC
     # 8) ledger line FIRST (G13) -- fixed to sandbox-writable d:\RPC zone (O-04: projRoot not
     #     sandbox-safe). Run ledger before any agent-out write so a collect crash (startup-
     #     injected sandbox whitelist w/o D:\Paper\agent-out) never loses the run record.
-    $ledger = Join-Path $Script:REPO_ROOT 'ops\station-bin\agent-runs.log'
+    $ledger = Resolve-LedgerPath -Proj $proj
     # 批B / 缺口6 (2026-09-18): 原为硬编码 `0,0` ⇒ 台账 queue_s/run_s **恒 0**, 与 run.json
     #   和 .meta 直接矛盾(已被 ADR-0007 阶段 0.5 夹具当场复现: 台账 `0,0` 而 .meta=QUEUE_S=2/RUN_S=19)。
     #   `$queue_s/$run_s` 在上方 meta 解析段(L1165-1183)已就绪; META_STALE 时二者已被主动归零,
@@ -4885,7 +4914,7 @@ mkdir -p "$stWorkDir/.attach/$nm2"
     $code = $rc
     if ($code -eq 9) { $code = 1 }   # 兼容: 9 仅本地语义保留, 原生 rc 走下面映射
     $finalCode = if ($rc -eq 0 -and $acceptOk -eq 1 -and $acceptGoldenOk -eq 1) { 0 } elseif ($rc -eq 6) { 6 } else { 1 }
-    $ledger = Join-Path $Script:REPO_ROOT 'ops\station-bin\agent-runs.log'
+    $ledger = Resolve-LedgerPath -Proj $proj
     $line = "$ts,$proj,$execModel,$sens,$finalCode,0,$runS"
     if (-not (Add-LedgerLine -Path $ledger -Line $line -GuardSink $d7t)) { Write-Host "LEDGER_WARN: append failed after 10 retries (F-4)" }
 

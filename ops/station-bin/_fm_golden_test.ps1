@@ -3440,6 +3440,21 @@ Assert-True "d167(结构): worker 入口被 Invoke-RemoteScript 以固定名调�
     $content.Contains('-WorkerEntry:$WorkerEntry')
 )
 
+# --- D171: ledger per-tenant (ADR-0013 D6-6 #4) ---
+Assert-True "d171(结构): 台账路径由 Resolve-LedgerPath 决定（默认关 + 两处写点都走它）" (
+    $content.Contains('function Resolve-LedgerPath') -and
+    ([regex]::Matches($content, [regex]::Escape('$ledger = Resolve-LedgerPath -Proj $proj')).Count -eq 2) -and
+    $content.Contains('$env:AGENT_LEDGER_TENANT') -and
+    $content.Contains('agent-runs.d'))
+Assert-True "d171(结构): 分租户首写先建父目录（Add-LedgerLine 不得因目录缺失丢首条）" (
+    $content.Contains('Split-Path -Parent $Path') -and
+    $content.Contains('New-Item -ItemType Directory -Path $dir -Force'))
+$caSrc = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\cluster_agent.py'))
+Assert-True "d171(结构): 内核只读聚合单文件 + 租户目录（cluster_agent 有 AGENT_LEDGER_DIR/_agent_ledger_files）" (
+    $caSrc.Contains('AGENT_LEDGER_DIR') -and
+    $caSrc.Contains('agent-runs.d') -and
+    $caSrc.Contains('def _agent_ledger_files'))
+
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
 exit $(if ($fail -eq 0) { 0 } else { 1 })
