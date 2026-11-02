@@ -36,8 +36,8 @@ projects:
 - id: Auto_Prover
   root: F:\Auto_Prover
   reachable: true
-  files: 11
-  hits: 18
+  files: 12
+  hits: 19
 - id: Textbook
   root: D:\Textbook
   reachable: true
@@ -46,8 +46,8 @@ projects:
 - id: Fin_Agent
   root: F:\Fin_Agent
   reachable: true
-  files: 2
-  hits: 2
+  files: 4
+  hits: 6
 - id: Cpp_Hub
   root: F:\Cpp_Hub
   reachable: true
