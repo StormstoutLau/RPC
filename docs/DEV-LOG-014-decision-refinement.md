@@ -6997,3 +6997,53 @@ run `202610130354429167`（且该 run 在 **TC 已转之后**派发）⇒
 - **不做** 长 ctx（>32k）与质量锚（`O-138` 未测三项，只有生产化才需要）。
 - **不代持凭据**：轮换监控平台口令 = 用户动作（`O-173` 甲仍开）。
 
+## 109. 权限面收口 + D167 worker 入口 + ADR-0013 D4 裁定（2026-11-02）
+
+> **触发**：用户「按调研结论更新 O-184 台账」→「方案乙修改配置，放开 Write 和 Edit 并更新 ADR」→「提交 ADR-0013」。本批**先运营后施工**：B 站桥接权限放开 → D167 worker 入口 → ADR-0013 裁定，全程零回滚。
+
+### 109.1 B 站 cc-connect 放开 Write / Edit（方案乙，已实测）
+
+| 步 | 读数 |
+|---|---|
+| 配置 | `allowed_tools` 由 `[Read,Grep,Glob,Bash]` → `[Read,Grep,Glob,Bash,Write,Edit]`；备份 `config.toml.bak-20261102` |
+| 重启 | `rpc-bridge` active · `config loaded` 无错误 · `MainPID=1788520` |
+| 运行时 argv | 16:32:03 pid 1804784 含 `--permission-mode dontAsk --allowedTools Read,Grep,Glob,Bash,Write,Edit` |
+| 真实写文件 | 16:33:59 产出 `/home/scott-lau/work/trae-cn-uninstall-record.md`（23,275 B）· 16:34:47 `turn complete tools=3` · 无 denied / error |
+
+★ **安全性论证**：`Bash` 原本就在白名单 ⇒ 变更前是**名义只读**；放开 `Write`/`Edit` 只是把写变成结构化可审计动作，实质边界仍由 `work_dir` + 非 root + 身份白名单守住。
+
+### 109.2 D167 worker 固定入口（ADR-0013 D6-6 #1 施工 ①）
+
+| 件 | 内容 |
+|---|---|
+| `ops/station-bin/_worker_entry.sh` | 固定名入口 + `--expect-version` 版本门 + `--exec` 透传 |
+| `agent-cli.ps1` | `Invoke-RemoteScript -WorkerEntry`（默认 OFF ⇒ 逐字节走旧路径）+ `$Script:WORKER_ENTRY_VERSION=1` |
+| `inventory/ops.yaml` | runtime / shell_strict / `root_keep`（10 项）三处登记 |
+| 夹具 | `_fm_golden_test` 增两条结构断言（版本两处一致 + 固定名调用） |
+
+★ **默认关** ⇒ 未接真实派发，现状行为逐字不变；D6 ②（站级并发）/ ②（门迁移）仍未做。
+
+### 109.3 ADR-0013 v1.3：D4 裁定 accepted
+
+- **④**「各仓库自编图编排 + `agent-cli` 仅 worker」= **目标形态**；**⑤**「Auto_Prover 试点」= **当前落地路径**。
+- D6 ⑥ 五项前置**转为施工清单**（①→⑤）；**裁定 ≠ 已实现**（① 只完成入口壳）。
+- D7 前置 ①「`$PROJECTS` 数据化」**已解**（2026-10-13 落地，2026-11-02 读码复核）。
+
+### 109.4 文档回写
+
+| 文档 | 回写 |
+|---|---|
+| [三机推理集群使用手册 §2b](三机推理集群使用手册.md) | 新增「Agent 会话接入」：8731 入口 / 三站现状 / 飞书桥接 / 主控三路 |
+| [OPEN-ISSUES](../spec/d6-agent-standard/OPEN-ISSUES.md) | 新增 `O-188`（权限面无真值）/ `O-189`（A 站飞书多实例约束） |
+| [ADR-0015](../adr/ADR-0015-飞书远程操作桥接引入.md) | §3 工具权限 / §5.1 档位 / §6 未实测 三处更新 |
+
+### 109.5 门禁读数（收官）
+
+全量 **PASS · 49 绿 / 3 黄 / 0 红**（黄灯均为存量：`evidence` 可重放缺口 · `memory-gates` 引擎侧无门通道 · `stations` 已登记漂移）· `ps1-golden` **668/0** · `py-tests` **75/75** · 台账 **182 行 / 闭环 168 / 仍开 14**（新增两条后 **16**）。
+
+### 109.6 明确不在本批（越界项）
+
+- **不做** `plugins.yaml` 第四维落地（`O-188` 已登记，须先裁「以 argv 复算」的口径）。
+- **不做** A 站接飞书（`O-189` 待裁：新建独立 app 或单桥接路由）。
+- **不做** 主控 `tmux` 别名封装（属使用习惯，不立判据）。
+
