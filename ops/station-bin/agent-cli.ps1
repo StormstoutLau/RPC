@@ -2797,6 +2797,18 @@ mkdir -p "`$STAGE/attach/$name"
     }
     $promptSha = Get-Sha256Text $promptFull
     $promptB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($promptFull))
+    # D170 (ADR-0013 D6-6 #3): worker-side gate - OPT-IN, default off => zero change.
+    #   Rules are DATA generated from the single source Get-ScrubRules (no second definition).
+    $workerGateOn = if ($env:AGENT_WORKER_GATE -eq '1') { '1' } else { '0' }
+    $workerGateSrc = Join-Path $Script:REPO_ROOT 'ops\station-bin\_worker_gate.sh'
+    $workerGateB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(
+        ([System.IO.File]::ReadAllText($workerGateSrc) -replace "`r`n", "`n")))
+    # D170 DEV1: rules must end with LF -- a final line without LF makes `while read` skip it
+    #   entirely (fail-open). The gate also uses `|| [ -n "$name" ]` as a second guard.
+    $gateRules = (@(Get-ScrubRules | Where-Object { $_.block } | ForEach-Object { "$($_.name)`t$($_.re)" }) -join "`n") + "`n"
+    $gateRulesB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($gateRules))
+    $gateSens = [string]$sens
+    $gateEgress = if (Get-BackendEgress $id) { '1' } else { '0' }
 
     # 4b) accept criteria (A14): executable verification gate run remotely after agent completes
     $accept = @($fm['accept'])
@@ -3040,6 +3052,16 @@ printf '{"state":"$stExecuting","pid":%d,"ts_start":"%s","task_id":"%s","host":"
 printf '{"phase":"%s","pid":%d,"ts":"%s","task_id":"%s","host":"agent-cli"}\n' "$stExecuting" "`$$" "`$(date -Is)" "$ts" >> "`$W/out/.d7-phases.txt`$EV_SUF" 2>/dev/null || true
 sleep 2   # artificial intake gap (BP-4: makes queue_s measurable on contention holder)
 printf '%s' "$promptB64" | base64 -d > "`$W/out/.prompt.txt`$EV_SUF"
+# D170 (ADR-0013 D6-6 #3): worker-side re-check of egress/sensitivity/scrub gates.
+#   Default off => skipped entirely (byte-equivalent legacy path). Fail-closed: reject = exit 4.
+WORKER_GATE="$workerGateOn"
+if [ "$WORKER_GATE" = 1 ]; then
+  printf '%s' "$workerGateB64" | base64 -d > /tmp/_worker_gate.sh
+  if ! bash /tmp/_worker_gate.sh --expect-version 1 --sensitivity "$gateSens" --backend-egress "$gateEgress" --prompt-file "`$W/out/.prompt.txt`$EV_SUF" --rules-b64 "$gateRulesB64"; then
+    echo "WORKER_GATE: rejected (exit 4, no override)"
+    exit 4
+  fi
+fi
 echo "PIPE_STDIN_OK"
 cd "`$W" || exit 8    # cwd=workspace so agent reads AGENTS.md + project files (inv 4: stdin pipe, not cwd hijack)
 R0=`$(date +%s%N)     # P2-1: run clock starts here (queue = lock+intake up to this point)
