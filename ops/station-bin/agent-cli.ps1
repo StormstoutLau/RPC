@@ -792,7 +792,9 @@ function Invoke-LockState {
         [string]$proj,
         [string]$hold,      # seconds to hold lock after acquire (A9 concurrency test)
         [string]$hostName,
-        [switch]$WorkerEntry   # D167: opt-in fixed worker entry (default off)
+        [switch]$WorkerEntry,   # D167: opt-in fixed worker entry (default off)
+        [switch]$StationLock,   # D168: opt-in station-wide cross-tenant gate (D6-6 #2)
+        [string]$Mode = ''      # station lock mode: shared|exclusive (default exclusive)
     )
     if (-not $hostName) { $hostName = 'scott-lau-GTR-Pro.local' }
     $W = "$Script:WORKSPACE_ROOT/$proj"
@@ -807,6 +809,48 @@ function Invoke-LockState {
 
     # PS5.1 gotcha: inside here-string the REMOTE vars must be backtick-escaped.
     # Only PS-side vars ($act, $sleepLine) are interpolated here directly.
+    if ($StationLock) {
+        # D168 (ADR-0013 D6-6 #2): station-wide gate -- ONE lock file shared by every proj.
+        #   Shared iff Mode=shared, exclusive otherwise. Opt-in: callers pass -StationLock.
+        $lockMode = if ($Mode -eq 'shared') { 'shared' } else { 'exclusive' }
+        $lockShared = if ($lockMode -eq 'shared') { '1' } else { '0' }
+        $stationRoot = $Script:WORKSPACE_ROOT
+        $body = @"
+set -u
+SR="$stationRoot"
+SL="`$SR/.station-lock"
+SS="`$SR/.station-lock.state"
+mkdir -p "`$SR"
+LOCK_SHARED=$lockShared
+LOCK_FLAGS=""
+[ "`$LOCK_SHARED" = 1 ] && LOCK_FLAGS="-s"
+case "$act" in
+  acquire)
+    exec 8> "`$SL"
+    if ! flock `$LOCK_FLAGS -n 8; then
+      owner=`$(grep -o '"pid": *[0-9]*' "`$SS" 2>/dev/null | grep -o '[0-9]*' | head -1)
+      op=`$(grep -o '"proj": *"[^"]*"' "`$SS" 2>/dev/null | cut -d'"' -f4)
+      [ -z "`$owner" ] && owner=unknown
+      [ -z "`$op" ] && op=unknown
+      echo "STATION_LOCK_HELD owner_pid=`$owner proj=`$op mode=`$( [ -n "`$LOCK_FLAGS" ] && echo shared || echo exclusive )"
+      exit 3
+    fi
+    printf '{"state":"station-held","pid":%d,"ts_start":"%s","proj":"%s","mode":"%s","host":"agent-cli"}' "`$$" "`$(date -Is)" "$proj" "$lockMode" > "`$SS"
+    echo "STATION_LOCK_ACQUIRED pid=`$$ proj=$proj mode=$lockMode"
+    $sleepLine
+    ;;
+  release)
+    printf '{"state":"done","pid":%d,"ts_start":"%s","proj":"%s","mode":"%s","host":"agent-cli"}' "`$$" "`$(date -Is)" "$proj" "$lockMode" > "`$SS"
+    echo "STATION_LOCK_RELEASED proj=$proj"
+    ;;
+  status)
+    if [ -f "`$SS" ]; then cat "`$SS"; echo; else echo "NO_STATION_STATE"; fi
+    ;;
+  *) echo "bad station lock action: $act"; exit 2 ;;
+esac
+"@
+    }
+    else {
     $body = @"
 set -u
 W="$W"
@@ -846,6 +890,7 @@ case "$act" in
   *) echo "bad lock action: $act"; exit 2 ;;
 esac
 "@
+    }
     $code = Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-lock-$act.sh" -WorkerEntry:$WorkerEntry
     return $code
 }
@@ -2872,6 +2917,11 @@ echo "ACCEPT_GOLDEN_OK=`$ACCEPT_GOLDEN_OK"
     #   （否则同一件事两份判据，正是本仓头号失败形态）。
     $dangerFace = $leaseX
     $flockShared = if ($readonly -and -not $dangerFace) { '1' } else { '0' }
+    # D168 (ADR-0013 D6-6 #2): station-wide cross-tenant gate - OPT-IN, default off => zero change.
+    #   Same rwlock mode as the workspace lock; fixed order: station (fd 8) -> workspace (fd 9).
+    $stationLockOn = if ($env:AGENT_STATION_LOCK -eq '1') { '1' } else { '0' }
+    $stationLockRoot = $Script:WORKSPACE_ROOT
+    $lockProj = [string]$proj
     # 落盘段用它决定"是否解包 golden"。**刻意走 PS 字面量**(在 body 里落成 `1`/`0`),
     #   不引入新的远端变量 —— 少一个"两边名字必须对齐"的耦合点。
     $goldenHint = if ($goldenActive) { '1' } else { '0' }
@@ -2934,11 +2984,31 @@ if [ -f "`$S" ]; then
     echo "ORPHAN_RECOVERED pid=`$pid"
   fi
 fi
-exec 9> "`$W/.agent-lock"
 # O-17 layer-2 rwlock: shared iff readonly ($flockShared=1), exclusive otherwise (default).
 LOCK_SHARED=$flockShared
 LOCK_FLAGS=""
 [ "`$LOCK_SHARED" = 1 ] && LOCK_FLAGS="-s"
+# D168 (ADR-0013 D6-6 #2): station-wide cross-tenant gate -- OPT-IN (AGENT_STATION_LOCK=1).
+#   Default off => this block is skipped and the body is byte-equivalent to the pre-D168 path.
+STATION_LOCK="$stationLockOn"
+if [ "$STATION_LOCK" = 1 ]; then
+  SR="$stationLockRoot"
+  SL="`$SR/.station-lock"
+  SS="`$SR/.station-lock.state"
+  mkdir -p "`$SR"
+  exec 8> "`$SL"
+  if ! flock `$LOCK_FLAGS -n 8; then
+    sowner=`$(grep -o '"pid": *[0-9]*' "`$SS" 2>/dev/null | grep -o '[0-9]*' | head -1)
+    sop=`$(grep -o '"proj": *"[^"]*"' "`$SS" 2>/dev/null | cut -d'"' -f4)
+    [ -z "`$sowner" ] && sowner=unknown
+    [ -z "`$sop" ] && sop=unknown
+    echo "STATION_LOCK_HELD owner_pid=`$sowner proj=`$sop mode=`$( [ -n "`$LOCK_FLAGS" ] && echo shared || echo exclusive )"
+    exit 3
+  fi
+  printf '{"state":"station-held","pid":%d,"ts_start":"%s","proj":"%s","mode":"%s","host":"agent-cli"}' "`$$" "`$(date -Is)" "$lockProj" "`$( [ -n "`$LOCK_FLAGS" ] && echo shared || echo exclusive )" > "`$SS"
+  echo "STATION_LOCK_ACQUIRED pid=`$$ proj=$lockProj mode=`$( [ -n "`$LOCK_FLAGS" ] && echo shared || echo exclusive )"
+fi
+exec 9> "`$W/.agent-lock"
 if ! flock `$LOCK_FLAGS -n 9; then
   owner=`$(grep -o '"pid": *[0-9]*' "`$S" 2>/dev/null | grep -o '[0-9]*' | head -1)
   [ -z "`$owner" ] && owner=unknown
@@ -7019,7 +7089,9 @@ try {
         if (-not $Proj) { $Proj = $env:AGENT_CLI_PROJ }
         # D167: env bridge (top-level param block is frozen in PS5.1 - see Invoke-Task note).
         $workerEntry = ($env:AGENT_WORKER_ENTRY -eq '1')
-        $code = Invoke-LockState -act $Act -proj $Proj -hold $Hold -hostName $RemoteHost -WorkerEntry:$workerEntry
+        $stationLock = ($env:AGENT_STATION_LOCK -eq '1')
+        $stationMode = [string]$env:AGENT_STATION_LOCK_MODE
+        $code = Invoke-LockState -act $Act -proj $Proj -hold $Hold -hostName $RemoteHost -WorkerEntry:$workerEntry -StationLock:$stationLock -Mode $stationMode
         exit (Resolve-ExitCode $code)
     }
     elseif ($Command -eq 'task') {
