@@ -132,4 +132,11 @@ known_drift:
       A 站 known_marketplaces.json 多一个 claude-plugins-official 注册项。
       该注册**未安装任何插件**（claude.plugins 三站一致, 不含它）, 属历史残留,
       不影响功能。修它需改 claude CLI 自己的注册文件（非我方配置）, 故先登记容忍。
-      B/C 站无此项。2026-09-15 首次对账发现。
+      C 站无此项。2026-09-15 首次对账发现。
+  - station: B
+    id: claude.mkt
+    extra: ["claude-plugins-official"]
+    note: >-
+      B 站同类注册项（2026-11-02 对账新发现, 此前 note 记的「B/C 无此项」已过期）。
+      同样**未安装任何插件**、属历史残留；出现时点落在 2026-10-30 装 cc-connect 前后,
+      非我方写入。修它需改 claude CLI 自己的注册文件, 故先登记容忍。
