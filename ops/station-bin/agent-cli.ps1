@@ -51,6 +51,9 @@ $Script:WORKSPACE_ARCHIVE_ROOT = "/home/$($Script:REMOTE_USER)/agent-workspaces-
 $Script:PROJECTS = @{}
 $Script:PROJECTS_ERR = ''   # 诊断用（载入失败原因）；命令侧以 (registered: ) 断面暴露
 $Script:TMP_ROOT = Join-Path $env:TEMP 'agent-cli'
+# D167 (ADR-0013 D6-6 #1): worker fixed-entry version - single source of truth.
+#   Must equal WORKER_ENTRY_VERSION in ops/station-bin/_worker_entry.sh.
+$Script:WORKER_ENTRY_VERSION = 1
 # O-12 REPO_ROOT: repo root for golden source resolution (this file is d:\RPC\ops\station-bin\ ->
 # two parents up = d:\RPC). NEW script var (IMPLEMENTATION §3.2 P1-1: not inherited/现役).
 # ★ 2026-10-16（`O-161` · 注册表数据化的**第三个消费面**）：子进程（`split` 的 BOM 副本落在 TEMP ⇒
@@ -294,7 +297,8 @@ function Invoke-RemoteScript {
     param(
         [string]$HostName,
         [string]$ScriptBody,
-        [string]$LocalName
+        [string]$LocalName,
+        [switch]$WorkerEntry   # D167: run through fixed worker entry (default off => zero change)
     )
     if (-not (Test-RemoteReach $HostName)) {
         # ssh reach failure -> retry once (inv 7 gate-cache: network-only retry per DESIGN §4.5/F7)
@@ -317,13 +321,27 @@ function Invoke-RemoteScript {
     $ScriptBody = $ScriptBody -replace "`r`n", "`n"
     [System.IO.File]::WriteAllText($localPath, $ScriptBody, $utf8NoBom)
 
+    # D167 (ADR-0013 D6-6 #1): fixed worker entry - version pin + passthrough.
+    #   Default OFF => byte-identical legacy path (`bash /tmp/<body>`); ON => upload the
+    #   fixed-name entry and invoke it. Body stdout/stderr/exit are passed through unchanged.
+    $remoteCmd = "bash /tmp/${LocalName}"
+    if ($WorkerEntry) {
+        $entryLocal = Join-Path $Script:TMP_ROOT '_worker_entry.sh'
+        $entrySrc = Join-Path $Script:REPO_ROOT 'ops\station-bin\_worker_entry.sh'
+        $entryText = [System.IO.File]::ReadAllText($entrySrc) -replace "`r`n", "`n"
+        [System.IO.File]::WriteAllText($entryLocal, $entryText, $utf8NoBom)
+        scp -q -o BatchMode=yes -o ConnectTimeout=10 $entryLocal "${HostName}:/tmp/_worker_entry.sh"
+        if ($LASTEXITCODE -ne 0) { throw "NETFAIL: scp _worker_entry.sh failed" }
+        $remoteCmd = "bash /tmp/_worker_entry.sh --expect-version $($Script:WORKER_ENTRY_VERSION) --exec /tmp/${LocalName}"
+    }
+
     scp -q -o BatchMode=yes -o ConnectTimeout=10 $localPath "${HostName}:/tmp/${LocalName}"
     if ($LASTEXITCODE -ne 0) { throw "NETFAIL: scp failed: $LocalName" }
 
     # PS5.1: 2>&1 under EAP=Stop throws NativeCommandError when ssh writes stderr (network fail
     # confirmed 2026-09-03) - catch and classify by message, then by rc.
     try {
-        $sshOut = ssh -o BatchMode=yes -o ConnectTimeout=10 $HostName "bash /tmp/${LocalName}" 2>&1
+        $sshOut = ssh -o BatchMode=yes -o ConnectTimeout=10 $HostName $remoteCmd 2>&1
         $code = $LASTEXITCODE
     }
     catch {
@@ -335,7 +353,7 @@ function Invoke-RemoteScript {
         Write-Host "[retry] ssh network failure (rc=$code), retry once (gate-cache: scrubber not re-run)"
         Start-Sleep -Seconds 2
         try {
-            $sshOut = ssh -o BatchMode=yes -o ConnectTimeout=10 $HostName "bash /tmp/${LocalName}" 2>&1
+            $sshOut = ssh -o BatchMode=yes -o ConnectTimeout=10 $HostName $remoteCmd 2>&1
             $code = $LASTEXITCODE
         }
         catch {
@@ -773,7 +791,8 @@ function Invoke-LockState {
         [string]$act,       # acquire|release|status
         [string]$proj,
         [string]$hold,      # seconds to hold lock after acquire (A9 concurrency test)
-        [string]$hostName
+        [string]$hostName,
+        [switch]$WorkerEntry   # D167: opt-in fixed worker entry (default off)
     )
     if (-not $hostName) { $hostName = 'scott-lau-GTR-Pro.local' }
     $W = "$Script:WORKSPACE_ROOT/$proj"
@@ -827,7 +846,7 @@ case "$act" in
   *) echo "bad lock action: $act"; exit 2 ;;
 esac
 "@
-    $code = Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-lock-$act.sh"
+    $code = Invoke-RemoteScript -HostName $hostName -ScriptBody $body -LocalName "agent-cli-lock-$act.sh" -WorkerEntry:$WorkerEntry
     return $code
 }
 
@@ -6998,7 +7017,9 @@ try {
         # M4 lock/state diagnostic (A9/A10). usage: agent-cli lock <proj> --acquire|--release|--status [--hold <s>]
         if (-not $Act) { Write-Host 'usage: agent-cli lock <proj> --acquire [--hold <s>] | --release | --status'; exit 2 }
         if (-not $Proj) { $Proj = $env:AGENT_CLI_PROJ }
-        $code = Invoke-LockState -act $Act -proj $Proj -hold $Hold -hostName $RemoteHost
+        # D167: env bridge (top-level param block is frozen in PS5.1 - see Invoke-Task note).
+        $workerEntry = ($env:AGENT_WORKER_ENTRY -eq '1')
+        $code = Invoke-LockState -act $Act -proj $Proj -hold $Hold -hostName $RemoteHost -WorkerEntry:$workerEntry
         exit (Resolve-ExitCode $code)
     }
     elseif ($Command -eq 'task') {

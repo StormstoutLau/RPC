@@ -96,6 +96,7 @@ station_runtime:
   - ops/station-bin/gguf-meta
   - ops/station-bin/_oc_session_meta.sh
   - ops/station-bin/_slot_gate.sh
+  - ops/station-bin/_worker_entry.sh
   - ops/station-bin/_station_ready.sh
   - ops/station-bin/agent-cli.ps1
   - ops/station-bin/backup-memories.sh
@@ -123,6 +124,7 @@ shell_strict:
     - ops/station-bin/cluster-watchdog
     - ops/station-bin/ocrun
     - ops/station-bin/backup-memories.sh
+    - ops/station-bin/_worker_entry.sh
   libs:
     - ops/station-bin/model-locate.sh
     - ops/station-bin/conf-lib.sh
@@ -131,7 +133,7 @@ shell_strict:
       why: "报告型门禁：四条规则必须全部跑完再给 [ABORT]/[WARN]/[OK]，abort 会丢结论；取数函数在逻辑或列表中被调用 ⇒ -e 本就不生效（SC2310），保留 set +e 是显式化，不是疏漏"
 
 # `station-bin` 布局（review-p2-big #8A）：根目录只放 部署件 / 入口运行时件 / 在跑夹具。
-#   一次性 `_*` 探针 → `probes_dir`；根目录 `_*` 只允许 `root_keep`（9 项，逐条有角色）。
+#   一次性 `_*` 探针 → `probes_dir`；根目录 `_*` 只允许 `root_keep`（10 项，逐条有角色）。
 #   ⚠ 迁移纪律：`git mv` 不改内容；登记 `frozen_ops_scripts` 同步删除（只减不增）。
 station_bin_layout:
   probes_dir: archive/station-bin-probes
@@ -140,6 +142,7 @@ station_bin_layout:
     - _station_ready.sh
     - _slot_gate.sh
     - _oc_session_meta.sh
+    - _worker_entry.sh
     # 在跑夹具：CHECKS 直接执行（ps1-golden / ps1-runstamp / scrubber 覆盖）
     - _fm_golden_test.ps1
     - _probe_fallback.ps1

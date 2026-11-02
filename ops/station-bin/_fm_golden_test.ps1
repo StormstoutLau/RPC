@@ -3430,6 +3430,16 @@ $gOut2 = if (Test-Path $gOutFile) { [IO.File]::ReadAllText($gOutFile) } else { '
 Assert-True "g166-5(行为): 篡改 ⇒ rc=91 + GOLDEN_TAMPERED + ACCEPT_GOLDEN_OK=0" (
     [bool]$ngsAst -and ($gRc2 -eq 91) -and ($gOut2 -match 'GOLDEN_TAMPERED') -and ($gOut2 -match 'ACCEPT_GOLDEN_OK=0'))
 
+# --- D167: worker fixed entry (ADR-0013 D6-6 #1) ---
+$wePs = ([regex]::Match($content, '\$Script:WORKER_ENTRY_VERSION\s*=\s*(\d+)')).Groups[1].Value
+$weSh = ([regex]::Match([IO.File]::ReadAllText((Join-Path $PSScriptRoot '_worker_entry.sh')), 'WORKER_ENTRY_VERSION=(\d+)')).Groups[1].Value
+Assert-True "d167(结构): worker 入口版本两处逐值一致（ps=$wePs sh=$weSh）" ($wePs -ne '' -and $wePs -eq $weSh)
+Assert-True "d167(结构): worker 入口被 Invoke-RemoteScript 以固定名调用（版本门 + 消费点接线）" (
+    $content.Contains('/tmp/_worker_entry.sh') -and
+    $content.Contains('--expect-version $($Script:WORKER_ENTRY_VERSION)') -and
+    $content.Contains('-WorkerEntry:$WorkerEntry')
+)
+
 Write-Host "--------------------------------"
 Write-Host "FM_GOLDEN_TEST pass=$pass fail=$fail"
 exit $(if ($fail -eq 0) { 0 } else { 1 })
