@@ -168,3 +168,48 @@ claude --output-format stream-json --input-format stream-json
 | [2026-10-30 三站 claude 接 halogen + 飞书调研](research/2026-10-30_claude-code三站halogen接入与飞书远程操作调研.md) | 通道背景（8731 寻址、cc-connect 选型）；**该文未涉及权限面**，本稿补这一维 |
 | [inventory/plugins.yaml](../inventory/plugins.yaml) | 三维真值；本稿指出**第四维缺失** |
 | [O-180](../spec/d6-agent-standard/OPEN-ISSUES.md) / [O-183](../spec/d6-agent-standard/OPEN-ISSUES.md) | 长上下文 prefill 同族（`slow agent send` 的可能来源，未归因） |
+
+---
+
+## 9. 长会话清理与桥接重启（2026-11-03 执行）
+
+### 9.1 对象
+
+B 站 `pid 1804784` —— 桥接用 `--resume 48915591-…` 保活的 claude 进程：
+
+| 项 | 读数 |
+|---|---|
+| 形态 | `ppid 1788543`（cc-connect）· 状态 `Sl` · RSS **249 MB** |
+| 进程龄 | **1 天 5 时 8 分** |
+| 近 3 小时桥接日志 | **无任何条目**（无在途回合） |
+| session 落盘 | 存在：`~/.claude/projects/-home-scott-lau-work/48915591-….jsonl` |
+
+### 9.2 判定：可清理，上下文不丢
+
+1. **transcript 已落盘** ⇒ 杀进程只丢内存态，`--resume` 可从 jsonl 重建对话。
+2. **无在途工作** ⇒ 空闲而非死锁（`Sl` 态、CPU 累计仅分钟级）。
+3. 它是**保活机制**不是 bug：手机端多轮对话共享上下文依赖 `--resume`。
+
+### 9.3 执行（方式 A = 重启桥接）
+
+```bash
+sudo -n systemctl restart rpc-bridge
+```
+
+| 项 | 结果 |
+|---|---|
+| 服务 | `active`（新 pid 2258494） |
+| 旧进程 1804784 | **已消失** |
+| 新 claude | **未拉起**（按需：收到消息才 spawn） |
+| 飞书连接 | `platform ready` + `wss://msg-frontier.feishu.cn` 已连 |
+| 启动日志 | `reset_on_idle_mins not set, applying default … default_minutes=0` |
+
+### 9.4 结构性成因（本次新发现）
+
+启动日志逐字写着 **`reset_on_idle_mins` 未设 ⇒ 默认 `0`**。`0` = **空闲会话不回收**，所以桥接拉起的会话会一直常驻（本次实测 27 h+、249 MB）。
+
+⇒ 若要字段级根治「空闲会话占内存」，需把 `reset_on_idle_mins` 设为非 0（如 60）。**代价**：超过该时长的会话被重置，`--resume` 的上下文保活随之失效（手机端多轮对话将从新会话开始）。**该取舍本次未做，仅登记。**
+
+### 9.5 与门禁 `stations` 的关系
+
+`stations` 的「长龄 orphan」判据把 `claude|opencode|timeout|defunct` 且 ≥6 h 一律报出 —— **合法的保活会话与真孤儿同形**（同一判据）。本次清理后 A/C 站 orphan 归零、B 站只剩这一个（随后随重启清除）。按 `ppid=cc-connect` 收窄判据属门禁射程改动，**未做**。
